@@ -43,7 +43,7 @@ interface MessageProfile {
 interface Message {
     id: string;
     texto: string;
-    usuario_id: string;
+    emisor_id: string;
     created_at: string;
     tipo: 'texto' | 'imagen' | 'video' | 'audio';
     archivo_url: string | null;
@@ -75,7 +75,7 @@ function mapMessageRow(row: Record<string, unknown>): Message {
     return {
         id: row.id as string,
         texto: (row.texto as string) ?? '',
-        usuario_id: row.usuario_id as string,
+        emisor_id: row.emisor_id as string,
         created_at: row.created_at as string,
         tipo: (row.tipo as Message['tipo']) ?? 'texto',
         archivo_url: (row.archivo_url as string | null) ?? null,
@@ -339,7 +339,7 @@ export default function ChatScreen() {
                 .select(`
                     id,
                     texto,
-                    usuario_id,
+                    emisor_id,
                     created_at,
                     tipo,
                     archivo_url,
@@ -535,13 +535,13 @@ export default function ChatScreen() {
                             const { data: perfil } = await supabase
                                 .from('perfiles')
                                 .select('nombre, avatar_url')
-                                .eq('id', payload.new.usuario_id)
+                                .eq('id', payload.new.emisor_id)
                                 .single();
 
                             const newMessage: Message = {
                                 id: newId,
                                 texto: (payload.new.texto as string) ?? '',
-                                usuario_id: payload.new.usuario_id as string,
+                                emisor_id: payload.new.emisor_id as string,
                                 created_at: payload.new.created_at as string,
                                 tipo: (payload.new.tipo as Message['tipo']) ?? 'texto',
                                 archivo_url: (payload.new.archivo_url as string | null) ?? null,
@@ -618,7 +618,7 @@ export default function ChatScreen() {
         const { error } = await supabase.from('mensajes').insert({
             plan_id: planId,
             texto: textoPayload,
-            usuario_id: currentUserId,
+            emisor_id: currentUserId,
             tipo,
             archivo_url: archivoUrl,
         });
@@ -775,7 +775,7 @@ export default function ChatScreen() {
     }, [isUploading, isSending, messageText, recording]);
 
     const renderItem = ({ item }: { item: Message }) => {
-        const isMe = item.usuario_id === currentUserId;
+        const isMe = item.emisor_id === currentUserId;
         const profile = normalizeProfile(item.perfiles);
         const nombreMostrar = profile?.nombre || 'Usuario';
         const avatarUri = profile?.avatar_url
@@ -852,7 +852,7 @@ export default function ChatScreen() {
                         onPress={() =>
                             router.push({
                                 pathname: '/user-profile/[id]',
-                                params: { id: item.usuario_id },
+                                params: { id: item.emisor_id },
                             })
                         }
                     >

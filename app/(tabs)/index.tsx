@@ -1,3 +1,6 @@
+/*
+pantalla principal / home feed de planes
+*/
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';

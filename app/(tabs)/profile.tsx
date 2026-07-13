@@ -1,3 +1,6 @@
+/*
+perfil del usuario
+*/
 import { Ionicons } from '@expo/vector-icons';
 import { decode } from 'base64-arraybuffer';
 import { LinearGradient } from 'expo-linear-gradient';

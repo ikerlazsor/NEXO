@@ -35,7 +35,7 @@ interface MessageProfile {
 interface Message {
     id: string;
     texto: string;
-    usuario_id: string;
+    emisor_id: string;
     created_at: string;
     tipo: 'texto' | 'imagen' | 'video' | 'audio';
     archivo_url: string | null;
@@ -67,7 +67,7 @@ function mapMessageRow(row: Record<string, unknown>): Message {
     return {
         id: row.id as string,
         texto: (row.texto as string) ?? '',
-        usuario_id: row.usuario_id as string,
+        emisor_id: row.emisor_id as string,
         created_at: row.created_at as string,
         tipo: (row.tipo as Message['tipo']) ?? 'texto',
         archivo_url: (row.archivo_url as string | null) ?? null,
@@ -119,20 +119,20 @@ export default function DirectChatScreen() {
             if (!user || !otherUserId) return [];
 
             let query = supabase
-                .from('mensajes_directos')
+                .from('mensajes') // Tabla única unificada
                 .select(`
                     id,
                     texto,
-                    usuario_id,
+                    emisor_id,
                     created_at,
                     tipo,
                     archivo_url,
-                    perfiles:usuario_id (
+                    perfiles:emisor_id (
                         nombre,
                         avatar_url
                     )
                 `)
-                .or(`and(usuario_id.eq.${user.id},receptor_id.eq.${otherUserId}),and(usuario_id.eq.${otherUserId},receptor_id.eq.${user.id})`)
+                .or(`and(emisor_id.eq.${user.id},receptor_id.eq.${otherUserId}),and(emisor_id.eq.${otherUserId},receptor_id.eq.${user.id})`)
                 .order('created_at', { ascending: false })
                 .limit(PAGE_SIZE);
 
@@ -274,22 +274,31 @@ export default function DirectChatScreen() {
                         {
                             event: 'INSERT',
                             schema: 'public',
-                            table: 'mensajes_directos',
-                            filter: `or(and(usuario_id=eq.${user.id},receptor_id=eq.${otherUserId}),and(usuario_id=eq.${otherUserId},receptor_id=eq.${user.id}))`,
+                            table: 'mensajes', // Escucha la tabla unificada
+                            filter: `plan_id=is.null`, // Solo mensajes sin plan asociado (privados)
                         },
                         async (payload) => {
+                            // Validar que el mensaje pertenezca a esta conversación privada específica
+                            const emisor = payload.new.emisor_id;
+                            const receptor = payload.new.receptor_id;
+                            const esDeEstaConversacion = 
+                                (emisor === user.id && receptor === otherUserId) || 
+                                (emisor === otherUserId && receptor === user.id);
+
+                            if (!esDeEstaConversacion) return;
+
                             const newId = payload.new.id as string;
 
                             const { data: perfil } = await supabase
                                 .from('perfiles')
                                 .select('nombre, avatar_url')
-                                .eq('id', payload.new.usuario_id)
+                                .eq('id', payload.new.emisor_id)
                                 .single();
 
                             const newMessage: Message = {
                                 id: newId,
                                 texto: (payload.new.texto as string) ?? '',
-                                usuario_id: payload.new.usuario_id as string,
+                                emisor_id: payload.new.emisor_id as string,
                                 created_at: payload.new.created_at as string,
                                 tipo: (payload.new.tipo as Message['tipo']) ?? 'texto',
                                 archivo_url: (payload.new.archivo_url as string | null) ?? null,
@@ -340,9 +349,10 @@ export default function DirectChatScreen() {
                   ? String(audioDurationSec)
                   : '';
 
-        const { error } = await supabase.from('mensajes_directos').insert({
-            usuario_id: currentUserId,
+        const { error } = await supabase.from('mensajes').insert({
+            emisor_id: currentUserId,
             receptor_id: otherUserId,
+            plan_id: null, // Campo explícito en null al ser chat privado
             texto: textoPayload,
             tipo,
             archivo_url: archivoUrl,
@@ -500,7 +510,7 @@ export default function DirectChatScreen() {
     }, [isUploading, isSending, messageText, recording]);
 
     const renderItem = ({ item }: { item: Message }) => {
-        const isMe = item.usuario_id === currentUserId;
+        const isMe = item.emisor_id === currentUserId;
         const profile = normalizeProfile(item.perfiles);
         const nombreMostrar = profile?.nombre || 'Usuario';
         const avatarUri = profile?.avatar_url
@@ -577,7 +587,7 @@ export default function DirectChatScreen() {
                         onPress={() =>
                             router.push({
                                 pathname: '/user-profile/[id]',
-                                params: { id: item.usuario_id },
+                                params: { id: item.emisor_id },
                             })
                         }
                     >

@@ -1,3 +1,6 @@
+/*
+inicio de sesión / registro
+*/
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';

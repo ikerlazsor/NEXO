@@ -1,3 +1,9 @@
+/* 
+Sin sesión → login
+Sesión + onboarding incompleto → onboarding
+Sesión + onboarding hecho → (tabs)  (pantalla principal)
+ */
+
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Session } from '@supabase/supabase-js';
 import { Stack, useRouter, useSegments } from 'expo-router';

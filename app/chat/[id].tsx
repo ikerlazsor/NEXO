@@ -23,12 +23,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PlanImage } from '../../components/PlanImage';
 import { uploadChatFile } from '../../lib/chatUpload';
-import { isDirectChatPlan, resolveDirectChatPeer } from '../../lib/directChat';
 import { getAvatarUri, getFriends, type FriendProfile } from '../../lib/friends';
 import { isUserCreatedGroupChat, updateGroupChatPhoto, uploadGroupChatPhoto } from '../../lib/groupChat';
 import { useT } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
-import { promoteWaitlist } from '../../lib/waitlist';
 import { sendPlanInvite } from '../../lib/planInvites';
 import { supabase } from '../../lib/supabase';
 
@@ -42,9 +40,9 @@ interface MessageProfile {
 
 interface Message {
     id: string;
-    texto: string;
+    contenido: string;
     emisor_id: string;
-    created_at: string;
+    creado_en: string;
     tipo: 'texto' | 'imagen' | 'video' | 'audio';
     archivo_url: string | null;
     perfiles: MessageProfile | MessageProfile[] | null;
@@ -65,18 +63,18 @@ function formatDuration(totalSeconds: number): string {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function parseStoredDuration(texto: string): number | null {
-    if (!texto || !/^\d+$/.test(texto.trim())) return null;
-    const value = parseInt(texto, 10);
+function parseStoredDuration(contenido: string): number | null {
+    if (!contenido || !/^\d+$/.test(contenido.trim())) return null;
+    const value = parseInt(contenido, 10);
     return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function mapMessageRow(row: Record<string, unknown>): Message {
     return {
         id: row.id as string,
-        texto: (row.texto as string) ?? '',
+        contenido: (row.contenido as string) ?? '',
         emisor_id: row.emisor_id as string,
-        created_at: row.created_at as string,
+        creado_en: row.creado_en as string,
         tipo: (row.tipo as Message['tipo']) ?? 'texto',
         archivo_url: (row.archivo_url as string | null) ?? null,
         perfiles: row.perfiles as Message['perfiles'],
@@ -95,7 +93,6 @@ export default function ChatScreen() {
     const [planImage, setPlanImage] = useState<string | null>(null);
     const [participantNames, setParticipantNames] = useState('');
     const [isGroupChat, setIsGroupChat] = useState(false);
-    const [isDirectChat, setIsDirectChat] = useState(false);
     const [planCategory, setPlanCategory] = useState<string | null>(null);
     const [planOwnerId, setPlanOwnerId] = useState<string | null>(null);
     const [uploadingGroupPhoto, setUploadingGroupPhoto] = useState(false);
@@ -138,7 +135,7 @@ export default function ChatScreen() {
     const fetchParticipants = useCallback(async (pid: string) => {
         const { data: planData } = await supabase
             .from('planes')
-            .select('user_id, perfiles:user_id(nombre, avatar_url)')
+            .select('creador_id, perfiles:creador_id(nombre, avatar_url)')
             .eq('id', pid)
             .single();
 
@@ -147,7 +144,7 @@ export default function ChatScreen() {
             .select('usuario_id, estado, perfiles:usuario_id(nombre, avatar_url)')
             .eq('plan_id', pid);
 
-        const ownerId = (planData?.user_id as string) ?? null;
+        const ownerId = (planData?.creador_id as string) ?? null;
         setCreatorId(ownerId);
 
         const byId = new Map<string, { id: string; nombre: string; avatar_url: string | null; isCreator: boolean }>();
@@ -220,20 +217,7 @@ export default function ChatScreen() {
         [planId, currentUserId, isGroupChat, t]
     );
 
-    const applyDirectChatDisplay = useCallback(async (pid: string, uid: string) => {
-        const peer = await resolveDirectChatPeer(pid, uid);
-        if (peer) {
-            setPlanName(peer.nombre);
-            setPlanImage(peer.avatarUri);
-            setParticipantNames('');
-        }
-    }, []);
-
-    const isCreatedGroupChat = isUserCreatedGroupChat({
-        category: planCategory,
-        is_direct_chat: isDirectChat,
-        is_group_chat: isGroupChat,
-    });
+    const isCreatedGroupChat = isUserCreatedGroupChat({ categoria: planCategory });
 
     const canEditGroupPhoto =
         !!planId &&
@@ -296,7 +280,7 @@ export default function ChatScreen() {
 
     const handleDeleteChat = useCallback(() => {
         if (!planId || !currentUserId) return;
-        const isHost = creatorId === currentUserId && !isDirectChat;
+        const isHost = creatorId === currentUserId;
         const title = isHost ? t('chat.deletePlanHost') : t('chat.deleteChat');
         const message = isHost ? t('chat.deletePlanHostConfirm') : t('chat.deleteChatConfirm');
         const actionLabel = isHost ? t('chat.deletePlanHost') : t('chat.deleteChat');
@@ -323,14 +307,13 @@ export default function ChatScreen() {
                             Alert.alert(t('profile.error'), error.message);
                             return;
                         }
-                        await promoteWaitlist(planId);
                     }
                     setShowMembers(false);
                     router.back();
                 },
             },
         ]);
-    }, [planId, currentUserId, creatorId, isDirectChat, t, router]);
+    }, [planId, currentUserId, creatorId, t, router]);
 
     const fetchMessages = useCallback(
         async (pid: string, before?: string) => {
@@ -338,22 +321,22 @@ export default function ChatScreen() {
                 .from('mensajes')
                 .select(`
                     id,
-                    texto,
+                    contenido,
                     emisor_id,
-                    created_at,
+                    creado_en,
                     tipo,
                     archivo_url,
-                    perfiles:usuario_id (
+                    perfiles:perfiles!mensajes_emisor_fkey (
                         nombre,
                         avatar_url
                     )
                 `)
                 .eq('plan_id', pid)
-                .order('created_at', { ascending: false })
+                .order('creado_en', { ascending: false })
                 .limit(PAGE_SIZE);
 
             if (before) {
-                query = query.lt('created_at', before);
+                query = query.lt('creado_en', before);
             }
 
             const { data, error } = await query;
@@ -371,7 +354,7 @@ export default function ChatScreen() {
         setLoadingMore(true);
         try {
             const oldest = messages[messages.length - 1];
-            const older = await fetchMessages(planId, oldest.created_at);
+            const older = await fetchMessages(planId, oldest.creado_en);
 
             if (older.length < PAGE_SIZE) setHasMore(false);
 
@@ -419,7 +402,7 @@ export default function ChatScreen() {
     useEffect(() => {
         messages.forEach((message) => {
             if (message.tipo !== 'audio' || !message.archivo_url) return;
-            if (parseStoredDuration(message.texto)) return;
+            if (parseStoredDuration(message.contenido)) return;
             if (audioDurations[message.id]) return;
             loadAudioDuration(message.id, message.archivo_url);
         });
@@ -468,7 +451,7 @@ export default function ChatScreen() {
 
                 const { data: planData, error: planError } = await supabase
                     .from('planes')
-                    .select('title, image_url, user_id, is_group_chat, is_direct_chat, category')
+                    .select('titulo, imagen_url, creador_id, categoria')
                     .eq('id', planId)
                     .single();
 
@@ -485,29 +468,23 @@ export default function ChatScreen() {
                     .eq('usuario_id', user.id)
                     .maybeSingle();
 
-                const isCreator = planData.user_id === user.id;
+                const isCreator = planData.creador_id === user.id;
                 if (!membership && !isCreator) {
                     setAccessDenied(true);
-                    setPlanName(planData.title);
-                    setPlanImage(planData.image_url);
+                    setPlanName(planData.titulo);
+                    setPlanImage(planData.imagen_url);
                     return;
                 }
 
                 if (!isMountedRef.current) return;
 
-                setPlanCategory(planData.category ?? null);
-                setPlanOwnerId(planData.user_id ?? null);
-                setCreatorId(planData.user_id ?? null);
-                const direct = isDirectChatPlan(planData);
-                setIsGroupChat(!!planData.is_group_chat || planData.category === 'Grupo');
-                setIsDirectChat(direct);
+                setPlanCategory(planData.categoria ?? null);
+                setPlanOwnerId(planData.creador_id ?? null);
+                setCreatorId(planData.creador_id ?? null);
+                setIsGroupChat(planData.categoria === 'Grupo');
 
-                if (direct) {
-                    await applyDirectChatDisplay(planId, user.id);
-                } else {
-                    setPlanName(planData.title);
-                    setPlanImage(planData.image_url ?? null);
-                }
+                setPlanName(planData.titulo);
+                setPlanImage(planData.imagen_url ?? null);
 
                 const [initialMessages] = await Promise.all([
                     fetchMessages(planId),
@@ -540,9 +517,9 @@ export default function ChatScreen() {
 
                             const newMessage: Message = {
                                 id: newId,
-                                texto: (payload.new.texto as string) ?? '',
+                                contenido: (payload.new.contenido as string) ?? '',
                                 emisor_id: payload.new.emisor_id as string,
-                                created_at: payload.new.created_at as string,
+                                creado_en: payload.new.creado_en as string,
                                 tipo: (payload.new.tipo as Message['tipo']) ?? 'texto',
                                 archivo_url: (payload.new.archivo_url as string | null) ?? null,
                                 perfiles: perfil,
@@ -570,24 +547,20 @@ export default function ChatScreen() {
         return () => {
             if (channel) supabase.removeChannel(channel);
         };
-    }, [planId, router, fetchMessages, fetchParticipants, applyDirectChatDisplay, t]);
+    }, [planId, router, fetchMessages, fetchParticipants, t]);
 
     const refreshChatHeader = useCallback(async () => {
         if (!planId || !currentUserId || accessDenied) return;
-        if (isDirectChat) {
-            await applyDirectChatDisplay(planId, currentUserId);
-            return;
-        }
         const { data } = await supabase
             .from('planes')
-            .select('title, image_url')
+            .select('titulo, imagen_url')
             .eq('id', planId)
             .single();
         if (data) {
-            if (data.title) setPlanName(data.title);
-            if (data.image_url) setPlanImage(data.image_url);
+            if (data.titulo) setPlanName(data.titulo);
+            if (data.imagen_url) setPlanImage(data.imagen_url);
         }
-    }, [planId, currentUserId, accessDenied, isDirectChat, applyDirectChatDisplay]);
+    }, [planId, currentUserId, accessDenied]);
 
     useFocusEffect(
         useCallback(() => {
@@ -608,7 +581,7 @@ export default function ChatScreen() {
         if (tipo === 'texto') setMessageText('');
         setIsSending(true);
 
-        const textoPayload =
+        const contenidoPayload =
             tipo === 'texto'
                 ? tempText
                 : tipo === 'audio' && audioDurationSec
@@ -617,7 +590,7 @@ export default function ChatScreen() {
 
         const { error } = await supabase.from('mensajes').insert({
             plan_id: planId,
-            texto: textoPayload,
+            contenido: contenidoPayload,
             emisor_id: currentUserId,
             tipo,
             archivo_url: archivoUrl,
@@ -811,7 +784,7 @@ export default function ChatScreen() {
             }
 
             if (item.tipo === 'audio' && item.archivo_url) {
-                const storedDuration = parseStoredDuration(item.texto);
+                const storedDuration = parseStoredDuration(item.contenido);
                 const durationSec = storedDuration ?? audioDurations[item.id];
                 const durationLabel = durationSec ? formatDuration(durationSec) : '--:--';
 
@@ -839,7 +812,7 @@ export default function ChatScreen() {
 
             return (
                 <Text style={[styles.msgText, isMe ? styles.myMsgText : styles.otherMsgText]}>
-                    {item.texto}
+                    {item.contenido}
                 </Text>
             );
         };
@@ -863,7 +836,7 @@ export default function ChatScreen() {
                     {!isMe && <Text style={styles.senderName}>{nombreMostrar}</Text>}
                     {renderContent()}
                     <Text style={[styles.timeText, isMe ? styles.myTime : styles.otherTime]}>
-                        {new Date(item.created_at).toLocaleTimeString([], {
+                        {new Date(item.creado_en).toLocaleTimeString([], {
                             hour: '2-digit',
                             minute: '2-digit',
                         })}
@@ -900,14 +873,7 @@ export default function ChatScreen() {
                     disabled={uploadingGroupPhoto}
                     style={styles.planHeaderImageWrap}
                 >
-                    {isDirectChat ? (
-                        <Image
-                            source={{
-                                uri: planImage || getAvatarUri({ nombre: planName || '?', avatar_url: null }),
-                            }}
-                            style={styles.planHeaderImage}
-                        />
-                    ) : isCreatedGroupChat ? (
+                    {isCreatedGroupChat ? (
                         <Image
                             source={{
                                 uri: planImage || 'https://via.placeholder.com/150/4DA6FF/FFFFFF?text=G',
@@ -940,7 +906,7 @@ export default function ChatScreen() {
                     <Text style={styles.headerTitle} numberOfLines={1}>
                         {planName || (loading ? t('chat.loading') : '')}
                     </Text>
-                    {!isDirectChat && (participantNames || loading) ? (
+                    {(participantNames || loading) ? (
                         <Text style={styles.headerSubtitle} numberOfLines={1}>
                             {participantNames || (loading ? t('chat.loading') : '')}
                         </Text>
@@ -1135,7 +1101,7 @@ export default function ChatScreen() {
                             )}
                         />
 
-                        {!accessDenied && !isDirectChat && (
+                        {!accessDenied && (
                             <TouchableOpacity
                                 style={styles.inviteBtn}
                                 onPress={() => {
@@ -1151,7 +1117,7 @@ export default function ChatScreen() {
                         <TouchableOpacity style={styles.leaveBtn} onPress={handleDeleteChat}>
                             <Ionicons name="trash-outline" size={20} color="#EF4444" />
                             <Text style={styles.leaveBtnText}>
-                                {creatorId === currentUserId && !isDirectChat
+                                {creatorId === currentUserId
                                     ? t('chat.deletePlanHost')
                                     : t('chat.deleteChat')}
                             </Text>

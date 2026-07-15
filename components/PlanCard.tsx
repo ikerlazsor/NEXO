@@ -17,10 +17,8 @@ import {
     View,
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
-import type { DeporteFormato, DeporteTipo } from '../lib/sportFormations';
 import { resolvePlanSport } from '../lib/sports';
 import { useT } from '../lib/i18n';
-import { SportLineupField } from './SportLineupField';
 import { SportIcon } from './SportIcon';
 import { PlanImage } from './PlanImage';
 
@@ -38,7 +36,7 @@ const MAX_VISIBLE_AVATARS = 4;
 const avatarFallback = (name?: string) =>
     `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'N')}&background=4DA6FF&color=fff`;
 
-export type Membership = 'none' | 'joined' | 'requested' | 'waitlist';
+export type Membership = 'none' | 'joined' | 'requested';
 
 const isSameCalendarDay = (a: Date, b: Date) =>
     a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -91,7 +89,9 @@ const AvatarStack = ({
                     )}
                 </View>
             </TouchableOpacity>
-            <Text style={styles.goingText}>{t('card.weAre', { n: participants.length })}</Text>
+            <TouchableOpacity activeOpacity={0.85} onPress={onOpenRoster}>
+                <Text style={styles.goingText}>{t('card.weAre', { n: participants.length })}</Text>
+            </TouchableOpacity>
             <Text style={styles.maxText}> ({t('card.max', { n: maxPeople })})</Text>
         </View>
     );
@@ -108,6 +108,7 @@ interface PlanCardProps {
     onDelete: (id: string) => void;
     onEdit: (id: string) => void;
     onToggleSave: (id: string) => void;
+    onReport?: (id: string) => void;
     router: any;
 }
 
@@ -122,11 +123,11 @@ function PlanCardInner({
     onDelete,
     onEdit,
     onToggleSave,
+    onReport,
     router,
 }: PlanCardProps) {
     const { t } = useT();
     const [expanded, setExpanded] = useState(false);
-    const [showField, setShowField] = useState(false);
     const [showRoster, setShowRoster] = useState(false);
     const entrance = useRef(new Animated.Value(0)).current;
     const scale = useRef(new Animated.Value(1)).current;
@@ -145,26 +146,15 @@ function PlanCardInner({
         }).start();
     }, [entrance, index]);
 
-    const isCreator = currentUserId && String(item.user_id) === String(currentUserId);
-    const isFull = item.joinedCount >= item.max_people;
+    const isCreator = currentUserId && String(item.creador_id) === String(currentUserId);
+    const isFull = item.joinedCount >= item.maximo_participantes;
     const requiresApproval = !!item.requiere_aprobacion;
     const participants = item.participantsList || [];
 
     const sportPlan = resolvePlanSport(item);
-    const canPlay = !!isCreator || membership === 'joined';
-    const categoryLabel =
-        item.category === 'Fútbol' || item.category === 'Deporte'
-            ? t('cat.Deporte')
-            : t('cat.' + item.category);
-    const promptJoin = () => {
-        setShowField(false);
-        Alert.alert(t('futbol.joinFirst'), '', [
-            { text: t('common.cancel'), style: 'cancel' },
-            { text: requiresApproval ? t('card.request') : t('card.join'), onPress: () => onJoin(item.id) },
-        ]);
-    };
+    const categoryLabel = t('cat.' + item.categoria);
 
-    const eventDate = item.event_date ? new Date(item.event_date) : null;
+    const eventDate = item.fecha_evento ? new Date(item.fecha_evento) : null;
     const isToday = eventDate ? isSameCalendarDay(eventDate, new Date()) : false;
     const isCalmPremium = !isToday && !isFull;
     const dateString = eventDate ? eventDate.toLocaleDateString() : t('card.noDate');
@@ -179,9 +169,9 @@ function PlanCardInner({
 
     const buildShareMessage = () => {
         const when = eventDate ? `${dateString}${timeString ? ` a las ${timeString}` : ''}` : '';
-        const where = item.location_name ? `\n📍 ${item.location_name}` : '';
+        const where = item.nombre_ubicacion ? `\n📍 ${item.nombre_ubicacion}` : '';
         const date = when ? `\n🗓️ ${when}` : '';
-        return `¡Únete a "${item.title}" en Nexo! 🎉${where}${date}\n\nÁbrelo en la app Nexo para apuntarte.`;
+        return `¡Únete a "${item.titulo}" en Nexo! 🎉${where}${date}\n\nÁbrelo en la app Nexo para apuntarte.`;
     };
 
     const openNativeShare = async () => {
@@ -203,7 +193,7 @@ function PlanCardInner({
     };
 
     const handleShare = () => {
-        Alert.alert(t('card.share'), `"${item.title}"`, [
+        Alert.alert(t('card.share'), `"${item.titulo}"`, [
             { text: t('card.shareWhats'), onPress: shareViaWhatsApp },
             { text: t('card.shareOther'), onPress: openNativeShare },
             { text: t('common.cancel'), style: 'cancel' },
@@ -211,8 +201,8 @@ function PlanCardInner({
     };
 
     const getPlanImageSource = (): string | number => {
-        if (!item.image_url) return 'https://via.placeholder.com/400';
-        const urlStr = String(item.image_url);
+        if (!item.imagen_url) return 'https://via.placeholder.com/400';
+        const urlStr = String(item.imagen_url);
         if (urlStr.startsWith('http')) return urlStr;
         const parsedId = parseInt(urlStr, 10);
         if (!isNaN(parsedId)) return parsedId;
@@ -244,14 +234,6 @@ function PlanCardInner({
                 </TouchableOpacity>
             );
         }
-        if (membership === 'waitlist') {
-            return (
-                <TouchableOpacity style={styles.waitlistActiveButton} onPress={() => onLeave(item.id)}>
-                    <Ionicons name="hourglass" size={18} color={DANGER_DARK} />
-                    <Text style={styles.waitlistActiveButtonText}>{t('card.onWaitlist')}</Text>
-                </TouchableOpacity>
-            );
-        }
         if (membership === 'joined') {
             return (
                 <TouchableOpacity style={styles.joinedButton} onPress={() => onLeave(item.id)}>
@@ -262,10 +244,10 @@ function PlanCardInner({
         }
         if (isFull) {
             return (
-                <TouchableOpacity style={styles.waitlistButton} onPress={() => onJoin(item.id)} activeOpacity={0.85}>
-                    <Ionicons name="ban" size={18} color="#FFF" />
-                    <Text style={styles.waitlistButtonText}>{t('card.joinWaitlist')}</Text>
-                </TouchableOpacity>
+                <View style={styles.fullButton}>
+                    <Ionicons name="ban" size={18} color={DANGER_DARK} />
+                    <Text style={styles.fullButtonText}>{t('card.full')}</Text>
+                </View>
             );
         }
         return (
@@ -278,7 +260,7 @@ function PlanCardInner({
 
     return (
         <Animated.View style={{ opacity: entrance, transform: [{ scale }, { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }] }}>
-            <Pressable onPress={toggleExpand} onPressIn={pressIn} onPressOut={pressOut}>
+            <Pressable onPressIn={pressIn} onPressOut={pressOut}>
                 <View style={[styles.card, isToday && styles.cardToday, isCalmPremium && styles.cardPremium, isFull && !isToday && styles.cardFull]}>
                     {isToday && (
                         <LinearGradient
@@ -329,6 +311,11 @@ function PlanCardInner({
                                 <Text style={styles.categoryTagText}>{categoryLabel}</Text>
                             </View>
                             <View style={styles.topRightGroup}>
+                                {!isCreator && onReport ? (
+                                    <TouchableOpacity style={styles.circleBtn} onPress={() => onReport(item.id)} hitSlop={8}>
+                                        <Ionicons name="flag-outline" size={17} color="#FFF" />
+                                    </TouchableOpacity>
+                                ) : null}
                                 <TouchableOpacity style={styles.circleBtn} onPress={handleShare} hitSlop={8}>
                                     <Ionicons name="arrow-redo" size={19} color="#FFF" />
                                 </TouchableOpacity>
@@ -346,14 +333,14 @@ function PlanCardInner({
                         )}
 
                         <View style={styles.imageBottomRow}>
-                            <Text style={styles.cardTitleOnImage} numberOfLines={2}>{item.title}</Text>
+                            <Text style={styles.cardTitleOnImage} numberOfLines={2}>{item.titulo}</Text>
                         </View>
                     </View>
 
                     <View style={styles.cardContent}>
                         <AvatarStack
                             participants={participants}
-                            maxPeople={item.max_people}
+                            maxPeople={item.maximo_participantes}
                             onOpenRoster={() => participants.length > 0 && setShowRoster(true)}
                         />
 
@@ -373,44 +360,43 @@ function PlanCardInner({
                             </View>
                             <View style={styles.metaItem}>
                                 <Ionicons name="location-outline" size={15} color={PRIMARY_DARK} />
-                                <Text style={styles.metaText} numberOfLines={1}>{item.location_name || t('card.location')}</Text>
+                                <Text style={styles.metaText} numberOfLines={1}>{item.nombre_ubicacion || t('card.location')}</Text>
                             </View>
                         </View>
 
-                        {sportPlan?.hasLineup && sportPlan.formato && (
-                            <TouchableOpacity style={styles.futbolChip} onPress={() => setShowField(true)} activeOpacity={0.85}>
+                        {sportPlan && (
+                            <View style={styles.futbolChip}>
                                 <View style={styles.futbolBall}>
-                                    {sportPlan?.tipo && (
-                                        <SportIcon sport={sportPlan.tipo} size={20} color="#FFF" />
-                                    )}
+                                    <SportIcon sport={sportPlan.tipo} size={20} color="#FFF" />
                                 </View>
-                                <Text style={styles.futbolFormatText}>{sportPlan.formato}</Text>
-                                <Text style={styles.futbolChipHint}>{t('futbol.lineup')}</Text>
-                                <Ionicons name="chevron-forward" size={16} color={PRIMARY_DARK} />
-                            </TouchableOpacity>
+                                <Text style={styles.futbolFormatText}>
+                                    {sportPlan.formato ?? t('sport.' + sportPlan.tipo)}
+                                </Text>
+                                <Text style={styles.futbolChipHint}>{t('sport.' + sportPlan.tipo)}</Text>
+                            </View>
                         )}
 
                         {expanded && (
                             <View style={styles.expandedSection}>
                                 <Text style={styles.descLabel}>{t('card.aboutPlan')}</Text>
-                                <Text style={styles.descriptionText}>{item.description || t('card.noDescription')}</Text>
+                                <Text style={styles.descriptionText}>{item.descripcion || t('card.noDescription')}</Text>
                                 <View style={styles.miniMapContainer}>
                                     <MapView
                                         style={styles.miniMap}
                                         scrollEnabled
                                         zoomEnabled
-                                        initialRegion={{ latitude: item.latitude || 40.4167, longitude: item.longitude || -3.7037, latitudeDelta: 0.005, longitudeDelta: 0.005 }}
+                                        initialRegion={{ latitude: item.latitud || 40.4167, longitude: item.longitud || -3.7037, latitudeDelta: 0.005, longitudeDelta: 0.005 }}
                                     >
-                                        <Marker coordinate={{ latitude: item.latitude || 40.4167, longitude: item.longitude || -3.7037 }} />
+                                        <Marker coordinate={{ latitude: item.latitud || 40.4167, longitude: item.longitud || -3.7037 }} />
                                     </MapView>
                                 </View>
                             </View>
                         )}
 
-                        <View style={styles.expandHint}>
+                        <TouchableOpacity style={styles.expandHint} onPress={toggleExpand} activeOpacity={0.7}>
                             <Text style={styles.expandHintText}>{expanded ? t('card.tapCollapse') : t('card.tapExpand')}</Text>
                             <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color="#94A3B8" />
-                        </View>
+                        </TouchableOpacity>
 
                         <View style={styles.cardFooter}>{renderFooter()}</View>
                     </View>
@@ -451,36 +437,6 @@ function PlanCardInner({
                     </Pressable>
                 </Pressable>
             </Modal>
-
-            {sportPlan?.hasLineup && sportPlan.formato && (
-                <Modal visible={showField} animationType="slide" onRequestClose={() => setShowField(false)}>
-                    <View style={styles.fieldModal}>
-                        <View style={styles.fieldModalHeader}>
-                            <TouchableOpacity style={styles.fieldCloseBtn} onPress={() => setShowField(false)}>
-                                <Ionicons name="chevron-down" size={26} color={INK} />
-                            </TouchableOpacity>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.fieldModalTitle} numberOfLines={1}>{item.title}</Text>
-                                <Text style={styles.fieldModalSub}>
-                                    {t('sport.' + sportPlan.tipo)} · {sportPlan.formato} · {t('futbol.lineup')}
-                                </Text>
-                            </View>
-                        </View>
-                        <View style={styles.fieldModalBody}>
-                            <SportLineupField
-                                planId={String(item.id)}
-                                sportType={sportPlan.tipo as DeporteTipo}
-                                formato={sportPlan.formato as DeporteFormato}
-                                currentUserId={currentUserId}
-                                canPlay={canPlay}
-                                onRequireJoin={promptJoin}
-                                router={router}
-                            />
-                            <Text style={styles.fieldModalHint}>{canPlay ? t('futbol.tapToPick') : t('futbol.joinFirst')}</Text>
-                        </View>
-                    </View>
-                </Modal>
-            )}
         </Animated.View>
     );
 }
@@ -568,10 +524,8 @@ const styles = StyleSheet.create({
     joinedButtonText: { color: SUCCESS, fontWeight: '800', fontSize: 14 },
     requestedButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FCD34D' },
     requestedButtonText: { color: '#B45309', fontWeight: '800', fontSize: 14 },
-    waitlistButton: { backgroundColor: DANGER_DARK, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16 },
-    waitlistButtonText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
-    waitlistActiveButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: DANGER_BG, borderWidth: 1, borderColor: DANGER },
-    waitlistActiveButtonText: { color: DANGER_DARK, fontWeight: '800', fontSize: 14 },
+    fullButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: DANGER_BG, borderWidth: 1, borderColor: DANGER },
+    fullButtonText: { color: DANGER_DARK, fontWeight: '800', fontSize: 14 },
     creatorFooterRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     creatorBadge: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 13, borderRadius: 16, backgroundColor: '#EEF3FB' },
     creatorBadgeText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 14 },

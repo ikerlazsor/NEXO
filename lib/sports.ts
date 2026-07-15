@@ -82,10 +82,6 @@ export const SPORT_IMAGES: Record<DeporteTipo, unknown[]> = {
 
 const MIN_PEOPLE_DEFAULT = 3;
 
-export function sportHasLineup(tipo: DeporteTipo): boolean {
-    return tipo !== 'running';
-}
-
 export function sportHasFormats(tipo: DeporteTipo): boolean {
     return FORMATS_BY_SPORT[tipo] != null;
 }
@@ -93,7 +89,7 @@ export function sportHasFormats(tipo: DeporteTipo): boolean {
 export function getMinPeopleForSport(tipo: DeporteTipo, formato: DeporteFormato | null): number {
     if (tipo === 'running') return MIN_PEOPLE_DEFAULT;
     if (!formato) return MIN_PEOPLE_DEFAULT;
-    return formatPlayersPerTeam(tipo, formato) * 2;
+    return formatPlayersPerTeam(formato) * 2;
 }
 
 export function getCoverImages(category: MainCategory, deporteTipo: DeporteTipo = 'futbol'): unknown[] {
@@ -103,65 +99,44 @@ export function getCoverImages(category: MainCategory, deporteTipo: DeporteTipo 
     return CATEGORY_IMAGES[category];
 }
 
-/** Guarda tipo+formato en futbol_formato (compatible sin columna deporte_tipo). */
-export function encodeSportFormat(tipo: DeporteTipo, formato: DeporteFormato | null): string | null {
-    if (tipo === 'running') return null;
-    if (!formato) return null;
-    if (tipo === 'futbol') return formato;
-    return `${tipo}:${formato}`;
+export function isDeporteTipo(value?: string | null): value is DeporteTipo {
+    return !!value && DEPORTE_TIPOS.includes(value as DeporteTipo);
 }
 
-export function decodeSportFormat(
-    futbolFormato: string | null | undefined,
-    deporteTipo?: string | null,
-    category?: string | null
-): { tipo: DeporteTipo; formato: DeporteFormato | null } {
-    if (deporteTipo && DEPORTE_TIPOS.includes(deporteTipo as DeporteTipo)) {
-        const tipo = deporteTipo as DeporteTipo;
-        if (tipo === 'running') return { tipo, formato: null };
-        const formats = FORMATS_BY_SPORT[tipo];
-        const fallback = formats?.[0] ?? DEFAULT_FORMAT[tipo as Exclude<DeporteTipo, 'running'>];
-        if (futbolFormato?.includes(':')) {
-            const parts = futbolFormato.split(':');
-            return { tipo, formato: (parts[1] || fallback) as DeporteFormato };
-        }
-        return { tipo, formato: (futbolFormato as DeporteFormato) || fallback };
-    }
+/**
+ * El formato del partido ya no se persiste en la BD: se deriva del aforo del plan.
+ * Devuelve el formato más grande cuyo mínimo de jugadores cabe en el aforo.
+ */
+export function deriveFormatoFromCapacity(
+    tipo: DeporteTipo,
+    maxParticipantes?: number | null
+): DeporteFormato | null {
+    const formats = FORMATS_BY_SPORT[tipo];
+    if (!formats?.length) return null;
+    if (!maxParticipantes || maxParticipantes <= 0) return formats[0];
 
-    if (futbolFormato?.includes(':')) {
-        const [rawTipo, rawFmt] = futbolFormato.split(':') as [DeporteTipo, DeporteFormato];
-        if (DEPORTE_TIPOS.includes(rawTipo)) {
-            return { tipo: rawTipo, formato: rawFmt };
+    let best = formats[0];
+    for (const formato of formats) {
+        if (getMinPeopleForSport(tipo, formato) <= maxParticipantes) {
+            best = formato;
         }
     }
-
-    if (category === 'Fútbol' || category === 'Deporte') {
-        return {
-            tipo: 'futbol',
-            formato: (futbolFormato as DeporteFormato) || '7v7',
-        };
-    }
-
-    return { tipo: 'futbol', formato: '7v7' };
+    return best;
 }
 
 export function resolvePlanSport(plan: {
-    category?: string | null;
-    deporte_tipo?: string | null;
-    futbol_formato?: string | null;
-}): { tipo: DeporteTipo; formato: DeporteFormato | null; hasLineup: boolean } | null {
-    if (plan.category !== 'Deporte' && plan.category !== 'Fútbol') return null;
-
-    const { tipo, formato } = decodeSportFormat(plan.futbol_formato, plan.deporte_tipo, plan.category);
-    if (tipo === 'running') return { tipo, formato: null, hasLineup: false };
-    return { tipo, formato, hasLineup: true };
+    categoria?: string | null;
+    tipo_deporte?: string | null;
+    maximo_participantes?: number | null;
+}): { tipo: DeporteTipo; formato: DeporteFormato | null } | null {
+    if (plan.categoria !== 'Deporte') return null;
+    const tipo = isDeporteTipo(plan.tipo_deporte) ? plan.tipo_deporte : 'futbol';
+    if (tipo === 'running') return { tipo, formato: null };
+    return { tipo, formato: deriveFormatoFromCapacity(tipo, plan.maximo_participantes) };
 }
 
-export function isFeedDeporteCategory(category?: string | null): boolean {
-    return category === 'Deporte' || category === 'Fútbol';
+export function isFeedDeporteCategory(categoria?: string | null): boolean {
+    return categoria === 'Deporte';
 }
 
-export const FEED_PLAN_CATEGORIES = new Set<string>([
-    ...MAIN_CATEGORIES,
-    'Fútbol',
-]);
+export const FEED_PLAN_CATEGORIES = new Set<string>([...MAIN_CATEGORIES]);

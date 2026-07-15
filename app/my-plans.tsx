@@ -15,10 +15,11 @@ import {
     View,
 } from 'react-native';
 import { PlanImage } from '../components/PlanImage';
+import { isFeedPlan } from '../lib/feedPlans';
 import { useT } from '../lib/i18n';
 import { getPlanJoinRequestCount } from '../lib/notifications';
+import { isAcceptedParticipant } from '../lib/participants';
 import { supabase } from '../lib/supabase';
-import { isAcceptedParticipant } from '../lib/waitlist';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -51,16 +52,16 @@ export default function MyPlansScreen() {
 
             const { data } = await supabase
                 .from('planes')
-                .select('id, title, image_url, max_people, event_date, is_direct_chat, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url))')
-                .eq('user_id', user.id)
-                .order('event_date', { ascending: true });
+                .select('id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url))')
+                .eq('creador_id', user.id)
+                .order('fecha_evento', { ascending: true });
 
             const now = new Date();
             const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
             const formatted = (data || [])
-                .filter((p: any) => p.is_direct_chat !== true && p.is_group_chat !== true)
-                .filter((p: any) => !p.event_date || new Date(p.event_date) >= startOfToday)
+                .filter((p: any) => isFeedPlan(p))
+                .filter((p: any) => !p.fecha_evento || new Date(p.fecha_evento) >= startOfToday)
                 .map((p: any) => {
                     const parts = (p.participantes || []) as any[];
                     const accepted = parts.filter(x => isAcceptedParticipant(x.estado));
@@ -117,16 +118,16 @@ export default function MyPlansScreen() {
     };
 
     const renderPlan = ({ item }: { item: any }) => {
-        const isFull = item.joinedCount >= item.max_people;
+        const isFull = item.joinedCount >= item.maximo_participantes;
         return (
             <View style={styles.card}>
                 <View style={styles.cardHeader}>
-                    <PlanImage source={item.image_url || 'https://via.placeholder.com/200'} style={styles.thumb} recyclingKey={String(item.id)} />
+                    <PlanImage source={item.imagen_url || 'https://via.placeholder.com/200'} style={styles.thumb} recyclingKey={String(item.id)} />
                     <View style={{ flex: 1, marginLeft: 12 }}>
-                        <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
+                        <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
                         <View style={styles.countRow}>
                             <Ionicons name="people" size={14} color={isFull ? '#B8860B' : PRIMARY_DARK} />
-                            <Text style={[styles.countText, isFull && { color: '#B8860B' }]}>{item.joinedCount}/{item.max_people}</Text>
+                            <Text style={[styles.countText, isFull && { color: '#B8860B' }]}>{item.joinedCount}/{item.maximo_participantes}</Text>
                             {isFull && <Text style={styles.fullTag}>{t('card.fullShort')}</Text>}
                         </View>
                     </View>

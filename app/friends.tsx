@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -27,7 +27,6 @@ import {
     type FriendProfile,
     type FriendRequest,
 } from '../lib/friends';
-import { findOrCreateDirectChat } from '../lib/directChat';
 import { useT } from '../lib/i18n';
 import {
     acceptPlanInvite,
@@ -50,6 +49,7 @@ type TabKey = 'friends' | 'requests';
 export default function FriendsScreen() {
     const router = useRouter();
     const { t } = useT();
+    const { tab } = useLocalSearchParams<{ tab?: string }>();
     const [activeTab, setActiveTab] = useState<TabKey>('friends');
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -58,8 +58,6 @@ export default function FriendsScreen() {
     const [outgoing, setOutgoing] = useState<FriendRequest[]>([]);
     const [planInvites, setPlanInvites] = useState<PlanInvite[]>([]);
     const [actionId, setActionId] = useState<string | null>(null);
-    const [hasAutoOpenedRequests, setHasAutoOpenedRequests] = useState(false);
-
     const hasLoadedRef = useRef(false);
 
     const loadData = useCallback(async () => {
@@ -82,11 +80,6 @@ export default function FriendsScreen() {
             setIncoming(incomingData);
             setOutgoing(outgoingData);
             setPlanInvites(invitesData);
-
-            if (!hasAutoOpenedRequests && (incomingData.length > 0 || invitesData.length > 0)) {
-                setActiveTab('requests');
-                setHasAutoOpenedRequests(true);
-            }
         } catch {
             Alert.alert(t('profile.error'), t('friends.loadError'));
         } finally {
@@ -94,12 +87,13 @@ export default function FriendsScreen() {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [router, t, hasAutoOpenedRequests, refreshing]);
+    }, [router, t, refreshing]);
 
     useFocusEffect(
         useCallback(() => {
+            if (tab === 'requests') setActiveTab('requests');
             loadData();
-        }, [loadData])
+        }, [loadData, tab])
     );
 
     const onRefresh = () => {
@@ -192,26 +186,9 @@ export default function FriendsScreen() {
         );
     };
 
-    const handleOpenChat = async (friendId: string) => {
-        setActionId('chat_' + friendId);
-        try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
-            const { planId, error } = await findOrCreateDirectChat(user.id, friendId);
-            if (error || !planId) {
-                const hint =
-                    error?.includes('policy') || error?.includes('RLS')
-                        ? t('myplans.rlsHint')
-                        : error || t('friends.chatError');
-                Alert.alert(t('profile.error'), hint);
-                return;
-            }
-            router.push(`/chat/${planId}`);
-        } catch {
-            Alert.alert(t('profile.error'), t('friends.chatError'));
-        } finally {
-            setActionId(null);
-        }
+    const handleOpenChat = (friendId: string) => {
+        // Los chats 1:1 ya no crean "planes falsos": van directos a mensajes con receptor_id.
+        router.push(`/direct-chat/${friendId}`);
     };
 
     const pendingCount = incoming.length + planInvites.length;
@@ -379,7 +356,7 @@ export default function FriendsScreen() {
 
     const renderPlanInvite = (invite: PlanInvite) => {
         const busy = actionId === 'pinv_' + invite.id;
-        const title = invite.plan?.title || '—';
+        const title = invite.plan?.titulo || '—';
         const inviterName = invite.invitador?.nombre || t('chats.user');
         const isGroup = invite.tipo === 'grupo';
 

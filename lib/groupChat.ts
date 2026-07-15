@@ -1,19 +1,10 @@
 import { decode } from 'base64-arraybuffer';
-import { isDirectChatPlan } from './directChat';
-import { FEED_PLAN_CATEGORIES } from './sports';
+import { isGroupChatPlan } from './feedPlans';
 import { supabase } from './supabase';
 
-/** Grupo creado en Chats (+), no chat 1:1 ni chat de un plan del feed. */
-export function isUserCreatedGroupChat(plan: {
-    is_direct_chat?: boolean | null;
-    is_group_chat?: boolean | null;
-    category?: string | null;
-}): boolean {
-    if (isDirectChatPlan(plan)) return false;
-    const cat = plan.category ?? '';
-    if (cat === 'Grupo') return true;
-    if (plan.is_group_chat && !FEED_PLAN_CATEGORIES.has(cat) && cat !== 'Chat') return true;
-    return false;
+/** Grupo creado en Chats (+): plan con categoría interna 'Grupo'. */
+export function isUserCreatedGroupChat(plan: { categoria?: string | null }): boolean {
+    return isGroupChatPlan(plan);
 }
 
 export async function uploadGroupChatPhoto(planId: string, uri: string): Promise<string | null> {
@@ -47,7 +38,7 @@ export async function uploadGroupChatPhoto(planId: string, uri: string): Promise
 }
 
 export async function updateGroupChatPhoto(planId: string, imageUrl: string): Promise<{ error: string | null }> {
-    const { error } = await supabase.from('planes').update({ image_url: imageUrl }).eq('id', planId);
+    const { error } = await supabase.from('planes').update({ imagen_url: imageUrl }).eq('id', planId);
     if (error?.message?.includes('policy') || error?.message?.includes('RLS')) {
         return { error: 'rls_planes_update' };
     }

@@ -3,7 +3,7 @@ import { countPendingPlanInvites } from './planInvites';
 import { supabase } from './supabase';
 
 export async function getPlanJoinRequestCount(userId: string): Promise<number> {
-    const { data: myPlans } = await supabase.from('planes').select('id').eq('user_id', userId);
+    const { data: myPlans } = await supabase.from('planes').select('id').eq('creador_id', userId);
     const ids = (myPlans || []).map((p) => p.id);
     if (ids.length === 0) return 0;
 

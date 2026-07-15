@@ -10,7 +10,6 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
-    Image,
     Modal,
     Platform,
     Pressable,
@@ -25,10 +24,12 @@ import {
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import { PlanCard, type Membership } from '../../components/PlanCard';
+import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { getAuthUser } from '../../lib/auth';
 import { isFeedPlan } from '../../lib/feedPlans';
-import { useT } from '../../lib/i18n';
+import { useT, LANG_OPTIONS } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
+import { reportPlan } from '../../lib/reportPlan';
 import { debounce } from '../../lib/debounce';
 import { getProfileNotificationCount } from '../../lib/notifications';
 import { SPAIN_PROVINCES } from '../../lib/provinces';
@@ -38,9 +39,8 @@ import {
     isAcceptedParticipant,
     mapEstadoToMembership,
     membershipFromJoinEstado,
-    promoteWaitlist,
     resolveJoinEstado,
-} from '../../lib/waitlist';
+} from '../../lib/participants';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -55,13 +55,12 @@ const CATEGORY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
     'Solo chicas': 'female',
     'Estudio': 'book',
     'Tapas': 'restaurant',
-    'Fútbol': 'football',
 };
 
 const DATE_KEYS = ['all', 'today', 'week', 'month'];
 
 const FEED_PLAN_COLUMNS =
-    'id, title, image_url, category, deporte_tipo, futbol_formato, event_date, location_name, latitude, longitude, max_people, user_id, requiere_aprobacion, description, is_direct_chat, is_group_chat';
+    'id, titulo, imagen_url, categoria, tipo_deporte, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion, estado';
 
 const EmptySearch = ({ onClear }: { onClear: () => void }) => {
     const { t } = useT();
@@ -117,89 +116,99 @@ export default function HomeScreen() {
         try {
             if (!refreshing && plans.length === 0) setLoading(true);
 
-            const user = await getAuthUser();
-            setCurrentUserId(user?.id || null);
+            const todayStart = new Date();
+            todayStart.setHours(0, 0, 0, 0);
+            const todayIso = todayStart.toISOString();
 
-            const { data: plansData, error: plansError } = await supabase
+            const userPromise = getAuthUser();
+            const plansPromise = supabase
                 .from('planes')
                 .select(FEED_PLAN_COLUMNS)
-                .order('event_date', { ascending: true });
+                .or(`fecha_evento.is.null,fecha_evento.gte.${todayIso}`)
+                .order('fecha_evento', { ascending: true })
+                .limit(100);
 
-            if (plansError) {
-                console.error('Error cargando planes:', plansError);
+            const [user, plansRes] = await Promise.all([userPromise, plansPromise]);
+            setCurrentUserId(user?.id || null);
+
+            if (plansRes.error) {
+                console.error('Error cargando planes:', plansRes.error);
             }
 
-            const safePlans = (plansData || []).filter(isFeedPlan);
+            const safePlans = (plansRes.data || []).filter(isFeedPlan);
             const planIds = safePlans.map((p) => p.id);
 
-            let partsByPlan: Record<string, any[]> = {};
-            if (planIds.length > 0) {
-                const { data: partsData, error: partsError } = await supabase
+            const partsPromise = planIds.length > 0
+                ? supabase
                     .from('participantes')
                     .select('plan_id, usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url)')
                     .in('plan_id', planIds)
-                    .eq('estado', 'aceptado');
+                    .eq('estado', 'aceptado')
+                : Promise.resolve({ data: [], error: null });
 
-                if (partsError) {
-                    console.warn('Participantes del feed:', partsError.message);
-                } else {
-                    (partsData || []).forEach((row: any) => {
-                        if (!partsByPlan[row.plan_id]) partsByPlan[row.plan_id] = [];
-                        partsByPlan[row.plan_id].push(row);
-                    });
-                }
+            const creatorIds = Array.from(new Set(safePlans.map((p) => p.creador_id).filter(Boolean)));
+            const creatorsPromise = creatorIds.length > 0
+                ? supabase.from('perfiles').select('id, nombre, avatar_url').in('id', creatorIds)
+                : Promise.resolve({ data: [], error: null });
+
+            const userExtrasPromise = user
+                ? Promise.all([
+                    supabase.from('perfiles').select('avatar_url').eq('id', user.id).maybeSingle(),
+                    getProfileNotificationCount(user.id),
+                    supabase.from('participantes').select('plan_id, estado').eq('usuario_id', user.id),
+                    supabase.from('planes_guardados').select('plan_id').eq('usuario_id', user.id),
+                ])
+                : Promise.resolve(null);
+
+            const [partsRes, creatorsRes, userExtras] = await Promise.all([
+                partsPromise,
+                creatorsPromise,
+                userExtrasPromise,
+            ]);
+
+            let partsByPlan: Record<string, any[]> = {};
+            if (partsRes.error) {
+                console.warn('Participantes del feed:', partsRes.error.message);
+            } else {
+                (partsRes.data || []).forEach((row: any) => {
+                    if (!partsByPlan[row.plan_id]) partsByPlan[row.plan_id] = [];
+                    partsByPlan[row.plan_id].push(row);
+                });
             }
 
-            const creatorIds = Array.from(new Set(safePlans.map((p) => p.user_id).filter(Boolean)));
-            let creatorMap: Record<string, any> = {};
-            if (creatorIds.length > 0) {
-                const { data: creators } = await supabase
-                    .from('perfiles')
-                    .select('id, nombre, avatar_url')
-                    .in('id', creatorIds);
-                creatorMap = Object.fromEntries((creators || []).map((c) => [c.id, c]));
-            }
+            const creatorMap = Object.fromEntries((creatorsRes.data || []).map((c) => [c.id, c]));
 
             const formattedPlans = safePlans.map((plan) => {
                 const rawParticipants = partsByPlan[plan.id] || [];
                 const accepted = rawParticipants.filter((p: any) => isAcceptedParticipant(p.estado));
                 const list: any[] = [];
-                const creator = creatorMap[plan.user_id];
+                const creator = creatorMap[plan.creador_id];
                 if (creator) list.push({ ...creator, isCreator: true });
                 accepted.forEach((p: any) => {
                     const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
-                    if (prof && prof.id !== plan.user_id) list.push({ ...prof, isCreator: false });
+                    if (prof && prof.id !== plan.creador_id) list.push({ ...prof, isCreator: false });
                 });
                 return { ...plan, joinedCount: accepted.length, participantsList: list };
             });
 
             setPlans(formattedPlans);
 
-            if (user) {
-                void Promise.all([
-                    supabase.from('perfiles').select('avatar_url').eq('id', user.id).maybeSingle(),
-                    getProfileNotificationCount(user.id),
-                    supabase.from('participantes').select('plan_id, estado').eq('usuario_id', user.id),
-                    supabase.from('planes_guardados').select('plan_id').eq('usuario_id', user.id),
-                ]).then(([profileRes, notifs, participantsRes, savedRes]) => {
-                    setAvatarUrl(profileRes.data?.avatar_url || user.user_metadata?.avatar_url || null);
-                    setNotifCount(notifs.total);
-                    setNotifBreakdown({
-                        friendRequests: notifs.friendRequests,
-                        planRequests: notifs.planRequests,
-                        planInvites: notifs.planInvites,
-                    });
-                    const map: Record<string, Membership> = {};
-                    (participantsRes.data || []).forEach((p: any) => {
-                        const m = mapEstadoToMembership(p.estado);
-                        if (m) map[p.plan_id] = m;
-                    });
-                    setMembershipMap(map);
-                    setSavedPlans(savedRes.data?.map((s) => s.plan_id) || []);
-                }).catch(() => {
-                    setNotifCount(0);
-                    setNotifBreakdown({ friendRequests: 0, planRequests: 0, planInvites: 0 });
+            if (user && userExtras) {
+                const [profileRes, notifs, participantsRes, savedRes] = userExtras;
+                setAvatarUrl(profileRes.data?.avatar_url || user.user_metadata?.avatar_url || null);
+                setNotifCount(notifs.total);
+                setNotifBreakdown({
+                    friendRequests: notifs.friendRequests,
+                    planRequests: notifs.planRequests,
+                    planInvites: notifs.planInvites,
                 });
+                const map: Record<string, Membership> = {};
+                (participantsRes.data || []).forEach((p: any) => {
+                    const m = mapEstadoToMembership(p.estado);
+                    if (m) map[p.plan_id] = m;
+                });
+                setMembershipMap(map);
+                setSavedPlans(savedRes.data?.map((s) => s.plan_id) || []);
             } else {
                 setNotifCount(0);
                 setNotifBreakdown({ friendRequests: 0, planRequests: 0, planInvites: 0 });
@@ -258,17 +267,8 @@ export default function HomeScreen() {
         if (!currentUserId) return;
         const membership = membershipMap[planId];
         const wasJoined = membership === 'joined';
-        const wasWaitlist = membership === 'waitlist';
-        const title = wasJoined
-            ? t('feed.leaveTitle')
-            : wasWaitlist
-              ? t('feed.leaveWaitlistTitle')
-              : t('feed.cancelRequestTitle');
-        const message = wasJoined
-            ? t('feed.leaveMsg')
-            : wasWaitlist
-              ? t('feed.leaveWaitlistMsg')
-              : t('feed.cancelRequestMsg');
+        const title = wasJoined ? t('feed.leaveTitle') : t('feed.cancelRequestTitle');
+        const message = wasJoined ? t('feed.leaveMsg') : t('feed.cancelRequestMsg');
         Alert.alert(title, message, [
             { text: t('common.cancel'), style: 'cancel' },
             {
@@ -292,10 +292,7 @@ export default function HomeScreen() {
                         Alert.alert(t('feed.error'), t('feed.leaveError'));
                         return;
                     }
-                    if (wasJoined) {
-                        await promoteWaitlist(planId);
-                        fetchData();
-                    }
+                    if (wasJoined) fetchData();
                 },
             },
         ]);
@@ -320,6 +317,27 @@ export default function HomeScreen() {
                 Alert.alert(t('feed.error'), t('feed.saveError'));
             }
         }
+    };
+
+    const handleReportPlan = (planId: string) => {
+        if (!currentUserId) return;
+        Alert.alert(t('card.reportTitle'), t('card.reportConfirm'), [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: t('card.report'),
+                style: 'destructive',
+                onPress: async () => {
+                    const { error } = await reportPlan(planId, currentUserId);
+                    if (error === 'already_reported') {
+                        Alert.alert(t('feed.error'), t('card.reportAlready'));
+                    } else if (error) {
+                        Alert.alert(t('feed.error'), t('card.reportError'));
+                    } else {
+                        Alert.alert(t('card.reportSuccess'));
+                    }
+                },
+            },
+        ]);
     };
 
     const handleDeletePlan = async (planId: string) => {
@@ -353,8 +371,8 @@ export default function HomeScreen() {
 
     const matchesDate = (plan: any) => {
         if (dateFilter === 'all') return true;
-        if (!plan.event_date) return false;
-        const d = new Date(plan.event_date);
+        if (!plan.fecha_evento) return false;
+        const d = new Date(plan.fecha_evento);
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         if (dateFilter === 'today') {
@@ -371,28 +389,25 @@ export default function HomeScreen() {
 
     const filteredPlans = useMemo(() => {
         const isMinePlan = (p: any) =>
-            String(p.user_id) === String(currentUserId)
+            String(p.creador_id) === String(currentUserId)
             || membershipMap[p.id] === 'joined'
-            || membershipMap[p.id] === 'requested'
-            || membershipMap[p.id] === 'waitlist';
+            || membershipMap[p.id] === 'requested';
 
         return plans
             .filter(p =>
                 isFeedPlan(p)
-                && (!p.event_date || new Date(p.event_date) >= startOfToday)
-                && (selectedFilter === 'Todos'
-                    || p.category === selectedFilter
-                    || (selectedFilter === 'Deporte' && (p.category === 'Deporte' || p.category === 'Fútbol')))
-                && p.title.toLowerCase().includes(search.toLowerCase())
-                && (zoneFilter.trim() === '' || (p.location_name || '').toLowerCase().includes(zoneFilter.trim().toLowerCase()))
+                && (!p.fecha_evento || new Date(p.fecha_evento) >= startOfToday)
+                && (selectedFilter === 'Todos' || p.categoria === selectedFilter)
+                && (p.titulo || '').toLowerCase().includes(search.toLowerCase())
+                && (zoneFilter.trim() === '' || (p.nombre_ubicacion || '').toLowerCase().includes(zoneFilter.trim().toLowerCase()))
                 && matchesDate(p)
             )
             .sort((a, b) => {
                 const am = isMinePlan(a) ? 0 : 1;
                 const bm = isMinePlan(b) ? 0 : 1;
                 if (am !== bm) return am - bm;
-                const ad = a.event_date ? new Date(a.event_date).getTime() : Infinity;
-                const bd = b.event_date ? new Date(b.event_date).getTime() : Infinity;
+                const ad = a.fecha_evento ? new Date(a.fecha_evento).getTime() : Infinity;
+                const bd = b.fecha_evento ? new Date(b.fecha_evento).getTime() : Infinity;
                 return ad - bd;
             });
     }, [plans, currentUserId, membershipMap, selectedFilter, search, zoneFilter, dateFilter, startOfToday.getTime()]);
@@ -411,44 +426,23 @@ export default function HomeScreen() {
                 </View>
                 <View style={styles.headerRight}>
                     <View style={styles.flagsRow}>
-                        <TouchableOpacity
-                            style={[styles.flagBtn, lang === 'es' && styles.flagBtnActive]}
-                            onPress={() => setLang('es')}
-                            activeOpacity={0.8}
-                        >
-                            <Text style={styles.flagEmoji}>🇪🇸</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.flagBtn, lang === 'en' && styles.flagBtnActive]}
-                            onPress={() => setLang('en')}
-                            activeOpacity={0.8}
-                        >
-                            <Text style={styles.flagEmoji}>🇬🇧</Text>
-                        </TouchableOpacity>
+                        {LANG_OPTIONS.map((opt) => (
+                            <TouchableOpacity
+                                key={opt.code}
+                                style={[styles.flagBtn, lang === opt.code && styles.flagBtnActive]}
+                                onPress={() => setLang(opt.code)}
+                                activeOpacity={0.8}
+                            >
+                                <Text style={styles.flagEmoji}>{opt.flag}</Text>
+                            </TouchableOpacity>
+                        ))}
                     </View>
                     <TouchableOpacity
                         style={styles.profileBtn}
-                        onPress={() => {
-                            if (notifCount === 0) {
-                                router.push('/profile');
-                                return;
-                            }
-                            const { friendRequests, planRequests, planInvites } = notifBreakdown;
-                            if (planRequests > 0 && friendRequests === 0 && planInvites === 0) {
-                                router.push('/my-plans');
-                            } else if (friendRequests > 0 || planInvites > 0) {
-                                router.push('/friends');
-                            } else {
-                                router.push('/profile');
-                            }
-                        }}
+                        onPress={() => router.push('/profile')}
                     >
                         <View style={styles.profileAvatarWrap}>
-                            {avatarUrl ? (
-                                <Image source={{ uri: avatarUrl }} style={styles.profileImage} />
-                            ) : (
-                                <View style={styles.profileIconBg}><Ionicons name="person" size={22} color={PRIMARY_DARK} /></View>
-                            )}
+                            <ProfileAvatar uri={avatarUrl} name="U" size={44} recyclingKey={currentUserId ?? undefined} />
                             {notifCount > 0 && (
                                 <View style={styles.profileNotifBadge}>
                                     <Text style={styles.profileNotifText}>
@@ -535,6 +529,7 @@ export default function HomeScreen() {
                             onDelete={handleDeletePlan}
                             onEdit={handleEditPlan}
                             onToggleSave={handleSave}
+                            onReport={currentUserId ? handleReportPlan : undefined}
                             router={router}
                         />
                     )}
@@ -642,12 +637,21 @@ const styles = StyleSheet.create({
     },
     profileNotifText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    flagsRow: { flexDirection: 'row', backgroundColor: '#FFF', borderRadius: 14, padding: 3, gap: 2, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
-    flagBtn: { width: 32, height: 32, borderRadius: 11, justifyContent: 'center', alignItems: 'center' },
+    flagsRow: {
+        flexDirection: 'row',
+        backgroundColor: '#FFF',
+        borderRadius: 14,
+        padding: 3,
+        gap: 2,
+        elevation: 3,
+        shadowColor: PRIMARY_DARK,
+        shadowOpacity: 0.12,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 3 },
+    },
+    flagBtn: { width: 30, height: 30, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
     flagBtnActive: { backgroundColor: '#E3ECFB' },
-    flagEmoji: { fontSize: 18 },
-    profileIconBg: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center', elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
-    profileImage: { width: 46, height: 46, borderRadius: 23, borderWidth: 2, borderColor: '#FFF' },
+    flagEmoji: { fontSize: 16 },
     searchWrapper: { paddingHorizontal: 24, marginBottom: 12 },
     searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 14, borderRadius: 18, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.1, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
     searchInput: { marginLeft: 10, flex: 1, fontSize: 16, color: INK },

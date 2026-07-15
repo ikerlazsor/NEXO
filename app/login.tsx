@@ -20,8 +20,9 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
+import { LangPicker } from '../components/LangPicker';
 import { useT } from '../lib/i18n';
-import { ensureProfile, isUsernameTaken, normalizeUsername, USERNAME_MAX_LENGTH } from '../lib/profile';
+import { ensureProfile, isUsernameTaken, isValidUsername, normalizeUsername, USERNAME_MAX_LENGTH } from '../lib/profile';
 import { supabase } from '../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -29,6 +30,12 @@ WebBrowser.maybeCompleteAuthSession();
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
+const MUTED = '#64748B';
+const PLACEHOLDER = '#94A3B8';
+const FIELD_BG = '#F5F9FF';
+const FIELD_BORDER = '#E3ECFB';
+
+type FieldName = 'nombre' | 'email' | 'password' | null;
 
 const parseAuthParams = (url: string): Record<string, string> => {
     const out: Record<string, string> = {};
@@ -46,15 +53,25 @@ const parseAuthParams = (url: string): Record<string, string> => {
     return out;
 };
 
+const COMMUNITY_AVATARS = [
+    'https://i.pravatar.cc/150?img=32',
+    'https://i.pravatar.cc/150?img=11',
+    'https://i.pravatar.cc/150?img=18',
+    'https://i.pravatar.cc/150?img=21',
+    'https://i.pravatar.cc/150?img=20',
+    'https://i.pravatar.cc/150?img=12',
+];
+
 export default function LoginScreen() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [nombre, setNombre] = useState(''); 
+    const [nombre, setNombre] = useState('');
     const [loading, setLoading] = useState(false);
     const [isRegistering, setIsRegistering] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
+    const [focusedField, setFocusedField] = useState<FieldName>(null);
     const router = useRouter();
-    const { t } = useT();
+    const { t, lang, setLang } = useT();
 
     const validatePassword = (pass: string) => {
         const hasNumber = /\d/.test(pass);
@@ -130,7 +147,7 @@ export default function LoginScreen() {
 
         const trimmedName = normalizeUsername(nombre);
         if (isRegistering) {
-            if (trimmedName.length > USERNAME_MAX_LENGTH) {
+            if (!isValidUsername(trimmedName)) {
                 return Alert.alert(t('login.notice'), t('login.usernameMaxHint'));
             }
             const taken = await isUsernameTaken(trimmedName);
@@ -142,19 +159,19 @@ export default function LoginScreen() {
         setLoading(true);
         try {
             if (isRegistering) {
-                const { data, error } = await supabase.auth.signUp({ 
-                    email: email.trim(), 
+                const { data, error } = await supabase.auth.signUp({
+                    email: email.trim(),
                     password,
-                    options: { data: { nombre: trimmedName, onboarding_completed: false } }
+                    options: { data: { nombre: trimmedName, registro_completado: false } }
                 });
-                
+
                 if (error) throw error;
 
                 if (data.user) {
                     const { error: profileError } = await ensureProfile(
                         {
                             ...data.user,
-                            user_metadata: { ...data.user.user_metadata, nombre: trimmedName, onboarding_completed: false },
+                            user_metadata: { ...data.user.user_metadata, nombre: trimmedName, registro_completado: false },
                         },
                         trimmedName
                     );
@@ -170,12 +187,12 @@ export default function LoginScreen() {
                     setIsRegistering(false);
                 }
             } else {
-                const { data, error } = await supabase.auth.signInWithPassword({ 
-                    email: email.trim(), 
-                    password 
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email: email.trim(),
+                    password
                 });
                 if (error) throw error;
-                
+
                 if (data.user) {
                     const { error: profileError } = await ensureProfile(data.user);
                     if (profileError) {
@@ -202,252 +219,449 @@ export default function LoginScreen() {
         }
     }
 
-    const communityAvatars = [
-        'https://i.pravatar.cc/150?img=32',
-        'https://i.pravatar.cc/150?img=11',
-        'https://i.pravatar.cc/150?img=18',
-        'https://i.pravatar.cc/150?img=21',
-        'https://i.pravatar.cc/150?img=20',
-        'https://i.pravatar.cc/150?img=12',
-        'https://i.pravatar.cc/150?img=8',
+    const switchMode = (registering: boolean) => {
+        if (registering === isRegistering) return;
+        setIsRegistering(registering);
+        setPassword('');
+        setShowPassword(false);
+    };
+
+    const fieldStyle = (name: FieldName) => [
+        styles.fieldWrapper,
+        focusedField === name && styles.fieldWrapperFocused,
     ];
 
     return (
-        <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.container}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
-        >
-            <LinearGradient colors={['#DCEBFF', '#F2F7FF', '#FFFFFF']} style={StyleSheet.absoluteFill} />
-            <ScrollView
-                contentContainerStyle={[
-                    styles.scrollContainer,
-                    isRegistering && styles.scrollContainerRegister,
-                ]}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="on-drag"
-                showsVerticalScrollIndicator={false}
-                bounces
-                nestedScrollEnabled
+        <View style={styles.container}>
+            <LinearGradient
+                colors={[PRIMARY_DARK, '#3B82F6', PRIMARY]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.heroGradient}
+            />
+            <View style={[styles.decorCircle, styles.decorCircleA]} />
+            <View style={[styles.decorCircle, styles.decorCircleB]} />
+
+            <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                style={styles.flex}
             >
-                <View style={styles.inner}>
-                    <Text style={styles.brandTitle}>NEXO</Text>
-
-                    <View style={styles.welcomeRow}>
-                        <View style={styles.avatarsOverlap}>
-                            {communityAvatars.map((url, index) => (
-                                <Image
-                                    key={index}
-                                    source={{ uri: url }}
-                                    style={[
-                                        styles.welcomeAvatar,
-                                        {
-                                            marginLeft: index === 0 ? 0 : -12,
-                                            zIndex: communityAvatars.length - index,
-                                        },
-                                    ]}
-                                />
-                            ))}
+                <ScrollView
+                    contentContainerStyle={styles.scrollContainer}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    showsVerticalScrollIndicator={false}
+                    bounces
+                >
+                    {/* ---------- Hero ---------- */}
+                    <View style={styles.hero}>
+                        <View style={styles.logoBadge}>
+                            <Ionicons name="people" size={26} color="#FFF" />
                         </View>
-                            <Text style={styles.welcomeText}>{t('login.welcome')}</Text>
-                            <Text style={styles.welcomeSub}>{t('login.welcomeSub')}</Text>
+                        <Text style={styles.brandTitle}>NEXO</Text>
+                        <Text style={styles.brandSubtitle}>
+                            {isRegistering ? t('login.subtitleRegister') : t('login.subtitleLogin')}
+                        </Text>
+
+                        <View style={styles.communityRow}>
+                            <View style={styles.avatarsOverlap}>
+                                {COMMUNITY_AVATARS.map((url, index) => (
+                                    <Image
+                                        key={index}
+                                        source={{ uri: url }}
+                                        style={[
+                                            styles.communityAvatar,
+                                            {
+                                                marginLeft: index === 0 ? 0 : -10,
+                                                zIndex: COMMUNITY_AVATARS.length - index,
+                                            },
+                                        ]}
+                                    />
+                                ))}
+                            </View>
+                            <Text style={styles.communityText}>{t('login.welcomeSub')}</Text>
                         </View>
+                    </View>
 
-                        <View style={styles.form}>
-                            <View style={styles.socialRow}>
-                                <TouchableOpacity style={styles.socialBtn} onPress={() => handleOAuth('google')} disabled={loading} activeOpacity={0.85}>
-                                    <Ionicons name="logo-google" size={20} color="#EA4335" />
-                                    <Text style={styles.socialText}>{t('login.google')}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={styles.socialBtn} onPress={() => handleOAuth('apple')} disabled={loading} activeOpacity={0.85}>
-                                    <Ionicons name="logo-apple" size={22} color={INK} />
-                                    <Text style={styles.socialText}>{t('login.apple')}</Text>
-                                </TouchableOpacity>
-                            </View>
-
-                            <View style={styles.dividerRow}>
-                                <View style={styles.dividerLine} />
-                                <Text style={styles.dividerText}>{t('login.orEmail')}</Text>
-                                <View style={styles.dividerLine} />
-                            </View>
-
-                            {isRegistering && (
-                                <>
-                                    <Text style={styles.label}>{t('login.username')}</Text>
-                                    <TextInput
-                                        placeholder={t('login.usernamePlaceholder')}
-                                        placeholderTextColor="#94A3B8"
-                                        style={styles.input}
-                                        value={nombre}
-                                        onChangeText={(text) => setNombre(text.slice(0, USERNAME_MAX_LENGTH))}
-                                        autoCapitalize={'words'}
-                                        maxLength={USERNAME_MAX_LENGTH}
-                                    />
-                                    <Text style={styles.inputHint}>{t('login.usernameMaxHint')}</Text>
-                                </>
-                            )}
-
-                            <Text style={styles.label}>{t('login.email')}</Text>
-                            <TextInput
-                                placeholder={t('login.emailPlaceholder')}
-                                placeholderTextColor="#94A3B8"
-                                style={styles.input}
-                                value={email}
-                                onChangeText={setEmail}
-                                autoCapitalize={'none'}
-                                keyboardType="email-address"
-                            />
-
-                            <Text style={styles.label}>{t('login.password')}</Text>
-                            <View style={styles.passwordWrapper}>
-                                <TextInput
-                                    placeholder="••••••••"
-                                    placeholderTextColor="#94A3B8"
-                                    style={styles.passwordInput}
-                                    value={password}
-                                    onChangeText={setPassword}
-                                    secureTextEntry={!showPassword}
-                                    autoCapitalize={'none'}
-                                />
-                                <TouchableOpacity 
-                                    style={styles.eyeButton} 
-                                    onPress={() => setShowPassword(!showPassword)}
-                                    activeOpacity={1}
-                                >
-                                    <Ionicons 
-                                        name={showPassword ? "eye-off" : "eye"} 
-                                        size={22} 
-                                        color="#94A3B8" 
-                                    />
-                                </TouchableOpacity>
-                            </View>
-
-                            <TouchableOpacity 
-                                style={styles.btnPrimary} 
-                                onPress={handleAuth} 
-                                disabled={loading}
+                    {/* ---------- Tarjeta ---------- */}
+                    <View style={styles.card}>
+                        <View style={styles.segmented}>
+                            <TouchableOpacity
+                                style={[styles.segmentBtn, !isRegistering && styles.segmentBtnActive]}
+                                onPress={() => switchMode(false)}
+                                activeOpacity={0.8}
                             >
-                                {loading ? (
-                                    <ActivityIndicator color="#fff" />
-                                ) : (
-                                    <Text style={styles.btnText}>
-                                        {isRegistering ? t('login.createAccount') : t('login.enter')}
-                                    </Text>
-                                )}
+                                <Text style={[styles.segmentText, !isRegistering && styles.segmentTextActive]}>
+                                    {t('login.tabLogin')}
+                                </Text>
                             </TouchableOpacity>
-
-                            <TouchableOpacity 
-                                style={styles.btnSecondary} 
-                                onPress={() => {
-                                    setIsRegistering(!isRegistering);
-                                    setPassword('');
-                                }}
+                            <TouchableOpacity
+                                style={[styles.segmentBtn, isRegistering && styles.segmentBtnActive]}
+                                onPress={() => switchMode(true)}
+                                activeOpacity={0.8}
                             >
-                                <Text style={styles.btnTextSecondary}>
-                                    {isRegistering 
-                                        ? t('login.haveAccount') 
-                                        : t('login.noAccount')}
+                                <Text style={[styles.segmentText, isRegistering && styles.segmentTextActive]}>
+                                    {t('login.tabRegister')}
                                 </Text>
                             </TouchableOpacity>
                         </View>
+
+                        <View style={styles.langBlock}>
+                            <Text style={styles.langLabel}>{t('login.language')}</Text>
+                            <LangPicker lang={lang} onChange={setLang} compact />
+                        </View>
+
+                        {isRegistering && (
+                            <View style={styles.fieldBlock}>
+                                <Text style={styles.label}>{t('login.username')}</Text>
+                                <View style={fieldStyle('nombre')}>
+                                    <Ionicons name="person-outline" size={20} color={focusedField === 'nombre' ? PRIMARY_DARK : PLACEHOLDER} />
+                                    <TextInput
+                                        placeholder={t('login.usernamePlaceholder')}
+                                        placeholderTextColor={PLACEHOLDER}
+                                        style={styles.fieldInput}
+                                        value={nombre}
+                                        onChangeText={(text) => setNombre(text.slice(0, USERNAME_MAX_LENGTH))}
+                                        onFocus={() => setFocusedField('nombre')}
+                                        onBlur={() => setFocusedField(null)}
+                                        autoCapitalize="words"
+                                        maxLength={USERNAME_MAX_LENGTH}
+                                        returnKeyType="next"
+                                    />
+                                </View>
+                                <Text style={styles.inputHint}>{t('login.usernameMaxHint')}</Text>
+                            </View>
+                        )}
+
+                        <View style={styles.fieldBlock}>
+                            <Text style={styles.label}>{t('login.email')}</Text>
+                            <View style={fieldStyle('email')}>
+                                <Ionicons name="mail-outline" size={20} color={focusedField === 'email' ? PRIMARY_DARK : PLACEHOLDER} />
+                                <TextInput
+                                    placeholder={t('login.emailPlaceholder')}
+                                    placeholderTextColor={PLACEHOLDER}
+                                    style={styles.fieldInput}
+                                    value={email}
+                                    onChangeText={setEmail}
+                                    onFocus={() => setFocusedField('email')}
+                                    onBlur={() => setFocusedField(null)}
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                    keyboardType="email-address"
+                                    returnKeyType="next"
+                                />
+                            </View>
+                        </View>
+
+                        <View style={styles.fieldBlock}>
+                            <Text style={styles.label}>{t('login.password')}</Text>
+                            <View style={fieldStyle('password')}>
+                                <Ionicons name="lock-closed-outline" size={20} color={focusedField === 'password' ? PRIMARY_DARK : PLACEHOLDER} />
+                                <TextInput
+                                    placeholder="••••••••"
+                                    placeholderTextColor={PLACEHOLDER}
+                                    style={styles.fieldInput}
+                                    value={password}
+                                    onChangeText={setPassword}
+                                    onFocus={() => setFocusedField('password')}
+                                    onBlur={() => setFocusedField(null)}
+                                    secureTextEntry={!showPassword}
+                                    autoCapitalize="none"
+                                    returnKeyType="done"
+                                    onSubmitEditing={handleAuth}
+                                />
+                                <TouchableOpacity
+                                    style={styles.eyeButton}
+                                    onPress={() => setShowPassword(!showPassword)}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                    <Ionicons
+                                        name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                                        size={21}
+                                        color={PLACEHOLDER}
+                                    />
+                                </TouchableOpacity>
+                            </View>
+                            {isRegistering && (
+                                <Text style={styles.inputHint}>{t('login.weakPasswordMsg')}</Text>
+                            )}
+                        </View>
+
+                        <TouchableOpacity
+                            onPress={handleAuth}
+                            disabled={loading}
+                            activeOpacity={0.9}
+                            style={styles.btnPrimaryWrapper}
+                        >
+                            <LinearGradient
+                                colors={[PRIMARY, PRIMARY_DARK]}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 0 }}
+                                style={styles.btnPrimary}
+                            >
+                                {loading ? (
+                                    <ActivityIndicator color="#FFF" />
+                                ) : (
+                                    <>
+                                        <Text style={styles.btnText}>
+                                            {isRegistering ? t('login.createAccount') : t('login.enter')}
+                                        </Text>
+                                        <Ionicons name="arrow-forward" size={19} color="#FFF" />
+                                    </>
+                                )}
+                            </LinearGradient>
+                        </TouchableOpacity>
+
+                        <View style={styles.dividerRow}>
+                            <View style={styles.dividerLine} />
+                            <Text style={styles.dividerText}>{t('login.orContinueWith')}</Text>
+                            <View style={styles.dividerLine} />
+                        </View>
+
+                        <View style={styles.socialRow}>
+                            <TouchableOpacity
+                                style={styles.socialBtn}
+                                onPress={() => handleOAuth('google')}
+                                disabled={loading}
+                                activeOpacity={0.85}
+                            >
+                                <Ionicons name="logo-google" size={20} color="#EA4335" />
+                                <Text style={styles.socialText}>{t('login.google')}</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.socialBtn}
+                                onPress={() => handleOAuth('apple')}
+                                disabled={loading}
+                                activeOpacity={0.85}
+                            >
+                                <Ionicons name="logo-apple" size={22} color={INK} />
+                                <Text style={styles.socialText}>{t('login.apple')}</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
-            </ScrollView>
-        </KeyboardAvoidingView>
+
+                    <TouchableOpacity
+                        style={styles.switchLink}
+                        onPress={() => switchMode(!isRegistering)}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={styles.switchLinkText}>
+                            {isRegistering ? t('login.haveAccount') : t('login.noAccount')}
+                        </Text>
+                    </TouchableOpacity>
+                </ScrollView>
+            </KeyboardAvoidingView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#F2F7FF' },
-    scrollContainer: { flexGrow: 1, justifyContent: 'center', paddingBottom: 40 },
-    scrollContainerRegister: { justifyContent: 'flex-start', paddingTop: Platform.OS === 'ios' ? 40 : 24 },
-    inner: { padding: 30, paddingBottom: 10 },
-    brandTitle: {
-        fontSize: 56,
-        fontWeight: '900',
-        color: INK,
-        textAlign: 'center',
-        letterSpacing: 10,
-        marginTop: 16,
-        marginBottom: 28,
+    flex: { flex: 1 },
+    heroGradient: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 380,
+        borderBottomLeftRadius: 42,
+        borderBottomRightRadius: 42,
     },
-    welcomeRow: {
-        flexDirection: 'column',
+    decorCircle: {
+        position: 'absolute',
+        borderRadius: 999,
+        backgroundColor: 'rgba(255,255,255,0.08)',
+    },
+    decorCircleA: { width: 220, height: 220, top: -70, right: -60 },
+    decorCircleB: { width: 150, height: 150, top: 180, left: -50 },
+    scrollContainer: {
+        flexGrow: 1,
+        paddingHorizontal: 22,
+        paddingBottom: 36,
+    },
+    hero: {
+        alignItems: 'center',
+        paddingTop: Platform.OS === 'ios' ? 76 : 56,
+        paddingBottom: 26,
+    },
+    logoBadge: {
+        width: 56,
+        height: 56,
+        borderRadius: 18,
+        backgroundColor: 'rgba(255,255,255,0.18)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.35)',
         alignItems: 'center',
         justifyContent: 'center',
-        marginBottom: 28,
-        paddingVertical: 10,
+        marginBottom: 14,
     },
-    avatarsOverlap: {
+    brandTitle: {
+        fontSize: 40,
+        fontWeight: '900',
+        color: '#FFF',
+        letterSpacing: 12,
+        marginLeft: 12, // compensa el letterSpacing del último carácter
+    },
+    brandSubtitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: 'rgba(255,255,255,0.9)',
+        marginTop: 6,
+        textAlign: 'center',
+        paddingHorizontal: 30,
+    },
+    communityRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 12
+        gap: 10,
+        marginTop: 18,
+        backgroundColor: 'rgba(255,255,255,0.14)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.25)',
+        borderRadius: 999,
+        paddingVertical: 8,
+        paddingHorizontal: 14,
+        maxWidth: '96%',
     },
-    welcomeAvatar: {
-        width: 34,
-        height: 34,
-        borderRadius: 17,
-        borderWidth: 2.5,
+    avatarsOverlap: { flexDirection: 'row', alignItems: 'center' },
+    communityAvatar: {
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        borderWidth: 2,
         borderColor: '#FFF',
     },
-    welcomeText: {
-        fontSize: 18,
-        fontWeight: '800',
-        color: INK,
+    communityText: {
+        flexShrink: 1,
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#FFF',
     },
-    welcomeSub: { fontSize: 13, fontWeight: '500', color: '#64748B', textAlign: 'center', marginTop: 4, paddingHorizontal: 20 },
-    form: { width: '100%', backgroundColor: '#FFF', borderRadius: 26, padding: 22, elevation: 8, shadowColor: '#1E3A8A', shadowOpacity: 0.12, shadowRadius: 20, shadowOffset: { width: 0, height: 10 } },
-    socialRow: { flexDirection: 'row', gap: 12, marginBottom: 18 },
-    socialBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFF', borderWidth: 1.5, borderColor: '#E3ECFB', borderRadius: 16, paddingVertical: 14 },
-    socialText: { fontSize: 15, fontWeight: '700', color: INK },
-    dividerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
-    dividerLine: { flex: 1, height: 1, backgroundColor: '#E3ECFB' },
-    dividerText: { marginHorizontal: 12, fontSize: 13, color: '#94A3B8', fontWeight: '600' },
-    label: { fontSize: 14, fontWeight: '700', color: INK, marginBottom: 8, marginLeft: 4 },
-    inputHint: { fontSize: 12, color: '#94A3B8', marginTop: -14, marginBottom: 16, marginLeft: 4, fontWeight: '500' },
-    input: { 
-        backgroundColor: '#F2F7FF', 
-        padding: 18, 
-        borderRadius: 16, 
-        marginBottom: 20, 
-        fontSize: 16, 
-        color: INK,
+    card: {
+        backgroundColor: '#FFF',
+        borderRadius: 28,
+        padding: 22,
+        shadowColor: '#1E3A8A',
+        shadowOpacity: 0.14,
+        shadowRadius: 24,
+        shadowOffset: { width: 0, height: 12 },
+        elevation: 10,
+    },
+    segmented: {
+        flexDirection: 'row',
+        backgroundColor: FIELD_BG,
+        borderRadius: 16,
+        padding: 4,
+        marginBottom: 22,
         borderWidth: 1,
-        borderColor: '#E3ECFB'
+        borderColor: FIELD_BORDER,
     },
-    passwordWrapper: {
+    segmentBtn: {
+        flex: 1,
+        paddingVertical: 11,
+        borderRadius: 12,
+        alignItems: 'center',
+    },
+    segmentBtnActive: {
+        backgroundColor: '#FFF',
+        shadowColor: '#1E3A8A',
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+        elevation: 3,
+    },
+    segmentText: { fontSize: 14, fontWeight: '700', color: MUTED },
+    segmentTextActive: { color: PRIMARY_DARK },
+    langBlock: { marginBottom: 18 },
+    langLabel: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: MUTED,
+        marginBottom: 8,
+        marginLeft: 4,
+        textTransform: 'uppercase',
+        letterSpacing: 0.4,
+    },
+    fieldBlock: { marginBottom: 16 },
+    label: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: INK,
+        marginBottom: 7,
+        marginLeft: 4,
+    },
+    fieldWrapper: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#F2F7FF',
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: '#E3ECFB',
-        marginBottom: 20,
+        gap: 10,
+        backgroundColor: FIELD_BG,
+        borderRadius: 15,
+        borderWidth: 1.5,
+        borderColor: FIELD_BORDER,
+        paddingHorizontal: 14,
     },
-    passwordInput: {
+    fieldWrapperFocused: {
+        borderColor: PRIMARY,
+        backgroundColor: '#FFF',
+    },
+    fieldInput: {
         flex: 1,
-        padding: 18, 
-        fontSize: 16,
-        color: '#1E293B',
+        paddingVertical: 15,
+        fontSize: 15.5,
+        color: INK,
     },
-    eyeButton: {
-        paddingRight: 18,
-        paddingLeft: 10,
-        justifyContent: 'center',
-        alignItems: 'center',
+    eyeButton: { padding: 2 },
+    inputHint: {
+        fontSize: 12,
+        color: PLACEHOLDER,
+        fontWeight: '500',
+        marginTop: 6,
+        marginLeft: 4,
     },
-    btnPrimary: { 
-        backgroundColor: PRIMARY_DARK, 
-        padding: 18, 
-        borderRadius: 16, 
-        alignItems: 'center', 
-        marginTop: 10,
-        elevation: 4,
+    btnPrimaryWrapper: {
+        marginTop: 6,
+        borderRadius: 16,
         shadowColor: PRIMARY_DARK,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.4,
-        shadowRadius: 10
+        shadowOpacity: 0.35,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 7 },
+        elevation: 6,
+    },
+    btnPrimary: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 17,
+        borderRadius: 16,
     },
     btnText: { color: '#FFF', fontWeight: '800', fontSize: 16 },
-    btnSecondary: { marginTop: 25, alignItems: 'center' },
-    btnTextSecondary: { color: '#64748B', fontWeight: '600', fontSize: 14 }
+    dividerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginVertical: 18,
+    },
+    dividerLine: { flex: 1, height: 1, backgroundColor: FIELD_BORDER },
+    dividerText: {
+        marginHorizontal: 12,
+        fontSize: 12.5,
+        color: PLACEHOLDER,
+        fontWeight: '600',
+    },
+    socialRow: { flexDirection: 'row', gap: 12 },
+    socialBtn: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#FFF',
+        borderWidth: 1.5,
+        borderColor: FIELD_BORDER,
+        borderRadius: 15,
+        paddingVertical: 13,
+    },
+    socialText: { fontSize: 15, fontWeight: '700', color: INK },
+    switchLink: { marginTop: 22, alignItems: 'center', paddingVertical: 6 },
+    switchLinkText: { color: MUTED, fontWeight: '600', fontSize: 14 },
 });

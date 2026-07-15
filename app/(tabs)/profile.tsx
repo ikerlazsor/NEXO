@@ -3,24 +3,25 @@ perfil del usuario
 */
 import { Ionicons } from '@expo/vector-icons';
 import { decode } from 'base64-arraybuffer';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
-    Image,
     Modal,
     Pressable,
     ScrollView,
     StyleSheet,
+    Switch,
     Text,
     TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ProfileAvatar } from '../../components/ProfileAvatar';
+import { ProfileDetailsSection } from '../../components/ProfileDetailsSection';
 import { getFriendsCount } from '../../lib/friends';
 import { useT } from '../../lib/i18n';
 import { getProfileNotificationCount } from '../../lib/notifications';
@@ -28,30 +29,40 @@ import { getAuthUser } from '../../lib/auth';
 import {
     deleteAccount,
     isUsernameTaken,
+    isValidUsername,
     normalizeUsername,
     resolveDisplayName,
     syncProfileFromAuth,
     updateProfileFields,
+    updateUsername,
     USERNAME_MAX_LENGTH,
 } from '../../lib/profile';
+import { renderRatingStars } from '../../lib/profileRating';
+import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
+import { BADGE_DEFINITIONS, getUserBadges } from '../../lib/badges';
 import {
-    DEFAULT_PLANS_DONE,
-    DEFAULT_RATING,
-    DEFAULT_REVIEW_COUNT,
-    renderRatingStars,
-} from '../../lib/profileRating';
+    AFICIONES_OPTIONS,
+    calcAge,
+    birthDateFromAge,
+    parseHabitos,
+    mergePerfilGustosPrivacy,
+    parsePrivacy,
+    searchProfilesByUsername,
+    type Genero,
+    type HabitoConsumo,
+    type ProfilePrivacy,
+} from '../../lib/profileFields';
 import { supabase } from '../../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
-const BG_TOP = '#DCEBFF';
-const BG_BOTTOM = '#F2F7FF';
+const MUTED = '#64748B';
+const BG = '#F8FAFC';
+const SURFACE = '#FFFFFF';
+const BORDER = '#E2E8F0';
 
-const PERSONALITY_OPTIONS = [
-    'Deportista', 'Viajero', 'Aventurero', 'Tranquilo', 'Yoga',
-    'Foodie', 'Fiestero', 'Lectura', 'De terraceo', 'Más de noche', 'Más de día',
-];
+const PERSONALITY_OPTIONS = [...AFICIONES_OPTIONS];
 
 type QuickAction = {
     key: string;
@@ -71,18 +82,31 @@ export default function ProfileScreen() {
     const [nombre, setNombre] = useState('');
     const [isEditing, setIsEditing] = useState(false);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-    const [tags, setTags] = useState<string[]>([]);
-    const [showTagModal, setShowTagModal] = useState(false);
     const [friendsCount, setFriendsCount] = useState(0);
     const [friendsNotifCount, setFriendsNotifCount] = useState(0);
     const [planRequests, setPlanRequests] = useState(0);
     const [aboutMe, setAboutMe] = useState('');
     const [isEditingAboutMe, setIsEditingAboutMe] = useState(false);
     const [deletingAccount, setDeletingAccount] = useState(false);
+    const [stats, setStats] = useState<UserStats>(EMPTY_STATS);
+    const [age, setAge] = useState<number | null>(null);
+    const [genero, setGenero] = useState<Genero | null>(null);
+    const [habitoBebida, setHabitoBebida] = useState<HabitoConsumo>('no_especificado');
+    const [habitoTabaco, setHabitoTabaco] = useState<HabitoConsumo>('no_especificado');
+    const [aficiones, setAficiones] = useState<string[]>([]);
+    const [showAficionModal, setShowAficionModal] = useState(false);
+    const [badges, setBadges] = useState<(typeof BADGE_DEFINITIONS[0] & { unlocked: boolean })[]>([]);
+    const [selectedBadge, setSelectedBadge] = useState<(typeof BADGE_DEFINITIONS[0] & { unlocked: boolean }) | null>(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<{ id: string; nombre: string | null; nombre_usuario: string | null; avatar_url: string | null }[]>([]);
+    const [searching, setSearching] = useState(false);
+    const [privacy, setPrivacy] = useState<ProfilePrivacy>({ mostrar_edad: true, mostrar_genero: true, mostrar_bebida: true, mostrar_tabaco: true, mostrar_aficiones: true });
+    const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>({});
+    const cacheRef = useRef<string | null>(null);
 
     useFocusEffect(
         useCallback(() => {
-            fetchUserData();
+            fetchUserData(!!cacheRef.current);
         }, [])
     );
 
@@ -91,6 +115,11 @@ export default function ProfileScreen() {
             setFriendsCount(await getFriendsCount(userId));
         } catch {
             setFriendsCount(0);
+        }
+        try {
+            setStats(await getUserStats(userId));
+        } catch {
+            setStats(EMPTY_STATS);
         }
     }, []);
 
@@ -114,19 +143,34 @@ export default function ProfileScreen() {
         }, [user?.id, fetchFriendsStats, fetchNotificationCounts])
     );
 
-    const fetchUserData = async () => {
+    const fetchUserData = async (silent = false) => {
         const authUser = await getAuthUser();
         if (!authUser) return;
 
         setUser(authUser);
-        const profile = await syncProfileFromAuth(authUser);
-        setNombre(profile.nombre);
-        setTags(profile.tags);
-        setAboutMe(profile.about_me);
-        setAvatarUrl(profile.avatar_url);
+        const [profile, userStats] = await Promise.all([
+            syncProfileFromAuth(authUser),
+            getUserStats(authUser.id),
+        ]);
+        cacheRef.current = authUser.id;
 
-        await fetchFriendsStats(authUser.id);
-        await fetchNotificationCounts(authUser.id);
+        setNombre(profile.nombre);
+        setAboutMe(profile.descripcion);
+        setAvatarUrl(profile.avatar_url);
+        setAge(calcAge(profile.fecha_nacimiento));
+        setGenero((profile.genero as Genero) || null);
+        const habitos = parseHabitos(profile.habitos_consumo);
+        setHabitoBebida(habitos.bebida);
+        setHabitoTabaco(habitos.tabaco);
+        setAficiones(profile.ambientes_preferidos?.length ? profile.ambientes_preferidos : profile.etiquetas);
+        setPerfilGustos(profile.perfil_gustos);
+        setPrivacy(parsePrivacy(profile.perfil_gustos));
+
+        setStats(userStats);
+        setBadges(getUserBadges(userStats));
+
+        void fetchFriendsStats(authUser.id);
+        void fetchNotificationCounts(authUser.id);
     };
 
     const uploadImage = async (uri: string) => {
@@ -189,23 +233,63 @@ export default function ProfileScreen() {
         ]);
     };
 
-    const addTag = (tag: string) => {
-        if (tags.length >= 5) {
+    const addAficion = (tag: string) => {
+        if (aficiones.length >= 5) {
             Alert.alert(t('profile.tagLimitTitle'), t('profile.tagLimit'));
             return;
         }
-        if (!tags.includes(tag)) {
-            const updatedTags = [...tags, tag];
-            setTags(updatedTags);
-            updateProfileData({ tags: updatedTags });
+        if (!aficiones.includes(tag)) {
+            const updated = [...aficiones, tag];
+            setAficiones(updated);
+            updateProfileData({ ambientes_preferidos: updated });
         }
-        setShowTagModal(false);
+        setShowAficionModal(false);
     };
 
-    const removeTag = (tagToRemove: string) => {
-        const updatedTags = tags.filter((tag) => tag !== tagToRemove);
-        setTags(updatedTags);
-        updateProfileData({ tags: updatedTags });
+    const removeAficion = (tagToRemove: string) => {
+        const updated = aficiones.filter((tag) => tag !== tagToRemove);
+        setAficiones(updated);
+        updateProfileData({ ambientes_preferidos: updated });
+    };
+
+    const savePrivacy = async (next: ProfilePrivacy) => {
+        setPrivacy(next);
+        await updateProfileData({
+            perfil_gustos: mergePerfilGustosPrivacy(perfilGustos, next),
+        });
+    };
+
+    const saveAge = async (newAge: number) => {
+        setAge(newAge);
+        await updateProfileData({ fecha_nacimiento: birthDateFromAge(newAge) });
+    };
+
+    const saveGenero = async (g: Genero) => {
+        setGenero(g);
+        await updateProfileData({ genero: g });
+    };
+
+    const saveHabitos = async (bebida: HabitoConsumo, tabaco: HabitoConsumo) => {
+        setHabitoBebida(bebida);
+        setHabitoTabaco(tabaco);
+        await updateProfileData({ habitos_consumo: { bebida, tabaco } });
+    };
+
+    const runSearch = async (q: string) => {
+        setSearchQuery(q);
+        if (!user?.id || q.trim().length < 2) {
+            setSearchResults([]);
+            return;
+        }
+        setSearching(true);
+        try {
+            const results = await searchProfilesByUsername(q, user.id);
+            setSearchResults(results);
+        } catch {
+            setSearchResults([]);
+        } finally {
+            setSearching(false);
+        }
     };
 
     const updateProfileData = async (data: Record<string, unknown>): Promise<{ error: string | null }> => {
@@ -220,7 +304,7 @@ export default function ProfileScreen() {
             Alert.alert(t('profile.error'), t('login.fillAll'));
             return;
         }
-        if (trimmed.length > USERNAME_MAX_LENGTH) {
+        if (!isValidUsername(trimmed)) {
             Alert.alert(t('profile.error'), t('login.usernameMaxHint'));
             return;
         }
@@ -231,56 +315,24 @@ export default function ProfileScreen() {
         }
         setNombre(trimmed);
         setIsEditing(false);
-        const { error } = await updateProfileData({ nombre: trimmed });
+        const { error } = await updateUsername(user.id, trimmed);
         if (error) {
             const isDuplicate =
                 error.toLowerCase().includes('unique') ||
-                error.toLowerCase().includes('duplicate') ||
-                error.includes('perfiles_nombre_lower_unique');
+                error.toLowerCase().includes('duplicate');
             Alert.alert(t('profile.error'), isDuplicate ? t('login.usernameTaken') : error);
             await fetchUserData();
         }
     };
 
     const quickActions: QuickAction[] = [
-        {
-            key: 'plans',
-            icon: 'albums',
-            labelKey: 'profile.myPlans',
-            route: '/my-plans',
-            color: PRIMARY_DARK,
-            bg: '#EFF6FF',
-            badge: planRequests,
-        },
-        {
-            key: 'friends',
-            icon: 'people',
-            labelKey: 'profile.friends',
-            route: '/friends',
-            color: '#0EA5E9',
-            bg: '#E0F2FE',
-            badge: friendsNotifCount,
-        },
-        {
-            key: 'saved',
-            icon: 'heart',
-            labelKey: 'profile.saved',
-            route: '/saved-plans',
-            color: '#EC4899',
-            bg: '#FCE7F3',
-        },
-        {
-            key: 'chats',
-            icon: 'chatbubbles',
-            labelKey: 'profile.chats',
-            route: '/chats',
-            color: '#8B5CF6',
-            bg: '#EDE9FE',
-        },
+        { key: 'plans', icon: 'albums', labelKey: 'profile.myPlans', route: '/my-plans', color: INK, bg: '#F1F5F9', badge: planRequests },
+        { key: 'friends', icon: 'people', labelKey: 'profile.friends', route: '/friends', color: INK, bg: '#F1F5F9', badge: friendsNotifCount },
+        { key: 'saved', icon: 'heart', labelKey: 'profile.saved', route: '/saved-plans', color: INK, bg: '#F1F5F9' },
+        { key: 'chats', icon: 'chatbubbles', labelKey: 'profile.chats', route: '/chats', color: INK, bg: '#F1F5F9' },
     ];
 
     const displayName = nombre.trim() || (user ? resolveDisplayName(user, t('profile.user')) : t('profile.user'));
-    const initial = displayName[0]?.toUpperCase() || '?';
 
     const confirmDeleteAccount = () => {
         Alert.alert(
@@ -313,15 +365,13 @@ export default function ProfileScreen() {
 
     return (
         <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-            <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
-
             <View style={styles.topBar}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} activeOpacity={0.8}>
-                    <Ionicons name="chevron-back" size={24} color={INK} />
+                    <Ionicons name="chevron-back" size={22} color={INK} />
                 </TouchableOpacity>
                 <Text style={styles.topTitle}>{t('profile.myProfile')}</Text>
                 <TouchableOpacity onPress={() => router.push('/settings')} style={styles.iconBtn} activeOpacity={0.8}>
-                    <Ionicons name="settings-outline" size={22} color={INK} />
+                    <Ionicons name="settings-outline" size={20} color={INK} />
                 </TouchableOpacity>
             </View>
 
@@ -330,32 +380,14 @@ export default function ProfileScreen() {
                 contentContainerStyle={styles.scroll}
                 keyboardShouldPersistTaps="handled"
             >
-                {/* Hero card */}
                 <View style={styles.heroCard}>
-                    <LinearGradient
-                        colors={['#5BB5FF', PRIMARY_DARK]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.heroBanner}
-                    />
-
                     <View style={styles.avatarBlock}>
-                        <View style={styles.avatarWrap}>
-                            <LinearGradient colors={['#FFF', '#E3ECFB']} style={styles.avatarRing}>
-                                <TouchableOpacity onPress={showPhotoMenu} style={styles.avatar} activeOpacity={0.9}>
-                                    {avatarUrl ? (
-                                        <Image source={{ uri: avatarUrl }} style={styles.avatarImg} />
-                                    ) : (
-                                        <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.avatarFallback}>
-                                            <Text style={styles.avatarInitial}>{initial}</Text>
-                                        </LinearGradient>
-                                    )}
-                                </TouchableOpacity>
-                            </LinearGradient>
-                            <TouchableOpacity onPress={showPhotoMenu} style={styles.cameraBtn} activeOpacity={0.85}>
-                                <Ionicons name="camera" size={15} color="#FFF" />
-                            </TouchableOpacity>
-                        </View>
+                        <TouchableOpacity onPress={showPhotoMenu} activeOpacity={0.9}>
+                            <ProfileAvatar uri={avatarUrl} name={displayName} size={96} recyclingKey={user?.id} />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={showPhotoMenu} style={styles.cameraBtn} activeOpacity={0.85}>
+                            <Ionicons name="camera-outline" size={14} color="#FFF" />
+                        </TouchableOpacity>
                     </View>
 
                     <View style={styles.nameBlock}>
@@ -390,21 +422,17 @@ export default function ProfileScreen() {
 
                     <View style={styles.statsRow}>
                         <View style={styles.statItem}>
-                            <Text style={styles.statValue}>{DEFAULT_PLANS_DONE}</Text>
+                            <Text style={styles.statValue}>{stats.numeroPlanesRealizados}</Text>
                             <Text style={styles.statLabel}>{t('profile.plansDone')}</Text>
                         </View>
                         <View style={styles.statDivider} />
                         <View style={styles.statItem}>
-                            <Text style={styles.statValue}>{DEFAULT_RATING.toFixed(1)}</Text>
-                            <View style={styles.starsRow}>{renderRatingStars(DEFAULT_RATING, 12)}</View>
-                            <Text style={styles.statMeta}>{DEFAULT_REVIEW_COUNT} {t('profile.reviews')}</Text>
+                            <Text style={styles.statValue}>{stats.valoracionMedia.toFixed(1)}</Text>
+                            <View style={styles.starsRow}>{renderRatingStars(stats.valoracionMedia, 12)}</View>
+                            <Text style={styles.statMeta}>{stats.numeroValoraciones} {t('profile.reviews')}</Text>
                         </View>
                         <View style={styles.statDivider} />
-                        <TouchableOpacity
-                            style={styles.statItem}
-                            onPress={() => router.push('/friends')}
-                            activeOpacity={0.75}
-                        >
+                        <View style={styles.statItem}>
                             <View style={styles.statBadgeWrap}>
                                 <Text style={styles.statValue}>{friendsCount}</Text>
                                 {friendsNotifCount > 0 && (
@@ -416,7 +444,7 @@ export default function ProfileScreen() {
                                 )}
                             </View>
                             <Text style={styles.statLabel}>{t('profile.friendsLabel')}</Text>
-                        </TouchableOpacity>
+                        </View>
                     </View>
                 </View>
 
@@ -427,7 +455,13 @@ export default function ProfileScreen() {
                         <TouchableOpacity
                             key={action.key}
                             style={styles.quickTile}
-                            onPress={() => router.push(action.route as any)}
+                            onPress={() => {
+                                if (action.key === 'friends' && (action.badge ?? 0) > 0) {
+                                    router.push({ pathname: '/friends', params: { tab: 'requests' } });
+                                } else {
+                                    router.push(action.route as any);
+                                }
+                            }}
                             activeOpacity={0.85}
                         >
                             <View style={[styles.quickIconWrap, { backgroundColor: action.bg }]}>
@@ -445,15 +479,86 @@ export default function ProfileScreen() {
                     ))}
                 </View>
 
+                {/* Buscar perfiles */}
+                <View style={styles.card}>
+                    <Text style={styles.cardTitle}>{t('profile.searchUsers')}</Text>
+                    <View style={styles.searchRow}>
+                        <Ionicons name="at" size={18} color="#94A3B8" />
+                        <TextInput
+                            style={styles.searchInput}
+                            placeholder={t('profile.searchPlaceholder')}
+                            placeholderTextColor="#94A3B8"
+                            value={searchQuery}
+                            onChangeText={runSearch}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                        />
+                        {searching && <ActivityIndicator size="small" color={PRIMARY_DARK} />}
+                    </View>
+                    {searchResults.map((r) => (
+                        <TouchableOpacity
+                            key={r.id}
+                            style={styles.searchResult}
+                            onPress={() => router.push({ pathname: '/user-profile/[id]', params: { id: r.id } })}
+                            activeOpacity={0.8}
+                        >
+                            <ProfileAvatar uri={r.avatar_url} name={r.nombre || 'U'} size={40} />
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.searchName}>{r.nombre || t('profile.user')}</Text>
+                                {r.nombre_usuario ? (
+                                    <Text style={styles.searchUsername}>@{r.nombre_usuario}</Text>
+                                ) : null}
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                        </TouchableOpacity>
+                    ))}
+                </View>
+
+                {/* Detalles personales */}
+                <ProfileDetailsSection
+                    age={age}
+                    genero={genero}
+                    habitoBebida={habitoBebida}
+                    habitoTabaco={habitoTabaco}
+                    privacy={privacy}
+                    onSaveAge={saveAge}
+                    onSaveGenero={saveGenero}
+                    onSaveHabitos={saveHabitos}
+                    onPrivacyChange={savePrivacy}
+                />
+
+                {/* Insignias */}
+                <View style={styles.card}>
+                    <View style={styles.cardHeader}>
+                        <Text style={styles.cardTitle}>{t('profile.badges')}</Text>
+                        <Text style={styles.cardMeta}>
+                            {badges.filter((b) => b.unlocked).length}/{badges.length}
+                        </Text>
+                    </View>
+                    <View style={styles.badgeGrid}>
+                        {badges.map((badge) => (
+                            <TouchableOpacity
+                                key={badge.id}
+                                style={[styles.badgeItem, badge.unlocked && { backgroundColor: badge.color + '22', borderColor: badge.color }]}
+                                onPress={() => setSelectedBadge(badge)}
+                                activeOpacity={0.85}
+                            >
+                                <View style={[styles.badgeIconWrap, !badge.unlocked && styles.badgeIconLocked]}>
+                                    <Ionicons
+                                        name={badge.icon as keyof typeof Ionicons.glyphMap}
+                                        size={22}
+                                        color={badge.unlocked ? badge.color : '#94A3B8'}
+                                    />
+                                </View>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </View>
+
                 {/* About me */}
                 <View style={styles.card}>
                     <View style={styles.cardHeader}>
-                        <View style={styles.cardHeaderLeft}>
-                            <View style={[styles.cardIcon, { backgroundColor: '#EFF6FF' }]}>
-                                <Ionicons name="document-text-outline" size={18} color={PRIMARY_DARK} />
-                            </View>
-                            <Text style={styles.cardTitle}>{t('profile.aboutMe')}</Text>
-                        </View>
+                        <Text style={styles.cardTitle}>{t('profile.aboutMe')}</Text>
                         <Text style={styles.cardMeta}>{aboutMe.length}/400</Text>
                     </View>
                     {isEditingAboutMe ? (
@@ -471,7 +576,7 @@ export default function ProfileScreen() {
                                 style={styles.aboutSave}
                                 onPress={async () => {
                                     setIsEditingAboutMe(false);
-                                    await updateProfileData({ about_me: aboutMe });
+                                    await updateProfileData({ descripcion: aboutMe });
                                 }}
                             >
                                 <Ionicons name="checkmark-circle" size={28} color={PRIMARY_DARK} />
@@ -487,30 +592,33 @@ export default function ProfileScreen() {
                     )}
                 </View>
 
-                {/* Personality */}
+                {/* Aficiones */}
                 <View style={styles.card}>
                     <View style={styles.cardHeader}>
-                        <View style={styles.cardHeaderLeft}>
-                            <View style={[styles.cardIcon, { backgroundColor: '#FEF3C7' }]}>
-                                <Ionicons name="sparkles-outline" size={18} color="#D97706" />
-                            </View>
-                            <Text style={styles.cardTitle}>{t('profile.personality')}</Text>
+                        <Text style={styles.cardTitle}>{t('profile.hobbies')}</Text>
+                        <View style={styles.hobbyHeaderRight}>
+                            <Text style={styles.cardMeta}>{aficiones.length}/5</Text>
+                            <Switch
+                                value={privacy.mostrar_aficiones}
+                                onValueChange={(v) => savePrivacy({ ...privacy, mostrar_aficiones: v })}
+                                trackColor={{ false: '#E2E8F0', true: '#BFDBFE' }}
+                                thumbColor={privacy.mostrar_aficiones ? PRIMARY_DARK : '#94A3B8'}
+                            />
                         </View>
-                        <Text style={styles.cardMeta}>{tags.length}/5</Text>
                     </View>
                     <View style={styles.tagsWrap}>
-                        {tags.map((tag) => (
+                        {aficiones.map((tag) => (
                             <View key={tag} style={styles.tagChip}>
                                 <Text style={styles.tagText}>{t('personality.' + tag) || tag}</Text>
-                                <TouchableOpacity onPress={() => removeTag(tag)} hitSlop={8}>
+                                <TouchableOpacity onPress={() => removeAficion(tag)} hitSlop={8}>
                                     <Ionicons name="close" size={14} color={PRIMARY_DARK} />
                                 </TouchableOpacity>
                             </View>
                         ))}
-                        {tags.length < 5 && (
-                            <TouchableOpacity style={styles.addTag} onPress={() => setShowTagModal(true)} activeOpacity={0.85}>
+                        {aficiones.length < 5 && (
+                            <TouchableOpacity style={styles.addTag} onPress={() => setShowAficionModal(true)} activeOpacity={0.85}>
                                 <Ionicons name="add" size={18} color={PRIMARY_DARK} />
-                                <Text style={styles.addTagText}>{t('profile.addPersonality')}</Text>
+                                <Text style={styles.addTagText}>{t('profile.addHobby')}</Text>
                             </TouchableOpacity>
                         )}
                     </View>
@@ -545,20 +653,20 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
             </ScrollView>
 
-            <Modal visible={showTagModal} transparent animationType="slide">
-                <Pressable style={styles.modalOverlay} onPress={() => setShowTagModal(false)}>
+            <Modal visible={showAficionModal} transparent animationType="slide">
+                <Pressable style={styles.modalOverlay} onPress={() => setShowAficionModal(false)}>
                     <Pressable style={styles.modalSheet} onPress={() => {}}>
                         <View style={styles.modalHandle} />
-                        <Text style={styles.modalTitle}>{t('profile.howDefine')}</Text>
+                        <Text style={styles.modalTitle}>{t('profile.pickHobby')}</Text>
                         <Text style={styles.modalSub}>{t('profile.tagLimit')}</Text>
                         <ScrollView contentContainerStyle={styles.modalTags} showsVerticalScrollIndicator={false}>
                             {PERSONALITY_OPTIONS.map((option) => {
-                                const selected = tags.includes(option);
+                                const selected = aficiones.includes(option);
                                 return (
                                     <TouchableOpacity
                                         key={option}
                                         style={[styles.modalTag, selected && styles.modalTagDisabled]}
-                                        onPress={() => addTag(option)}
+                                        onPress={() => addAficion(option)}
                                         disabled={selected}
                                         activeOpacity={0.8}
                                     >
@@ -570,9 +678,32 @@ export default function ProfileScreen() {
                                 );
                             })}
                         </ScrollView>
-                        <TouchableOpacity style={styles.modalClose} onPress={() => setShowTagModal(false)}>
+                        <TouchableOpacity style={styles.modalClose} onPress={() => setShowAficionModal(false)}>
                             <Text style={styles.modalCloseText}>{t('profile.cancel')}</Text>
                         </TouchableOpacity>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            <Modal visible={!!selectedBadge} transparent animationType="fade" onRequestClose={() => setSelectedBadge(null)}>
+                <Pressable style={styles.modalOverlay} onPress={() => setSelectedBadge(null)}>
+                    <Pressable style={styles.badgeModal} onPress={(e) => e.stopPropagation()}>
+                        {selectedBadge && (
+                            <>
+                                <View style={[styles.badgeModalIcon, { backgroundColor: (selectedBadge.unlocked ? selectedBadge.color : '#94A3B8') + '22' }]}>
+                                    <Ionicons
+                                        name={selectedBadge.icon as keyof typeof Ionicons.glyphMap}
+                                        size={40}
+                                        color={selectedBadge.unlocked ? selectedBadge.color : '#94A3B8'}
+                                    />
+                                </View>
+                                <Text style={styles.badgeModalTitle}>{selectedBadge.nombre}</Text>
+                                <Text style={styles.badgeModalDesc}>{selectedBadge.descripcion}</Text>
+                                <Text style={[styles.badgeModalStatus, selectedBadge.unlocked && { color: '#22C55E' }]}>
+                                    {selectedBadge.unlocked ? t('profile.badgeUnlocked') : t('profile.badgeLocked')}
+                                </Text>
+                            </>
+                        )}
                     </Pressable>
                 </Pressable>
             </Modal>
@@ -590,7 +721,7 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: BG_BOTTOM },
+    safe: { flex: 1, backgroundColor: BG },
     topBar: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -599,33 +730,28 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
     },
     iconBtn: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: 'rgba(255,255,255,0.85)',
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: SURFACE,
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.9)',
+        borderColor: BORDER,
     },
-    topTitle: { fontSize: 17, fontWeight: '800', color: INK, letterSpacing: -0.3 },
+    topTitle: { fontSize: 17, fontWeight: '700', color: INK },
     scroll: { paddingHorizontal: 20, paddingBottom: 40 },
     heroCard: {
-        backgroundColor: '#FFF',
-        borderRadius: 28,
-        overflow: 'hidden',
-        marginBottom: 24,
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.14,
-        shadowRadius: 20,
-        shadowOffset: { width: 0, height: 10 },
-        elevation: 8,
+        backgroundColor: SURFACE,
+        borderRadius: 16,
+        paddingVertical: 24,
+        paddingHorizontal: 20,
+        marginBottom: 16,
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.8)',
+        borderColor: BORDER,
+        alignItems: 'center',
     },
-    heroBanner: { height: 88 },
-    avatarBlock: { alignItems: 'center', marginTop: -52 },
-    avatarWrap: { position: 'relative' },
+    avatarBlock: { position: 'relative', marginBottom: 14 },
     avatarRing: {
         width: 108,
         height: 108,
@@ -646,17 +772,18 @@ const styles = StyleSheet.create({
     avatarInitial: { fontSize: 38, fontWeight: '900', color: '#FFF' },
     cameraBtn: {
         position: 'absolute',
-        bottom: 4,
-        right: 4,
-        width: 32,
-        height: 32,
-        borderRadius: 16,
+        bottom: 0,
+        right: 0,
+        width: 28,
+        height: 28,
+        borderRadius: 14,
         backgroundColor: INK,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2.5,
-        borderColor: '#FFF',
+        borderWidth: 2,
+        borderColor: SURFACE,
     },
+    hobbyHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     nameBlock: { alignItems: 'center', paddingHorizontal: 24, marginTop: 10 },
     nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' },
     displayName: { fontSize: 22, fontWeight: '900', color: INK, letterSpacing: -0.4 },
@@ -750,17 +877,12 @@ const styles = StyleSheet.create({
         flexGrow: 1,
         flexBasis: '46%',
         maxWidth: '48%',
-        backgroundColor: '#FFF',
-        borderRadius: 20,
-        padding: 16,
+        backgroundColor: SURFACE,
+        borderRadius: 14,
+        padding: 14,
         alignItems: 'center',
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.06,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 3,
         borderWidth: 1,
-        borderColor: '#EEF3FB',
+        borderColor: BORDER,
     },
     quickIconWrap: {
         width: 52,
@@ -794,17 +916,12 @@ const styles = StyleSheet.create({
         lineHeight: 18,
     },
     card: {
-        backgroundColor: '#FFF',
-        borderRadius: 22,
+        backgroundColor: SURFACE,
+        borderRadius: 16,
         padding: 18,
-        marginBottom: 16,
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.06,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 3,
+        marginBottom: 14,
         borderWidth: 1,
-        borderColor: '#EEF3FB',
+        borderColor: BORDER,
     },
     cardHeader: {
         flexDirection: 'row',
@@ -854,14 +971,14 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        backgroundColor: '#EFF6FF',
-        paddingHorizontal: 14,
-        paddingVertical: 9,
-        borderRadius: 20,
+        backgroundColor: '#F1F5F9',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 10,
         borderWidth: 1,
-        borderColor: '#BFDBFE',
+        borderColor: BORDER,
     },
-    tagText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 13 },
+    tagText: { fontSize: 13, color: INK, fontWeight: '600' },
     addTag: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -961,4 +1078,99 @@ const styles = StyleSheet.create({
         elevation: 6,
     },
     loadingText: { fontSize: 14, fontWeight: '600', color: INK },
+    searchRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        backgroundColor: '#F8FAFC',
+        borderRadius: 14,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderWidth: 1,
+        borderColor: '#EEF3FB',
+        marginBottom: 8,
+    },
+    searchInput: { flex: 1, fontSize: 15, color: INK },
+    searchResult: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#F1F5F9',
+        gap: 12,
+    },
+    searchAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#E3ECFB' },
+    searchName: { fontSize: 15, fontWeight: '700', color: INK },
+    searchUsername: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
+    detailLabel: { fontSize: 12, fontWeight: '700', color: '#64748B', marginBottom: 8, marginTop: 12, textTransform: 'uppercase' },
+    ageRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    ageChip: {
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderRadius: 12,
+        backgroundColor: '#F8FAFC',
+        borderWidth: 1,
+        borderColor: '#E3ECFB',
+    },
+    ageChipActive: { backgroundColor: '#EFF6FF', borderColor: PRIMARY },
+    ageChipText: { fontWeight: '700', color: MUTED },
+    ageChipTextActive: { color: PRIMARY_DARK },
+    genderRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    genderChipSm: {
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 12,
+        backgroundColor: '#F8FAFC',
+        borderWidth: 1,
+        borderColor: '#E3ECFB',
+    },
+    genderChipSmActive: { backgroundColor: '#EFF6FF', borderColor: PRIMARY },
+    genderChipSmText: { fontSize: 12, fontWeight: '700', color: MUTED },
+    genderChipSmTextActive: { color: PRIMARY_DARK },
+    habitRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    habitChip: {
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderRadius: 12,
+        backgroundColor: '#F8FAFC',
+        borderWidth: 1,
+        borderColor: '#E3ECFB',
+    },
+    habitChipActive: { backgroundColor: '#ECFDF5', borderColor: '#22C55E' },
+    habitChipText: { fontWeight: '700', color: MUTED, fontSize: 13 },
+    habitChipTextActive: { color: '#059669' },
+    badgeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center' },
+    badgeItem: {
+        width: 56,
+        height: 56,
+        borderRadius: 18,
+        backgroundColor: '#F1F5F9',
+        borderWidth: 2,
+        borderColor: '#E2E8F0',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    badgeIconWrap: { justifyContent: 'center', alignItems: 'center' },
+    badgeIconLocked: { opacity: 0.45 },
+    badgeModal: {
+        backgroundColor: '#FFF',
+        marginHorizontal: 32,
+        borderRadius: 24,
+        padding: 28,
+        alignItems: 'center',
+        alignSelf: 'center',
+        marginTop: 'auto',
+        marginBottom: 'auto',
+    },
+    badgeModalIcon: {
+        width: 80,
+        height: 80,
+        borderRadius: 40,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    badgeModalTitle: { fontSize: 20, fontWeight: '900', color: INK, marginBottom: 8 },
+    badgeModalDesc: { fontSize: 14, color: MUTED, textAlign: 'center', lineHeight: 20 },
+    badgeModalStatus: { fontSize: 13, fontWeight: '700', color: '#94A3B8', marginTop: 12 },
 });

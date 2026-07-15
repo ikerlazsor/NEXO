@@ -2,6 +2,15 @@ import { supabase } from './supabase';
 
 export type PlanInviteType = 'plan' | 'grupo';
 
+export interface PlanInvitePlan {
+    id: string;
+    titulo: string;
+    imagen_url: string | null;
+    maximo_participantes: number | null;
+    requiere_aprobacion: boolean | null;
+    categoria?: string | null;
+}
+
 export interface PlanInvite {
     id: string;
     plan_id: string;
@@ -9,9 +18,20 @@ export interface PlanInvite {
     invitado_id: string;
     tipo: PlanInviteType;
     estado: string;
-    created_at: string;
-    plan?: { id: string; title: string; image_url: string | null; max_people: number | null; requiere_aprobacion: boolean | null; is_group_chat?: boolean | null; category?: string };
+    creado_en: string;
+    plan?: PlanInvitePlan;
     invitador?: { id: string; nombre: string; avatar_url: string | null };
+}
+
+const INVITE_SELECT = `
+    id, plan_id, invitador_id, invitado_id, tipo, estado, creado_en,
+    planes:plan_id ( id, titulo, imagen_url, maximo_participantes, requiere_aprobacion, categoria ),
+    invitador:perfiles!inv_planes_invitador_fkey ( id, nombre, avatar_url )
+`;
+
+function firstRow<T>(raw: T | T[] | null | undefined): T | undefined {
+    if (!raw) return undefined;
+    return Array.isArray(raw) ? raw[0] : raw;
 }
 
 export async function sendPlanInvite(
@@ -30,7 +50,7 @@ export async function sendPlanInvite(
     if (existing) return { error: 'already_member' };
 
     const { data: pending } = await supabase
-        .from('plan_invitaciones')
+        .from('invitaciones_planes')
         .select('id')
         .eq('plan_id', planId)
         .eq('invitado_id', invitadoId)
@@ -39,7 +59,7 @@ export async function sendPlanInvite(
 
     if (pending) return { error: 'already_invited' };
 
-    const { error } = await supabase.from('plan_invitaciones').insert({
+    const { error } = await supabase.from('invitaciones_planes').insert({
         plan_id: planId,
         invitador_id: invitadorId,
         invitado_id: invitadoId,
@@ -51,37 +71,12 @@ export async function sendPlanInvite(
 }
 
 export async function getIncomingPlanInvites(userId: string): Promise<PlanInvite[]> {
-    const fullSelect = await supabase
-        .from('plan_invitaciones')
-        .select(`
-            id, plan_id, invitador_id, invitado_id, tipo, estado, created_at,
-            planes:plan_id ( id, title, image_url, max_people, requiere_aprobacion, is_group_chat, category ),
-            invitador:invitador_id ( id, nombre, avatar_url )
-        `)
+    const { data, error } = await supabase
+        .from('invitaciones_planes')
+        .select(INVITE_SELECT)
         .eq('invitado_id', userId)
         .eq('estado', 'pendiente')
-        .order('created_at', { ascending: false });
-
-    let data = fullSelect.data;
-    let error = fullSelect.error;
-
-    if (error?.message?.includes('is_group_chat')) {
-        const fallback = await supabase
-            .from('plan_invitaciones')
-            .select(`
-                id, plan_id, invitador_id, invitado_id, tipo, estado, created_at,
-                planes:plan_id ( id, title, image_url, max_people, requiere_aprobacion, category ),
-                invitador:invitador_id ( id, nombre, avatar_url )
-            `)
-            .eq('invitado_id', userId)
-            .eq('estado', 'pendiente')
-            .order('created_at', { ascending: false });
-        data = (fallback.data ?? []).map((row: any) => ({
-            ...row,
-            planes: row.planes ? { ...row.planes, is_group_chat: row.planes.category === 'Grupo' } : row.planes,
-        }));
-        error = fallback.error;
-    }
+        .order('creado_en', { ascending: false });
 
     if (error) throw error;
 
@@ -92,13 +87,16 @@ export async function getIncomingPlanInvites(userId: string): Promise<PlanInvite
         invitado_id: row.invitado_id,
         tipo: row.tipo,
         estado: row.estado,
-        created_at: row.created_at,
-        plan: row.planes,
-        invitador: row.invitador,
+        creado_en: row.creado_en,
+        plan: firstRow(row.planes),
+        invitador: firstRow(row.invitador),
     }));
 }
 
-export async function acceptPlanInvite(invite: PlanInvite, userId: string): Promise<{ error: string | null; chatId?: string }> {
+export async function acceptPlanInvite(
+    invite: PlanInvite,
+    userId: string
+): Promise<{ error: string | null; chatId?: string }> {
     const plan = invite.plan;
     if (!plan) return { error: 'no_plan' };
 
@@ -106,14 +104,14 @@ export async function acceptPlanInvite(invite: PlanInvite, userId: string): Prom
         .from('participantes')
         .select('id', { count: 'exact', head: true })
         .eq('plan_id', invite.plan_id)
-        .or('estado.eq.aceptado,estado.is.null');
+        .eq('estado', 'aceptado');
 
     const joined = count ?? 0;
-    const max = plan.max_people ?? 999;
+    const max = plan.maximo_participantes ?? 999;
     if (joined >= max) return { error: 'full' };
 
-    const isGroup = plan.is_group_chat || plan.category === 'Grupo';
-    const estado = isGroup ? 'aceptado' : plan.requiere_aprobacion ? 'pendiente' : 'aceptado';
+    const isGroup = invite.tipo === 'grupo' || plan.categoria === 'Grupo';
+    const estado = isGroup || !plan.requiere_aprobacion ? 'aceptado' : 'pendiente';
 
     const { error: partError } = await supabase.from('participantes').insert({
         plan_id: invite.plan_id,
@@ -123,14 +121,14 @@ export async function acceptPlanInvite(invite: PlanInvite, userId: string): Prom
 
     if (partError) return { error: partError.message };
 
-    await supabase.from('plan_invitaciones').update({ estado: 'aceptado' }).eq('id', invite.id);
+    await supabase.from('invitaciones_planes').update({ estado: 'aceptado' }).eq('id', invite.id);
 
     return { error: null, chatId: invite.plan_id };
 }
 
 export async function rejectPlanInvite(inviteId: string): Promise<{ error: string | null }> {
     const { error } = await supabase
-        .from('plan_invitaciones')
+        .from('invitaciones_planes')
         .update({ estado: 'rechazado' })
         .eq('id', inviteId);
     return { error: error?.message ?? null };
@@ -138,7 +136,7 @@ export async function rejectPlanInvite(inviteId: string): Promise<{ error: strin
 
 export async function countPendingPlanInvites(userId: string): Promise<number> {
     const { count, error } = await supabase
-        .from('plan_invitaciones')
+        .from('invitaciones_planes')
         .select('id', { count: 'exact', head: true })
         .eq('invitado_id', userId)
         .eq('estado', 'pendiente');

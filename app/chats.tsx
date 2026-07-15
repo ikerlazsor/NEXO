@@ -21,7 +21,8 @@ import {
     View
 } from 'react-native';
 import { PlanImage } from '../components/PlanImage';
-import { isDirectChatPlan } from '../lib/directChat';
+import { getDirectConversations } from '../lib/directChat';
+import { isGroupChatPlan } from '../lib/feedPlans';
 import { getAvatarUri, getFriends, type FriendProfile } from '../lib/friends';
 import { sendPlanInvite } from '../lib/planInvites';
 import { useT } from '../lib/i18n';
@@ -37,9 +38,11 @@ type ChatRow = {
     id: string;
     title: string;
     image_url: string | null;
-    is_group_chat: boolean;
-    is_direct_chat: boolean;
+    kind: 'plan' | 'group' | 'direct';
+    /** Para chats directos: id del otro usuario (ruta /direct-chat/[peerId]). */
+    peerId?: string;
     ultimoTexto: string;
+    lastAt: string;
 };
 
 export default function MyChatsScreen() {
@@ -61,18 +64,18 @@ export default function MyChatsScreen() {
         }, [])
     );
 
-    const formatPreview = (msg: { tipo: string; texto: string; usuario_id: string }, names: Record<string, string>) => {
-        const nombre = names[msg.usuario_id] || t('chats.user');
+    const formatPreview = (msg: { tipo: string; contenido: string; emisor_id: string }, names: Record<string, string>) => {
+        const nombre = names[msg.emisor_id] || t('chats.user');
         if (msg.tipo === 'imagen') return `${nombre}: ${t('chats.previewImage')}`;
         if (msg.tipo === 'video') return `${nombre}: ${t('chats.previewVideo')}`;
         if (msg.tipo === 'audio') {
-            const sec = parseInt(msg.texto, 10);
+            const sec = parseInt(msg.contenido, 10);
             const dur = Number.isFinite(sec) && sec > 0
                 ? `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, '0')}`
                 : null;
             return dur ? `${nombre}: ${t('chats.previewVoice')} ${dur}` : `${nombre}: ${t('chats.previewVoice')}`;
         }
-        return `${nombre}: ${msg.texto}`;
+        return `${nombre}: ${msg.contenido}`;
     };
 
     const fetchMyChats = async () => {
@@ -81,149 +84,82 @@ export default function MyChatsScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            const { data: myParts } = await supabase
-                .from('participantes')
-                .select('plan_id')
-                .eq('usuario_id', user.id);
+            const [{ data: myParts }, directConversations] = await Promise.all([
+                supabase.from('participantes').select('plan_id').eq('usuario_id', user.id).eq('estado', 'aceptado'),
+                getDirectConversations(user.id).catch(() => []),
+            ]);
 
             const planIds = [...new Set((myParts ?? []).map((p) => p.plan_id))].filter(Boolean);
 
-            if (planIds.length === 0) {
-                setChats([]);
-                return;
-            }
-
-            let plans: any[] | null = null;
-            let plansError: any = null;
-
-            const fullSelect = await supabase
-                .from('planes')
-                .select('id, title, image_url, is_direct_chat, is_group_chat, category, user_id')
-                .in('id', planIds);
-
-            if (fullSelect.error?.message?.includes('is_group_chat')) {
-                const fallback = await supabase
+            let planRows: ChatRow[] = [];
+            if (planIds.length > 0) {
+                const { data: plans, error: plansError } = await supabase
                     .from('planes')
-                    .select('id, title, image_url, is_direct_chat, category, user_id')
+                    .select('id, titulo, imagen_url, categoria, creador_id, creado_en')
                     .in('id', planIds);
-                plans = (fallback.data ?? []).map((p) => ({ ...p, is_group_chat: p.category === 'Grupo' }));
-                plansError = fallback.error;
-            } else {
-                plans = fullSelect.data;
-                plansError = fullSelect.error;
-            }
 
-            if (plansError) throw plansError;
-            if (!plans?.length) {
-                setChats([]);
-                return;
-            }
+                if (plansError) throw plansError;
 
-            const ids = plans.map((p) => p.id);
+                const ids = (plans ?? []).map((p) => p.id);
+                const msgLimit = Math.min(Math.max(ids.length * 4, 40), 300);
 
-            const msgLimit = Math.min(Math.max(ids.length * 4, 40), 300);
+                let lastMsgs: any[] = [];
+                if (ids.length > 0) {
+                    const { data } = await supabase
+                        .from('mensajes')
+                        .select('plan_id, contenido, tipo, creado_en, emisor_id')
+                        .in('plan_id', ids)
+                        .order('creado_en', { ascending: false })
+                        .limit(msgLimit);
+                    lastMsgs = data ?? [];
+                }
 
-            const [{ data: lastMsgs }, { data: allParts }] = await Promise.all([
-                supabase
-                    .from('mensajes')
-                    .select('plan_id, texto, tipo, created_at, usuario_id')
-                    .in('plan_id', ids)
-                    .order('created_at', { ascending: false })
-                    .limit(msgLimit),
-                supabase
-                    .from('participantes')
-                    .select('plan_id, usuario_id, perfiles:usuario_id(nombre, avatar_url, imagen_url, image_url)')
-                    .in('plan_id', ids),
-            ]);
+                const lastByPlan = new Map<string, any>();
+                lastMsgs.forEach((m) => {
+                    if (!lastByPlan.has(m.plan_id)) lastByPlan.set(m.plan_id, m);
+                });
 
-            const lastByPlan = new Map<string, typeof lastMsgs extends (infer U)[] | null ? U : never>();
-            (lastMsgs ?? []).forEach((m) => {
-                if (!lastByPlan.has(m.plan_id)) lastByPlan.set(m.plan_id, m);
-            });
+                const nameIds = new Set<string>(lastMsgs.map((m) => m.emisor_id));
+                const names: Record<string, string> = {};
+                if (nameIds.size > 0) {
+                    const { data: profiles } = await supabase
+                        .from('perfiles')
+                        .select('id, nombre')
+                        .in('id', Array.from(nameIds));
+                    (profiles ?? []).forEach((pr) => { names[pr.id] = pr.nombre; });
+                }
 
-            const partsByPlan = new Map<string, any[]>();
-            (allParts ?? []).forEach((p) => {
-                const list = partsByPlan.get(p.plan_id) ?? [];
-                list.push(p);
-                partsByPlan.set(p.plan_id, list);
-            });
-
-            const nameIds = new Set<string>();
-            (lastMsgs ?? []).forEach((m) => nameIds.add(m.usuario_id));
-            const names: Record<string, string> = {};
-            if (nameIds.size > 0) {
-                const { data: profiles } = await supabase
-                    .from('perfiles')
-                    .select('id, nombre')
-                    .in('id', Array.from(nameIds));
-                (profiles ?? []).forEach((pr) => { names[pr.id] = pr.nombre; });
-            }
-
-            const directIds = plans.filter((p) => isDirectChatPlan(p)).map((p) => p.id);
-            const peerByPlan = new Map<string, { nombre: string; avatarUri: string }>();
-            if (directIds.length > 0) {
-                const { data: directParts } = await supabase
-                    .from('participantes')
-                    .select('plan_id, usuario_id, perfiles:usuario_id(nombre, avatar_url, imagen_url, image_url)')
-                    .in('plan_id', directIds)
-                    .neq('usuario_id', user.id);
-                (directParts ?? []).forEach((part: any) => {
-                    const prof = Array.isArray(part.perfiles) ? part.perfiles[0] : part.perfiles;
-                    if (!prof?.nombre) return;
-                    peerByPlan.set(part.plan_id, {
-                        nombre: prof.nombre,
-                        avatarUri: getAvatarUri({ nombre: prof.nombre, avatar_url: prof.avatar_url }),
-                    });
+                planRows = (plans ?? []).map((p) => {
+                    const ult = lastByPlan.get(p.id);
+                    return {
+                        id: p.id,
+                        title: p.titulo,
+                        image_url: p.imagen_url,
+                        kind: isGroupChatPlan(p) ? 'group' as const : 'plan' as const,
+                        ultimoTexto: ult ? formatPreview(ult, names) : t('chats.noMessages'),
+                        lastAt: ult?.creado_en ?? p.creado_en ?? '',
+                    };
                 });
             }
 
-            const rows: ChatRow[] = plans.map((p) => {
-                const isGroup = !!p.is_group_chat || p.category === 'Grupo';
-                const isDirect = isDirectChatPlan(p);
-                const participants = partsByPlan.get(p.id) ?? [];
-                let displayTitle = p.title;
-                let displayImage = p.image_url;
+            const directRows: ChatRow[] = directConversations.map((c) => ({
+                id: `direct-${c.peerId}`,
+                peerId: c.peerId,
+                title: c.nombre,
+                image_url: c.avatarUri,
+                kind: 'direct' as const,
+                ultimoTexto: c.lastMessage
+                    ? formatPreview(
+                          { tipo: c.lastMessage.tipo, contenido: c.lastMessage.contenido, emisor_id: c.lastMessage.emisor_id },
+                          { [c.peerId]: c.nombre, [user.id]: t('chats.you') }
+                      )
+                    : t('chats.noMessages'),
+                lastAt: c.lastMessage?.creado_en ?? '',
+            }));
 
-                if (isDirect) {
-                    const peer = peerByPlan.get(p.id);
-                    if (peer) {
-                        displayTitle = peer.nombre;
-                        displayImage = peer.avatarUri;
-                    } else {
-                        const other = participants.find((part: any) => part.usuario_id !== user.id);
-                        const prof = other?.perfiles;
-                        const profile = Array.isArray(prof) ? prof[0] : prof;
-                        const nombre =
-                            profile?.nombre ||
-                            (other?.usuario_id ? names[other.usuario_id] : null) ||
-                            p.title;
-                        const avatarUrl = profile?.avatar_url ?? null;
-                        if (nombre && nombre !== 'Chat') displayTitle = nombre;
-                        displayImage = getAvatarUri({
-                            nombre: displayTitle,
-                            avatar_url: avatarUrl,
-                        });
-                    }
-                } else if (isGroup && p.image_url) {
-                    displayImage = p.image_url;
-                }
-
-                const ult = lastByPlan.get(p.id);
-                return {
-                    id: p.id,
-                    title: displayTitle,
-                    image_url: displayImage,
-                    is_group_chat: isGroup,
-                    is_direct_chat: isDirect,
-                    ultimoTexto: ult ? formatPreview(ult, names) : t('chats.noMessages'),
-                };
-            });
-
-            rows.sort((a, b) => {
-                const ta = lastByPlan.get(a.id)?.created_at ?? '';
-                const tb = lastByPlan.get(b.id)?.created_at ?? '';
-                return new Date(tb).getTime() - new Date(ta).getTime();
-            });
+            const rows = [...planRows, ...directRows].sort(
+                (a, b) => new Date(b.lastAt || 0).getTime() - new Date(a.lastAt || 0).getTime()
+            );
 
             setChats(rows);
         } catch (error) {
@@ -261,24 +197,26 @@ export default function MyChatsScreen() {
     };
 
     const insertGroupPlan = async (userId: string, name: string) => {
-        const base = {
-            is_direct_chat: false,
-            title: name,
-            category: 'Grupo',
-            user_id: userId,
-            max_people: 50,
-            requiere_aprobacion: false,
-        };
+        // Los grupos de chat viven en planes con categoria 'Grupo'; fecha_evento y
+        // maximo_participantes son NOT NULL en el esquema, así que damos valores neutros.
+        const farFuture = new Date();
+        farFuture.setFullYear(farFuture.getFullYear() + 10);
 
-        const withFlag = await supabase.from('planes').insert({ ...base, is_group_chat: true }).select().single();
-        if (!withFlag.error) return withFlag.data;
+        const { data, error } = await supabase
+            .from('planes')
+            .insert({
+                titulo: name,
+                categoria: 'Grupo',
+                creador_id: userId,
+                maximo_participantes: 50,
+                fecha_evento: farFuture.toISOString(),
+                requiere_aprobacion: false,
+            })
+            .select()
+            .single();
 
-        if (withFlag.error.message?.includes('is_group_chat')) {
-            const without = await supabase.from('planes').insert(base).select().single();
-            if (without.error) throw without.error;
-            return without.data;
-        }
-        throw withFlag.error;
+        if (error) throw error;
+        return data;
     };
 
     const handleCreateGroup = async () => {
@@ -391,9 +329,13 @@ export default function MyChatsScreen() {
                         <TouchableOpacity
                             style={styles.chatCard}
                             activeOpacity={0.85}
-                            onPress={() => router.push(`/chat/${item.id}`)}
+                            onPress={() =>
+                                item.kind === 'direct' && item.peerId
+                                    ? router.push(`/direct-chat/${item.peerId}`)
+                                    : router.push(`/chat/${item.id}`)
+                            }
                         >
-                            {item.is_direct_chat ? (
+                            {item.kind === 'direct' ? (
                                 <Image
                                     source={{
                                         uri:
@@ -402,13 +344,13 @@ export default function MyChatsScreen() {
                                     }}
                                     style={styles.chatImage}
                                 />
-                            ) : item.is_group_chat && item.image_url ? (
+                            ) : item.kind === 'group' && item.image_url ? (
                                 <PlanImage
                                     source={item.image_url}
                                     style={styles.chatImage}
                                     recyclingKey={`group-${item.id}`}
                                 />
-                            ) : item.is_group_chat ? (
+                            ) : item.kind === 'group' ? (
                                 <View style={styles.groupIconWrap}>
                                     <Ionicons name="people" size={28} color={PRIMARY_DARK} />
                                 </View>

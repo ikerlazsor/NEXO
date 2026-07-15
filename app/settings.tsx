@@ -12,6 +12,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { LangPicker } from '../components/LangPicker';
 import { useT } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
 
@@ -96,16 +97,7 @@ export default function SettingsScreen() {
                         icon="language-outline"
                         label={t('settings.language')}
                         onPress={undefined}
-                        right={
-                            <View style={styles.langToggle}>
-                                <TouchableOpacity style={[styles.langOption, lang === 'es' && styles.langOptionActive]} onPress={() => setLang('es')}>
-                                    <Text style={styles.langFlag}>🇪🇸</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={[styles.langOption, lang === 'en' && styles.langOptionActive]} onPress={() => setLang('en')}>
-                                    <Text style={styles.langFlag}>🇬🇧</Text>
-                                </TouchableOpacity>
-                            </View>
-                        }
+                        right={<LangPicker lang={lang} onChange={setLang} compact />}
                     />
                 </View>
 

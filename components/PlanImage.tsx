@@ -34,7 +34,7 @@ export function PlanImage({
             cachePolicy="memory-disk"
             priority={priority}
             recyclingKey={key}
-            transition={150}
+            transition={0}
             placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }}
         />
     );

@@ -1,11 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
-    Image,
     ScrollView,
     StyleSheet,
     Text,
@@ -13,10 +11,10 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ProfileAvatar } from '../../components/ProfileAvatar';
 import {
     acceptFriendRequest,
     cancelFriendRequest,
-    getAvatarUri,
     getFriendStatus,
     getFriendsCount,
     rejectFriendRequest,
@@ -24,19 +22,20 @@ import {
     sendFriendRequest,
     type FriendStatus,
 } from '../../lib/friends';
+import { blockUser, isUserBlocked, unblockUser } from '../../lib/blocks';
 import { useT } from '../../lib/i18n';
-import {
-    DEFAULT_RATING,
-    DEFAULT_REVIEW_COUNT,
-    renderRatingStars,
-} from '../../lib/profileRating';
+import { renderRatingStars } from '../../lib/profileRating';
+import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
 import { supabase } from '../../lib/supabase';
+import { calcAge, parseHabitos, parsePrivacy, type ProfilePrivacy } from '../../lib/profileFields';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
-const INK = '#0F2A4A';
-const BG_TOP = '#DCEBFF';
-const BG_BOTTOM = '#F2F7FF';
+const INK = '#0F172A';
+const MUTED = '#64748B';
+const BG = '#F8FAFC';
+const SURFACE = '#FFFFFF';
+const BORDER = '#E2E8F0';
 const SUCCESS = '#22C55E';
 const DANGER = '#EF4444';
 
@@ -44,8 +43,13 @@ type PublicProfile = {
     id: string;
     nombre: string | null;
     avatar_url: string | null;
-    about_me: string | null;
-    tags: string[] | null;
+    descripcion: string | null;
+    etiquetas: string[] | null;
+    fecha_nacimiento: string | null;
+    genero: string | null;
+    habitos_consumo: Record<string, unknown> | null;
+    ambientes_preferidos: string[] | null;
+    perfil_gustos: Record<string, unknown> | null;
 };
 
 export default function UserProfileScreen() {
@@ -61,6 +65,9 @@ export default function UserProfileScreen() {
     const [friendStatus, setFriendStatus] = useState<FriendStatus>('none');
     const [requestId, setRequestId] = useState<string | null>(null);
     const [friendsCount, setFriendsCount] = useState(0);
+    const [stats, setStats] = useState<UserStats>(EMPTY_STATS);
+    const [blocked, setBlocked] = useState(false);
+    const [privacy, setPrivacy] = useState<ProfilePrivacy | null>(null);
 
     const loadProfile = useCallback(async () => {
         if (!profileId) return;
@@ -73,7 +80,7 @@ export default function UserProfileScreen() {
 
             const { data: profile, error } = await supabase
                 .from('perfiles')
-                .select('id, nombre, avatar_url, about_me, tags')
+                .select('id, nombre, avatar_url, descripcion, etiquetas, fecha_nacimiento, genero, habitos_consumo, ambientes_preferidos, perfil_gustos')
                 .eq('id', profileId)
                 .single();
 
@@ -83,20 +90,35 @@ export default function UserProfileScreen() {
                 id: profile.id,
                 nombre: profile.nombre,
                 avatar_url: profile.avatar_url,
-                about_me: profile.about_me,
-                tags: Array.isArray(profile.tags) ? profile.tags : [],
+                descripcion: profile.descripcion,
+                etiquetas: Array.isArray(profile.etiquetas) ? profile.etiquetas : [],
+                fecha_nacimiento: profile.fecha_nacimiento,
+                genero: profile.genero,
+                habitos_consumo: (profile.habitos_consumo as Record<string, unknown>) ?? {},
+                ambientes_preferidos: Array.isArray(profile.ambientes_preferidos) ? profile.ambientes_preferidos : [],
+                perfil_gustos: (profile.perfil_gustos as Record<string, unknown>) ?? {},
             });
+            setPrivacy(parsePrivacy(profile.perfil_gustos));
 
-            const count = await getFriendsCount(profileId);
+            const [count, userStats] = await Promise.all([
+                getFriendsCount(profileId),
+                getUserStats(profileId),
+            ]);
             setFriendsCount(count);
+            setStats(userStats);
 
             if (user && user.id !== profileId) {
-                const status = await getFriendStatus(user.id, profileId);
+                const [status, isBlocked] = await Promise.all([
+                    getFriendStatus(user.id, profileId),
+                    isUserBlocked(user.id, profileId),
+                ]);
                 setFriendStatus(status.status);
                 setRequestId(status.requestId);
+                setBlocked(isBlocked);
             } else {
                 setFriendStatus('self');
                 setRequestId(null);
+                setBlocked(false);
             }
         } catch (error) {
             console.error('Error fetching user profile:', error);
@@ -124,8 +146,15 @@ export default function UserProfileScreen() {
             return;
         }
 
-        Alert.alert(t('userprofile.requestSentTitle'), t('userprofile.requestSentMsg'));
-        await loadProfile();
+        setFriendStatus('pending_sent');
+        const { data: pending } = await supabase
+            .from('amistades')
+            .select('id')
+            .eq('usuario_origen_id', currentUserId)
+            .eq('usuario_destino_id', profileId)
+            .eq('estado', 'pendiente')
+            .maybeSingle();
+        setRequestId(pending?.id ?? null);
     };
 
     const handleAccept = async () => {
@@ -201,6 +230,53 @@ export default function UserProfileScreen() {
         );
     };
 
+    const handleToggleBlock = () => {
+        if (!currentUserId || !profileId || !userProfile) return;
+
+        if (blocked) {
+            Alert.alert(t('userprofile.unblockTitle'), t('userprofile.unblockConfirm'), [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('userprofile.unblock'),
+                    onPress: async () => {
+                        setActionLoading(true);
+                        const { error } = await unblockUser(currentUserId, profileId);
+                        setActionLoading(false);
+                        if (error) {
+                            Alert.alert(t('profile.error'), error);
+                            return;
+                        }
+                        setBlocked(false);
+                        await loadProfile();
+                    },
+                },
+            ]);
+            return;
+        }
+
+        Alert.alert(
+            t('userprofile.blockTitle'),
+            t('userprofile.blockConfirmName', { name: userProfile.nombre || t('chats.user') }),
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('userprofile.block'),
+                    style: 'destructive',
+                    onPress: async () => {
+                        setActionLoading(true);
+                        const { error } = await blockUser(currentUserId, profileId);
+                        setActionLoading(false);
+                        if (error) {
+                            Alert.alert(t('profile.error'), error);
+                            return;
+                        }
+                        setBlocked(true);
+                    },
+                },
+            ]
+        );
+    };
+
     const renderFriendAction = () => {
         if (friendStatus === 'self') return null;
 
@@ -252,15 +328,8 @@ export default function UserProfileScreen() {
 
         return (
             <TouchableOpacity style={styles.addFriendBtn} onPress={handleSendRequest} activeOpacity={0.88}>
-                <LinearGradient
-                    colors={[PRIMARY, PRIMARY_DARK]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.addFriendGradient}
-                >
-                    <Ionicons name="person-add-outline" size={20} color="#FFF" />
-                    <Text style={styles.addFriendText}>{t('userprofile.addFriend')}</Text>
-                </LinearGradient>
+                <Ionicons name="person-add-outline" size={20} color="#FFF" />
+                <Text style={styles.addFriendText}>{t('userprofile.addFriend')}</Text>
             </TouchableOpacity>
         );
     };
@@ -268,7 +337,6 @@ export default function UserProfileScreen() {
     if (loading) {
         return (
             <SafeAreaView style={styles.safe} edges={['top']}>
-                <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator size="large" color={PRIMARY_DARK} />
                 </View>
@@ -279,7 +347,6 @@ export default function UserProfileScreen() {
     if (!userProfile) {
         return (
             <SafeAreaView style={styles.safe} edges={['top']}>
-                <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
                 <View style={styles.topBar}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} activeOpacity={0.8}>
                         <Ionicons name="chevron-back" size={24} color={INK} />
@@ -295,15 +362,29 @@ export default function UserProfileScreen() {
         );
     }
 
-    const avatarUri = getAvatarUri(userProfile);
     const displayName = userProfile.nombre?.trim() || t('profile.user');
-    const initial = displayName[0]?.toUpperCase() || '?';
-    const aboutText = (userProfile.about_me ?? '').trim();
-    const tags = userProfile.tags ?? [];
+    const aboutText = (userProfile.descripcion ?? '').trim();
+    const hobbies = userProfile.ambientes_preferidos?.length
+        ? userProfile.ambientes_preferidos
+        : (userProfile.etiquetas ?? []);
+    const age = calcAge(userProfile.fecha_nacimiento);
+    const habitos = parseHabitos(userProfile.habitos_consumo);
+    const priv = privacy ?? parsePrivacy(userProfile.perfil_gustos);
+
+    const detailRows: { label: string; value: string }[] = [];
+    if (priv.mostrar_edad && age) detailRows.push({ label: t('profile.age'), value: String(age) });
+    if (priv.mostrar_genero && userProfile.genero) {
+        detailRows.push({ label: t('profile.gender'), value: t('genero.' + userProfile.genero) });
+    }
+    if (priv.mostrar_bebida && habitos.bebida !== 'no_especificado') {
+        detailRows.push({ label: t('profile.drinking'), value: t('habito.' + habitos.bebida) });
+    }
+    if (priv.mostrar_tabaco && habitos.tabaco !== 'no_especificado') {
+        detailRows.push({ label: t('profile.smoking'), value: t('habito.' + habitos.tabaco) });
+    }
 
     return (
         <SafeAreaView style={styles.safe} edges={['top']}>
-            <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
 
             <View style={styles.topBar}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} activeOpacity={0.8}>
@@ -318,31 +399,14 @@ export default function UserProfileScreen() {
                 contentContainerStyle={styles.scroll}
             >
                 <View style={styles.heroCard}>
-                    <LinearGradient
-                        colors={['#5BB5FF', PRIMARY_DARK]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.heroBanner}
-                    />
-
-                    <View style={styles.avatarBlock}>
-                        <LinearGradient colors={['#FFF', '#E3ECFB']} style={styles.avatarRing}>
-                            {avatarUri ? (
-                                <Image source={{ uri: avatarUri }} style={styles.avatarImg} />
-                            ) : (
-                                <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.avatarFallback}>
-                                    <Text style={styles.avatarInitial}>{initial}</Text>
-                                </LinearGradient>
-                            )}
-                        </LinearGradient>
-                    </View>
+                    <ProfileAvatar uri={userProfile.avatar_url} name={displayName} size={96} recyclingKey={userProfile.id} />
 
                     <Text style={styles.displayName} numberOfLines={1}>{displayName}</Text>
 
                     <View style={styles.ratingRow}>
-                        <View style={styles.stars}>{renderRatingStars(DEFAULT_RATING, 13)}</View>
+                        <View style={styles.stars}>{renderRatingStars(stats.valoracionMedia, 13)}</View>
                         <Text style={styles.ratingMeta}>
-                            {DEFAULT_RATING.toFixed(1)}/10 · {DEFAULT_REVIEW_COUNT} {t('userprofile.reviews')}
+                            {stats.valoracionMedia.toFixed(1)}/5 · {stats.numeroValoraciones} {t('userprofile.reviews')}
                         </Text>
                     </View>
 
@@ -351,50 +415,56 @@ export default function UserProfileScreen() {
                             <Text style={styles.statValue}>{friendsCount}</Text>
                             <Text style={styles.statLabel}>{t('userprofile.friendsLabel')}</Text>
                         </View>
+                        <View style={styles.statItem}>
+                            <Text style={styles.statValue}>{stats.numeroPlanesRealizados}</Text>
+                            <Text style={styles.statLabel}>{t('userprofile.plansLabel')}</Text>
+                        </View>
                     </View>
 
                     <View style={styles.actionWrap}>{renderFriendAction()}</View>
                 </View>
 
                 <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <View style={styles.cardHeaderLeft}>
-                            <View style={[styles.cardIcon, { backgroundColor: '#EFF6FF' }]}>
-                                <Ionicons name="document-text-outline" size={18} color={PRIMARY_DARK} />
-                            </View>
-                            <Text style={styles.cardTitle}>{t('userprofile.aboutMe')}</Text>
-                        </View>
-                    </View>
+                    <Text style={styles.cardTitle}>{t('userprofile.aboutMe')}</Text>
                     {aboutText ? (
-                        <View style={styles.aboutBox}>
-                            <Text style={styles.aboutText}>{aboutText}</Text>
-                        </View>
+                        <Text style={styles.aboutText}>{aboutText}</Text>
                     ) : (
-                        <View style={styles.aboutEmptyBox}>
-                            <Ionicons name="information-circle-outline" size={22} color="#94A3B8" />
-                            <Text style={styles.aboutEmptyText}>{t('userprofile.aboutEmpty')}</Text>
-                        </View>
+                        <Text style={styles.aboutEmptyText}>{t('userprofile.aboutEmpty')}</Text>
                     )}
                 </View>
 
-                {tags.length > 0 && (
+                {detailRows.length > 0 && (
                     <View style={styles.card}>
-                        <View style={styles.cardHeader}>
-                            <View style={styles.cardHeaderLeft}>
-                                <View style={[styles.cardIcon, { backgroundColor: '#FEF3C7' }]}>
-                                    <Ionicons name="sparkles-outline" size={18} color="#D97706" />
-                                </View>
-                                <Text style={styles.cardTitle}>{t('profile.personality')}</Text>
+                        <Text style={styles.cardTitle}>{t('userprofile.details')}</Text>
+                        {detailRows.map((row) => (
+                            <View key={row.label} style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>{row.label}</Text>
+                                <Text style={styles.detailValue}>{row.value}</Text>
                             </View>
-                        </View>
+                        ))}
+                    </View>
+                )}
+
+                {priv.mostrar_aficiones && hobbies.length > 0 && (
+                    <View style={styles.card}>
+                        <Text style={styles.cardTitle}>{t('profile.hobbies')}</Text>
                         <View style={styles.tagsWrap}>
-                            {tags.map((tag, index) => (
+                            {hobbies.map((tag, index) => (
                                 <View key={`${tag}-${index}`} style={styles.tag}>
-                                    <Text style={styles.tagText}>{tag}</Text>
+                                    <Text style={styles.tagText}>{t('personality.' + tag) || tag}</Text>
                                 </View>
                             ))}
                         </View>
                     </View>
+                )}
+
+                {friendStatus !== 'self' && currentUserId && (
+                    <TouchableOpacity style={styles.blockBtn} onPress={handleToggleBlock} activeOpacity={0.85}>
+                        <Ionicons name={blocked ? 'lock-open-outline' : 'ban-outline'} size={17} color={blocked ? '#64748B' : DANGER} />
+                        <Text style={[styles.blockBtnText, blocked && { color: '#64748B' }]}>
+                            {blocked ? t('userprofile.unblock') : t('userprofile.block')}
+                        </Text>
+                    </TouchableOpacity>
                 )}
 
             </ScrollView>
@@ -403,10 +473,10 @@ export default function UserProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: BG_BOTTOM },
+    safe: { flex: 1, backgroundColor: BG },
     loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, paddingHorizontal: 32 },
-    errorText: { fontSize: 16, color: '#64748B', textAlign: 'center' },
+    errorText: { fontSize: 16, color: MUTED, textAlign: 'center' },
     topBar: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -415,96 +485,69 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
     },
     iconBtn: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: 'rgba(255,255,255,0.88)',
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: SURFACE,
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.95)',
+        borderColor: BORDER,
     },
-    iconBtnPlaceholder: { width: 42 },
-    topTitle: { fontSize: 18, fontWeight: '900', color: INK, letterSpacing: -0.3 },
+    iconBtnPlaceholder: { width: 40 },
+    topTitle: { fontSize: 17, fontWeight: '700', color: INK },
     scroll: { paddingHorizontal: 20, paddingBottom: 36 },
     heroCard: {
-        backgroundColor: '#FFF',
-        borderRadius: 28,
-        marginBottom: 16,
-        paddingBottom: 20,
+        backgroundColor: SURFACE,
+        borderRadius: 16,
+        marginBottom: 14,
+        paddingVertical: 24,
+        paddingHorizontal: 20,
         borderWidth: 1,
-        borderColor: '#EEF3FB',
-        overflow: 'hidden',
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.12,
-        shadowRadius: 16,
-        shadowOffset: { width: 0, height: 8 },
-        elevation: 6,
-    },
-    heroBanner: { height: 88 },
-    avatarBlock: { alignItems: 'center', marginTop: -46 },
-    avatarRing: {
-        width: 98,
-        height: 98,
-        borderRadius: 49,
-        padding: 4,
-        justifyContent: 'center',
+        borderColor: BORDER,
         alignItems: 'center',
     },
-    avatarImg: {
-        width: 90,
-        height: 90,
-        borderRadius: 45,
-        backgroundColor: '#E3ECFB',
-    },
-    avatarFallback: {
-        width: 90,
-        height: 90,
-        borderRadius: 45,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    avatarInitial: { fontSize: 34, fontWeight: '900', color: '#FFF' },
     displayName: {
-        fontSize: 24,
-        fontWeight: '900',
+        fontSize: 22,
+        fontWeight: '700',
         color: INK,
         textAlign: 'center',
-        marginTop: 12,
+        marginTop: 14,
         paddingHorizontal: 20,
-        letterSpacing: -0.4,
     },
     ratingRow: { alignItems: 'center', marginTop: 10, gap: 6 },
     stars: { flexDirection: 'row' },
-    ratingMeta: { fontSize: 13, color: '#64748B', fontWeight: '600' },
+    ratingMeta: { fontSize: 13, color: MUTED, fontWeight: '500' },
     statsRow: {
         flexDirection: 'row',
         justifyContent: 'center',
         marginTop: 16,
         paddingTop: 14,
-        marginHorizontal: 20,
+        width: '100%',
         borderTopWidth: 1,
-        borderTopColor: '#EEF3FB',
+        borderTopColor: BORDER,
+        gap: 32,
     },
-    statItem: { alignItems: 'center', minWidth: 80 },
-    statValue: { fontSize: 20, fontWeight: '900', color: INK },
+    statItem: { alignItems: 'center', minWidth: 72 },
+    statValue: { fontSize: 20, fontWeight: '700', color: INK },
     statLabel: {
         fontSize: 11,
-        fontWeight: '700',
-        color: '#64748B',
+        fontWeight: '600',
+        color: MUTED,
         marginTop: 4,
         textTransform: 'uppercase',
     },
-    actionWrap: { paddingHorizontal: 20, marginTop: 16 },
-    addFriendBtn: { borderRadius: 16, overflow: 'hidden' },
-    addFriendGradient: {
+    actionWrap: { paddingHorizontal: 4, marginTop: 16, width: '100%' },
+    addFriendBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
+        backgroundColor: PRIMARY_DARK,
         paddingVertical: 14,
+        borderRadius: 12,
     },
-    addFriendText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
+    addFriendText: { color: '#FFF', fontWeight: '700', fontSize: 15 },
     pendingBtn: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -555,71 +598,47 @@ const styles = StyleSheet.create({
     rejectBtnText: { color: DANGER, fontWeight: '700', fontSize: 14 },
     actionLoading: { paddingVertical: 14, alignItems: 'center' },
     card: {
-        backgroundColor: '#FFF',
-        borderRadius: 22,
-        padding: 16,
+        backgroundColor: SURFACE,
+        borderRadius: 16,
+        padding: 18,
         marginBottom: 14,
         borderWidth: 1,
-        borderColor: '#EEF3FB',
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.06,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 3,
+        borderColor: BORDER,
     },
-    cardHeader: {
+    cardTitle: { fontSize: 16, fontWeight: '700', color: INK, marginBottom: 12 },
+    aboutText: { fontSize: 15, color: '#334155', lineHeight: 22 },
+    aboutEmptyText: { fontSize: 14, color: MUTED, lineHeight: 21 },
+    detailRow: {
         flexDirection: 'row',
-        alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: 14,
-    },
-    cardHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    cardIcon: {
-        width: 36,
-        height: 36,
-        borderRadius: 12,
-        justifyContent: 'center',
         alignItems: 'center',
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: BORDER,
     },
-    cardTitle: { fontSize: 16, fontWeight: '800', color: INK },
-    aboutBox: {
-        backgroundColor: '#F8FBFF',
-        borderRadius: 16,
-        padding: 16,
-        borderWidth: 1,
-        borderColor: '#DBEAFE',
-        position: 'relative',
-    },
-    aboutText: {
-        fontSize: 15,
-        color: '#334155',
-        lineHeight: 24,
-    },
-    aboutEmptyBox: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 10,
-        backgroundColor: '#F8FAFC',
-        borderRadius: 16,
-        padding: 14,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    aboutEmptyText: {
-        flex: 1,
-        fontSize: 14,
-        color: '#94A3B8',
-        lineHeight: 21,
-    },
+    detailLabel: { fontSize: 13, fontWeight: '600', color: MUTED, textTransform: 'uppercase' },
+    detailValue: { fontSize: 15, fontWeight: '600', color: INK },
     tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     tag: {
-        backgroundColor: '#EFF6FF',
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        borderRadius: 14,
+        backgroundColor: '#F1F5F9',
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+        borderRadius: 10,
         borderWidth: 1,
-        borderColor: '#BFDBFE',
+        borderColor: BORDER,
     },
-    tagText: { fontSize: 13, color: PRIMARY_DARK, fontWeight: '700' },
-    detailText: { fontSize: 15, color: '#475569', fontWeight: '600' },
+    tagText: { fontSize: 13, color: INK, fontWeight: '600' },
+    blockBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 13,
+        borderRadius: 16,
+        backgroundColor: '#FFF',
+        borderWidth: 1,
+        borderColor: '#FECACA',
+        marginTop: 2,
+    },
+    blockBtnText: { color: DANGER, fontWeight: '700', fontSize: 14 },
 });

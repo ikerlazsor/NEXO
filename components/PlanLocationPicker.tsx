@@ -10,7 +10,7 @@ import {
     TextInput,
     View,
 } from 'react-native';
-import MapView, { Marker, type MapView as MapViewType } from 'react-native-maps';
+import MapView, { Marker } from 'react-native-maps';
 import { reverseGeocodePlace, searchPlaces, type GeocodeResult } from '../lib/geocoding';
 import { useT } from '../lib/i18n';
 
@@ -31,7 +31,7 @@ type SearchResult = GeocodeResult;
 interface Props {
     location: PlanLocation;
     onLocationChange: (loc: PlanLocation) => void;
-    mapRef: React.RefObject<MapViewType | null>;
+    mapRef: React.RefObject<MapView | null>;
 }
 
 export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props) {

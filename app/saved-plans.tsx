@@ -14,15 +14,15 @@ import {
     View
 } from 'react-native';
 import { PlanCard, type Membership } from '../components/PlanCard';
+import { deletePlanCompletely } from '../lib/deletePlan';
 import { useT } from '../lib/i18n';
-import { supabase } from '../lib/supabase';
 import {
     isAcceptedParticipant,
     mapEstadoToMembership,
     membershipFromJoinEstado,
-    promoteWaitlist,
     resolveJoinEstado,
-} from '../lib/waitlist';
+} from '../lib/participants';
+import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -59,7 +59,7 @@ export default function SavedPlansScreen() {
 
             const rawPlans = (savedData || []).map((s: any) => s.planes).filter(Boolean);
 
-            const creatorIds = Array.from(new Set(rawPlans.map((p: any) => p.user_id).filter(Boolean)));
+            const creatorIds = Array.from(new Set(rawPlans.map((p: any) => p.creador_id).filter(Boolean)));
             let creatorMap: Record<string, any> = {};
             if (creatorIds.length > 0) {
                 const { data: creators } = await supabase.from('perfiles').select('id, nombre, avatar_url').in('id', creatorIds);
@@ -70,10 +70,11 @@ export default function SavedPlansScreen() {
                 const rawParticipants = (plan.participantes || []) as any[];
                 const accepted = rawParticipants.filter((p: any) => isAcceptedParticipant(p.estado));
                 const list: any[] = [];
-                const creator = creatorMap[plan.user_id];
+                const creator = creatorMap[plan.creador_id];
                 if (creator) list.push({ ...creator, isCreator: true });
                 accepted.forEach((p: any) => {
-                    if (p.perfiles && p.perfiles.id !== plan.user_id) list.push({ ...p.perfiles, isCreator: false });
+                    const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
+                    if (prof && prof.id !== plan.creador_id) list.push({ ...prof, isCreator: false });
                 });
                 return { ...plan, joinedCount: accepted.length, participantsList: list };
             });
@@ -111,20 +112,16 @@ export default function SavedPlansScreen() {
         if (!currentUserId) return;
         const membership = membershipMap[planId];
         const wasJoined = membership === 'joined';
-        const wasWaitlist = membership === 'waitlist';
         Alert.alert(
-            wasJoined ? t('saved.leave') : wasWaitlist ? t('feed.leaveWaitlistTitle') : t('saved.cancelRequest'),
-            wasJoined ? t('saved.leaveConfirm') : wasWaitlist ? t('feed.leaveWaitlistMsg') : t('saved.cancelRequestConfirm'),
+            wasJoined ? t('saved.leave') : t('saved.cancelRequest'),
+            wasJoined ? t('saved.leaveConfirm') : t('saved.cancelRequestConfirm'),
             [
             { text: t('common.no') },
             { text: t('common.yes'), onPress: async () => {
                 setMembershipMap(prev => { const n = { ...prev }; delete n[planId]; return n; });
                 if (wasJoined) setSavedPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: Math.max(0, p.joinedCount - 1) } : p));
                 await supabase.from('participantes').delete().eq('plan_id', planId).eq('usuario_id', currentUserId);
-                if (wasJoined) {
-                    await promoteWaitlist(planId);
-                    fetchSavedData();
-                }
+                if (wasJoined) fetchSavedData();
             }}
         ]);
     };
@@ -140,8 +137,7 @@ export default function SavedPlansScreen() {
             { text: t('common.cancel'), style: "cancel" },
             { text: t('common.delete'), style: "destructive", onPress: async () => {
                 setSavedPlans(prev => prev.filter(p => p.id !== planId));
-                await supabase.from('participantes').delete().eq('plan_id', planId);
-                await supabase.from('planes').delete().eq('id', planId);
+                await deletePlanCompletely(planId);
             }}
         ]);
     };

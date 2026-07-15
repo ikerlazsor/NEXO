@@ -38,7 +38,9 @@ function AuthGate({ children }: { children: ReactNode }) {
         return;
       }
       const dbDone = await fetchOnboardingStatus(s.user.id);
-      const metaDone = s.user.user_metadata?.onboarding_completed === true;
+      const metaDone =
+        s.user.user_metadata?.registro_completado === true ||
+        s.user.user_metadata?.onboarding_completed === true;
       setOnboardingDone(dbDone || metaDone);
     };
 

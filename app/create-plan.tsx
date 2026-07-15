@@ -28,10 +28,10 @@ import {
     DEPORTE_TIPOS,
     FORMATS_BY_SPORT,
     MAIN_CATEGORIES,
-    decodeSportFormat,
-    encodeSportFormat,
+    deriveFormatoFromCapacity,
     getCoverImages,
     getMinPeopleForSport,
+    isDeporteTipo,
     sportHasFormats,
     type MainCategory,
 } from '../lib/sports';
@@ -80,24 +80,25 @@ export default function CreatePlanScreen() {
             const loadPlanData = async () => {
                 const { data, error } = await supabase.from('planes').select('*').eq('id', editId).single();
                 if (data && !error) {
-                    setTitle(data.title);
-                    setDescription(data.description);
-                    const loadedCategory = data.category === 'Fútbol' ? 'Deporte' : data.category;
+                    setTitle(data.titulo ?? '');
+                    setDescription(data.descripcion ?? '');
+                    const loadedCategory = data.categoria;
                     setCategory(MAIN_CATEGORIES.includes(loadedCategory) ? loadedCategory : 'Deporte');
-                    const decoded = decodeSportFormat(data.futbol_formato, data.deporte_tipo, data.category);
-                    setDeporteTipo(decoded.tipo);
-                    if (decoded.formato) setDeporteFormato(decoded.formato);
+                    const tipo = isDeporteTipo(data.tipo_deporte) ? data.tipo_deporte : 'futbol';
+                    setDeporteTipo(tipo);
+                    const formato = deriveFormatoFromCapacity(tipo, data.maximo_participantes);
+                    if (formato) setDeporteFormato(formato);
                     const min =
-                        loadedCategory === 'Deporte' || data.category === 'Fútbol'
-                            ? getMinPeopleForSport(decoded.tipo, decoded.formato)
+                        loadedCategory === 'Deporte'
+                            ? getMinPeopleForSport(tipo, formato)
                             : MIN_PEOPLE_DEFAULT;
-                    setMaxPeople(Math.min(MAX_PEOPLE, Math.max(min, data.max_people)));
+                    setMaxPeople(Math.min(MAX_PEOPLE, Math.max(min, data.maximo_participantes)));
                     setRequiereAprobacion(!!data.requiere_aprobacion);
-                    setDate(new Date(data.event_date));
+                    setDate(new Date(data.fecha_evento));
                     setLocation({
-                        latitude: data.latitude || 40.416775,
-                        longitude: data.longitude || -3.703790,
-                        address: data.location_name
+                        latitude: data.latitud || 40.416775,
+                        longitude: data.longitud || -3.703790,
+                        address: data.nombre_ubicacion ?? ''
                     });
                 }
             };
@@ -183,24 +184,18 @@ export default function CreatePlanScreen() {
             }
 
             const planPayload: Record<string, unknown> = {
-                title: title,
-                description: description,
-                category: category,
-                location_name: location.address || t('createplan.noLocationName'),
-                max_people: maxPeople,
-                image_url: uploadedUrl,
-                user_id: user.id,
-                event_date: date.toISOString(),
-                latitude: location.latitude,
-                longitude: location.longitude,
+                titulo: title.trim(),
+                descripcion: description.trim(),
+                categoria: category,
+                nombre_ubicacion: location.address || t('createplan.noLocationName'),
+                maximo_participantes: maxPeople,
+                imagen_url: uploadedUrl,
+                creador_id: user.id,
+                fecha_evento: date.toISOString(),
+                latitud: location.latitude,
+                longitud: location.longitude,
                 requiere_aprobacion: requiereAprobacion,
-                futbol_formato:
-                    category === 'Deporte'
-                        ? encodeSportFormat(
-                              deporteTipo,
-                              sportHasFormats(deporteTipo) ? deporteFormato : null
-                          )
-                        : null,
+                tipo_deporte: category === 'Deporte' ? deporteTipo : null,
             };
 
             const savePlan = async (payload: Record<string, unknown>) => {
@@ -210,21 +205,9 @@ export default function CreatePlanScreen() {
                 return supabase.from('planes').insert(payload).select().single();
             };
 
-            let result = await savePlan(planPayload);
-
-            if (result.error?.message?.includes('futbol_formato')) {
-                const fallbackPayload = { ...planPayload, futbol_formato: null };
-                result = await savePlan(fallbackPayload);
-            }
+            const result = await savePlan(planPayload);
 
             if (result.error) throw result.error;
-
-            if (category === 'Deporte' && !editId && 'data' in result && result.data?.id) {
-                await supabase
-                    .from('planes')
-                    .update({ deporte_tipo: deporteTipo })
-                    .eq('id', result.data.id);
-            }
 
             if (editId) {
                 router.back();
@@ -237,6 +220,13 @@ export default function CreatePlanScreen() {
                     .insert({ plan_id: planData.id, usuario_id: user.id, estado: 'aceptado' });
 
                 if (participantError) throw participantError;
+
+                void supabase.from('mensajes').insert({
+                    plan_id: planData.id,
+                    emisor_id: user.id,
+                    contenido: t('chat.planCreated'),
+                    tipo: 'texto',
+                });
 
                 router.replace('/(tabs)');
             }

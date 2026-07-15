@@ -3,10 +3,30 @@ import { supabase } from './supabase';
 
 const DELETE_ACCOUNT_RPC = 'delete_own_account';
 
-export const USERNAME_MAX_LENGTH = 15;
+// Límites del constraint de perfiles.nombre_usuario (3-20 caracteres).
+export const USERNAME_MIN_LENGTH = 3;
+export const USERNAME_MAX_LENGTH = 20;
+
+export interface ProfileRow {
+    nombre: string | null;
+    nombre_usuario: string | null;
+    avatar_url: string | null;
+    descripcion: string | null;
+    etiquetas: string[] | null;
+    fecha_nacimiento: string | null;
+    genero: string | null;
+    habitos_consumo: Record<string, unknown> | null;
+    ambientes_preferidos: string[] | null;
+    perfil_gustos: Record<string, unknown> | null;
+}
 
 export function normalizeUsername(value: string): string {
     return value.trim();
+}
+
+export function isValidUsername(value: string): boolean {
+    const normalized = normalizeUsername(value);
+    return normalized.length >= USERNAME_MIN_LENGTH && normalized.length <= USERNAME_MAX_LENGTH;
 }
 
 export function readNombreFromUser(user: {
@@ -32,38 +52,29 @@ export function resolveDisplayName(
 }
 
 export async function isUsernameTaken(
-    nombre: string,
+    nombreUsuario: string,
     excludeUserId?: string
 ): Promise<boolean> {
-    const normalized = normalizeUsername(nombre);
+    const normalized = normalizeUsername(nombreUsuario);
     if (!normalized) return false;
 
-    try {
-        const { data, error } = await runWithTimeout(
-            () =>
-                supabase.rpc('is_username_taken', {
-                    check_name: normalized,
-                    exclude_id: excludeUserId ?? null,
-                }),
-            8000
-        );
-
-        if (!error) return data === true;
-    } catch {
-        // fallback abajo
-    }
-
-    const { data: rows } = await supabase
+    let query = supabase
         .from('perfiles')
         .select('id')
-        .ilike('nombre', normalized)
+        .ilike('nombre_usuario', normalized)
         .limit(1);
 
-    if (rows?.length) {
-        if (excludeUserId && rows[0].id === excludeUserId) return false;
-        return true;
+    if (excludeUserId) {
+        query = query.neq('id', excludeUserId);
     }
-    return false;
+
+    try {
+        const { data, error } = await runWithTimeout(() => query, 8000);
+        if (error) return false;
+        return (data?.length ?? 0) > 0;
+    } catch {
+        return false;
+    }
 }
 
 export async function deleteAccount(): Promise<{ error: string | null }> {
@@ -89,9 +100,7 @@ export async function deleteAccount(): Promise<{ error: string | null }> {
     if (rpcError) {
         const { error: profileDeleteError } = await supabase.from('perfiles').delete().eq('id', userId);
         if (profileDeleteError) {
-            return {
-                error: `${rpcError}. Ejecuta supabase/delete-account.sql en Supabase para borrado completo.`,
-            };
+            return { error: rpcError };
         }
     }
 
@@ -112,7 +121,7 @@ export async function ensureProfile(
 
     const { data: existing } = await supabase
         .from('perfiles')
-        .select('nombre, onboarding_completed')
+        .select('nombre, nombre_usuario, registro_completado')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -127,13 +136,28 @@ export async function ensureProfile(
             typeof user.user_metadata?.avatar_url === 'string'
                 ? user.user_metadata.avatar_url
                 : null,
-        onboarding_completed: existing?.onboarding_completed === true,
+        registro_completado: existing?.registro_completado === true,
     };
 
-    const { error } = await supabase.from('perfiles').upsert(payload, {
+    // nombre_usuario tiene constraint UNIQUE + longitud 3-20: solo lo fijamos si es válido
+    // y el perfil aún no tiene uno.
+    if (!existing?.nombre_usuario && isValidUsername(nombre)) {
+        payload.nombre_usuario = nombre;
+    }
+
+    let { error } = await supabase.from('perfiles').upsert(payload, {
         onConflict: 'id',
         ignoreDuplicates: false,
     });
+
+    // Si el nombre de usuario ya está cogido, reintentamos sin él (el perfil no debe fallar por eso).
+    if (error && payload.nombre_usuario) {
+        delete payload.nombre_usuario;
+        ({ error } = await supabase.from('perfiles').upsert(payload, {
+            onConflict: 'id',
+            ignoreDuplicates: false,
+        }));
+    }
 
     if (error) {
         return { error: error.message };
@@ -145,10 +169,10 @@ export async function ensureProfile(
 export async function loadProfileRow(userId: string) {
     const { data, error } = await supabase
         .from('perfiles')
-        .select('nombre, avatar_url, about_me, tags')
+        .select('nombre, nombre_usuario, avatar_url, descripcion, etiquetas, fecha_nacimiento, genero, habitos_consumo, ambientes_preferidos, perfil_gustos')
         .eq('id', userId)
         .maybeSingle();
-    return { data, error };
+    return { data: (data as ProfileRow | null) ?? null, error };
 }
 
 export async function syncProfileFromAuth(
@@ -158,7 +182,17 @@ export async function syncProfileFromAuth(
         user_metadata?: Record<string, unknown> | null;
     },
     explicitNombre?: string
-): Promise<{ nombre: string; avatar_url: string | null; about_me: string; tags: string[] }> {
+): Promise<{
+    nombre: string;
+    avatar_url: string | null;
+    descripcion: string;
+    etiquetas: string[];
+    fecha_nacimiento: string | null;
+    genero: string | null;
+    habitos_consumo: Record<string, unknown>;
+    ambientes_preferidos: string[];
+    perfil_gustos: Record<string, unknown>;
+}> {
     await ensureProfile(user, explicitNombre);
 
     const { data } = await loadProfileRow(user.id);
@@ -173,8 +207,13 @@ export async function syncProfileFromAuth(
     return {
         nombre,
         avatar_url: data?.avatar_url ?? (typeof user.user_metadata?.avatar_url === 'string' ? user.user_metadata.avatar_url : null),
-        about_me: data?.about_me ?? (typeof user.user_metadata?.about_me === 'string' ? user.user_metadata.about_me : ''),
-        tags: (data?.tags as string[] | undefined) ?? (Array.isArray(user.user_metadata?.tags) ? (user.user_metadata.tags as string[]) : []),
+        descripcion: data?.descripcion ?? '',
+        etiquetas: Array.isArray(data?.etiquetas) ? data.etiquetas : [],
+        fecha_nacimiento: data?.fecha_nacimiento ?? null,
+        genero: data?.genero ?? null,
+        habitos_consumo: (data?.habitos_consumo as Record<string, unknown>) ?? {},
+        ambientes_preferidos: Array.isArray(data?.ambientes_preferidos) ? data.ambientes_preferidos : [],
+        perfil_gustos: (data?.perfil_gustos as Record<string, unknown>) ?? {},
     };
 }
 
@@ -187,4 +226,16 @@ export async function updateProfileFields(
 
     void supabase.auth.updateUser({ data: fields }).catch(() => {});
     return { error: null };
+}
+
+/** Actualiza el nombre visible y el nombre de usuario único a la vez. */
+export async function updateUsername(
+    userId: string,
+    nombreUsuario: string
+): Promise<{ error: string | null }> {
+    const normalized = normalizeUsername(nombreUsuario);
+    if (!isValidUsername(normalized)) {
+        return { error: 'invalid_length' };
+    }
+    return updateProfileFields(userId, { nombre: normalized, nombre_usuario: normalized });
 }

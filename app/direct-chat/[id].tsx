@@ -34,9 +34,9 @@ interface MessageProfile {
 
 interface Message {
     id: string;
-    texto: string;
+    contenido: string;
     emisor_id: string;
-    created_at: string;
+    creado_en: string;
     tipo: 'texto' | 'imagen' | 'video' | 'audio';
     archivo_url: string | null;
     perfiles: MessageProfile | MessageProfile[] | null;
@@ -57,18 +57,18 @@ function formatDuration(totalSeconds: number): string {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function parseStoredDuration(texto: string): number | null {
-    if (!texto || !/^\d+$/.test(texto.trim())) return null;
-    const value = parseInt(texto, 10);
+function parseStoredDuration(contenido: string): number | null {
+    if (!contenido || !/^\d+$/.test(contenido.trim())) return null;
+    const value = parseInt(contenido, 10);
     return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function mapMessageRow(row: Record<string, unknown>): Message {
     return {
         id: row.id as string,
-        texto: (row.texto as string) ?? '',
+        contenido: (row.contenido as string) ?? '',
         emisor_id: row.emisor_id as string,
-        created_at: row.created_at as string,
+        creado_en: row.creado_en as string,
         tipo: (row.tipo as Message['tipo']) ?? 'texto',
         archivo_url: (row.archivo_url as string | null) ?? null,
         perfiles: row.perfiles as Message['perfiles'],
@@ -119,25 +119,26 @@ export default function DirectChatScreen() {
             if (!user || !otherUserId) return [];
 
             let query = supabase
-                .from('mensajes') // Tabla única unificada
+                .from('mensajes')
                 .select(`
                     id,
-                    texto,
+                    contenido,
                     emisor_id,
-                    created_at,
+                    creado_en,
                     tipo,
                     archivo_url,
-                    perfiles:emisor_id (
+                    perfiles:perfiles!mensajes_emisor_fkey (
                         nombre,
                         avatar_url
                     )
                 `)
+                .is('plan_id', null)
                 .or(`and(emisor_id.eq.${user.id},receptor_id.eq.${otherUserId}),and(emisor_id.eq.${otherUserId},receptor_id.eq.${user.id})`)
-                .order('created_at', { ascending: false })
+                .order('creado_en', { ascending: false })
                 .limit(PAGE_SIZE);
 
             if (before) {
-                query = query.lt('created_at', before);
+                query = query.lt('creado_en', before);
             }
 
             const { data, error } = await query;
@@ -155,7 +156,7 @@ export default function DirectChatScreen() {
         setLoadingMore(true);
         try {
             const oldest = messages[messages.length - 1];
-            const older = await fetchMessages(oldest.created_at);
+            const older = await fetchMessages(oldest.creado_en);
 
             if (older.length < PAGE_SIZE) setHasMore(false);
 
@@ -203,7 +204,7 @@ export default function DirectChatScreen() {
     useEffect(() => {
         messages.forEach((message) => {
             if (message.tipo !== 'audio' || !message.archivo_url) return;
-            if (parseStoredDuration(message.texto)) return;
+            if (parseStoredDuration(message.contenido)) return;
             if (audioDurations[message.id]) return;
             loadAudioDuration(message.id, message.archivo_url);
         });
@@ -297,9 +298,9 @@ export default function DirectChatScreen() {
 
                             const newMessage: Message = {
                                 id: newId,
-                                texto: (payload.new.texto as string) ?? '',
+                                contenido: (payload.new.contenido as string) ?? '',
                                 emisor_id: payload.new.emisor_id as string,
-                                created_at: payload.new.created_at as string,
+                                creado_en: payload.new.creado_en as string,
                                 tipo: (payload.new.tipo as Message['tipo']) ?? 'texto',
                                 archivo_url: (payload.new.archivo_url as string | null) ?? null,
                                 perfiles: perfil,
@@ -342,7 +343,7 @@ export default function DirectChatScreen() {
         if (tipo === 'texto') setMessageText('');
         setIsSending(true);
 
-        const textoPayload =
+        const contenidoPayload =
             tipo === 'texto'
                 ? tempText
                 : tipo === 'audio' && audioDurationSec
@@ -353,7 +354,7 @@ export default function DirectChatScreen() {
             emisor_id: currentUserId,
             receptor_id: otherUserId,
             plan_id: null, // Campo explícito en null al ser chat privado
-            texto: textoPayload,
+            contenido: contenidoPayload,
             tipo,
             archivo_url: archivoUrl,
         });
@@ -546,7 +547,7 @@ export default function DirectChatScreen() {
             }
 
             if (item.tipo === 'audio' && item.archivo_url) {
-                const storedDuration = parseStoredDuration(item.texto);
+                const storedDuration = parseStoredDuration(item.contenido);
                 const durationSec = storedDuration ?? audioDurations[item.id];
                 const durationLabel = durationSec ? formatDuration(durationSec) : '--:--';
 
@@ -574,7 +575,7 @@ export default function DirectChatScreen() {
 
             return (
                 <Text style={[styles.msgText, isMe ? styles.myMsgText : styles.otherMsgText]}>
-                    {item.texto}
+                    {item.contenido}
                 </Text>
             );
         };
@@ -598,7 +599,7 @@ export default function DirectChatScreen() {
                     {!isMe && <Text style={styles.senderName}>{nombreMostrar}</Text>}
                     {renderContent()}
                     <Text style={[styles.timeText, isMe ? styles.myTime : styles.otherTime]}>
-                        {new Date(item.created_at).toLocaleTimeString([], {
+                        {new Date(item.creado_en).toLocaleTimeString([], {
                             hour: '2-digit',
                             minute: '2-digit',
                         })}

@@ -10,10 +10,10 @@ export interface FriendProfile {
 
 export interface FriendshipRow {
     id: string;
-    usuario_id: string;
-    amigo_id: string;
+    usuario_origen_id: string;
+    usuario_destino_id: string;
     estado: 'pendiente' | 'aceptado' | 'rechazado';
-    created_at: string;
+    creado_en: string;
 }
 
 export interface FriendRequest extends FriendshipRow {
@@ -47,12 +47,12 @@ export async function getFriendStatus(
 
     const { data, error } = await supabase
         .from('amistades')
-        .select('id, usuario_id, amigo_id, estado')
+        .select('id, usuario_origen_id, usuario_destino_id, estado')
         .or(
-            `and(usuario_id.eq.${currentUserId},amigo_id.eq.${otherUserId}),and(usuario_id.eq.${otherUserId},amigo_id.eq.${currentUserId})`
+            `and(usuario_origen_id.eq.${currentUserId},usuario_destino_id.eq.${otherUserId}),and(usuario_origen_id.eq.${otherUserId},usuario_destino_id.eq.${currentUserId})`
         )
         .neq('estado', 'rechazado')
-        .order('created_at', { ascending: false })
+        .order('creado_en', { ascending: false })
         .limit(1)
         .maybeSingle();
 
@@ -64,7 +64,7 @@ export async function getFriendStatus(
     }
 
     if (data.estado === 'pendiente') {
-        if (data.usuario_id === currentUserId) {
+        if (data.usuario_origen_id === currentUserId) {
             return { status: 'pending_sent', requestId: data.id };
         }
         return { status: 'pending_received', requestId: data.id };
@@ -88,23 +88,23 @@ export async function sendFriendRequest(
     const { data: rejectedRow } = await supabase
         .from('amistades')
         .select('id')
-        .eq('usuario_id', fromUserId)
-        .eq('amigo_id', toUserId)
+        .eq('usuario_origen_id', fromUserId)
+        .eq('usuario_destino_id', toUserId)
         .eq('estado', 'rechazado')
         .maybeSingle();
 
     if (rejectedRow) {
         const { error } = await supabase
             .from('amistades')
-            .update({ estado: 'pendiente', updated_at: new Date().toISOString() })
+            .update({ estado: 'pendiente', actualizado_en: new Date().toISOString() })
             .eq('id', rejectedRow.id);
 
         return { error: error?.message ?? null };
     }
 
     const { error } = await supabase.from('amistades').insert({
-        usuario_id: fromUserId,
-        amigo_id: toUserId,
+        usuario_origen_id: fromUserId,
+        usuario_destino_id: toUserId,
         estado: 'pendiente',
     });
 
@@ -119,7 +119,7 @@ export async function sendFriendRequest(
 export async function acceptFriendRequest(requestId: string) {
     return supabase
         .from('amistades')
-        .update({ estado: 'aceptado', updated_at: new Date().toISOString() })
+        .update({ estado: 'aceptado', actualizado_en: new Date().toISOString() })
         .eq('id', requestId)
         .eq('estado', 'pendiente');
 }
@@ -127,7 +127,7 @@ export async function acceptFriendRequest(requestId: string) {
 export async function rejectFriendRequest(requestId: string) {
     return supabase
         .from('amistades')
-        .update({ estado: 'rechazado', updated_at: new Date().toISOString() })
+        .update({ estado: 'rechazado', actualizado_en: new Date().toISOString() })
         .eq('id', requestId)
         .eq('estado', 'pendiente');
 }
@@ -145,7 +145,7 @@ export async function getFriendsCount(userId: string): Promise<number> {
         .from('amistades')
         .select('id', { count: 'exact', head: true })
         .eq('estado', 'aceptado')
-        .or(`usuario_id.eq.${userId},amigo_id.eq.${userId}`);
+        .or(`usuario_origen_id.eq.${userId},usuario_destino_id.eq.${userId}`);
 
     if (error) throw error;
     return count ?? 0;
@@ -155,7 +155,7 @@ export async function getPendingRequestsCount(userId: string): Promise<number> {
     const { count, error } = await supabase
         .from('amistades')
         .select('id', { count: 'exact', head: true })
-        .eq('amigo_id', userId)
+        .eq('usuario_destino_id', userId)
         .eq('estado', 'pendiente');
 
     if (error) throw error;
@@ -167,22 +167,21 @@ export async function getFriends(userId: string): Promise<(FriendProfile & { fri
         .from('amistades')
         .select(`
             id,
-            usuario_id,
-            amigo_id,
-            solicitante:usuario_id ( id, nombre, avatar_url ),
-            receptor:amigo_id ( id, nombre, avatar_url )
+            usuario_origen_id,
+            usuario_destino_id,
+            solicitante:perfiles!amistades_origen_fkey ( id, nombre, avatar_url ),
+            receptor:perfiles!amistades_destino_fkey ( id, nombre, avatar_url )
         `)
         .eq('estado', 'aceptado')
-        .or(`usuario_id.eq.${userId},amigo_id.eq.${userId}`)
-        .order('updated_at', { ascending: false });
+        .or(`usuario_origen_id.eq.${userId},usuario_destino_id.eq.${userId}`)
+        .order('actualizado_en', { ascending: false });
 
     if (error) throw error;
 
     return (data ?? []).map((row) => {
         const solicitante = mapProfile(row.solicitante);
         const receptor = mapProfile(row.receptor);
-        const friend =
-            row.usuario_id === userId ? receptor : solicitante;
+        const friend = row.usuario_origen_id === userId ? receptor : solicitante;
 
         return {
             id: friend?.id ?? '',
@@ -198,26 +197,26 @@ export async function getIncomingRequests(userId: string): Promise<FriendRequest
         .from('amistades')
         .select(`
             id,
-            usuario_id,
-            amigo_id,
+            usuario_origen_id,
+            usuario_destino_id,
             estado,
-            created_at,
-            perfil:usuario_id ( id, nombre, avatar_url )
+            creado_en,
+            perfil:perfiles!amistades_origen_fkey ( id, nombre, avatar_url )
         `)
-        .eq('amigo_id', userId)
+        .eq('usuario_destino_id', userId)
         .eq('estado', 'pendiente')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
 
     if (error) throw error;
 
     return (data ?? []).map((row) => ({
         id: row.id as string,
-        usuario_id: row.usuario_id as string,
-        amigo_id: row.amigo_id as string,
+        usuario_origen_id: row.usuario_origen_id as string,
+        usuario_destino_id: row.usuario_destino_id as string,
         estado: row.estado as FriendshipRow['estado'],
-        created_at: row.created_at as string,
+        creado_en: row.creado_en as string,
         perfil: mapProfile(row.perfil) ?? {
-            id: row.usuario_id as string,
+            id: row.usuario_origen_id as string,
             nombre: 'Usuario',
             avatar_url: null,
         },
@@ -229,26 +228,26 @@ export async function getOutgoingRequests(userId: string): Promise<FriendRequest
         .from('amistades')
         .select(`
             id,
-            usuario_id,
-            amigo_id,
+            usuario_origen_id,
+            usuario_destino_id,
             estado,
-            created_at,
-            perfil:amigo_id ( id, nombre, avatar_url )
+            creado_en,
+            perfil:perfiles!amistades_destino_fkey ( id, nombre, avatar_url )
         `)
-        .eq('usuario_id', userId)
+        .eq('usuario_origen_id', userId)
         .eq('estado', 'pendiente')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
 
     if (error) throw error;
 
     return (data ?? []).map((row) => ({
         id: row.id as string,
-        usuario_id: row.usuario_id as string,
-        amigo_id: row.amigo_id as string,
+        usuario_origen_id: row.usuario_origen_id as string,
+        usuario_destino_id: row.usuario_destino_id as string,
         estado: row.estado as FriendshipRow['estado'],
-        created_at: row.created_at as string,
+        creado_en: row.creado_en as string,
         perfil: mapProfile(row.perfil) ?? {
-            id: row.amigo_id as string,
+            id: row.usuario_destino_id as string,
             nombre: 'Usuario',
             avatar_url: null,
         },

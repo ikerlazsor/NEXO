@@ -92,6 +92,7 @@ export default function FriendsScreen() {
     useFocusEffect(
         useCallback(() => {
             if (tab === 'requests') setActiveTab('requests');
+            else if (tab === 'friends') setActiveTab('friends');
             loadData();
         }, [loadData, tab])
     );

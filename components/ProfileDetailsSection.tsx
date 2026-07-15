@@ -1,4 +1,5 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import type { ReactNode } from 'react';
 import { useState } from 'react';
 import {
     Modal,
@@ -27,29 +28,30 @@ const MUTED = '#64748B';
 const BORDER = '#E2E8F0';
 const ACCENT = '#2563EB';
 
-interface Props {
-    age: number | null;
-    genero: Genero | null;
-    habitoBebida: HabitoConsumo;
-    habitoTabaco: HabitoConsumo;
-    privacy: ProfilePrivacy;
-    onSaveAge: (age: number) => void;
-    onSaveGenero: (g: Genero) => void;
-    onSaveHabitos: (bebida: HabitoConsumo, tabaco: HabitoConsumo) => void;
-    onPrivacyChange: (privacy: ProfilePrivacy) => void;
+function generoIcon(g: Genero): keyof typeof Ionicons.glyphMap {
+    switch (g) {
+        case 'masculino': return 'male';
+        case 'femenino': return 'female';
+        case 'no_binario': return 'male-female';
+        case 'otro': return 'ellipsis-horizontal';
+        default: return 'help-circle-outline';
+    }
 }
 
 function DetailRow({
     label,
+    labelIcon,
     value,
+    valueIcon,
     hidden,
     onEdit,
     onToggleVisible,
     hiddenLabel,
-    showLabel,
 }: {
     label: string;
+    labelIcon?: ReactNode;
     value: string;
+    valueIcon?: ReactNode;
     hidden: boolean;
     onEdit?: () => void;
     onToggleVisible: (v: boolean) => void;
@@ -59,11 +61,17 @@ function DetailRow({
     return (
         <View style={styles.row}>
             <View style={styles.rowMain}>
-                <Text style={styles.rowLabel}>{label}</Text>
+                <View style={styles.labelRow}>
+                    {labelIcon}
+                    <Text style={styles.rowLabel}>{label}</Text>
+                </View>
                 <TouchableOpacity onPress={onEdit} disabled={!onEdit} activeOpacity={onEdit ? 0.7 : 1}>
-                    <Text style={[styles.rowValue, hidden && styles.rowValueHidden]}>
-                        {hidden ? hiddenLabel : value}
-                    </Text>
+                    <View style={styles.valueRow}>
+                        {!hidden && valueIcon}
+                        <Text style={[styles.rowValue, hidden && styles.rowValueHidden]}>
+                            {hidden ? hiddenLabel : value}
+                        </Text>
+                    </View>
                 </TouchableOpacity>
             </View>
             <View style={styles.rowActions}>
@@ -81,6 +89,18 @@ function DetailRow({
             </View>
         </View>
     );
+}
+
+interface Props {
+    age: number | null;
+    genero: Genero | null;
+    habitoBebida: HabitoConsumo;
+    habitoTabaco: HabitoConsumo;
+    privacy: ProfilePrivacy;
+    onSaveAge: (age: number) => void;
+    onSaveGenero: (g: Genero) => void;
+    onSaveHabitos: (bebida: HabitoConsumo, tabaco: HabitoConsumo) => void;
+    onPrivacyChange: (privacy: ProfilePrivacy) => void;
 }
 
 export function ProfileDetailsSection({
@@ -133,6 +153,7 @@ export function ProfileDetailsSection({
             <DetailRow
                 label={t('profile.gender')}
                 value={generoValue}
+                valueIcon={genero ? <Ionicons name={generoIcon(genero)} size={18} color={ACCENT} /> : null}
                 hidden={!privacy.mostrar_genero}
                 hiddenLabel={t('profile.hidden')}
                 showLabel={t('profile.visible')}
@@ -141,7 +162,8 @@ export function ProfileDetailsSection({
             />
             <View style={styles.divider} />
             <DetailRow
-                label={t('profile.drinking')}
+                label={t('profile.alcohol')}
+                labelIcon={<Ionicons name="wine-outline" size={16} color={MUTED} />}
                 value={bebidaValue}
                 hidden={!privacy.mostrar_bebida}
                 hiddenLabel={t('profile.hidden')}
@@ -152,6 +174,7 @@ export function ProfileDetailsSection({
             <View style={styles.divider} />
             <DetailRow
                 label={t('profile.smoking')}
+                labelIcon={<MaterialCommunityIcons name="smoking" size={16} color={MUTED} />}
                 value={tabacoValue}
                 hidden={!privacy.mostrar_tabaco}
                 hiddenLabel={t('profile.hidden')}
@@ -160,7 +183,6 @@ export function ProfileDetailsSection({
                 onToggleVisible={(v) => updatePrivacy('mostrar_tabaco', v)}
             />
 
-            {/* Editar edad */}
             <Modal visible={editAge} transparent animationType="fade" onRequestClose={() => setEditAge(false)}>
                 <Pressable style={styles.modalBg} onPress={() => setEditAge(false)}>
                     <Pressable style={styles.modalBox} onPress={(e) => e.stopPropagation()}>
@@ -188,7 +210,6 @@ export function ProfileDetailsSection({
                 </Pressable>
             </Modal>
 
-            {/* Editar género */}
             <Modal visible={editGenero} transparent animationType="slide" onRequestClose={() => setEditGenero(false)}>
                 <Pressable style={styles.modalBg} onPress={() => setEditGenero(false)}>
                     <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
@@ -203,6 +224,7 @@ export function ProfileDetailsSection({
                                         setEditGenero(false);
                                     }}
                                 >
+                                    <Ionicons name={generoIcon(g)} size={20} color={ACCENT} />
                                     <Text style={styles.sheetOptionText}>{t('genero.' + g)}</Text>
                                 </TouchableOpacity>
                             ))}
@@ -211,11 +233,10 @@ export function ProfileDetailsSection({
                 </Pressable>
             </Modal>
 
-            {/* Editar bebida / tabaco */}
             <Modal visible={editBebida} transparent animationType="slide" onRequestClose={() => setEditBebida(false)}>
                 <Pressable style={styles.modalBg} onPress={() => setEditBebida(false)}>
                     <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-                        <Text style={styles.modalTitle}>{t('profile.drinking')}</Text>
+                        <Text style={styles.modalTitle}>{t('profile.alcohol')}</Text>
                         {HABITO_BEBIDA_OPTIONS.filter((h) => h !== 'no_especificado').map((h) => (
                             <TouchableOpacity
                                 key={h}
@@ -225,6 +246,7 @@ export function ProfileDetailsSection({
                                     setEditBebida(false);
                                 }}
                             >
+                                <Ionicons name="wine-outline" size={20} color={ACCENT} />
                                 <Text style={styles.sheetOptionText}>{t('habito.' + h)}</Text>
                             </TouchableOpacity>
                         ))}
@@ -245,6 +267,7 @@ export function ProfileDetailsSection({
                                     setEditTabaco(false);
                                 }}
                             >
+                                <MaterialCommunityIcons name="smoking" size={20} color={ACCENT} />
                                 <Text style={styles.sheetOptionText}>{t('habito.' + h)}</Text>
                             </TouchableOpacity>
                         ))}
@@ -268,8 +291,10 @@ const styles = StyleSheet.create({
     sectionSub: { fontSize: 13, color: MUTED, marginTop: 4, marginBottom: 16, lineHeight: 18 },
     row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
     rowMain: { flex: 1 },
+    labelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     rowLabel: { fontSize: 12, fontWeight: '600', color: MUTED, textTransform: 'uppercase', letterSpacing: 0.4 },
-    rowValue: { fontSize: 16, fontWeight: '600', color: INK, marginTop: 4 },
+    valueRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+    rowValue: { fontSize: 16, fontWeight: '600', color: INK },
     rowValueHidden: { color: MUTED, fontStyle: 'italic' },
     rowActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     editBtn: { padding: 4 },
@@ -304,6 +329,9 @@ const styles = StyleSheet.create({
         marginTop: 'auto',
     },
     sheetOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
         paddingVertical: 14,
         borderBottomWidth: 1,
         borderBottomColor: BORDER,

@@ -1,15 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
-export type Lang = 'es' | 'en' | 'fr' | 'pt';
+export type Lang = 'es' | 'en';
 
 const STORAGE_KEY = '@nexo_lang';
 
-export const LANG_OPTIONS: { code: Lang; label: string; flag: string }[] = [
-    { code: 'es', label: 'Español', flag: '🇪🇸' },
-    { code: 'en', label: 'English', flag: '🇬🇧' },
-    { code: 'fr', label: 'Français', flag: '🇫🇷' },
-    { code: 'pt', label: 'Português', flag: '🇵🇹' },
+export const LANG_OPTIONS: { code: Lang; label: string }[] = [
+    { code: 'es', label: 'ES' },
+    { code: 'en', label: 'EN' },
 ];
 
 type Dict = Record<string, string>;
@@ -66,6 +64,9 @@ const es: Dict = {
     'feed.filterZoneSub': 'Toca un punto del mapa',
     'feed.filterZoneHint': 'Selecciona la provincia donde quieres ver planes',
     'feed.filterDateTitle': 'Filtrar por fecha',
+    'feed.filterCategoryTitle': 'Filtrar por categoría',
+    'feed.category': 'Categoría',
+    'feed.searchProfiles': 'Buscar perfiles',
 
     // Fechas filtro
     'date.all': 'Cualquier fecha',
@@ -79,6 +80,11 @@ const es: Dict = {
     'card.joined': 'Unido',
     'card.requested': 'Solicitado',
     'card.full': 'PLAN COMPLETO',
+    'card.joinWaitlist': 'Lista de espera',
+    'card.waitlist': 'En lista de espera',
+    'card.leaveWaitlistTitle': 'Salir de la lista',
+    'card.leaveWaitlistMsg': '¿Quieres salir de la lista de espera?',
+    'card.friendsJoined': '{n} amigo(s) unido(s) a este plan',
     'card.myPlan': 'Tu Plan',
     'card.weAre': '¡Ya somos {n}!',
     'card.max': 'máx {n}',
@@ -134,13 +140,13 @@ const es: Dict = {
     'myplans.rlsHint': 'Ejecuta supabase/participantes-host-rls.sql en Supabase para poder aprobar solicitudes.',
 
     // Chats
-    'chats.title': 'Mis Grupos',
+    'chats.title': 'Mis Chats',
     'chats.empty': 'No tienes chats todavía',
-    'chats.emptySub': 'Únete a un plan para ver el grupo de chat aquí.',
+    'chats.emptySub': 'Únete a un plan para ver el chat aquí.',
     'chats.explore': 'Explorar planes',
     'chats.noMessages': 'No hay mensajes todavía',
-    'chats.createGroup': 'Crear grupo',
-    'chats.groupName': 'Nombre del grupo',
+    'chats.createGroup': 'Crear chat',
+    'chats.groupName': 'Nombre del chat',
     'chats.groupNamePlaceholder': 'Ej: Los del viernes',
     'chats.inviteFriends': 'Invitar amigos',
     'chats.selectOneFriend': 'Selecciona al menos un amigo',
@@ -198,10 +204,10 @@ const es: Dict = {
     'friends.chatError': 'Hubo un problema al intentar abrir el chat.',
     'friends.planInvites': 'Invitaciones a planes',
     'friends.planInvitesSub': 'Acepta para unirte al plan o al grupo de chat.',
-    'friends.inviteTypeGroup': 'Grupo',
+    'friends.inviteTypeGroup': 'Chat',
     'friends.inviteTypePlan': 'Plan',
     'friends.inviteFrom': '{name} te invita',
-    'friends.inviteGroup': 'Grupo: {title}',
+    'friends.inviteGroup': 'Chat: {title}',
     'friends.invitePlan': 'Plan: {title}',
     'friends.inviteSent': 'Invitación enviada. Tu amigo la verá en Solicitudes.',
     'friends.invitesSqlHint': 'Ejecuta supabase/plan-invites-setup.sql en Supabase.',
@@ -227,6 +233,11 @@ const es: Dict = {
     'settings.soon': 'Próximamente',
     'settings.soonMsg': 'Esta función estará disponible pronto.',
     'settings.logoutConfirm': '¿Seguro que quieres salir?',
+    'settings.blockedAccounts': 'Cuentas bloqueadas',
+    'settings.nexoPlus': 'Nexo Plus',
+    'settings.blockedEmpty': 'No tienes cuentas bloqueadas',
+    'settings.unblock': 'Desbloquear',
+    'settings.unblockConfirm': '¿Desbloquear a {name}?',
 
     // Perfil (extra)
     'profile.myProfile': 'Mi Perfil',
@@ -239,11 +250,13 @@ const es: Dict = {
     'profile.editGender': 'Editar género',
     'profile.age': 'Edad',
     'profile.gender': 'Género',
-    'profile.drinking': 'Bebida',
-    'profile.smoking': 'Tabaco',
-    'profile.hobbies': 'Aficiones',
+    'profile.drinking': 'Alcohol',
+    'profile.smoking': 'Fumar',
+    'profile.alcohol': 'Alcohol',
+    'profile.hobbies': 'Personalidad',
     'profile.addHobby': 'Añadir',
-    'profile.pickHobby': 'Elige una afición',
+    'profile.pickHobby': 'Elige tu personalidad',
+    'profile.pickPersonality': 'Elige tu personalidad',
     'profile.badges': 'Insignias',
     'profile.badgeUnlocked': '¡Desbloqueada!',
     'profile.badgeLocked': 'Aún no desbloqueada',
@@ -259,7 +272,7 @@ const es: Dict = {
     'habito.si': 'Sí',
     'habito.no_especificado': 'No especificado',
     'profile.quickActions': 'Accesos rápidos',
-    'profile.chats': 'Mis grupos',
+    'profile.chats': 'Mis chats',
     'profile.uploading': 'Subiendo foto…',
     'profile.plansDone': 'Planes hechos',
     'profile.reviews': 'reseñas',
@@ -280,6 +293,16 @@ const es: Dict = {
     'profile.uploadError': 'No se pudo subir la imagen',
     'profile.tagLimit': 'Máximo 5 etiquetas',
     'profile.error': 'Error',
+
+    // Buscar perfiles
+    'search.title': 'Buscar perfiles',
+    'search.placeholder': 'Buscar por nombre o usuario...',
+    'search.rankings': 'Rankings',
+    'search.rankFriends': 'Más seguidos',
+    'search.rankPlans': 'Más planes',
+    'search.rankBadges': 'Más insignias',
+    'search.noResults': 'Sin resultados',
+    'search.emptyQuery': 'Escribe al menos 2 caracteres',
 
     // Chat (extra)
     'chat.recording': 'Grabando',
@@ -309,7 +332,7 @@ const es: Dict = {
     'explore.feat2Title': 'Conoce gente',
     'explore.feat2Desc': 'Únete a planes y haz nuevos amigos.',
     'explore.feat3Title': 'Chatea al instante',
-    'explore.feat3Desc': 'Cada plan tiene su grupo de chat.',
+    'explore.feat3Desc': 'Cada plan tiene su chat.',
     'explore.cta': 'Ir a los planes',
 
     // Guardados
@@ -554,6 +577,9 @@ const en: Dict = {
     'feed.filterZoneSub': 'Tap a point on the map',
     'feed.filterZoneHint': 'Select the province where you want to see plans',
     'feed.filterDateTitle': 'Filter by date',
+    'feed.filterCategoryTitle': 'Filter by category',
+    'feed.category': 'Category',
+    'feed.searchProfiles': 'Search profiles',
 
     'date.all': 'Any date',
     'date.today': 'Today',
@@ -565,6 +591,11 @@ const en: Dict = {
     'card.joined': 'Joined',
     'card.requested': 'Requested',
     'card.full': 'PLAN FULL',
+    'card.joinWaitlist': 'Join waitlist',
+    'card.waitlist': 'On waitlist',
+    'card.leaveWaitlistTitle': 'Leave waitlist',
+    'card.leaveWaitlistMsg': 'Do you want to leave the waitlist?',
+    'card.friendsJoined': '{n} friend(s) joined this plan',
     'card.myPlan': 'Your Plan',
     'card.weAre': "We're already {n}!",
     'card.max': 'max {n}',
@@ -617,13 +648,13 @@ const en: Dict = {
     'myplans.full': 'The plan is full. Free up spots to accept more people.',
     'myplans.rlsHint': 'Run supabase/participantes-host-rls.sql in Supabase to approve join requests.',
 
-    'chats.title': 'My Groups',
+    'chats.title': 'My Chats',
     'chats.empty': "You don't have chats yet",
-    'chats.emptySub': 'Join a plan to see its group chat here.',
+    'chats.emptySub': 'Join a plan to see its chat here.',
     'chats.explore': 'Explore plans',
     'chats.noMessages': 'No messages yet',
-    'chats.createGroup': 'Create group',
-    'chats.groupName': 'Group name',
+    'chats.createGroup': 'Create chat',
+    'chats.groupName': 'Chat name',
     'chats.groupNamePlaceholder': 'E.g. Friday crew',
     'chats.inviteFriends': 'Invite friends',
     'chats.selectOneFriend': 'Select at least one friend',
@@ -680,10 +711,10 @@ const en: Dict = {
     'friends.chatError': 'There was a problem opening the chat.',
     'friends.planInvites': 'Plan invitations',
     'friends.planInvitesSub': 'Accept to join the plan or group chat.',
-    'friends.inviteTypeGroup': 'Group',
+    'friends.inviteTypeGroup': 'Chat',
     'friends.inviteTypePlan': 'Plan',
     'friends.inviteFrom': '{name} invited you',
-    'friends.inviteGroup': 'Group: {title}',
+    'friends.inviteGroup': 'Chat: {title}',
     'friends.invitePlan': 'Plan: {title}',
     'friends.inviteSent': 'Invitation sent. Your friend will see it under Requests.',
     'friends.invitesSqlHint': 'Run supabase/plan-invites-setup.sql in Supabase.',
@@ -708,6 +739,11 @@ const en: Dict = {
     'settings.soon': 'Coming soon',
     'settings.soonMsg': 'This feature will be available soon.',
     'settings.logoutConfirm': 'Are you sure you want to log out?',
+    'settings.blockedAccounts': 'Blocked accounts',
+    'settings.nexoPlus': 'Nexo Plus',
+    'settings.blockedEmpty': 'You have no blocked accounts',
+    'settings.unblock': 'Unblock',
+    'settings.unblockConfirm': 'Unblock {name}?',
 
     'profile.myProfile': 'My Profile',
     'profile.details': 'Details',
@@ -719,11 +755,13 @@ const en: Dict = {
     'profile.editGender': 'Edit gender',
     'profile.age': 'Age',
     'profile.gender': 'Gender',
-    'profile.drinking': 'Drinking',
+    'profile.drinking': 'Alcohol',
     'profile.smoking': 'Smoking',
-    'profile.hobbies': 'Hobbies',
+    'profile.alcohol': 'Alcohol',
+    'profile.hobbies': 'Personality',
     'profile.addHobby': 'Add',
-    'profile.pickHobby': 'Pick a hobby',
+    'profile.pickHobby': 'Pick your personality',
+    'profile.pickPersonality': 'Pick your personality',
     'profile.badges': 'Badges',
     'profile.badgeUnlocked': 'Unlocked!',
     'profile.badgeLocked': 'Not unlocked yet',
@@ -739,7 +777,7 @@ const en: Dict = {
     'habito.si': 'Yes',
     'habito.no_especificado': 'Not specified',
     'profile.quickActions': 'Quick access',
-    'profile.chats': 'My groups',
+    'profile.chats': 'My chats',
     'profile.uploading': 'Uploading photo…',
     'profile.plansDone': 'Plans done',
     'profile.reviews': 'reviews',
@@ -787,8 +825,17 @@ const en: Dict = {
     'explore.feat2Title': 'Meet people',
     'explore.feat2Desc': 'Join plans and make new friends.',
     'explore.feat3Title': 'Chat instantly',
-    'explore.feat3Desc': 'Every plan has its own chat group.',
+    'explore.feat3Desc': 'Every plan has its own chat.',
     'explore.cta': 'Go to plans',
+
+    'search.title': 'Search profiles',
+    'search.placeholder': 'Search by name or username...',
+    'search.rankings': 'Rankings',
+    'search.rankFriends': 'Most followed',
+    'search.rankPlans': 'Most plans',
+    'search.rankBadges': 'Most badges',
+    'search.noResults': 'No results',
+    'search.emptyQuery': 'Type at least 2 characters',
 
     'saved.title': 'Saved',
     'saved.empty': "You don't have saved plans",
@@ -1091,7 +1138,7 @@ const pt: Dict = {
     'onboarding.finish': 'Começar no NEXO',
 };
 
-const DICTS: Record<Lang, Dict> = { es, en, fr, pt };
+const DICTS: Record<Lang, Dict> = { es, en };
 
 interface I18nContextValue {
     lang: Lang;
@@ -1106,7 +1153,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         AsyncStorage.getItem(STORAGE_KEY).then((saved) => {
-            if (saved === 'es' || saved === 'en' || saved === 'fr' || saved === 'pt') setLangState(saved);
+            if (saved === 'es' || saved === 'en') setLangState(saved);
         });
     }, []);
 

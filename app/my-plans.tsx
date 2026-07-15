@@ -19,6 +19,7 @@ import { isFeedPlan } from '../lib/feedPlans';
 import { useT } from '../lib/i18n';
 import { getPlanJoinRequestCount } from '../lib/notifications';
 import { isAcceptedParticipant } from '../lib/participants';
+import { resolvePlanImageSource } from '../lib/sports';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -122,7 +123,7 @@ export default function MyPlansScreen() {
         return (
             <View style={styles.card}>
                 <View style={styles.cardHeader}>
-                    <PlanImage source={item.imagen_url || 'https://via.placeholder.com/200'} style={styles.thumb} recyclingKey={String(item.id)} />
+                    <PlanImage source={resolvePlanImageSource(item.imagen_url)} style={styles.thumb} recyclingKey={String(item.id)} />
                     <View style={{ flex: 1, marginLeft: 12 }}>
                         <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
                         <View style={styles.countRow}>

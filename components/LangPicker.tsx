@@ -16,12 +16,17 @@ export function LangPicker({ lang, onChange, compact }: Props) {
             {LANG_OPTIONS.map((opt) => (
                 <TouchableOpacity
                     key={opt.code}
-                    style={[styles.option, lang === opt.code && styles.optionActive]}
+                    style={[
+                        styles.option,
+                        compact && styles.optionCompact,
+                        lang === opt.code && styles.optionActive,
+                    ]}
                     onPress={() => onChange(opt.code)}
                     activeOpacity={0.8}
                 >
-                    <Text style={styles.flag}>{opt.flag}</Text>
-                    {!compact && <Text style={[styles.label, lang === opt.code && styles.labelActive]}>{opt.label}</Text>}
+                    <Text style={[styles.code, compact && styles.codeCompact, lang === opt.code && styles.codeActive]}>
+                        {opt.label}
+                    </Text>
                 </TouchableOpacity>
             ))}
         </View>
@@ -35,23 +40,28 @@ const styles = StyleSheet.create({
         gap: 8,
         justifyContent: 'center',
     },
-    rowCompact: { gap: 6 },
+    rowCompact: { gap: 4 },
     option: {
-        flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 12,
+        justifyContent: 'center',
+        paddingHorizontal: 14,
         paddingVertical: 8,
-        borderRadius: 12,
+        borderRadius: 10,
         borderWidth: 1,
         borderColor: BORDER,
         backgroundColor: '#FFF',
+        minWidth: 44,
+    },
+    optionCompact: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        minWidth: 36,
     },
     optionActive: {
         borderColor: ACCENT,
         backgroundColor: '#EFF6FF',
     },
-    flag: { fontSize: 18 },
-    label: { fontSize: 13, fontWeight: '600', color: '#64748B' },
-    labelActive: { color: ACCENT },
+    code: { fontSize: 14, fontWeight: '800', color: '#64748B' },
+    codeCompact: { fontSize: 12 },
+    codeActive: { color: ACCENT },
 });

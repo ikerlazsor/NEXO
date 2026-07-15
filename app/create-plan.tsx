@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
-    Image,
     KeyboardAvoidingView,
     Platform,
     Pressable,
@@ -29,6 +28,7 @@ import {
     FORMATS_BY_SPORT,
     MAIN_CATEGORIES,
     deriveFormatoFromCapacity,
+    encodeCoverImageKey,
     getCoverImages,
     getMinPeopleForSport,
     isDeporteTipo,
@@ -145,22 +145,8 @@ export default function CreatePlanScreen() {
         setPickerVisible(true);
     };
 
-    // Usar rutas locales de assets en lugar de subir a Storage
-    const uploadLocalImage = async (imageRequire: any) => {
-        try {
-            // Obtener la URI local del asset
-            const imageModule = Image.resolveAssetSource(imageRequire);
-            const uri = imageModule.uri;
-            
-            if (!uri) throw new Error("No se pudo obtener la URI del recurso");
-
-            console.log("URI local de la imagen:", uri);
-            return uri;
-        } catch (e) {
-            console.error("Error obteniendo URI local:", e);
-            return null;
-        }
-    };
+    // Guardar clave estable del asset (no URI local)
+    const getCoverImageKey = () => encodeCoverImageKey(category, deporteTipo, coverIndex);
 
     const handleCreatePlan = async () => {
         if (!title.trim() || !description.trim()) {
@@ -176,12 +162,7 @@ export default function CreatePlanScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            const uploadedUrl = await uploadLocalImage(selectedImage);
-
-            if (!uploadedUrl) {
-                Alert.alert(t('profile.error'), t('createplan.uploadError'));
-                return;
-            }
+            const imageKey = getCoverImageKey();
 
             const planPayload: Record<string, unknown> = {
                 titulo: title.trim(),
@@ -189,7 +170,7 @@ export default function CreatePlanScreen() {
                 categoria: category,
                 nombre_ubicacion: location.address || t('createplan.noLocationName'),
                 maximo_participantes: maxPeople,
-                imagen_url: uploadedUrl,
+                imagen_url: imageKey,
                 creador_id: user.id,
                 fecha_evento: date.toISOString(),
                 latitud: location.latitude,

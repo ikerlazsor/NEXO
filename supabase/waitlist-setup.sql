@@ -28,7 +28,7 @@ DECLARE
     v_count int;
     v_next_id uuid;
 BEGIN
-    SELECT max_people INTO v_max FROM planes WHERE id = p_plan_id;
+    SELECT maximo_participantes INTO v_max FROM planes WHERE id = p_plan_id;
     IF v_max IS NULL THEN
         RETURN;
     END IF;

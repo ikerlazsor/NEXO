@@ -14,7 +14,6 @@ import {
     Platform,
     Pressable,
     RefreshControl,
-    ScrollView,
     StatusBar,
     StyleSheet,
     Text,
@@ -25,9 +24,11 @@ import {
 import MapView, { Marker } from 'react-native-maps';
 import { PlanCard, type Membership } from '../../components/PlanCard';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
+import { LangPicker } from '../../components/LangPicker';
 import { getAuthUser } from '../../lib/auth';
+import { getFriends } from '../../lib/friends';
 import { isFeedPlan } from '../../lib/feedPlans';
-import { useT, LANG_OPTIONS } from '../../lib/i18n';
+import { useT } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { reportPlan } from '../../lib/reportPlan';
 import { debounce } from '../../lib/debounce';
@@ -39,6 +40,7 @@ import {
     isAcceptedParticipant,
     mapEstadoToMembership,
     membershipFromJoinEstado,
+    promoteWaitlist,
     resolveJoinEstado,
 } from '../../lib/participants';
 
@@ -87,6 +89,7 @@ export default function HomeScreen() {
     const [dateFilter, setDateFilter] = useState('all');
     const [showZoneModal, setShowZoneModal] = useState(false);
     const [showDateModal, setShowDateModal] = useState(false);
+    const [showCategoryModal, setShowCategoryModal] = useState(false);
 
     const [plans, setPlans] = useState<any[]>([]);
     const [membershipMap, setMembershipMap] = useState<Record<string, Membership>>({});
@@ -101,8 +104,9 @@ export default function HomeScreen() {
         planRequests: 0,
         planInvites: 0,
     });
+    const [friendIds, setFriendIds] = useState<Set<string>>(new Set());
 
-    const filters = ['Todos', ...MAIN_CATEGORIES];
+    const CATEGORY_FILTER_OPTIONS = ['Todos', 'Fiesta', 'Tapas', 'Deporte', 'Estudio', 'Solo chicas'];
 
     const fetchData = async () => {
         let finished = false;
@@ -157,6 +161,7 @@ export default function HomeScreen() {
                     getProfileNotificationCount(user.id),
                     supabase.from('participantes').select('plan_id, estado').eq('usuario_id', user.id),
                     supabase.from('planes_guardados').select('plan_id').eq('usuario_id', user.id),
+                    getFriends(user.id),
                 ])
                 : Promise.resolve(null);
 
@@ -194,7 +199,7 @@ export default function HomeScreen() {
             setPlans(formattedPlans);
 
             if (user && userExtras) {
-                const [profileRes, notifs, participantsRes, savedRes] = userExtras;
+                const [profileRes, notifs, participantsRes, savedRes, friendsData] = userExtras;
                 setAvatarUrl(profileRes.data?.avatar_url || user.user_metadata?.avatar_url || null);
                 setNotifCount(notifs.total);
                 setNotifBreakdown({
@@ -202,6 +207,7 @@ export default function HomeScreen() {
                     planRequests: notifs.planRequests,
                     planInvites: notifs.planInvites,
                 });
+                setFriendIds(new Set(friendsData.map((f) => f.id)));
                 const map: Record<string, Membership> = {};
                 (participantsRes.data || []).forEach((p: any) => {
                     const m = mapEstadoToMembership(p.estado);
@@ -212,6 +218,7 @@ export default function HomeScreen() {
             } else {
                 setNotifCount(0);
                 setNotifBreakdown({ friendRequests: 0, planRequests: 0, planInvites: 0 });
+                setFriendIds(new Set());
             }
         } catch (error) {
             console.log(error);
@@ -246,7 +253,11 @@ export default function HomeScreen() {
         const plan = plans.find(p => p.id === planId);
         if (!plan) return;
 
-        const estado = resolveJoinEstado(plan);
+        const estado = resolveJoinEstado({
+            requiere_aprobacion: plan.requiere_aprobacion,
+            maximo_participantes: plan.maximo_participantes,
+            joinedCount: plan.joinedCount,
+        });
         const nextMembership = membershipFromJoinEstado(estado);
 
         const prevMap = membershipMap;
@@ -267,8 +278,17 @@ export default function HomeScreen() {
         if (!currentUserId) return;
         const membership = membershipMap[planId];
         const wasJoined = membership === 'joined';
-        const title = wasJoined ? t('feed.leaveTitle') : t('feed.cancelRequestTitle');
-        const message = wasJoined ? t('feed.leaveMsg') : t('feed.cancelRequestMsg');
+        const wasWaitlist = membership === 'waitlist';
+        const title = wasJoined
+            ? t('feed.leaveTitle')
+            : wasWaitlist
+              ? t('card.leaveWaitlistTitle')
+              : t('feed.cancelRequestTitle');
+        const message = wasJoined
+            ? t('feed.leaveMsg')
+            : wasWaitlist
+              ? t('card.leaveWaitlistMsg')
+              : t('feed.cancelRequestMsg');
         Alert.alert(title, message, [
             { text: t('common.cancel'), style: 'cancel' },
             {
@@ -292,7 +312,10 @@ export default function HomeScreen() {
                         Alert.alert(t('feed.error'), t('feed.leaveError'));
                         return;
                     }
-                    if (wasJoined) fetchData();
+                    if (wasJoined) {
+                        await promoteWaitlist(planId);
+                        fetchData();
+                    }
                 },
             },
         ]);
@@ -425,18 +448,7 @@ export default function HomeScreen() {
                     <Text style={styles.logoInline}>Nexo</Text>
                 </View>
                 <View style={styles.headerRight}>
-                    <View style={styles.flagsRow}>
-                        {LANG_OPTIONS.map((opt) => (
-                            <TouchableOpacity
-                                key={opt.code}
-                                style={[styles.flagBtn, lang === opt.code && styles.flagBtnActive]}
-                                onPress={() => setLang(opt.code)}
-                                activeOpacity={0.8}
-                            >
-                                <Text style={styles.flagEmoji}>{opt.flag}</Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
+                    <LangPicker lang={lang} onChange={setLang} compact />
                     <TouchableOpacity
                         style={styles.profileBtn}
                         onPress={() => router.push('/profile')}
@@ -464,7 +476,7 @@ export default function HomeScreen() {
 
             <View style={styles.quickFiltersRow}>
                 <TouchableOpacity
-                    style={[styles.quickFilterPill, zoneFilter ? styles.quickFilterActive : null]}
+                    style={[styles.quickFilterPill, styles.quickFilterBox, zoneFilter ? styles.quickFilterActive : null]}
                     onPress={() => setShowZoneModal(true)}
                 >
                     <Ionicons name="location" size={15} color={zoneFilter ? '#FFF' : PRIMARY_DARK} />
@@ -479,28 +491,24 @@ export default function HomeScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                    style={[styles.quickFilterPill, dateFilter !== 'all' ? styles.quickFilterActive : null]}
+                    style={[styles.quickFilterPill, styles.quickFilterBox, dateFilter !== 'all' ? styles.quickFilterActive : null]}
                     onPress={() => setShowDateModal(true)}
                 >
                     <Ionicons name="calendar" size={15} color={dateFilter !== 'all' ? '#FFF' : PRIMARY_DARK} />
-                    <Text style={[styles.quickFilterText, dateFilter !== 'all' ? { color: '#FFF' } : null]}>
+                    <Text style={[styles.quickFilterText, dateFilter !== 'all' ? { color: '#FFF' } : null]} numberOfLines={1}>
                         {dateFilter !== 'all' ? activeDateLabel : t('feed.date')}
                     </Text>
                 </TouchableOpacity>
-            </View>
 
-            <View style={styles.filtersContainer}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersScroll}>
-                    {filters.map(f => {
-                        const active = selectedFilter === f;
-                        return (
-                            <Pressable key={f} onPress={() => setSelectedFilter(f)} style={[styles.filterBtn, active && styles.activeFilter]}>
-                                <Ionicons name={CATEGORY_ICONS[f] || 'pricetag'} size={15} color={active ? '#FFF' : PRIMARY_DARK} />
-                                <Text style={[styles.filterText, active && styles.activeText]}>{t('cat.' + f)}</Text>
-                            </Pressable>
-                        );
-                    })}
-                </ScrollView>
+                <TouchableOpacity
+                    style={[styles.quickFilterPill, styles.quickFilterBox, selectedFilter !== 'Todos' ? styles.quickFilterActive : null]}
+                    onPress={() => setShowCategoryModal(true)}
+                >
+                    <Ionicons name="grid" size={15} color={selectedFilter !== 'Todos' ? '#FFF' : PRIMARY_DARK} />
+                    <Text style={[styles.quickFilterText, selectedFilter !== 'Todos' ? { color: '#FFF' } : null]} numberOfLines={1}>
+                        {selectedFilter !== 'Todos' ? t('cat.' + selectedFilter) : t('feed.category')}
+                    </Text>
+                </TouchableOpacity>
             </View>
 
             {loading && !refreshing ? (
@@ -524,6 +532,7 @@ export default function HomeScreen() {
                             currentUserId={currentUserId}
                             membership={membershipMap[item.id] || 'none'}
                             isSaved={savedPlans.includes(item.id)}
+                            friendIds={friendIds}
                             onJoin={handleJoin}
                             onLeave={handleLeave}
                             onDelete={handleDeletePlan}
@@ -536,15 +545,43 @@ export default function HomeScreen() {
                 />
             )}
 
-            <TouchableOpacity style={styles.fabLeft} onPress={() => router.push('/chats')}>
-                <Ionicons name="chatbubbles" size={26} color="#fff" />
-            </TouchableOpacity>
+            <View style={styles.floatingBar}>
+                <TouchableOpacity style={styles.floatingBtn} onPress={() => router.push('/chats')} activeOpacity={0.9}>
+                    <Ionicons name="chatbubbles" size={24} color="#fff" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.floatingBtnCenter} onPress={() => router.push('/search-profiles')} activeOpacity={0.9}>
+                    <Ionicons name="search" size={24} color="#fff" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.floatingBtn} onPress={() => router.push('/create-plan')} activeOpacity={0.9}>
+                    <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.floatingBtnGradient}>
+                        <Ionicons name="add" size={28} color="#fff" />
+                    </LinearGradient>
+                </TouchableOpacity>
+            </View>
 
-            <TouchableOpacity style={styles.fab} onPress={() => router.push('/create-plan')} activeOpacity={0.9}>
-                <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.fabGradient}>
-                    <Ionicons name="add" size={32} color="#fff" />
-                </LinearGradient>
-            </TouchableOpacity>
+            <Modal visible={showCategoryModal} transparent animationType="fade" onRequestClose={() => setShowCategoryModal(false)}>
+                <Pressable style={styles.modalOverlay} onPress={() => setShowCategoryModal(false)}>
+                    <Pressable style={styles.modalSheet}>
+                        <Text style={styles.modalTitle}>{t('feed.filterCategoryTitle')}</Text>
+                        {CATEGORY_FILTER_OPTIONS.map((cat) => {
+                            const active = selectedFilter === cat;
+                            return (
+                                <TouchableOpacity
+                                    key={cat}
+                                    style={[styles.dateOption, active && styles.dateOptionActive]}
+                                    onPress={() => { setSelectedFilter(cat); setShowCategoryModal(false); }}
+                                >
+                                    <View style={styles.categoryOptionRow}>
+                                        <Ionicons name={CATEGORY_ICONS[cat] || 'apps'} size={18} color={active ? PRIMARY_DARK : '#64748B'} />
+                                        <Text style={[styles.dateOptionText, active && { color: PRIMARY_DARK, fontWeight: '800' }]}>{t('cat.' + cat)}</Text>
+                                    </View>
+                                    {active && <Ionicons name="checkmark-circle" size={20} color={PRIMARY_DARK} />}
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </Pressable>
+                </Pressable>
+            </Modal>
 
             <Modal visible={showZoneModal} animationType="slide" onRequestClose={() => setShowZoneModal(false)}>
                 <View style={styles.mapModalContainer}>
@@ -637,36 +674,16 @@ const styles = StyleSheet.create({
     },
     profileNotifText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    flagsRow: {
-        flexDirection: 'row',
-        backgroundColor: '#FFF',
-        borderRadius: 14,
-        padding: 3,
-        gap: 2,
-        elevation: 3,
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.12,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 3 },
-    },
-    flagBtn: { width: 30, height: 30, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-    flagBtnActive: { backgroundColor: '#E3ECFB' },
-    flagEmoji: { fontSize: 16 },
     searchWrapper: { paddingHorizontal: 24, marginBottom: 12 },
     searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 14, borderRadius: 18, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.1, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
     searchInput: { marginLeft: 10, flex: 1, fontSize: 16, color: INK },
 
-    quickFiltersRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 24, marginBottom: 12 },
-    quickFilterPill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, borderWidth: 1, borderColor: '#E3ECFB', maxWidth: 180 },
+    quickFiltersRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 24, marginBottom: 12 },
+    quickFilterPill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFF', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 14, borderWidth: 1, borderColor: '#E3ECFB' },
+    quickFilterBox: { flex: 1, justifyContent: 'center' },
     quickFilterActive: { backgroundColor: PRIMARY_DARK, borderColor: PRIMARY_DARK },
-    quickFilterText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 13, flexShrink: 1 },
+    quickFilterText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 12, flexShrink: 1 },
 
-    filtersContainer: { marginBottom: 4 },
-    filtersScroll: { paddingHorizontal: 24, paddingBottom: 10 },
-    filterBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 9, borderRadius: 14, backgroundColor: '#FFF', marginRight: 10, borderWidth: 1, borderColor: '#E3ECFB' },
-    activeFilter: { backgroundColor: PRIMARY_DARK, borderColor: PRIMARY_DARK },
-    filterText: { color: '#475569', fontWeight: '700' },
-    activeText: { color: '#FFF' },
     listContent: { paddingHorizontal: 20, paddingBottom: 130, paddingTop: 6 },
 
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: 60, paddingHorizontal: 20 },
@@ -676,9 +693,47 @@ const styles = StyleSheet.create({
     createBtnEmpty: { marginTop: 22, backgroundColor: PRIMARY_DARK, paddingHorizontal: 22, paddingVertical: 13, borderRadius: 16 },
     createBtnEmptyText: { color: '#FFF', fontWeight: '700' },
 
-    fab: { position: 'absolute', bottom: 32, right: 24, width: 64, height: 64, borderRadius: 22, elevation: 12, shadowColor: PRIMARY_DARK, shadowOpacity: 0.4, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
-    fabGradient: { flex: 1, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
-    fabLeft: { position: 'absolute', bottom: 32, left: 24, backgroundColor: INK, width: 64, height: 64, borderRadius: 22, justifyContent: 'center', alignItems: 'center', elevation: 12, shadowColor: INK, shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
+    floatingBar: {
+        position: 'absolute',
+        bottom: 28,
+        left: 24,
+        right: 24,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: INK,
+        borderRadius: 22,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        elevation: 14,
+        shadowColor: INK,
+        shadowOpacity: 0.35,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 6 },
+    },
+    floatingBtn: {
+        width: 52,
+        height: 52,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    floatingBtnCenter: {
+        width: 52,
+        height: 52,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255,255,255,0.12)',
+    },
+    floatingBtnGradient: {
+        width: 52,
+        height: 52,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    categoryOptionRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 
     modalOverlay: { flex: 1, backgroundColor: 'rgba(15,42,74,0.4)', justifyContent: 'center', paddingHorizontal: 32 },
     modalSheet: { backgroundColor: '#FFF', borderRadius: 24, padding: 22 },

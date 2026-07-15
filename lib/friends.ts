@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { isBlockedEitherWay } from './blocks';
 
 export type FriendStatus = 'self' | 'none' | 'friends' | 'pending_sent' | 'pending_received';
 
@@ -77,6 +78,10 @@ export async function sendFriendRequest(
     fromUserId: string,
     toUserId: string
 ): Promise<{ error: string | null }> {
+    if (await isBlockedEitherWay(fromUserId, toUserId)) {
+        return { error: 'No puedes enviar solicitudes a este usuario' };
+    }
+
     const existing = await getFriendStatus(fromUserId, toUserId);
     if (existing.status === 'friends') return { error: 'Ya sois amigos' };
     if (existing.status === 'pending_sent') return { error: 'Ya enviaste una solicitud' };
@@ -117,6 +122,16 @@ export async function sendFriendRequest(
 }
 
 export async function acceptFriendRequest(requestId: string) {
+    const { data: row } = await supabase
+        .from('amistades')
+        .select('usuario_origen_id, usuario_destino_id')
+        .eq('id', requestId)
+        .maybeSingle();
+
+    if (row && await isBlockedEitherWay(row.usuario_origen_id, row.usuario_destino_id)) {
+        return { data: null, error: { message: 'No puedes aceptar esta solicitud' } as any };
+    }
+
     return supabase
         .from('amistades')
         .update({ estado: 'aceptado', actualizado_en: new Date().toISOString() })

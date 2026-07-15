@@ -3,6 +3,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
+    Keyboard,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -43,6 +44,7 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
     const [resolvingPin, setResolvingPin] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const requestIdRef = useRef(0);
+    const searchInputRef = useRef<TextInput>(null);
 
     const hasAddress =
         !!location.address?.trim() &&
@@ -116,6 +118,10 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
     const pickResult = (item: SearchResult) => {
         applyLocation(item.latitude, item.longitude, item.subtitle || item.label);
         setSearchText(item.label);
+        setShowSuggestions(false);
+        setResults([]);
+        Keyboard.dismiss();
+        searchInputRef.current?.blur();
     };
 
     const clearSearch = () => {
@@ -142,6 +148,7 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
                 <View style={[styles.searchCard, showDropdown && styles.searchCardOpen]}>
                     <Ionicons name="search" size={20} color={PRIMARY_DARK} />
                     <TextInput
+                        ref={searchInputRef}
                         placeholder={t('createplan.searchPlace')}
                         placeholderTextColor={PLACEHOLDER}
                         style={styles.searchInput}

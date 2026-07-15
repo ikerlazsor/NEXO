@@ -20,6 +20,7 @@ import {
     isAcceptedParticipant,
     mapEstadoToMembership,
     membershipFromJoinEstado,
+    promoteWaitlist,
     resolveJoinEstado,
 } from '../lib/participants';
 import { supabase } from '../lib/supabase';
@@ -99,7 +100,11 @@ export default function SavedPlansScreen() {
         const plan = savedPlans.find(p => p.id === planId);
         if (!plan) return;
 
-        const estado = resolveJoinEstado(plan);
+        const estado = resolveJoinEstado({
+            requiere_aprobacion: plan.requiere_aprobacion,
+            maximo_participantes: plan.maximo_participantes,
+            joinedCount: plan.joinedCount,
+        });
         const nextMembership = membershipFromJoinEstado(estado);
         setMembershipMap(prev => ({ ...prev, [planId]: nextMembership }));
         if (estado === 'aceptado') {
@@ -112,16 +117,20 @@ export default function SavedPlansScreen() {
         if (!currentUserId) return;
         const membership = membershipMap[planId];
         const wasJoined = membership === 'joined';
+        const wasWaitlist = membership === 'waitlist';
         Alert.alert(
-            wasJoined ? t('saved.leave') : t('saved.cancelRequest'),
-            wasJoined ? t('saved.leaveConfirm') : t('saved.cancelRequestConfirm'),
+            wasJoined ? t('saved.leave') : wasWaitlist ? t('card.leaveWaitlistTitle') : t('saved.cancelRequest'),
+            wasJoined ? t('saved.leaveConfirm') : wasWaitlist ? t('card.leaveWaitlistMsg') : t('saved.cancelRequestConfirm'),
             [
             { text: t('common.no') },
             { text: t('common.yes'), onPress: async () => {
                 setMembershipMap(prev => { const n = { ...prev }; delete n[planId]; return n; });
                 if (wasJoined) setSavedPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: Math.max(0, p.joinedCount - 1) } : p));
                 await supabase.from('participantes').delete().eq('plan_id', planId).eq('usuario_id', currentUserId);
-                if (wasJoined) fetchSavedData();
+                if (wasJoined) {
+                    await promoteWaitlist(planId);
+                    fetchSavedData();
+                }
             }}
         ]);
     };

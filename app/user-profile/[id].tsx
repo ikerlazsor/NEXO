@@ -22,7 +22,7 @@ import {
     sendFriendRequest,
     type FriendStatus,
 } from '../../lib/friends';
-import { blockUser, isUserBlocked, unblockUser } from '../../lib/blocks';
+import { blockUser, isBlockedEitherWay, isUserBlocked, unblockUser } from '../../lib/blocks';
 import { useT } from '../../lib/i18n';
 import { renderRatingStars } from '../../lib/profileRating';
 import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
@@ -67,6 +67,7 @@ export default function UserProfileScreen() {
     const [friendsCount, setFriendsCount] = useState(0);
     const [stats, setStats] = useState<UserStats>(EMPTY_STATS);
     const [blocked, setBlocked] = useState(false);
+    const [blockedEitherWay, setBlockedEitherWay] = useState(false);
     const [privacy, setPrivacy] = useState<ProfilePrivacy | null>(null);
 
     const loadProfile = useCallback(async () => {
@@ -108,17 +109,20 @@ export default function UserProfileScreen() {
             setStats(userStats);
 
             if (user && user.id !== profileId) {
-                const [status, isBlocked] = await Promise.all([
+                const [status, isBlocked, eitherWay] = await Promise.all([
                     getFriendStatus(user.id, profileId),
                     isUserBlocked(user.id, profileId),
+                    isBlockedEitherWay(user.id, profileId),
                 ]);
                 setFriendStatus(status.status);
                 setRequestId(status.requestId);
                 setBlocked(isBlocked);
+                setBlockedEitherWay(eitherWay);
             } else {
                 setFriendStatus('self');
                 setRequestId(null);
                 setBlocked(false);
+                setBlockedEitherWay(false);
             }
         } catch (error) {
             console.error('Error fetching user profile:', error);
@@ -271,6 +275,9 @@ export default function UserProfileScreen() {
                             return;
                         }
                         setBlocked(true);
+                        setBlockedEitherWay(true);
+                        setFriendStatus('none');
+                        setRequestId(null);
                     },
                 },
             ]
@@ -278,7 +285,7 @@ export default function UserProfileScreen() {
     };
 
     const renderFriendAction = () => {
-        if (friendStatus === 'self') return null;
+        if (friendStatus === 'self' || blockedEitherWay) return null;
 
         if (actionLoading) {
             return (

@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
+import { BadgeTile } from '../../components/BadgeTile';
 import { ProfileDetailsSection } from '../../components/ProfileDetailsSection';
 import { getFriendsCount } from '../../lib/friends';
 import { useT } from '../../lib/i18n';
@@ -40,6 +41,7 @@ import {
 import { renderRatingStars } from '../../lib/profileRating';
 import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
 import { BADGE_DEFINITIONS, getUserBadges } from '../../lib/badges';
+import { getBadgeStats } from '../../lib/badgeStats';
 import {
     AFICIONES_OPTIONS,
     calcAge,
@@ -47,7 +49,6 @@ import {
     parseHabitos,
     mergePerfilGustosPrivacy,
     parsePrivacy,
-    searchProfilesByUsername,
     type Genero,
     type HabitoConsumo,
     type ProfilePrivacy,
@@ -97,9 +98,6 @@ export default function ProfileScreen() {
     const [showAficionModal, setShowAficionModal] = useState(false);
     const [badges, setBadges] = useState<(typeof BADGE_DEFINITIONS[0] & { unlocked: boolean })[]>([]);
     const [selectedBadge, setSelectedBadge] = useState<(typeof BADGE_DEFINITIONS[0] & { unlocked: boolean }) | null>(null);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [searchResults, setSearchResults] = useState<{ id: string; nombre: string | null; nombre_usuario: string | null; avatar_url: string | null }[]>([]);
-    const [searching, setSearching] = useState(false);
     const [privacy, setPrivacy] = useState<ProfilePrivacy>({ mostrar_edad: true, mostrar_genero: true, mostrar_bebida: true, mostrar_tabaco: true, mostrar_aficiones: true });
     const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>({});
     const cacheRef = useRef<string | null>(null);
@@ -167,7 +165,8 @@ export default function ProfileScreen() {
         setPrivacy(parsePrivacy(profile.perfil_gustos));
 
         setStats(userStats);
-        setBadges(getUserBadges(userStats));
+        const badgeStats = await getBadgeStats(authUser.id);
+        setBadges(getUserBadges(badgeStats));
 
         void fetchFriendsStats(authUser.id);
         void fetchNotificationCounts(authUser.id);
@@ -273,23 +272,6 @@ export default function ProfileScreen() {
         setHabitoBebida(bebida);
         setHabitoTabaco(tabaco);
         await updateProfileData({ habitos_consumo: { bebida, tabaco } });
-    };
-
-    const runSearch = async (q: string) => {
-        setSearchQuery(q);
-        if (!user?.id || q.trim().length < 2) {
-            setSearchResults([]);
-            return;
-        }
-        setSearching(true);
-        try {
-            const results = await searchProfilesByUsername(q, user.id);
-            setSearchResults(results);
-        } catch {
-            setSearchResults([]);
-        } finally {
-            setSearching(false);
-        }
     };
 
     const updateProfileData = async (data: Record<string, unknown>): Promise<{ error: string | null }> => {
@@ -432,7 +414,11 @@ export default function ProfileScreen() {
                             <Text style={styles.statMeta}>{stats.numeroValoraciones} {t('profile.reviews')}</Text>
                         </View>
                         <View style={styles.statDivider} />
-                        <View style={styles.statItem}>
+                        <TouchableOpacity
+                            style={styles.statItem}
+                            onPress={() => router.push({ pathname: '/friends', params: { tab: 'friends' } })}
+                            activeOpacity={0.8}
+                        >
                             <View style={styles.statBadgeWrap}>
                                 <Text style={styles.statValue}>{friendsCount}</Text>
                                 {friendsNotifCount > 0 && (
@@ -444,7 +430,7 @@ export default function ProfileScreen() {
                                 )}
                             </View>
                             <Text style={styles.statLabel}>{t('profile.friendsLabel')}</Text>
-                        </View>
+                        </TouchableOpacity>
                     </View>
                 </View>
 
@@ -479,42 +465,6 @@ export default function ProfileScreen() {
                     ))}
                 </View>
 
-                {/* Buscar perfiles */}
-                <View style={styles.card}>
-                    <Text style={styles.cardTitle}>{t('profile.searchUsers')}</Text>
-                    <View style={styles.searchRow}>
-                        <Ionicons name="at" size={18} color="#94A3B8" />
-                        <TextInput
-                            style={styles.searchInput}
-                            placeholder={t('profile.searchPlaceholder')}
-                            placeholderTextColor="#94A3B8"
-                            value={searchQuery}
-                            onChangeText={runSearch}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                        />
-                        {searching && <ActivityIndicator size="small" color={PRIMARY_DARK} />}
-                    </View>
-                    {searchResults.map((r) => (
-                        <TouchableOpacity
-                            key={r.id}
-                            style={styles.searchResult}
-                            onPress={() => router.push({ pathname: '/user-profile/[id]', params: { id: r.id } })}
-                            activeOpacity={0.8}
-                        >
-                            <ProfileAvatar uri={r.avatar_url} name={r.nombre || 'U'} size={40} />
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.searchName}>{r.nombre || t('profile.user')}</Text>
-                                {r.nombre_usuario ? (
-                                    <Text style={styles.searchUsername}>@{r.nombre_usuario}</Text>
-                                ) : null}
-                            </View>
-                            <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
-                        </TouchableOpacity>
-                    ))}
-                </View>
-
-                {/* Detalles personales */}
                 <ProfileDetailsSection
                     age={age}
                     genero={genero}
@@ -537,20 +487,11 @@ export default function ProfileScreen() {
                     </View>
                     <View style={styles.badgeGrid}>
                         {badges.map((badge) => (
-                            <TouchableOpacity
+                            <BadgeTile
                                 key={badge.id}
-                                style={[styles.badgeItem, badge.unlocked && { backgroundColor: badge.color + '22', borderColor: badge.color }]}
+                                badge={badge}
                                 onPress={() => setSelectedBadge(badge)}
-                                activeOpacity={0.85}
-                            >
-                                <View style={[styles.badgeIconWrap, !badge.unlocked && styles.badgeIconLocked]}>
-                                    <Ionicons
-                                        name={badge.icon as keyof typeof Ionicons.glyphMap}
-                                        size={22}
-                                        color={badge.unlocked ? badge.color : '#94A3B8'}
-                                    />
-                                </View>
-                            </TouchableOpacity>
+                            />
                         ))}
                     </View>
                 </View>
@@ -592,10 +533,10 @@ export default function ProfileScreen() {
                     )}
                 </View>
 
-                {/* Aficiones */}
+                {/* Personalidad */}
                 <View style={styles.card}>
                     <View style={styles.cardHeader}>
-                        <Text style={styles.cardTitle}>{t('profile.hobbies')}</Text>
+                        <Text style={styles.cardTitle}>{t('profile.personality')}</Text>
                         <View style={styles.hobbyHeaderRight}>
                             <Text style={styles.cardMeta}>{aficiones.length}/5</Text>
                             <Switch
@@ -618,7 +559,7 @@ export default function ProfileScreen() {
                         {aficiones.length < 5 && (
                             <TouchableOpacity style={styles.addTag} onPress={() => setShowAficionModal(true)} activeOpacity={0.85}>
                                 <Ionicons name="add" size={18} color={PRIMARY_DARK} />
-                                <Text style={styles.addTagText}>{t('profile.addHobby')}</Text>
+                                <Text style={styles.addTagText}>{t('profile.addPersonality')}</Text>
                             </TouchableOpacity>
                         )}
                     </View>
@@ -657,7 +598,7 @@ export default function ProfileScreen() {
                 <Pressable style={styles.modalOverlay} onPress={() => setShowAficionModal(false)}>
                     <Pressable style={styles.modalSheet} onPress={() => {}}>
                         <View style={styles.modalHandle} />
-                        <Text style={styles.modalTitle}>{t('profile.pickHobby')}</Text>
+                        <Text style={styles.modalTitle}>{t('profile.pickPersonality')}</Text>
                         <Text style={styles.modalSub}>{t('profile.tagLimit')}</Text>
                         <ScrollView contentContainerStyle={styles.modalTags} showsVerticalScrollIndicator={false}>
                             {PERSONALITY_OPTIONS.map((option) => {
@@ -689,20 +630,14 @@ export default function ProfileScreen() {
                 <Pressable style={styles.modalOverlay} onPress={() => setSelectedBadge(null)}>
                     <Pressable style={styles.badgeModal} onPress={(e) => e.stopPropagation()}>
                         {selectedBadge && (
-                            <>
-                                <View style={[styles.badgeModalIcon, { backgroundColor: (selectedBadge.unlocked ? selectedBadge.color : '#94A3B8') + '22' }]}>
-                                    <Ionicons
-                                        name={selectedBadge.icon as keyof typeof Ionicons.glyphMap}
-                                        size={40}
-                                        color={selectedBadge.unlocked ? selectedBadge.color : '#94A3B8'}
-                                    />
-                                </View>
+                            <View style={styles.badgeModalContent}>
+                                <BadgeTile badge={selectedBadge} size="modal" />
                                 <Text style={styles.badgeModalTitle}>{selectedBadge.nombre}</Text>
                                 <Text style={styles.badgeModalDesc}>{selectedBadge.descripcion}</Text>
                                 <Text style={[styles.badgeModalStatus, selectedBadge.unlocked && { color: '#22C55E' }]}>
                                     {selectedBadge.unlocked ? t('profile.badgeUnlocked') : t('profile.badgeLocked')}
                                 </Text>
-                            </>
+                            </View>
                         )}
                     </Pressable>
                 </Pressable>
@@ -1162,6 +1097,7 @@ const styles = StyleSheet.create({
         marginTop: 'auto',
         marginBottom: 'auto',
     },
+    badgeModalContent: { alignItems: 'center', gap: 12 },
     badgeModalIcon: {
         width: 80,
         height: 80,

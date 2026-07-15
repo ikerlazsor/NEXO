@@ -17,7 +17,8 @@ import {
     View,
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
-import { resolvePlanSport } from '../lib/sports';
+import { resolvePlanSport, resolvePlanImageSource } from '../lib/sports';
+import type { Membership } from '../lib/participants';
 import { useT } from '../lib/i18n';
 import { SportIcon } from './SportIcon';
 import { PlanImage } from './PlanImage';
@@ -36,7 +37,7 @@ const MAX_VISIBLE_AVATARS = 4;
 const avatarFallback = (name?: string) =>
     `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'N')}&background=4DA6FF&color=fff`;
 
-export type Membership = 'none' | 'joined' | 'requested';
+export type { Membership } from '../lib/participants';
 
 const isSameCalendarDay = (a: Date, b: Date) =>
     a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -103,6 +104,7 @@ interface PlanCardProps {
     currentUserId: string | null;
     membership: Membership;
     isSaved: boolean;
+    friendIds?: Set<string>;
     onJoin: (id: string) => void;
     onLeave: (id: string) => void;
     onDelete: (id: string) => void;
@@ -118,6 +120,7 @@ function PlanCardInner({
     currentUserId,
     membership,
     isSaved,
+    friendIds,
     onJoin,
     onLeave,
     onDelete,
@@ -150,13 +153,17 @@ function PlanCardInner({
     const isFull = item.joinedCount >= item.maximo_participantes;
     const requiresApproval = !!item.requiere_aprobacion;
     const participants = item.participantsList || [];
+    const friendsInPlan = friendIds
+        ? participants.filter((p: { id?: string }) => p.id && friendIds.has(p.id)).length
+        : 0;
 
     const sportPlan = resolvePlanSport(item);
     const categoryLabel = t('cat.' + item.categoria);
 
     const eventDate = item.fecha_evento ? new Date(item.fecha_evento) : null;
     const isToday = eventDate ? isSameCalendarDay(eventDate, new Date()) : false;
-    const isCalmPremium = !isToday && !isFull;
+    const isSoloChicas = item.categoria === 'Solo chicas';
+    const isCalmPremium = !isToday && !isFull && !isSoloChicas;
     const dateString = eventDate ? eventDate.toLocaleDateString() : t('card.noDate');
     const timeString = eventDate ? eventDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
@@ -200,14 +207,7 @@ function PlanCardInner({
         ]);
     };
 
-    const getPlanImageSource = (): string | number => {
-        if (!item.imagen_url) return 'https://via.placeholder.com/400';
-        const urlStr = String(item.imagen_url);
-        if (urlStr.startsWith('http')) return urlStr;
-        const parsedId = parseInt(urlStr, 10);
-        if (!isNaN(parsedId)) return parsedId;
-        return 'https://via.placeholder.com/400';
-    };
+    const getPlanImageSource = (): string | number => resolvePlanImageSource(item.imagen_url);
 
     const renderFooter = () => {
         if (isCreator) {
@@ -242,12 +242,20 @@ function PlanCardInner({
                 </TouchableOpacity>
             );
         }
+        if (membership === 'waitlist') {
+            return (
+                <TouchableOpacity style={styles.waitlistButton} onPress={() => onLeave(item.id)}>
+                    <Ionicons name="hourglass" size={18} color="#7C3AED" />
+                    <Text style={styles.waitlistButtonText}>{t('card.waitlist')}</Text>
+                </TouchableOpacity>
+            );
+        }
         if (isFull) {
             return (
-                <View style={styles.fullButton}>
-                    <Ionicons name="ban" size={18} color={DANGER_DARK} />
-                    <Text style={styles.fullButtonText}>{t('card.full')}</Text>
-                </View>
+                <TouchableOpacity style={styles.waitlistJoinButton} onPress={() => onJoin(item.id)} activeOpacity={0.85}>
+                    <Ionicons name="list" size={18} color="#FFF" />
+                    <Text style={styles.waitlistJoinText}>{t('card.joinWaitlist')}</Text>
+                </TouchableOpacity>
             );
         }
         return (
@@ -261,13 +269,21 @@ function PlanCardInner({
     return (
         <Animated.View style={{ opacity: entrance, transform: [{ scale }, { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }] }}>
             <Pressable onPressIn={pressIn} onPressOut={pressOut}>
-                <View style={[styles.card, isToday && styles.cardToday, isCalmPremium && styles.cardPremium, isFull && !isToday && styles.cardFull]}>
+                <View style={[styles.card, isToday && styles.cardToday, isSoloChicas && styles.cardSoloChicas, isCalmPremium && styles.cardPremium, isFull && !isToday && !isSoloChicas && styles.cardFull]}>
                     {isToday && (
                         <LinearGradient
                             colors={['#F59E0B', '#D97706', '#B45309']}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 1 }}
                             style={styles.todayBorder}
+                        />
+                    )}
+                    {isSoloChicas && (
+                        <LinearGradient
+                            colors={['#F9A8D4', '#EC4899', '#DB2777']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.soloChicasBorder}
                         />
                     )}
                     {isCalmPremium && (
@@ -286,7 +302,7 @@ function PlanCardInner({
                             style={styles.fullBorder}
                         />
                     )}
-                    <View style={[styles.cardInner, isToday && styles.cardInnerToday, isCalmPremium && styles.cardInnerPremium, isFull && styles.cardInnerFull]}>
+                    <View style={[styles.cardInner, isToday && styles.cardInnerToday, isSoloChicas && styles.cardInnerSoloChicas, isCalmPremium && styles.cardInnerPremium, isFull && styles.cardInnerFull]}>
                     <View style={styles.imageWrap}>
                         <PlanImage
                             source={getPlanImageSource()}
@@ -343,6 +359,15 @@ function PlanCardInner({
                             maxPeople={item.maximo_participantes}
                             onOpenRoster={() => participants.length > 0 && setShowRoster(true)}
                         />
+
+                        {friendsInPlan > 0 && (
+                            <View style={styles.friendsBanner}>
+                                <Ionicons name="people" size={16} color={PRIMARY_DARK} />
+                                <Text style={styles.friendsBannerText}>
+                                    {t('card.friendsJoined', { n: friendsInPlan })}
+                                </Text>
+                            </View>
+                        )}
 
                         {isToday && (
                             <View style={styles.todayBanner}>
@@ -447,6 +472,9 @@ const styles = StyleSheet.create({
     fullBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
     cardInnerFull: { borderColor: DANGER, borderWidth: 2, backgroundColor: DANGER_BG },
     cardToday: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#D97706', shadowOpacity: 0.35, borderRadius: 28 },
+    cardSoloChicas: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#DB2777', shadowOpacity: 0.35, borderRadius: 28 },
+    soloChicasBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
+    cardInnerSoloChicas: { backgroundColor: '#FDF2F8', borderColor: '#F9A8D4', borderWidth: 1.5 },
     cardPremium: { padding: 2, overflow: 'visible', elevation: 12, shadowColor: '#2563EB', shadowOpacity: 0.2, borderRadius: 28 },
     todayBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
     premiumBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
@@ -525,6 +553,23 @@ const styles = StyleSheet.create({
     requestedButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FCD34D' },
     requestedButtonText: { color: '#B45309', fontWeight: '800', fontSize: 14 },
     fullButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: DANGER_BG, borderWidth: 1, borderColor: DANGER },
+    waitlistButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: '#C4B5FD' },
+    waitlistButtonText: { color: '#6D28D9', fontWeight: '800', fontSize: 15 },
+    waitlistJoinButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#7C3AED' },
+    waitlistJoinText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
+    friendsBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#EFF6FF',
+        borderRadius: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#BFDBFE',
+    },
+    friendsBannerText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 13, flex: 1 },
     fullButtonText: { color: DANGER_DARK, fontWeight: '800', fontSize: 14 },
     creatorFooterRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     creatorBadge: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 13, borderRadius: 16, backgroundColor: '#EEF3FB' },

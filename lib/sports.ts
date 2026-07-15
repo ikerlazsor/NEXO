@@ -140,3 +140,40 @@ export function isFeedDeporteCategory(categoria?: string | null): boolean {
 }
 
 export const FEED_PLAN_CATEGORIES = new Set<string>([...MAIN_CATEGORIES]);
+
+function buildCoverLookup(): Record<string, number> {
+    const lookup: Record<string, number> = {};
+    for (const [cat, images] of Object.entries(CATEGORY_IMAGES)) {
+        (images as number[]).forEach((img, i) => {
+            lookup[`nexo_cover:${cat}:${i}`] = img;
+        });
+    }
+    for (const [sport, images] of Object.entries(SPORT_IMAGES)) {
+        (images as number[]).forEach((img, i) => {
+            lookup[`nexo_cover:Deporte:${sport}:${i}`] = img;
+        });
+    }
+    return lookup;
+}
+
+export const COVER_IMAGE_LOOKUP = buildCoverLookup();
+
+export function encodeCoverImageKey(
+    category: MainCategory,
+    deporteTipo: DeporteTipo,
+    index: number
+): string {
+    if (category === 'Deporte') return `nexo_cover:Deporte:${deporteTipo}:${index}`;
+    return `nexo_cover:${category}:${index}`;
+}
+
+export function resolvePlanImageSource(imagenUrl: string | null | undefined): string | number {
+    if (!imagenUrl) return 'https://via.placeholder.com/400';
+    const urlStr = String(imagenUrl);
+    if (urlStr.startsWith('http')) return urlStr;
+    if (COVER_IMAGE_LOOKUP[urlStr]) return COVER_IMAGE_LOOKUP[urlStr];
+    const parsedId = parseInt(urlStr, 10);
+    if (!isNaN(parsedId)) return parsedId;
+    if (urlStr.startsWith('file://') || urlStr.includes('/assets/')) return urlStr;
+    return 'https://via.placeholder.com/400';
+}

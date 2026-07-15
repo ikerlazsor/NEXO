@@ -16,7 +16,6 @@ export const HABITO_TABACO_OPTIONS: HabitoConsumo[] = ['no_especificado', 'no', 
 export const AFICIONES_OPTIONS = [
     'Deportista', 'Viajero', 'Aventurero', 'Tranquilo', 'Yoga',
     'Foodie', 'Fiestero', 'Lectura', 'De terraceo', 'Más de noche', 'Más de día',
-    'Música', 'Cine', 'Gaming', 'Naturaleza',
 ] as const;
 
 export type Aficion = (typeof AFICIONES_OPTIONS)[number];

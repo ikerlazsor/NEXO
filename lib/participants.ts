@@ -38,6 +38,15 @@ export function membershipFromJoinEstado(estado: ParticipantEstado): Participant
     return 'joined';
 }
 
+/** True si aún se puede unir a la lista de espera (más de 2h antes del evento). */
+export function canJoinWaitlist(fechaEvento: string | null | undefined): boolean {
+    if (!fechaEvento) return true;
+    const eventMs = new Date(fechaEvento).getTime();
+    if (!Number.isFinite(eventMs)) return true;
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+    return eventMs - Date.now() > TWO_HOURS_MS;
+}
+
 /** Promueve al primero en lista de espera si hay hueco libre. */
 export async function promoteWaitlist(planId: string): Promise<void> {
     const { error } = await supabase.rpc('promote_waitlist', { p_plan_id: planId });

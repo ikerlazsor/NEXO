@@ -26,6 +26,7 @@ import { isGroupChatPlan } from '../lib/feedPlans';
 import { getAvatarUri, getFriends, type FriendProfile } from '../lib/friends';
 import { sendPlanInvite } from '../lib/planInvites';
 import { useT } from '../lib/i18n';
+import { resolvePlanImageSource } from '../lib/sports';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -346,7 +347,7 @@ export default function MyChatsScreen() {
                                 />
                             ) : item.kind === 'group' && item.image_url ? (
                                 <PlanImage
-                                    source={item.image_url}
+                                    source={resolvePlanImageSource(item.image_url)}
                                     style={styles.chatImage}
                                     recyclingKey={`group-${item.id}`}
                                 />
@@ -356,7 +357,7 @@ export default function MyChatsScreen() {
                                 </View>
                             ) : (
                                 <PlanImage
-                                    source={item.image_url}
+                                    source={resolvePlanImageSource(item.image_url)}
                                     style={styles.chatImage}
                                     recyclingKey={String(item.id)}
                                 />

@@ -539,6 +539,7 @@ export default function HomeScreen() {
                             onEdit={handleEditPlan}
                             onToggleSave={handleSave}
                             onReport={currentUserId ? handleReportPlan : undefined}
+                            onOpenDetail={(planId) => router.push({ pathname: '/plan/[id]', params: { id: planId } })}
                             router={router}
                         />
                     )}

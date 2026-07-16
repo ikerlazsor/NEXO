@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
-import { BadgeTile } from '../../components/BadgeTile';
+import { BadgeDetailModal, BadgeTile } from '../../components/TrophyBadge';
 import { ProfileDetailsSection } from '../../components/ProfileDetailsSection';
 import { getFriendsCount } from '../../lib/friends';
 import { useT } from '../../lib/i18n';
@@ -40,7 +40,7 @@ import {
 } from '../../lib/profile';
 import { renderRatingStars } from '../../lib/profileRating';
 import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
-import { BADGE_DEFINITIONS, getUserBadges } from '../../lib/badges';
+import { getUserBadges, type UserBadge } from '../../lib/badges';
 import { getBadgeStats } from '../../lib/badgeStats';
 import {
     AFICIONES_OPTIONS,
@@ -96,8 +96,8 @@ export default function ProfileScreen() {
     const [habitoTabaco, setHabitoTabaco] = useState<HabitoConsumo>('no_especificado');
     const [aficiones, setAficiones] = useState<string[]>([]);
     const [showAficionModal, setShowAficionModal] = useState(false);
-    const [badges, setBadges] = useState<(typeof BADGE_DEFINITIONS[0] & { unlocked: boolean })[]>([]);
-    const [selectedBadge, setSelectedBadge] = useState<(typeof BADGE_DEFINITIONS[0] & { unlocked: boolean }) | null>(null);
+    const [badges, setBadges] = useState<UserBadge[]>([]);
+    const [selectedBadge, setSelectedBadge] = useState<UserBadge | null>(null);
     const [privacy, setPrivacy] = useState<ProfilePrivacy>({ mostrar_edad: true, mostrar_genero: true, mostrar_bebida: true, mostrar_tabaco: true, mostrar_aficiones: true });
     const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>({});
     const cacheRef = useRef<string | null>(null);
@@ -488,7 +488,7 @@ export default function ProfileScreen() {
                     <View style={styles.badgeGrid}>
                         {badges.map((badge) => (
                             <BadgeTile
-                                key={badge.id}
+                                key={badge.family.id}
                                 badge={badge}
                                 onPress={() => setSelectedBadge(badge)}
                             />
@@ -626,22 +626,11 @@ export default function ProfileScreen() {
                 </Pressable>
             </Modal>
 
-            <Modal visible={!!selectedBadge} transparent animationType="fade" onRequestClose={() => setSelectedBadge(null)}>
-                <Pressable style={styles.modalOverlay} onPress={() => setSelectedBadge(null)}>
-                    <Pressable style={styles.badgeModal} onPress={(e) => e.stopPropagation()}>
-                        {selectedBadge && (
-                            <View style={styles.badgeModalContent}>
-                                <BadgeTile badge={selectedBadge} size="modal" />
-                                <Text style={styles.badgeModalTitle}>{selectedBadge.nombre}</Text>
-                                <Text style={styles.badgeModalDesc}>{selectedBadge.descripcion}</Text>
-                                <Text style={[styles.badgeModalStatus, selectedBadge.unlocked && { color: '#22C55E' }]}>
-                                    {selectedBadge.unlocked ? t('profile.badgeUnlocked') : t('profile.badgeLocked')}
-                                </Text>
-                            </View>
-                        )}
-                    </Pressable>
-                </Pressable>
-            </Modal>
+            <BadgeDetailModal
+                badge={selectedBadge}
+                visible={!!selectedBadge}
+                onClose={() => setSelectedBadge(null)}
+            />
 
             {loading && (
                 <View style={styles.loadingOverlay}>
@@ -1074,39 +1063,5 @@ const styles = StyleSheet.create({
     habitChipActive: { backgroundColor: '#ECFDF5', borderColor: '#22C55E' },
     habitChipText: { fontWeight: '700', color: MUTED, fontSize: 13 },
     habitChipTextActive: { color: '#059669' },
-    badgeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center' },
-    badgeItem: {
-        width: 56,
-        height: 56,
-        borderRadius: 18,
-        backgroundColor: '#F1F5F9',
-        borderWidth: 2,
-        borderColor: '#E2E8F0',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    badgeIconWrap: { justifyContent: 'center', alignItems: 'center' },
-    badgeIconLocked: { opacity: 0.45 },
-    badgeModal: {
-        backgroundColor: '#FFF',
-        marginHorizontal: 32,
-        borderRadius: 24,
-        padding: 28,
-        alignItems: 'center',
-        alignSelf: 'center',
-        marginTop: 'auto',
-        marginBottom: 'auto',
-    },
-    badgeModalContent: { alignItems: 'center', gap: 12 },
-    badgeModalIcon: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 16,
-    },
-    badgeModalTitle: { fontSize: 20, fontWeight: '900', color: INK, marginBottom: 8 },
-    badgeModalDesc: { fontSize: 14, color: MUTED, textAlign: 'center', lineHeight: 20 },
-    badgeModalStatus: { fontSize: 13, fontWeight: '700', color: '#94A3B8', marginTop: 12 },
+    badgeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
 });

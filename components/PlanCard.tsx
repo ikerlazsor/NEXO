@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import { resolvePlanSport, resolvePlanImageSource } from '../lib/sports';
-import type { Membership } from '../lib/participants';
+import { canJoinWaitlist, type Membership } from '../lib/participants';
 import { useT } from '../lib/i18n';
 import { SportIcon } from './SportIcon';
 import { PlanImage } from './PlanImage';
@@ -111,6 +111,7 @@ interface PlanCardProps {
     onEdit: (id: string) => void;
     onToggleSave: (id: string) => void;
     onReport?: (id: string) => void;
+    onOpenDetail?: (id: string) => void;
     router: any;
 }
 
@@ -127,6 +128,7 @@ function PlanCardInner({
     onEdit,
     onToggleSave,
     onReport,
+    onOpenDetail,
     router,
 }: PlanCardProps) {
     const { t } = useT();
@@ -167,10 +169,15 @@ function PlanCardInner({
     const dateString = eventDate ? eventDate.toLocaleDateString() : t('card.noDate');
     const timeString = eventDate ? eventDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
-    const toggleExpand = () => {
+    const openDetail = () => {
+        if (onOpenDetail) {
+            onOpenDetail(item.id);
+            return;
+        }
         LayoutAnimation.configureNext(LayoutAnimation.create(260, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity));
         setExpanded(prev => !prev);
     };
+    const toggleExpand = openDetail;
     const pressIn = () => Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
     const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
 
@@ -251,6 +258,14 @@ function PlanCardInner({
             );
         }
         if (isFull) {
+            if (!canJoinWaitlist(item.fecha_evento)) {
+                return (
+                    <View style={styles.fullClosedRow}>
+                        <Ionicons name="ban" size={18} color={DANGER_DARK} />
+                        <Text style={styles.fullClosedText}>{t('card.fullClosed')}</Text>
+                    </View>
+                );
+            }
             return (
                 <TouchableOpacity style={styles.waitlistJoinButton} onPress={() => onJoin(item.id)} activeOpacity={0.85}>
                     <Ionicons name="list" size={18} color="#FFF" />
@@ -268,7 +283,7 @@ function PlanCardInner({
 
     return (
         <Animated.View style={{ opacity: entrance, transform: [{ scale }, { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }] }}>
-            <Pressable onPressIn={pressIn} onPressOut={pressOut}>
+            <Pressable onPressIn={pressIn} onPressOut={pressOut} onPress={onOpenDetail ? () => onOpenDetail(item.id) : undefined}>
                 <View style={[styles.card, isToday && styles.cardToday, isSoloChicas && styles.cardSoloChicas, isCalmPremium && styles.cardPremium, isFull && !isToday && !isSoloChicas && styles.cardFull]}>
                     {isToday && (
                         <LinearGradient
@@ -357,7 +372,10 @@ function PlanCardInner({
                         <AvatarStack
                             participants={participants}
                             maxPeople={item.maximo_participantes}
-                            onOpenRoster={() => participants.length > 0 && setShowRoster(true)}
+                            onOpenRoster={() => {
+                                if (onOpenDetail) onOpenDetail(item.id);
+                                else if (participants.length > 0) setShowRoster(true);
+                            }}
                         />
 
                         {friendsInPlan > 0 && (
@@ -401,7 +419,7 @@ function PlanCardInner({
                             </View>
                         )}
 
-                        {expanded && (
+                        {expanded && !onOpenDetail && (
                             <View style={styles.expandedSection}>
                                 <Text style={styles.descLabel}>{t('card.aboutPlan')}</Text>
                                 <Text style={styles.descriptionText}>{item.descripcion || t('card.noDescription')}</Text>
@@ -419,8 +437,10 @@ function PlanCardInner({
                         )}
 
                         <TouchableOpacity style={styles.expandHint} onPress={toggleExpand} activeOpacity={0.7}>
-                            <Text style={styles.expandHintText}>{expanded ? t('card.tapCollapse') : t('card.tapExpand')}</Text>
-                            <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color="#94A3B8" />
+                            <Text style={styles.expandHintText}>
+                                {onOpenDetail ? t('card.tapDetail') : expanded ? t('card.tapCollapse') : t('card.tapExpand')}
+                            </Text>
+                            <Ionicons name={onOpenDetail ? 'open-outline' : expanded ? 'chevron-up' : 'chevron-down'} size={16} color="#94A3B8" />
                         </TouchableOpacity>
 
                         <View style={styles.cardFooter}>{renderFooter()}</View>
@@ -557,6 +577,8 @@ const styles = StyleSheet.create({
     waitlistButtonText: { color: '#6D28D9', fontWeight: '800', fontSize: 15 },
     waitlistJoinButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#7C3AED' },
     waitlistJoinText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
+    fullClosedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: DANGER_BG, borderWidth: 1, borderColor: '#FECACA' },
+    fullClosedText: { color: DANGER_DARK, fontWeight: '800', fontSize: 15 },
     friendsBanner: {
         flexDirection: 'row',
         alignItems: 'center',

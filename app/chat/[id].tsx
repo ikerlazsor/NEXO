@@ -28,6 +28,7 @@ import { isUserCreatedGroupChat, updateGroupChatPhoto, uploadGroupChatPhoto } fr
 import { useT } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { sendPlanInvite } from '../../lib/planInvites';
+import { resolvePlanImageSource } from '../../lib/sports';
 import { supabase } from '../../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -882,7 +883,7 @@ export default function ChatScreen() {
                         />
                     ) : (
                         <PlanImage
-                            source={planImage || 'https://via.placeholder.com/150'}
+                            source={resolvePlanImageSource(planImage)}
                             style={styles.planHeaderImage}
                             recyclingKey={planId}
                         />

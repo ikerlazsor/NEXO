@@ -183,6 +183,7 @@ export default function SavedPlansScreen() {
                             onDelete={handleDelete}
                             onEdit={handleEdit}
                             onToggleSave={handleRemove}
+                            onOpenDetail={(planId) => router.push({ pathname: '/plan/[id]', params: { id: planId } })}
                             router={router}
                         />
                     )}

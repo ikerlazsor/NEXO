@@ -96,7 +96,7 @@ export default function RootLayout() {
     <I18nProvider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <AuthGate>
-          <Stack screenOptions={{ headerShown: false }}>
+          <Stack screenOptions={{ headerShown: false, freezeOnBlur: true }}>
             <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
             <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
           </Stack>

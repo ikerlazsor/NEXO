@@ -24,13 +24,13 @@ const PREVIEW_W = SCREEN_W - H_PAD * 2;
 const PREVIEW_H = 248;
 const THUMB = 72;
 
+import { MAIN_CATEGORY_ICONS } from '../lib/categories';
+
 const CATEGORY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-    Deporte: 'fitness',
-    Fiesta: 'sparkles',
-    'Solo chicas': 'female',
-    Estudio: 'book',
-    Tapas: 'restaurant',
-    'Fútbol': 'football',
+    ...Object.fromEntries(
+        Object.entries(MAIN_CATEGORY_ICONS).map(([k, v]) => [k, v as keyof typeof Ionicons.glyphMap]),
+    ),
+    Grupo: 'people',
 };
 
 interface Props {
@@ -111,7 +111,7 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
                             index,
                         })}
                         renderItem={({ item }) => (
-                            <Image source={item} style={styles.previewImage} resizeMode="cover" />
+                            <Image source={{ uri: item }} style={styles.previewImage} resizeMode="cover" />
                         )}
                     />
 
@@ -144,7 +144,7 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
                             onPress={() => pickThumb(i)}
                             style={[styles.thumbWrap, active && styles.thumbWrapActive]}
                         >
-                            <Image source={img} style={styles.thumbImage} resizeMode="cover" />
+                            <Image source={{ uri: img }} style={styles.thumbImage} resizeMode="cover" />
                             {active && (
                                 <View style={styles.thumbCheck}>
                                     <Ionicons name="checkmark" size={14} color="#FFF" />

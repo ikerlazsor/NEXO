@@ -9,14 +9,13 @@ export async function getPlanJoinRequestCount(userId: string): Promise<number> {
         .select('id, categoria, fecha_evento')
         .eq('creador_id', userId);
 
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const now = Date.now();
 
     const activeFeedPlanIds = (myPlans || [])
         .filter((p) => {
             if (!isFeedPlan(p)) return false;
             if (!p.fecha_evento) return true;
-            return new Date(p.fecha_evento) >= startOfToday;
+            return new Date(p.fecha_evento).getTime() >= now;
         })
         .map((p) => p.id);
 

@@ -1,10 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    Image,
     KeyboardAvoidingView,
     Platform,
     Pressable,
@@ -17,9 +19,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAuthUser } from '../lib/auth';
+import { uploadAvatarFromUri } from '../lib/avatar';
 import { useT } from '../lib/i18n';
 import { saveOnboardingPreferences } from '../lib/onboarding';
-import { GENERO_OPTIONS, type Genero } from '../lib/profileFields';
+import { AFICIONES_OPTIONS, ONBOARDING_GENERO_OPTIONS, type Genero } from '../lib/profileFields';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -28,6 +31,8 @@ const MUTED = '#64748B';
 
 const MIN_AGE = 18;
 const MAX_AGE = 99;
+const PERSONALITY_COUNT = 3;
+const TOTAL_STEPS = 4;
 
 export default function OnboardingScreen() {
     const router = useRouter();
@@ -35,10 +40,43 @@ export default function OnboardingScreen() {
     const [step, setStep] = useState(0);
     const [age, setAge] = useState('');
     const [genero, setGenero] = useState<Genero | null>(null);
+    const [avatarUri, setAvatarUri] = useState<string | null>(null);
+    const [personalities, setPersonalities] = useState<string[]>([]);
     const [saving, setSaving] = useState(false);
+    const [completing, setCompleting] = useState(false);
 
     const parsedAge = parseInt(age, 10);
     const ageValid = Number.isFinite(parsedAge) && parsedAge >= MIN_AGE && parsedAge <= MAX_AGE;
+    const personalitiesValid = personalities.length === PERSONALITY_COUNT;
+
+    const togglePersonality = (tag: string) => {
+        setPersonalities((prev) => {
+            if (prev.includes(tag)) return prev.filter((p) => p !== tag);
+            if (prev.length >= PERSONALITY_COUNT) {
+                Alert.alert(t('onboarding.notice'), t('onboarding.personalitiesLimit', { n: PERSONALITY_COUNT }));
+                return prev;
+            }
+            return [...prev, tag];
+        });
+    };
+
+    const pickPhoto = async (useCamera: boolean) => {
+        const result = useCamera
+            ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.5 })
+            : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.5 });
+
+        if (!result.canceled && result.assets[0]?.uri) {
+            setAvatarUri(result.assets[0].uri);
+        }
+    };
+
+    const showPhotoMenu = () => {
+        Alert.alert(t('onboarding.photoTitle'), t('onboarding.photoChoice'), [
+            { text: t('profile.camera'), onPress: () => pickPhoto(true) },
+            { text: t('profile.gallery'), onPress: () => pickPhoto(false) },
+            { text: t('profile.cancel'), style: 'cancel' },
+        ]);
+    };
 
     const handleFinish = async () => {
         if (!ageValid) {
@@ -49,35 +87,75 @@ export default function OnboardingScreen() {
             Alert.alert(t('onboarding.notice'), t('onboarding.pickGender'));
             return;
         }
-        if (saving) return;
+        if (!avatarUri) {
+            Alert.alert(t('onboarding.notice'), t('onboarding.pickPhoto'));
+            return;
+        }
+        if (!personalitiesValid) {
+            Alert.alert(t('onboarding.notice'), t('onboarding.pickPersonalities', { n: PERSONALITY_COUNT }));
+            return;
+        }
+        if (saving || completing) return;
 
         setSaving(true);
+        setCompleting(true);
         try {
             const user = await getAuthUser();
             if (!user) {
                 router.replace('/login');
                 return;
             }
+
+            const { url, error: uploadError } = await uploadAvatarFromUri(user.id, avatarUri);
+            if (uploadError || !url) {
+                Alert.alert(t('onboarding.error'), uploadError ?? t('profile.uploadError'));
+                return;
+            }
+
             const { error } = await saveOnboardingPreferences(user.id, {
                 age: parsedAge,
                 genero,
+                avatar_url: url,
+                ambientes_preferidos: personalities,
             });
             if (error) {
                 Alert.alert(t('onboarding.error'), error);
+                setCompleting(false);
                 return;
             }
             router.replace('/(tabs)');
         } catch (e) {
             const msg = e instanceof Error ? e.message : t('onboarding.error');
             Alert.alert(t('onboarding.error'), msg);
+            setCompleting(false);
         } finally {
             setSaving(false);
         }
     };
 
+    const renderStepDots = () => (
+        <View style={styles.steps}>
+            {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
+                <View key={i} style={styles.stepGroup}>
+                    <View style={[styles.stepDot, step >= i && styles.stepDotActive]} />
+                    {i < TOTAL_STEPS - 1 ? (
+                        <View style={[styles.stepLine, step > i && styles.stepLineActive]} />
+                    ) : null}
+                </View>
+            ))}
+        </View>
+    );
+
     return (
         <View style={styles.root}>
             <LinearGradient colors={['#DCEBFF', '#F2F7FF', '#FFFFFF']} style={StyleSheet.absoluteFill} />
+
+            {completing ? (
+                <View style={styles.completingOverlay}>
+                    <ActivityIndicator size="large" color={PRIMARY_DARK} />
+                    <Text style={styles.completingText}>{t('onboarding.finishing')}</Text>
+                </View>
+            ) : null}
 
             <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
                 <KeyboardAvoidingView
@@ -98,13 +176,9 @@ export default function OnboardingScreen() {
                         </View>
 
                         <View style={styles.card}>
-                            <View style={styles.steps}>
-                                <View style={[styles.stepDot, step >= 0 && styles.stepDotActive]} />
-                                <View style={[styles.stepLine, step >= 1 && styles.stepLineActive]} />
-                                <View style={[styles.stepDot, step >= 1 && styles.stepDotActive]} />
-                            </View>
+                            {renderStepDots()}
 
-                            {step === 0 ? (
+                            {step === 0 && (
                                 <>
                                     <Text style={styles.question}>{t('onboarding.ageQuestion')}</Text>
                                     <Text style={styles.hint}>{t('onboarding.ageHint')}</Text>
@@ -128,7 +202,9 @@ export default function OnboardingScreen() {
                                         <Ionicons name="arrow-forward" size={18} color="#FFF" />
                                     </TouchableOpacity>
                                 </>
-                            ) : (
+                            )}
+
+                            {step === 1 && (
                                 <>
                                     <Pressable onPress={() => setStep(0)} style={styles.backLink}>
                                         <Ionicons name="chevron-back" size={18} color={PRIMARY_DARK} />
@@ -136,7 +212,7 @@ export default function OnboardingScreen() {
                                     </Pressable>
                                     <Text style={styles.question}>{t('onboarding.genderQuestion')}</Text>
                                     <View style={styles.genderGrid}>
-                                        {GENERO_OPTIONS.map((g) => (
+                                        {ONBOARDING_GENERO_OPTIONS.map((g) => (
                                             <TouchableOpacity
                                                 key={g}
                                                 style={[styles.genderChip, genero === g && styles.genderChipActive]}
@@ -150,13 +226,84 @@ export default function OnboardingScreen() {
                                         ))}
                                     </View>
                                     <TouchableOpacity
+                                        style={[styles.btn, !genero && styles.btnDisabled]}
+                                        onPress={() => genero && setStep(2)}
+                                        disabled={!genero}
+                                        activeOpacity={0.9}
+                                    >
+                                        <Text style={styles.btnText}>{t('onboarding.continue')}</Text>
+                                        <Ionicons name="arrow-forward" size={18} color="#FFF" />
+                                    </TouchableOpacity>
+                                </>
+                            )}
+
+                            {step === 2 && (
+                                <>
+                                    <Pressable onPress={() => setStep(1)} style={styles.backLink}>
+                                        <Ionicons name="chevron-back" size={18} color={PRIMARY_DARK} />
+                                        <Text style={styles.backText}>{t('onboarding.back')}</Text>
+                                    </Pressable>
+                                    <Text style={styles.question}>{t('onboarding.photoQuestion')}</Text>
+                                    <Text style={styles.hint}>{t('onboarding.photoHint')}</Text>
+                                    <TouchableOpacity style={styles.photoPicker} onPress={showPhotoMenu} activeOpacity={0.9}>
+                                        {avatarUri ? (
+                                            <Image source={{ uri: avatarUri }} style={styles.photoPreview} />
+                                        ) : (
+                                            <View style={styles.photoPlaceholder}>
+                                                <Ionicons name="camera" size={36} color={PRIMARY_DARK} />
+                                                <Text style={styles.photoPlaceholderText}>{t('onboarding.addPhoto')}</Text>
+                                            </View>
+                                        )}
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.btn, !avatarUri && styles.btnDisabled]}
+                                        onPress={() => avatarUri && setStep(3)}
+                                        disabled={!avatarUri}
+                                        activeOpacity={0.9}
+                                    >
+                                        <Text style={styles.btnText}>{t('onboarding.continue')}</Text>
+                                        <Ionicons name="arrow-forward" size={18} color="#FFF" />
+                                    </TouchableOpacity>
+                                </>
+                            )}
+
+                            {step === 3 && (
+                                <>
+                                    <Pressable onPress={() => setStep(2)} style={styles.backLink}>
+                                        <Ionicons name="chevron-back" size={18} color={PRIMARY_DARK} />
+                                        <Text style={styles.backText}>{t('onboarding.back')}</Text>
+                                    </Pressable>
+                                    <Text style={styles.question}>{t('onboarding.personalitiesQuestion')}</Text>
+                                    <Text style={styles.hint}>
+                                        {t('onboarding.personalitiesHint', { n: PERSONALITY_COUNT })}
+                                        {' · '}
+                                        {personalities.length}/{PERSONALITY_COUNT}
+                                    </Text>
+                                    <View style={styles.personalityGrid}>
+                                        {AFICIONES_OPTIONS.map((tag) => {
+                                            const active = personalities.includes(tag);
+                                            return (
+                                                <TouchableOpacity
+                                                    key={tag}
+                                                    style={[styles.personalityChip, active && styles.personalityChipActive]}
+                                                    onPress={() => togglePersonality(tag)}
+                                                    activeOpacity={0.85}
+                                                >
+                                                    <Text style={[styles.personalityText, active && styles.personalityTextActive]}>
+                                                        {t('personality.' + tag)}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </View>
+                                    <TouchableOpacity
                                         onPress={handleFinish}
-                                        disabled={!genero || saving}
+                                        disabled={!personalitiesValid || saving}
                                         activeOpacity={0.9}
                                         style={styles.btnWrapper}
                                     >
                                         <LinearGradient
-                                            colors={genero ? [PRIMARY, PRIMARY_DARK] : ['#CBD5E1', '#94A3B8']}
+                                            colors={personalitiesValid ? [PRIMARY, PRIMARY_DARK] : ['#CBD5E1', '#94A3B8']}
                                             style={styles.btn}
                                         >
                                             {saving ? (
@@ -210,9 +357,10 @@ const styles = StyleSheet.create({
         elevation: 8,
     },
     steps: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
-    stepDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#E2E8F0' },
-    stepDotActive: { backgroundColor: PRIMARY_DARK, width: 12, height: 12, borderRadius: 6 },
-    stepLine: { width: 48, height: 2, backgroundColor: '#E2E8F0', marginHorizontal: 8 },
+    stepGroup: { flexDirection: 'row', alignItems: 'center' },
+    stepDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#E2E8F0' },
+    stepDotActive: { backgroundColor: PRIMARY_DARK, width: 10, height: 10, borderRadius: 5 },
+    stepLine: { width: 20, height: 2, backgroundColor: '#E2E8F0', marginHorizontal: 4 },
     stepLineActive: { backgroundColor: PRIMARY },
     question: { fontSize: 20, fontWeight: '800', color: INK, textAlign: 'center', marginBottom: 8 },
     hint: { fontSize: 13, color: MUTED, textAlign: 'center', marginBottom: 20 },
@@ -228,6 +376,38 @@ const styles = StyleSheet.create({
         borderColor: '#E3ECFB',
         marginBottom: 24,
     },
+    photoPicker: {
+        alignSelf: 'center',
+        marginBottom: 24,
+        borderRadius: 999,
+        overflow: 'hidden',
+    },
+    photoPreview: { width: 140, height: 140, borderRadius: 70 },
+    photoPlaceholder: {
+        width: 140,
+        height: 140,
+        borderRadius: 70,
+        backgroundColor: '#EFF6FF',
+        borderWidth: 2,
+        borderColor: '#BFDBFE',
+        borderStyle: 'dashed',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+    },
+    photoPlaceholderText: { fontSize: 13, fontWeight: '700', color: PRIMARY_DARK },
+    personalityGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20, justifyContent: 'center' },
+    personalityChip: {
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        borderRadius: 20,
+        backgroundColor: '#F8FAFC',
+        borderWidth: 1.5,
+        borderColor: '#E3ECFB',
+    },
+    personalityChipActive: { backgroundColor: '#EFF6FF', borderColor: PRIMARY },
+    personalityText: { fontSize: 13, fontWeight: '700', color: MUTED },
+    personalityTextActive: { color: PRIMARY_DARK },
     btnWrapper: { borderRadius: 16, overflow: 'hidden', marginTop: 8 },
     btn: {
         flexDirection: 'row',
@@ -255,4 +435,13 @@ const styles = StyleSheet.create({
     genderChipActive: { backgroundColor: '#EFF6FF', borderColor: PRIMARY },
     genderText: { fontSize: 15, fontWeight: '700', color: MUTED },
     genderTextActive: { color: PRIMARY_DARK },
+    completingOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: '#F2F7FF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 10,
+        gap: 16,
+    },
+    completingText: { fontSize: 16, fontWeight: '700', color: INK },
 });

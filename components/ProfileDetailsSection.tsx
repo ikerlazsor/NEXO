@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 import { useT } from '../lib/i18n';
 import {
-    GENERO_OPTIONS,
     HABITO_BEBIDA_OPTIONS,
     HABITO_TABACO_OPTIONS,
     isValidAge,
@@ -98,7 +97,6 @@ interface Props {
     habitoTabaco: HabitoConsumo;
     privacy: ProfilePrivacy;
     onSaveAge: (age: number) => void;
-    onSaveGenero: (g: Genero) => void;
     onSaveHabitos: (bebida: HabitoConsumo, tabaco: HabitoConsumo) => void;
     onPrivacyChange: (privacy: ProfilePrivacy) => void;
 }
@@ -110,14 +108,12 @@ export function ProfileDetailsSection({
     habitoTabaco,
     privacy,
     onSaveAge,
-    onSaveGenero,
     onSaveHabitos,
     onPrivacyChange,
 }: Props) {
     const { t } = useT();
     const [editAge, setEditAge] = useState(false);
     const [ageDraft, setAgeDraft] = useState('');
-    const [editGenero, setEditGenero] = useState(false);
     const [editBebida, setEditBebida] = useState(false);
     const [editTabaco, setEditTabaco] = useState(false);
 
@@ -157,9 +153,9 @@ export function ProfileDetailsSection({
                 hidden={!privacy.mostrar_genero}
                 hiddenLabel={t('profile.hidden')}
                 showLabel={t('profile.visible')}
-                onEdit={() => setEditGenero(true)}
                 onToggleVisible={(v) => updatePrivacy('mostrar_genero', v)}
             />
+            <Text style={styles.genderLockedHint}>{t('profile.genderLocked')}</Text>
             <View style={styles.divider} />
             <DetailRow
                 label={t('profile.alcohol')}
@@ -206,29 +202,6 @@ export function ProfileDetailsSection({
                         >
                             <Text style={styles.modalBtnText}>{t('common.save')}</Text>
                         </TouchableOpacity>
-                    </Pressable>
-                </Pressable>
-            </Modal>
-
-            <Modal visible={editGenero} transparent animationType="slide" onRequestClose={() => setEditGenero(false)}>
-                <Pressable style={styles.modalBg} onPress={() => setEditGenero(false)}>
-                    <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-                        <Text style={styles.modalTitle}>{t('profile.editGender')}</Text>
-                        <ScrollView>
-                            {GENERO_OPTIONS.map((g) => (
-                                <TouchableOpacity
-                                    key={g}
-                                    style={styles.sheetOption}
-                                    onPress={() => {
-                                        onSaveGenero(g);
-                                        setEditGenero(false);
-                                    }}
-                                >
-                                    <Ionicons name={generoIcon(g)} size={20} color={ACCENT} />
-                                    <Text style={styles.sheetOptionText}>{t('genero.' + g)}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
                     </Pressable>
                 </Pressable>
             </Modal>
@@ -299,6 +272,14 @@ const styles = StyleSheet.create({
     rowActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     editBtn: { padding: 4 },
     divider: { height: 1, backgroundColor: BORDER },
+    genderLockedHint: {
+        fontSize: 12,
+        color: MUTED,
+        marginTop: -4,
+        marginBottom: 8,
+        paddingHorizontal: 2,
+        lineHeight: 17,
+    },
     modalBg: { flex: 1, backgroundColor: 'rgba(15,23,42,0.4)', justifyContent: 'center', padding: 24 },
     modalBox: { backgroundColor: '#FFF', borderRadius: 16, padding: 20 },
     modalTitle: { fontSize: 17, fontWeight: '700', color: INK, marginBottom: 14 },

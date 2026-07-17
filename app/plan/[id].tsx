@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { PlanImage } from '../../components/PlanImage';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { SportIcon } from '../../components/SportIcon';
@@ -32,10 +33,15 @@ import {
     resolveJoinEstado,
     type Membership,
 } from '../../lib/participants';
+import { canJoinPlanByGender } from '../../lib/soloChicas';
+import { canJoinMorePlans } from '../../lib/planLimits';
+import { kickParticipant } from '../../lib/kickParticipant';
+import type { Genero } from '../../lib/profileFields';
 import { useT } from '../../lib/i18n';
 import { renderRatingStars } from '../../lib/profileRating';
 import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
-import { resolvePlanImageSource, resolvePlanSport } from '../../lib/sports';
+import { resolvePlanImageSource, resolvePlanSport, getPlanCategoryDisplay } from '../../lib/sports';
+import { ScreenKeys } from '../../lib/screenState';
 import { supabase } from '../../lib/supabase';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -60,6 +66,8 @@ type Participant = {
     nombre: string;
     avatar_url?: string | null;
     isCreator?: boolean;
+    ambientes_preferidos?: string[] | null;
+    etiquetas?: string[] | null;
 };
 
 type PlanRow = {
@@ -76,6 +84,7 @@ type PlanRow = {
     creador_id: string;
     requiere_aprobacion: boolean;
     descripcion: string | null;
+    solo_chicas?: boolean;
 };
 
 function PersonBubble({
@@ -140,6 +149,8 @@ export default function PlanDetailScreen() {
     const { t } = useT();
     const { id } = useLocalSearchParams<{ id: string | string[] }>();
     const planId = Array.isArray(id) ? id[0] : id;
+    const scrollKey = planId ? `${ScreenKeys.PLAN_DETAIL}:${planId}` : ScreenKeys.PLAN_DETAIL;
+    const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(scrollKey);
 
     const [loading, setLoading] = useState(true);
     const [plan, setPlan] = useState<PlanRow | null>(null);
@@ -148,16 +159,19 @@ export default function PlanDetailScreen() {
     const [creator, setCreator] = useState<Participant | null>(null);
     const [creatorStats, setCreatorStats] = useState<UserStats>(EMPTY_STATS);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(null);
     const [membership, setMembership] = useState<Membership>('none');
     const [friendIds, setFriendIds] = useState<Set<string>>(new Set());
     const [isSaved, setIsSaved] = useState(false);
     const [actionBusy, setActionBusy] = useState(false);
     const [mapExpanded, setMapExpanded] = useState(false);
+    const hasLoadedRef = useRef(false);
 
     const loadPlan = useCallback(async () => {
         if (!planId) return;
+        const silent = hasLoadedRef.current;
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
 
             const user = await getAuthUser();
             setCurrentUserId(user?.id ?? null);
@@ -165,7 +179,7 @@ export default function PlanDetailScreen() {
             const { data: planRow, error } = await supabase
                 .from('planes')
                 .select(
-                    'id, titulo, imagen_url, categoria, tipo_deporte, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion',
+                    'id, titulo, imagen_url, categoria, tipo_deporte, solo_chicas, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion',
                 )
                 .eq('id', planId)
                 .maybeSingle();
@@ -177,7 +191,7 @@ export default function PlanDetailScreen() {
 
             setPlan(planRow as PlanRow);
 
-            const [partsRes, creatorRes, myPartRes, savedRes, friendsData, stats] = await Promise.all([
+            const [partsRes, creatorRes, myPartRes, savedRes, friendsData, stats, myProfileRes] = await Promise.all([
                 supabase
                     .from('participantes')
                     .select('usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url)')
@@ -185,7 +199,7 @@ export default function PlanDetailScreen() {
                     .eq('estado', 'aceptado'),
                 supabase
                     .from('perfiles')
-                    .select('id, nombre, avatar_url')
+                    .select('id, nombre, avatar_url, ambientes_preferidos, etiquetas')
                     .eq('id', planRow.creador_id)
                     .maybeSingle(),
                 user
@@ -206,6 +220,9 @@ export default function PlanDetailScreen() {
                     : Promise.resolve({ data: null, error: null }),
                 user ? getFriends(user.id) : Promise.resolve([]),
                 getUserStats(planRow.creador_id),
+                user
+                    ? supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle()
+                    : Promise.resolve({ data: null, error: null }),
             ]);
 
             const accepted = (partsRes.data || []).filter((p: { estado: string }) =>
@@ -237,6 +254,8 @@ export default function PlanDetailScreen() {
 
             setIsSaved(!!savedRes.data);
             setFriendIds(new Set(friendsData.map((f) => f.id)));
+            setCurrentUserGenero((myProfileRes.data?.genero as Genero) ?? null);
+            hasLoadedRef.current = true;
         } finally {
             setLoading(false);
         }
@@ -252,6 +271,7 @@ export default function PlanDetailScreen() {
     const isFull = plan ? joinedCount >= plan.maximo_participantes : false;
     const requiresApproval = !!plan?.requiere_aprobacion;
     const waitlistOpen = canJoinWaitlist(plan?.fecha_evento);
+    const genderBlocked = plan ? !canJoinPlanByGender(plan, currentUserGenero) : false;
 
     const eventDate = plan?.fecha_evento ? new Date(plan.fecha_evento) : null;
     const dateString = eventDate ? eventDate.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }) : t('card.noDate');
@@ -262,8 +282,30 @@ export default function PlanDetailScreen() {
     const lat = plan?.latitud ?? 40.4167;
     const lng = plan?.longitud ?? -3.7037;
 
+    const handleKick = (targetUserId: string, targetName: string) => {
+        if (!currentUserId || !planId || !isCreator) return;
+        Alert.alert(t('planDetail.kickTitle'), t('planDetail.kickMsg', { name: targetName }), [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: t('planDetail.kickConfirm'),
+                style: 'destructive',
+                onPress: async () => {
+                    const { error } = await kickParticipant(planId, targetUserId, currentUserId);
+                    if (error) {
+                        Alert.alert(t('feed.error'), error);
+                        return;
+                    }
+                    await loadPlan();
+                },
+            },
+        ]);
+    };
+
     const openProfile = (userId: string) => {
-        router.push({ pathname: '/user-profile/[id]', params: { id: userId } });
+        router.push({
+            pathname: '/user-profile/[id]',
+            params: { id: userId, isFriend: friendIds.has(userId) ? '1' : '0' },
+        });
     };
 
     const handleShare = async () => {
@@ -305,6 +347,15 @@ export default function PlanDetailScreen() {
 
     const handleJoin = async () => {
         if (!currentUserId || !plan || actionBusy) return;
+        if (!canJoinPlanByGender(plan, currentUserGenero)) {
+            Alert.alert(t('feed.error'), t('card.soloChicasOnly'));
+            return;
+        }
+        const limitCheck = await canJoinMorePlans(currentUserId, plan.id);
+        if (!limitCheck.allowed) {
+            Alert.alert(t('feed.error'), t('feed.planLimitReached', { max: limitCheck.max }));
+            return;
+        }
         setActionBusy(true);
         const estado = resolveJoinEstado({
             requiere_aprobacion: plan.requiere_aprobacion,
@@ -439,6 +490,15 @@ export default function PlanDetailScreen() {
             );
         }
 
+        if (genderBlocked) {
+            return (
+                <View style={styles.genderBlockedBtn}>
+                    <Ionicons name="lock-closed" size={20} color="#DB2777" />
+                    <Text style={styles.genderBlockedBtnText}>{t('card.soloChicasOnly')}</Text>
+                </View>
+            );
+        }
+
         if (isFull) {
             if (!waitlistOpen) {
                 return (
@@ -466,7 +526,7 @@ export default function PlanDetailScreen() {
         );
     };
 
-    if (loading) {
+    if (loading && !plan) {
         return (
             <View style={styles.loadingWrap}>
                 <ActivityIndicator size="large" color={PRIMARY_DARK} />
@@ -498,6 +558,9 @@ export default function PlanDetailScreen() {
     return (
         <View style={styles.root}>
             <ScrollView
+                ref={scrollRef}
+                onScroll={onScroll}
+                scrollEventThrottle={scrollEventThrottle}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{ paddingBottom: insets.bottom + 140 }}
             >
@@ -528,13 +591,13 @@ export default function PlanDetailScreen() {
                 <View style={styles.sheet}>
                     <View style={styles.titleBlock}>
                         <View style={styles.categoryChipLight}>
-                            <Text style={styles.categoryChipLightText}>{t('cat.' + plan.categoria)}</Text>
+                            <Text style={styles.categoryChipLightText}>{getPlanCategoryDisplay(plan, t)}</Text>
                         </View>
                         <Text style={styles.planTitle}>{plan.titulo}</Text>
                         {sportPlan && (
                             <View style={styles.sportChipLight}>
                                 <SportIcon sport={sportPlan.tipo} size={16} color={PRIMARY_DARK} />
-                                <Text style={styles.sportChipLightText}>{sportPlan.formato ?? t('sport.' + sportPlan.tipo)}</Text>
+                                <Text style={styles.sportChipLightText}>{t('sport.' + sportPlan.tipo)}</Text>
                             </View>
                         )}
                     </View>
@@ -579,15 +642,23 @@ export default function PlanDetailScreen() {
                                             {renderRatingStars(creatorStats.valoracionMedia, 14)}
                                             <Text style={styles.ratingText}>{ratingLabel}</Text>
                                         </View>
+                                        {(creator.ambientes_preferidos?.length || creator.etiquetas?.length) ? (
+                                            <View style={styles.personalityRow}>
+                                                {(creator.ambientes_preferidos?.length
+                                                    ? creator.ambientes_preferidos
+                                                    : creator.etiquetas ?? []
+                                                )
+                                                    .slice(0, 3)
+                                                    .map((tag) => (
+                                                        <View key={tag} style={styles.personalityChip}>
+                                                            <Text style={styles.personalityChipText}>
+                                                                {t('personality.' + tag) || tag}
+                                                            </Text>
+                                                        </View>
+                                                    ))}
+                                            </View>
+                                        ) : null}
                                     </View>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={styles.historyBtn}
-                                    activeOpacity={0.85}
-                                    onPress={() => openProfile(creator.id)}
-                                >
-                                    <Text style={styles.historyBtnText}>{t('planDetail.viewHistory')}</Text>
-                                    <Ionicons name="arrow-forward" size={16} color={PRIMARY_DARK} />
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -612,13 +683,23 @@ export default function PlanDetailScreen() {
                                 contentContainerStyle={styles.participantsScroll}
                             >
                                 {participants.map((p) => (
-                                    <PersonBubble
-                                        key={p.id}
-                                        person={p}
-                                        isFriend={friendIds.has(p.id)}
-                                        subtitle={p.isCreator ? t('planDetail.creator') : undefined}
-                                        onPress={() => openProfile(p.id)}
-                                    />
+                                    <View key={p.id} style={styles.participantBubbleWrap}>
+                                        <PersonBubble
+                                            person={p}
+                                            isFriend={friendIds.has(p.id)}
+                                            subtitle={p.isCreator ? t('planDetail.creator') : undefined}
+                                            onPress={() => openProfile(p.id)}
+                                        />
+                                        {isCreator && !p.isCreator && (
+                                            <TouchableOpacity
+                                                style={styles.kickBtn}
+                                                onPress={() => handleKick(p.id, p.nombre || t('profile.user'))}
+                                                hitSlop={8}
+                                            >
+                                                <Ionicons name="close-circle" size={22} color={DANGER} />
+                                            </TouchableOpacity>
+                                        )}
+                                    </View>
                                 ))}
                             </ScrollView>
                         )}
@@ -662,6 +743,7 @@ export default function PlanDetailScreen() {
                                 </View>
                             </View>
                         </TouchableOpacity>
+                        <View style={styles.mapBottomSpacer} />
                     </View>
                 </View>
             </ScrollView>
@@ -749,6 +831,7 @@ const styles = StyleSheet.create({
         borderTopRightRadius: 28,
         paddingTop: 28,
         paddingHorizontal: 20,
+        paddingBottom: 8,
         minHeight: 200,
         marginTop: -16,
         ...Platform.select({
@@ -830,6 +913,7 @@ const styles = StyleSheet.create({
         borderRadius: 20,
     },
     mapExpandText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
+    mapBottomSpacer: { height: 28, backgroundColor: SURFACE },
 
     fullMapRoot: { flex: 1, backgroundColor: '#000' },
     fullMap: { ...StyleSheet.absoluteFillObject },
@@ -902,20 +986,21 @@ const styles = StyleSheet.create({
     creatorNameFriend: { color: '#047857' },
     ratingRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
     ratingText: { fontSize: 12, color: MUTED, fontWeight: '500' },
-    historyBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        paddingVertical: 12,
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(0,0,0,0.06)',
-        backgroundColor: 'rgba(255,255,255,0.5)',
+    personalityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+    personalityChip: {
+        backgroundColor: '#EFF6FF',
+        borderRadius: 12,
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderWidth: 1,
+        borderColor: '#BFDBFE',
     },
-    historyBtnText: { fontSize: 14, fontWeight: '700', color: PRIMARY_DARK },
+    personalityChipText: { fontSize: 11, fontWeight: '700', color: PRIMARY_DARK },
 
     participantCount: { fontSize: 14, fontWeight: '700', color: MUTED },
     participantsScroll: { paddingVertical: 4, gap: 16, paddingRight: 8 },
+    participantBubbleWrap: { alignItems: 'center', position: 'relative' },
+    kickBtn: { position: 'absolute', top: -4, right: -4, backgroundColor: '#FFF', borderRadius: 12 },
     personBubble: { width: 80, alignItems: 'center' },
     personAvatarRing: {
         alignItems: 'center',
@@ -1018,6 +1103,19 @@ const styles = StyleSheet.create({
         borderColor: '#FECACA',
     },
     fullClosedBtnText: { color: DANGER, fontSize: 16, fontWeight: '800' },
+    genderBlockedBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        backgroundColor: '#FDF2F8',
+        paddingVertical: 18,
+        paddingHorizontal: 24,
+        borderRadius: 16,
+        borderWidth: 1.5,
+        borderColor: '#FBCFE8',
+    },
+    genderBlockedBtnText: { color: '#DB2777', fontSize: 15, fontWeight: '800', textAlign: 'center', flex: 1 },
     requestedBtn: {
         flexDirection: 'row',
         alignItems: 'center',

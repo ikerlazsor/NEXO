@@ -14,91 +14,291 @@ const MUTED = '#64748B';
 
 export const METAL_PALETTE: Record<
     TrophyMetal,
-    { colors: [string, string, ...string[]]; rim: string; glow?: string }
+    { colors: [string, string, ...string[]]; rim: string; glow?: string; accent?: string }
 > = {
-    locked: { colors: ['#E2E8F0', '#94A3B8'], rim: '#64748B' },
-    bronze: { colors: ['#F0C987', '#CD7F32', '#8B5A2B'], rim: '#6B4423' },
-    silver: { colors: ['#F5F5F5', '#C0C0C0', '#808080'], rim: '#5C5C5C' },
-    gold: { colors: ['#FFF4B8', '#FFD700', '#DAA520'], rim: '#B8860B', glow: '#FFD70044' },
-    elite: { colors: ['#C4B5FD', '#818CF8', '#6366F1'], rim: '#4338CA', glow: '#6366F144' },
-    legendary: { colors: ['#E0F2FE', '#7DD3FC', '#38BDF8', '#0284C7'], rim: '#0369A1', glow: '#38BDF866' },
-    welcome: { colors: ['#93C5FD', '#4DA6FF', '#2563EB'], rim: '#1D4ED8', glow: '#2563EB55' },
+    locked: { colors: ['#E2E8F0', '#94A3B8'], rim: '#64748B', accent: '#94A3B8' },
+    bronze: { colors: ['#F0C987', '#CD7F32', '#8B5A2B'], rim: '#6B4423', glow: '#CD7F3244', accent: '#FFF8E7' },
+    silver: { colors: ['#F5F5F5', '#C0C0C0', '#808080'], rim: '#5C5C5C', glow: '#C0C0C044', accent: '#FFFFFF' },
+    gold: { colors: ['#FFF4B8', '#FFD700', '#DAA520'], rim: '#B8860B', glow: '#FFD70044', accent: '#FFFDE7' },
+    elite: { colors: ['#C4B5FD', '#818CF8', '#6366F1'], rim: '#4338CA', glow: '#6366F144', accent: '#EEF2FF' },
+    legendary: { colors: ['#E0F2FE', '#7DD3FC', '#38BDF8', '#0284C7'], rim: '#0369A1', glow: '#38BDF866', accent: '#F0F9FF' },
+    welcome: { colors: ['#93C5FD', '#4DA6FF', '#2563EB'], rim: '#1D4ED8', glow: '#2563EB55', accent: '#EFF6FF' },
 };
 
 interface TrophyProps {
     shape: BadgeShape;
     metal: TrophyMetal;
-    size?: 'grid' | 'modal' | 'preview';
+    size?: 'grid' | 'modal' | 'preview' | 'hero';
 }
 
+const SIZE_MAP = {
+    grid: 52,
+    preview: 56,
+    modal: 88,
+    hero: 48,
+} as const;
+
 export function TrophyIcon({ shape, metal, size = 'grid' }: TrophyProps) {
-    const dims = size === 'modal' ? { w: 88, h: 108 } : size === 'preview' ? { w: 56, h: 70 } : { w: 52, h: 64 };
+    const dim = SIZE_MAP[size];
     const palette = METAL_PALETTE[metal];
     const locked = metal === 'locked';
 
     return (
-        <View style={[styles.trophyWrap, { width: dims.w, height: dims.h }]}>
-            {!locked && palette.glow && (
-                <View style={[styles.glow, { backgroundColor: palette.glow, width: dims.w * 1.1, height: dims.h * 0.5 }]} />
-            )}
-            <LinearGradient
-                colors={palette.colors}
-                start={{ x: 0.2, y: 0 }}
-                end={{ x: 0.8, y: 1 }}
-                style={[styles.trophyBody, { width: dims.w * 0.72, borderColor: palette.rim }]}
-            >
-                <ShapeDecoration shape={shape} metal={metal} width={dims.w * 0.72} />
-                {!locked && <View style={styles.cupShine} />}
-            </LinearGradient>
-            <View style={[styles.stem, { width: dims.w * 0.14, height: dims.h * 0.18, backgroundColor: palette.rim }]} />
-            <LinearGradient
-                colors={locked ? (['#CBD5E1', '#94A3B8'] as [string, string]) : ([palette.colors[0], palette.rim] as [string, string])}
-                style={[styles.base, { width: dims.w * 0.88, height: dims.h * 0.12, borderColor: palette.rim }]}
-            />
-            {shape === 'crown' && !locked && (
-                <View style={[styles.crownTop, { top: -dims.h * 0.08 }]}>
-                    <Ionicons name="diamond" size={dims.w * 0.22} color="#FFF" />
-                </View>
-            )}
+        <View style={[styles.iconRoot, { width: dim, height: dim }]}>
+            {!locked && palette.glow ? (
+                <View
+                    style={[
+                        styles.glow,
+                        {
+                            backgroundColor: palette.glow,
+                            width: dim * 1.15,
+                            height: dim * 1.15,
+                        },
+                    ]}
+                />
+            ) : null}
+            <BadgeSilhouette shape={shape} dim={dim} palette={palette} locked={locked} />
         </View>
     );
 }
 
-function ShapeDecoration({ shape, metal, width }: { shape: BadgeShape; metal: TrophyMetal; width: number }) {
-    const iconColor = metal === 'locked' ? '#94A3B8' : '#FFFFFF';
-    const iconSize = width * 0.32;
+type Palette = (typeof METAL_PALETTE)[TrophyMetal];
 
-    const iconMap: Partial<Record<BadgeShape, keyof typeof Ionicons.glyphMap>> = {
-        welcome: 'sparkles',
-        gourmet: 'restaurant',
-        sport: 'football',
-        party: 'musical-notes',
-        scholar: 'school',
-        grace: 'heart',
-        pillar: 'business',
-        laurel: 'time',
-        heart: 'heart-circle',
-        network: 'git-network',
-        compass: 'compass',
-        crown: 'star',
-    };
+function BadgeSilhouette({
+    shape,
+    dim,
+    palette,
+    locked,
+}: {
+    shape: BadgeShape;
+    dim: number;
+    palette: Palette;
+    locked: boolean;
+}) {
+    const rim = palette.rim;
+    const accent = palette.accent ?? '#FFFFFF';
 
-    return (
-        <View style={styles.emblem}>
-            {shape === 'sport' && <View style={styles.handleLeft} />}
-            {shape === 'sport' && <View style={styles.handleRight} />}
-            {shape === 'grace' && <View style={[styles.graceWing, styles.graceWingLeft]} />}
-            {shape === 'grace' && <View style={[styles.graceWing, styles.graceWingRight]} />}
-            {shape === 'welcome' && (
-                <>
-                    <View style={[styles.welcomeRay, { transform: [{ rotate: '-28deg' }] }]} />
-                    <View style={[styles.welcomeRay, { transform: [{ rotate: '28deg' }] }]} />
-                </>
-            )}
-            {shape === 'crown' && metal === 'legendary' && <View style={styles.legendRing} />}
-            <Ionicons name={iconMap[shape] ?? 'trophy'} size={iconSize} color={iconColor} />
-        </View>
-    );
+    switch (shape) {
+        case 'medal_welcome':
+            return (
+                <View style={{ alignItems: 'center' }}>
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[
+                            styles.starMedal,
+                            {
+                                width: dim * 0.78,
+                                height: dim * 0.78,
+                                borderColor: rim,
+                            },
+                        ]}
+                    >
+                        <View style={[styles.starInner, { borderColor: accent }]} />
+                    </LinearGradient>
+                    <View style={[styles.ribbonLeft, { backgroundColor: rim, width: dim * 0.18, height: dim * 0.28 }]} />
+                    <View style={[styles.ribbonRight, { backgroundColor: rim, width: dim * 0.18, height: dim * 0.28 }]} />
+                </View>
+            );
+
+        case 'medal_round':
+            return (
+                <View style={{ alignItems: 'center' }}>
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[
+                            styles.roundMedal,
+                            { width: dim * 0.72, height: dim * 0.72, borderColor: rim },
+                        ]}
+                    >
+                        <View style={[styles.roundRing, { borderColor: accent }]} />
+                    </LinearGradient>
+                    <View style={[styles.vRibbon, { borderBottomColor: rim, width: dim * 0.14, height: dim * 0.22 }]} />
+                    <View style={[styles.vRibbon, styles.vRibbonRight, { borderBottomColor: rim, width: dim * 0.14, height: dim * 0.22 }]} />
+                </View>
+            );
+
+        case 'trophy_cup':
+            return (
+                <View style={{ alignItems: 'center', justifyContent: 'flex-end', height: dim }}>
+                    <View style={[styles.cupHandle, styles.cupHandleL, { borderColor: rim, height: dim * 0.28 }]} />
+                    <View style={[styles.cupHandle, styles.cupHandleR, { borderColor: rim, height: dim * 0.28 }]} />
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[
+                            styles.cupBowl,
+                            { width: dim * 0.62, height: dim * 0.42, borderColor: rim },
+                        ]}
+                    />
+                    <View style={[styles.cupStem, { width: dim * 0.1, height: dim * 0.14, backgroundColor: rim }]} />
+                    <LinearGradient
+                        colors={[palette.colors[0], rim]}
+                        style={[styles.cupBase, { width: dim * 0.7, height: dim * 0.1, borderColor: rim }]}
+                    />
+                </View>
+            );
+
+        case 'star_burst':
+            return (
+                <LinearGradient
+                    colors={palette.colors}
+                    style={[
+                        styles.burstStar,
+                        { width: dim * 0.82, height: dim * 0.82, borderColor: rim },
+                    ]}
+                >
+                    <View style={[styles.burstCore, { backgroundColor: accent }]} />
+                </LinearGradient>
+            );
+
+        case 'hexagon':
+            return (
+                <LinearGradient
+                    colors={palette.colors}
+                    style={[
+                        styles.hexagon,
+                        { width: dim * 0.76, height: dim * 0.84, borderColor: rim },
+                    ]}
+                >
+                    <View style={[styles.hexInner, { borderColor: accent }]} />
+                </LinearGradient>
+            );
+
+        case 'shield':
+            return (
+                <LinearGradient
+                    colors={palette.colors}
+                    style={[
+                        styles.shield,
+                        { width: dim * 0.68, height: dim * 0.86, borderColor: rim },
+                    ]}
+                >
+                    <View style={[styles.shieldChevron, { borderTopColor: accent }]} />
+                </LinearGradient>
+            );
+
+        case 'block':
+            return (
+                <View style={{ alignItems: 'center' }}>
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[
+                            styles.blockTop,
+                            { width: dim * 0.62, height: dim * 0.52, borderColor: rim },
+                        ]}
+                    />
+                    <View style={[styles.blockBase, { width: dim * 0.78, height: dim * 0.14, backgroundColor: rim }]} />
+                </View>
+            );
+
+        case 'wreath':
+            return (
+                <View style={[styles.wreathWrap, { width: dim * 0.82, height: dim * 0.82 }]}>
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[styles.wreathRing, { borderColor: rim }]}
+                    />
+                    {[0, 60, 120, 180, 240, 300].map((deg) => (
+                        <View
+                            key={deg}
+                            style={[
+                                styles.wreathLeaf,
+                                {
+                                    backgroundColor: locked ? '#94A3B8' : palette.colors[1],
+                                    transform: [{ rotate: `${deg}deg` }, { translateY: -dim * 0.36 }],
+                                },
+                            ]}
+                        />
+                    ))}
+                </View>
+            );
+
+        case 'heart_shape':
+            return (
+                <View style={[styles.heartWrap, { width: dim * 0.8, height: dim * 0.76 }]}>
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[styles.heartLobe, styles.heartLobeL, { borderColor: rim }]}
+                    />
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[styles.heartLobe, styles.heartLobeR, { borderColor: rim }]}
+                    />
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[styles.heartPoint, { borderBottomColor: rim }]}
+                    />
+                </View>
+            );
+
+        case 'nodes':
+            return (
+                <View style={[styles.nodesWrap, { width: dim * 0.8, height: dim * 0.8 }]}>
+                    <LinearGradient colors={palette.colors} style={[styles.nodeCenter, { borderColor: rim }]} />
+                    {[0, 72, 144, 216, 288].map((deg) => (
+                        <View
+                            key={deg}
+                            style={[
+                                styles.nodeOrbit,
+                                {
+                                    transform: [{ rotate: `${deg}deg` }, { translateY: -dim * 0.28 }],
+                                },
+                            ]}
+                        >
+                            <View style={[styles.nodeDot, { backgroundColor: rim }]} />
+                            <View style={[styles.nodeLine, { backgroundColor: rim }]} />
+                        </View>
+                    ))}
+                </View>
+            );
+
+        case 'compass_nav':
+            return (
+                <View style={[styles.compassWrap, { width: dim * 0.86, height: dim * 0.86 }]}>
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[styles.compassDiamond, { borderColor: rim }]}
+                    />
+                    <View style={[styles.compassNeedleN, { borderBottomColor: accent }]} />
+                    <View style={[styles.compassNeedleS, { borderTopColor: rim }]} />
+                    <View style={[styles.compassNeedleE, { borderLeftColor: palette.colors[2] ?? rim }]} />
+                    <View style={[styles.compassNeedleW, { borderRightColor: palette.colors[0] }]} />
+                    <View style={[styles.compassHub, { backgroundColor: rim }]} />
+                </View>
+            );
+
+        case 'crown_spike':
+            return (
+                <View style={{ alignItems: 'center' }}>
+                    <View style={[styles.crownSpikes, { width: dim * 0.78 }]}>
+                        {[0, 1, 2, 3, 4].map((i) => (
+                            <LinearGradient
+                                key={i}
+                                colors={palette.colors}
+                                style={[
+                                    styles.crownSpike,
+                                    {
+                                        height: i === 2 ? dim * 0.38 : dim * 0.28,
+                                        borderColor: rim,
+                                    },
+                                ]}
+                            />
+                        ))}
+                    </View>
+                    <LinearGradient
+                        colors={palette.colors}
+                        style={[styles.crownBand, { width: dim * 0.82, height: dim * 0.22, borderColor: rim }]}
+                    />
+                </View>
+            );
+
+        default:
+            return (
+                <LinearGradient
+                    colors={palette.colors}
+                    style={[styles.roundMedal, { width: dim * 0.72, height: dim * 0.72, borderColor: rim }]}
+                />
+            );
+    }
 }
 
 interface BadgeTileProps {
@@ -130,9 +330,19 @@ interface BadgeDetailModalProps {
     badge: UserBadge | null;
     visible: boolean;
     onClose: () => void;
+    onSetFeatured?: (badge: UserBadge) => void;
+    isFeatured?: boolean;
+    canSetFeatured?: boolean;
 }
 
-export function BadgeDetailModal({ badge, visible, onClose }: BadgeDetailModalProps) {
+export function BadgeDetailModal({
+    badge,
+    visible,
+    onClose,
+    onSetFeatured,
+    isFeatured,
+    canSetFeatured,
+}: BadgeDetailModalProps) {
     const { t } = useT();
     if (!badge) return null;
 
@@ -214,6 +424,22 @@ export function BadgeDetailModal({ badge, visible, onClose }: BadgeDetailModalPr
                             <Text style={styles.progressHint}>{badge.progressText}</Text>
                         )}
 
+                        {canSetFeatured && badge.unlocked && onSetFeatured ? (
+                            <TouchableOpacity
+                                style={[styles.featuredBtn, isFeatured && styles.featuredBtnActive]}
+                                onPress={() => onSetFeatured(badge)}
+                            >
+                                <Ionicons
+                                    name={isFeatured ? 'star' : 'star-outline'}
+                                    size={18}
+                                    color={isFeatured ? '#FFF' : '#2563EB'}
+                                />
+                                <Text style={[styles.featuredBtnText, isFeatured && styles.featuredBtnTextActive]}>
+                                    {isFeatured ? t('profile.featuredBadgeActive') : t('profile.setFeaturedBadge')}
+                                </Text>
+                            </TouchableOpacity>
+                        ) : null}
+
                         <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
                             <Text style={styles.closeBtnText}>{t('common.back')}</Text>
                         </TouchableOpacity>
@@ -225,90 +451,197 @@ export function BadgeDetailModal({ badge, visible, onClose }: BadgeDetailModalPr
 }
 
 const styles = StyleSheet.create({
-    trophyWrap: { alignItems: 'center', justifyContent: 'flex-end', position: 'relative' },
-    glow: {
-        position: 'absolute',
-        bottom: '18%',
+    iconRoot: { alignItems: 'center', justifyContent: 'center', position: 'relative' },
+    glow: { position: 'absolute', borderRadius: 999, opacity: 0.75 },
+
+    starMedal: {
         borderRadius: 999,
-        opacity: 0.85,
-    },
-    trophyBody: {
-        height: '58%',
-        borderTopLeftRadius: 14,
-        borderTopRightRadius: 14,
-        borderBottomLeftRadius: 6,
-        borderBottomRightRadius: 6,
         borderWidth: 2,
+        transform: [{ rotate: '22deg' }],
         alignItems: 'center',
         justifyContent: 'center',
-        overflow: 'hidden',
     },
-    cupShine: {
+    starInner: {
+        width: '42%',
+        height: '42%',
+        borderRadius: 999,
+        borderWidth: 2,
+        opacity: 0.65,
+    },
+    ribbonLeft: { position: 'absolute', bottom: -4, left: '22%', transform: [{ rotate: '-18deg' }], borderRadius: 3 },
+    ribbonRight: { position: 'absolute', bottom: -4, right: '22%', transform: [{ rotate: '18deg' }], borderRadius: 3 },
+
+    roundMedal: { borderRadius: 999, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+    roundRing: { width: '55%', height: '55%', borderRadius: 999, borderWidth: 2, opacity: 0.5 },
+    vRibbon: {
         position: 'absolute',
-        top: 4,
-        left: 6,
-        width: '35%',
-        height: '45%',
-        backgroundColor: 'rgba(255,255,255,0.35)',
-        borderRadius: 8,
-        transform: [{ rotate: '-18deg' }],
+        bottom: -2,
+        left: '34%',
+        borderLeftWidth: 0,
+        borderRightWidth: 0,
+        borderBottomWidth: 18,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
+        transform: [{ rotate: '-8deg' }],
     },
-    stem: { borderRadius: 2 },
-    base: {
+    vRibbonRight: { left: '48%', transform: [{ rotate: '8deg' }] },
+
+    cupHandle: {
+        position: 'absolute',
+        top: '18%',
+        width: 10,
+        borderWidth: 2,
+        borderRadius: 8,
+    },
+    cupHandleL: { left: '8%', borderRightWidth: 0 },
+    cupHandleR: { right: '8%', borderLeftWidth: 0 },
+    cupBowl: { borderWidth: 2, borderTopLeftRadius: 10, borderTopRightRadius: 10, borderBottomLeftRadius: 4, borderBottomRightRadius: 4 },
+    cupStem: { borderRadius: 2 },
+    cupBase: { borderRadius: 4, borderWidth: 2, marginTop: 1 },
+
+    burstStar: {
+        borderWidth: 2,
+        transform: [{ rotate: '18deg' }],
+        borderRadius: 6,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    burstCore: { width: '32%', height: '32%', borderRadius: 999, opacity: 0.55 },
+
+    hexagon: {
+        borderWidth: 2,
+        transform: [{ rotate: '30deg' }],
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    hexInner: { width: '45%', height: '45%', borderWidth: 2, borderRadius: 4, transform: [{ rotate: '-30deg' }], opacity: 0.45 },
+
+    shield: {
+        borderWidth: 2,
+        borderTopLeftRadius: 14,
+        borderTopRightRadius: 14,
+        borderBottomLeftRadius: 22,
+        borderBottomRightRadius: 22,
+        alignItems: 'center',
+        paddingTop: 8,
+    },
+    shieldChevron: {
+        width: 0,
+        height: 0,
+        borderLeftWidth: 10,
+        borderRightWidth: 10,
+        borderTopWidth: 14,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
+        opacity: 0.55,
+    },
+
+    blockTop: { borderWidth: 2, borderRadius: 4 },
+    blockBase: { borderRadius: 3, marginTop: 2 },
+
+    wreathWrap: { alignItems: 'center', justifyContent: 'center' },
+    wreathRing: {
+        width: '72%',
+        height: '72%',
+        borderRadius: 999,
+        borderWidth: 5,
+        position: 'absolute',
+    },
+    wreathLeaf: {
+        position: 'absolute',
+        width: 8,
+        height: 12,
+        borderRadius: 6,
+    },
+
+    heartWrap: { alignItems: 'center', justifyContent: 'center' },
+    heartLobe: {
+        position: 'absolute',
+        top: 0,
+        width: '38%',
+        height: '42%',
+        borderRadius: 999,
+        borderWidth: 2,
+    },
+    heartLobeL: { left: '14%', transform: [{ rotate: '-38deg' }] },
+    heartLobeR: { right: '14%', transform: [{ rotate: '38deg' }] },
+    heartPoint: {
+        position: 'absolute',
+        bottom: 2,
+        width: 0,
+        height: 0,
+        borderLeftWidth: 18,
+        borderRightWidth: 18,
+        borderBottomWidth: 22,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
+    },
+
+    nodesWrap: { alignItems: 'center', justifyContent: 'center' },
+    nodeCenter: { width: '34%', height: '34%', borderRadius: 999, borderWidth: 2 },
+    nodeOrbit: { position: 'absolute', alignItems: 'center' },
+    nodeDot: { width: 8, height: 8, borderRadius: 4 },
+    nodeLine: { width: 2, height: 10, marginTop: 1 },
+
+    compassWrap: { alignItems: 'center', justifyContent: 'center' },
+    compassDiamond: {
+        width: '78%',
+        height: '78%',
+        transform: [{ rotate: '45deg' }],
         borderRadius: 6,
         borderWidth: 2,
-        marginTop: 1,
     },
-    crownTop: { position: 'absolute', alignSelf: 'center' },
-    emblem: { alignItems: 'center', justifyContent: 'center' },
-    handleLeft: {
+    compassNeedleN: {
         position: 'absolute',
-        left: -8,
-        width: 8,
-        height: 20,
-        borderWidth: 2,
-        borderColor: 'rgba(255,255,255,0.5)',
-        borderRightWidth: 0,
-        borderTopLeftRadius: 8,
-        borderBottomLeftRadius: 8,
+        top: '10%',
+        width: 0,
+        height: 0,
+        borderLeftWidth: 7,
+        borderRightWidth: 7,
+        borderBottomWidth: 16,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
     },
-    handleRight: {
+    compassNeedleS: {
         position: 'absolute',
-        right: -8,
-        width: 8,
-        height: 20,
-        borderWidth: 2,
-        borderColor: 'rgba(255,255,255,0.5)',
-        borderLeftWidth: 0,
-        borderTopRightRadius: 8,
-        borderBottomRightRadius: 8,
+        bottom: '10%',
+        width: 0,
+        height: 0,
+        borderLeftWidth: 5,
+        borderRightWidth: 5,
+        borderTopWidth: 12,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
     },
-    graceWing: {
+    compassNeedleE: {
         position: 'absolute',
-        top: 8,
-        width: 10,
-        height: 18,
-        backgroundColor: 'rgba(255,255,255,0.25)',
-        borderRadius: 10,
+        right: '12%',
+        width: 0,
+        height: 0,
+        borderTopWidth: 5,
+        borderBottomWidth: 5,
+        borderLeftWidth: 10,
+        borderTopColor: 'transparent',
+        borderBottomColor: 'transparent',
     },
-    graceWingLeft: { left: -4, transform: [{ rotate: '-25deg' }] },
-    graceWingRight: { right: -4, transform: [{ rotate: '25deg' }] },
-    welcomeRay: {
+    compassNeedleW: {
         position: 'absolute',
-        top: -6,
-        width: 3,
-        height: 14,
-        backgroundColor: 'rgba(255,255,255,0.6)',
-        borderRadius: 2,
+        left: '12%',
+        width: 0,
+        height: 0,
+        borderTopWidth: 5,
+        borderBottomWidth: 5,
+        borderRightWidth: 10,
+        borderTopColor: 'transparent',
+        borderBottomColor: 'transparent',
     },
-    legendRing: {
-        position: 'absolute',
-        width: 46,
-        height: 46,
-        borderRadius: 23,
-        borderWidth: 2,
-        borderColor: 'rgba(255,255,255,0.45)',
-    },
+    compassHub: { position: 'absolute', width: 8, height: 8, borderRadius: 4 },
+
+    crownSpikes: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 3 },
+    crownSpike: { flex: 1, borderWidth: 2, borderBottomWidth: 0, borderTopLeftRadius: 4, borderTopRightRadius: 4 },
+    crownBand: { borderWidth: 2, borderRadius: 4, marginTop: -1 },
+
     tile: { width: 88, alignItems: 'center', gap: 6 },
     tilePress: { width: 88 },
     tileName: { fontSize: 11, fontWeight: '700', color: INK, textAlign: 'center', lineHeight: 14 },
@@ -366,6 +699,21 @@ const styles = StyleSheet.create({
     },
     currentPillText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
     progressHint: { marginTop: 14, fontSize: 13, color: MUTED, fontWeight: '600' },
+    featuredBtn: {
+        marginTop: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 20,
+        borderRadius: 14,
+        backgroundColor: '#EFF6FF',
+        borderWidth: 1.5,
+        borderColor: '#BFDBFE',
+    },
+    featuredBtnActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+    featuredBtnText: { color: '#2563EB', fontWeight: '800', fontSize: 14 },
+    featuredBtnTextActive: { color: '#FFF' },
     closeBtn: {
         marginTop: 20,
         paddingVertical: 12,

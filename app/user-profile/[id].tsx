@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -12,6 +12,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
+import { BadgeDetailModal, BadgeTile } from '../../components/TrophyBadge';
+import { getUserBadges, type UserBadge } from '../../lib/badges';
+import { getBadgeStats } from '../../lib/badgeStats';
 import {
     acceptFriendRequest,
     cancelFriendRequest,
@@ -27,6 +30,8 @@ import { useT } from '../../lib/i18n';
 import { renderRatingStars } from '../../lib/profileRating';
 import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
 import { supabase } from '../../lib/supabase';
+import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
+import { ScreenKeys } from '../../lib/screenState';
 import { calcAge, parseHabitos, parsePrivacy, type ProfilePrivacy } from '../../lib/profileFields';
 
 const PRIMARY = '#4DA6FF';
@@ -55,29 +60,45 @@ type PublicProfile = {
 export default function UserProfileScreen() {
     const router = useRouter();
     const { t } = useT();
-    const { id } = useLocalSearchParams<{ id: string | string[] }>();
+    const { id, isFriend } = useLocalSearchParams<{ id: string | string[]; isFriend?: string }>();
     const profileId = Array.isArray(id) ? id[0] : id;
+    const friendHint = isFriend === '1';
+    const scrollKey = profileId ? `${ScreenKeys.USER_PROFILE}:${profileId}` : ScreenKeys.USER_PROFILE;
+    const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(scrollKey);
 
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState(false);
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-    const [friendStatus, setFriendStatus] = useState<FriendStatus>('none');
+    const [friendStatus, setFriendStatus] = useState<FriendStatus | null>(friendHint ? 'friends' : null);
     const [requestId, setRequestId] = useState<string | null>(null);
     const [friendsCount, setFriendsCount] = useState(0);
     const [stats, setStats] = useState<UserStats>(EMPTY_STATS);
     const [blocked, setBlocked] = useState(false);
     const [blockedEitherWay, setBlockedEitherWay] = useState(false);
     const [privacy, setPrivacy] = useState<ProfilePrivacy | null>(null);
+    const [badges, setBadges] = useState<UserBadge[]>([]);
+    const [selectedBadge, setSelectedBadge] = useState<UserBadge | null>(null);
+    const [badgesLoading, setBadgesLoading] = useState(true);
+    const hasDataRef = useRef(false);
 
     const loadProfile = useCallback(async () => {
         if (!profileId) return;
 
         try {
-            setLoading(true);
+            if (!hasDataRef.current) setLoading(true);
 
             const { data: { user } } = await supabase.auth.getUser();
             setCurrentUserId(user?.id ?? null);
+
+            const friendPromise =
+                user && user.id !== profileId
+                    ? Promise.all([
+                          getFriendStatus(user.id, profileId),
+                          isUserBlocked(user.id, profileId),
+                          isBlockedEitherWay(user.id, profileId),
+                      ])
+                    : Promise.resolve(null);
 
             const { data: profile, error } = await supabase
                 .from('perfiles')
@@ -101,28 +122,32 @@ export default function UserProfileScreen() {
             });
             setPrivacy(parsePrivacy(profile.perfil_gustos));
 
-            const [count, userStats] = await Promise.all([
+            const [count, userStats, badgeStats] = await Promise.all([
                 getFriendsCount(profileId),
                 getUserStats(profileId),
+                getBadgeStats(profileId),
             ]);
             setFriendsCount(count);
             setStats(userStats);
+            const allBadges = getUserBadges(badgeStats);
+            setBadges(allBadges);
+            setBadgesLoading(false);
+            hasDataRef.current = true;
 
-            if (user && user.id !== profileId) {
-                const [status, isBlocked, eitherWay] = await Promise.all([
-                    getFriendStatus(user.id, profileId),
-                    isUserBlocked(user.id, profileId),
-                    isBlockedEitherWay(user.id, profileId),
-                ]);
+            const friendData = await friendPromise;
+            if (friendData) {
+                const [status, isBlocked, eitherWay] = friendData;
                 setFriendStatus(status.status);
                 setRequestId(status.requestId);
                 setBlocked(isBlocked);
                 setBlockedEitherWay(eitherWay);
-            } else {
+            } else if (user?.id === profileId) {
                 setFriendStatus('self');
                 setRequestId(null);
                 setBlocked(false);
                 setBlockedEitherWay(false);
+            } else {
+                setFriendStatus('none');
             }
         } catch (error) {
             console.error('Error fetching user profile:', error);
@@ -287,7 +312,7 @@ export default function UserProfileScreen() {
     const renderFriendAction = () => {
         if (friendStatus === 'self' || blockedEitherWay) return null;
 
-        if (actionLoading) {
+        if (friendStatus === null || actionLoading) {
             return (
                 <View style={styles.actionLoading}>
                     <ActivityIndicator color={PRIMARY_DARK} />
@@ -341,7 +366,7 @@ export default function UserProfileScreen() {
         );
     };
 
-    if (loading) {
+    if (loading && !userProfile) {
         return (
             <SafeAreaView style={styles.safe} edges={['top']}>
                 <View style={styles.loadingContainer}>
@@ -402,6 +427,9 @@ export default function UserProfileScreen() {
             </View>
 
             <ScrollView
+                ref={scrollRef}
+                onScroll={onScroll}
+                scrollEventThrottle={scrollEventThrottle}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scroll}
             >
@@ -465,6 +493,28 @@ export default function UserProfileScreen() {
                     </View>
                 )}
 
+                <View style={styles.card}>
+                    <View style={styles.cardHeaderRow}>
+                        <Text style={styles.cardTitleInline}>{t('profile.badges')}</Text>
+                        <Text style={styles.cardMeta}>
+                            {badges.filter((b) => b.unlocked).length}/{badges.length}
+                        </Text>
+                    </View>
+                    <View style={styles.badgeGrid}>
+                        {badgesLoading ? (
+                            <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 24, alignSelf: 'center' }} />
+                        ) : (
+                            badges.map((badge) => (
+                                <BadgeTile
+                                    key={badge.family.id}
+                                    badge={badge}
+                                    onPress={() => setSelectedBadge(badge)}
+                                />
+                            ))
+                        )}
+                    </View>
+                </View>
+
                 {friendStatus !== 'self' && currentUserId && (
                     <TouchableOpacity style={styles.blockBtn} onPress={handleToggleBlock} activeOpacity={0.85}>
                         <Ionicons name={blocked ? 'lock-open-outline' : 'ban-outline'} size={17} color={blocked ? '#64748B' : DANGER} />
@@ -475,6 +525,12 @@ export default function UserProfileScreen() {
                 )}
 
             </ScrollView>
+
+            <BadgeDetailModal
+                badge={selectedBadge}
+                visible={!!selectedBadge}
+                onClose={() => setSelectedBadge(null)}
+            />
         </SafeAreaView>
     );
 }
@@ -613,6 +669,15 @@ const styles = StyleSheet.create({
         borderColor: BORDER,
     },
     cardTitle: { fontSize: 16, fontWeight: '700', color: INK, marginBottom: 12 },
+    cardTitleInline: { fontSize: 16, fontWeight: '700', color: INK },
+    cardHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 12,
+    },
+    cardMeta: { fontSize: 13, fontWeight: '700', color: MUTED },
+    badgeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center' },
     aboutText: { fontSize: 15, color: '#334155', lineHeight: 22 },
     aboutEmptyText: { fontSize: 14, color: MUTED, lineHeight: 21 },
     detailRow: {

@@ -3,18 +3,18 @@ import type { BadgeStats } from './badgeStats';
 export type TrophyMetal = 'locked' | 'bronze' | 'silver' | 'gold' | 'elite' | 'legendary' | 'welcome';
 
 export type BadgeShape =
-    | 'welcome'
-    | 'gourmet'
-    | 'sport'
-    | 'party'
-    | 'scholar'
-    | 'grace'
-    | 'pillar'
-    | 'laurel'
-    | 'heart'
-    | 'network'
-    | 'compass'
-    | 'crown';
+    | 'medal_welcome'
+    | 'medal_round'
+    | 'trophy_cup'
+    | 'star_burst'
+    | 'hexagon'
+    | 'shield'
+    | 'block'
+    | 'wreath'
+    | 'heart_shape'
+    | 'nodes'
+    | 'compass_nav'
+    | 'crown_spike';
 
 export type BadgeKind = 'welcome' | 'tiered' | 'elite' | 'legendary';
 
@@ -53,14 +53,14 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'primeros_pasos',
         nombre: 'Primeros pasos',
-        shape: 'welcome',
+        shape: 'medal_welcome',
         kind: 'welcome',
         welcomeText: 'Bienvenido a la comunidad Nexo',
     },
     {
         id: 'foodie',
         nombre: 'Foodie',
-        shape: 'gourmet',
+        shape: 'medal_round',
         kind: 'tiered',
         thresholds: [5, 20, 50],
         getCount: (s) => s.planesTapas,
@@ -74,7 +74,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'mvp',
         nombre: 'MVP',
-        shape: 'sport',
+        shape: 'trophy_cup',
         kind: 'tiered',
         thresholds: [5, 20, 50],
         getCount: (s) => s.planesDeporte,
@@ -88,7 +88,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'mr_mrs_aura',
         nombre: 'Mr/Mrs Aura',
-        shape: 'party',
+        shape: 'star_burst',
         kind: 'tiered',
         thresholds: [5, 20, 50],
         getCount: (s) => s.planesFiesta,
@@ -102,7 +102,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'genio',
         nombre: 'Genio',
-        shape: 'scholar',
+        shape: 'hexagon',
         kind: 'tiered',
         thresholds: [5, 20, 50],
         getCount: (s) => s.planesEstudio,
@@ -116,7 +116,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'superwoman',
         nombre: 'Superwoman',
-        shape: 'grace',
+        shape: 'shield',
         kind: 'tiered',
         thresholds: [5, 20, 50],
         getCount: (s) => s.planesSoloChicas,
@@ -130,7 +130,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'arquitecto',
         nombre: 'Arquitecto',
-        shape: 'pillar',
+        shape: 'block',
         kind: 'elite',
         eliteCheck: (s) => s.planesCreados >= 25,
         eliteText: 'Crea 25 planes',
@@ -138,7 +138,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'veterano',
         nombre: 'Veterano',
-        shape: 'laurel',
+        shape: 'wreath',
         kind: 'elite',
         eliteCheck: (s) => s.cuentaAntiguedadDias >= 365,
         eliteText: 'Lleva más de 1 año en la app',
@@ -146,7 +146,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'inolvidable',
         nombre: 'Inolvidable',
-        shape: 'heart',
+        shape: 'heart_shape',
         kind: 'elite',
         eliteCheck: (s) => s.numeroValoraciones >= 50 && s.porcentajeRepetiria >= 95,
         eliteText: '95% quieren repetir contigo (mín. 50 valoraciones)',
@@ -154,7 +154,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'maestro_conexiones',
         nombre: 'Maestro de Conexiones',
-        shape: 'network',
+        shape: 'nodes',
         kind: 'elite',
         eliteCheck: (s) => s.numeroAmistades >= 100,
         eliteText: 'Crea 100 amistades',
@@ -162,7 +162,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'sin_limites',
         nombre: 'Sin límites',
-        shape: 'compass',
+        shape: 'compass_nav',
         kind: 'elite',
         eliteCheck: (s) => s.categoriasProbadas >= 5,
         eliteText: 'Prueba todas las categorías de planes',
@@ -170,7 +170,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     {
         id: 'embajador_nexo',
         nombre: 'Embajador Nexo',
-        shape: 'crown',
+        shape: 'crown_spike',
         kind: 'legendary',
         legendaryText:
             '1000 personas distintas · valoración ≥4,5 · 500+ valoraciones · 90%+ repetirían',

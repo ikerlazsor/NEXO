@@ -17,10 +17,11 @@ import {
     View,
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
-import { resolvePlanSport, resolvePlanImageSource } from '../lib/sports';
+import { resolvePlanImageSource, resolvePlanCategories } from '../lib/sports';
 import { canJoinWaitlist, type Membership } from '../lib/participants';
+import { canJoinPlanByGender, isSoloChicasPlan } from '../lib/soloChicas';
+import { kickParticipant } from '../lib/kickParticipant';
 import { useT } from '../lib/i18n';
-import { SportIcon } from './SportIcon';
 import { PlanImage } from './PlanImage';
 
 const PRIMARY = '#4DA6FF';
@@ -102,6 +103,7 @@ interface PlanCardProps {
     item: any;
     index: number;
     currentUserId: string | null;
+    userGenero?: string | null;
     membership: Membership;
     isSaved: boolean;
     friendIds?: Set<string>;
@@ -112,6 +114,7 @@ interface PlanCardProps {
     onToggleSave: (id: string) => void;
     onReport?: (id: string) => void;
     onOpenDetail?: (id: string) => void;
+    onParticipantsChanged?: () => void;
     router: any;
 }
 
@@ -119,6 +122,7 @@ function PlanCardInner({
     item,
     index,
     currentUserId,
+    userGenero,
     membership,
     isSaved,
     friendIds,
@@ -129,6 +133,7 @@ function PlanCardInner({
     onToggleSave,
     onReport,
     onOpenDetail,
+    onParticipantsChanged,
     router,
 }: PlanCardProps) {
     const { t } = useT();
@@ -159,12 +164,14 @@ function PlanCardInner({
         ? participants.filter((p: { id?: string }) => p.id && friendIds.has(p.id)).length
         : 0;
 
-    const sportPlan = resolvePlanSport(item);
-    const categoryLabel = t('cat.' + item.categoria);
+    const { main: mainCategory, sub: subCategory } = resolvePlanCategories(item);
+    const mainCategoryLabel = mainCategory ? t(`cat.main.${mainCategory}`) : '';
+    const subCategoryLabel = subCategory ? t(`cat.sub.${subCategory}`) : '';
 
     const eventDate = item.fecha_evento ? new Date(item.fecha_evento) : null;
     const isToday = eventDate ? isSameCalendarDay(eventDate, new Date()) : false;
-    const isSoloChicas = item.categoria === 'Solo chicas';
+    const isSoloChicas = isSoloChicasPlan(item);
+    const genderBlocked = !canJoinPlanByGender(item, userGenero as any);
     const isCalmPremium = !isToday && !isFull && !isSoloChicas;
     const dateString = eventDate ? eventDate.toLocaleDateString() : t('card.noDate');
     const timeString = eventDate ? eventDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
@@ -257,6 +264,14 @@ function PlanCardInner({
                 </TouchableOpacity>
             );
         }
+        if (genderBlocked) {
+            return (
+                <View style={styles.genderBlockedRow}>
+                    <Ionicons name="lock-closed" size={18} color="#DB2777" />
+                    <Text style={styles.genderBlockedText}>{t('card.soloChicasOnly')}</Text>
+                </View>
+            );
+        }
         if (isFull) {
             if (!canJoinWaitlist(item.fecha_evento)) {
                 return (
@@ -338,13 +353,33 @@ function PlanCardInner({
                         )}
 
                         <View style={styles.topRow}>
-                            <View style={styles.categoryTag}>
-                                <Text style={styles.categoryTagText}>{categoryLabel}</Text>
+                            <View style={styles.topLeftTags}>
+                                {mainCategoryLabel ? (
+                                    <View style={styles.mainCategoryTag}>
+                                        <Text style={styles.mainCategoryText}>{mainCategoryLabel}</Text>
+                                    </View>
+                                ) : null}
+                                {subCategoryLabel ? (
+                                    <View style={styles.subCategoryTag}>
+                                        <Text style={styles.subCategoryText}>{subCategoryLabel}</Text>
+                                    </View>
+                                ) : null}
+                                {isSoloChicas ? (
+                                    <View style={styles.soloChicasTag}>
+                                        <Ionicons name="female" size={11} color="#FFF" />
+                                        <Text style={styles.soloChicasTagText}>{t('createplan.soloChicasTitle')}</Text>
+                                    </View>
+                                ) : null}
                             </View>
                             <View style={styles.topRightGroup}>
                                 {!isCreator && onReport ? (
-                                    <TouchableOpacity style={styles.circleBtn} onPress={() => onReport(item.id)} hitSlop={8}>
-                                        <Ionicons name="flag-outline" size={17} color="#FFF" />
+                                    <TouchableOpacity
+                                        style={styles.circleBtnSmall}
+                                        onPress={() => onReport(item.id)}
+                                        hitSlop={8}
+                                        activeOpacity={0.85}
+                                    >
+                                        <Ionicons name="flag" size={16} color="#FECACA" />
                                     </TouchableOpacity>
                                 ) : null}
                                 <TouchableOpacity style={styles.circleBtn} onPress={handleShare} hitSlop={8}>
@@ -382,7 +417,7 @@ function PlanCardInner({
                             <View style={styles.friendsBanner}>
                                 <Ionicons name="people" size={16} color={PRIMARY_DARK} />
                                 <Text style={styles.friendsBannerText}>
-                                    {t('card.friendsJoined', { n: friendsInPlan })}
+                                    {t(friendsInPlan === 1 ? 'card.friendsJoinedOne' : 'card.friendsJoinedMany', { n: friendsInPlan })}
                                 </Text>
                             </View>
                         )}
@@ -406,18 +441,6 @@ function PlanCardInner({
                                 <Text style={styles.metaText} numberOfLines={1}>{item.nombre_ubicacion || t('card.location')}</Text>
                             </View>
                         </View>
-
-                        {sportPlan && (
-                            <View style={styles.futbolChip}>
-                                <View style={styles.futbolBall}>
-                                    <SportIcon sport={sportPlan.tipo} size={20} color="#FFF" />
-                                </View>
-                                <Text style={styles.futbolFormatText}>
-                                    {sportPlan.formato ?? t('sport.' + sportPlan.tipo)}
-                                </Text>
-                                <Text style={styles.futbolChipHint}>{t('sport.' + sportPlan.tipo)}</Text>
-                            </View>
-                        )}
 
                         {expanded && !onOpenDetail && (
                             <View style={styles.expandedSection}>
@@ -457,27 +480,61 @@ function PlanCardInner({
                             {t('card.participants')} · {participants.length}
                         </Text>
                         {participants.map((p: any) => (
-                            <TouchableOpacity
-                                key={p.id}
-                                style={styles.rosterRow}
-                                activeOpacity={0.8}
-                                onPress={() => {
-                                    setShowRoster(false);
-                                    router.push({ pathname: '/user-profile/[id]', params: { id: p.id } });
-                                }}
-                            >
-                                <Image
-                                    source={{ uri: p.avatar_url || avatarFallback(p.nombre) }}
-                                    style={[styles.rosterAvatar, p.isCreator && styles.stackAvatarCreator]}
-                                />
-                                <View style={{ flex: 1 }}>
-                                    <Text style={styles.rosterName}>{p.nombre || t('profile.user')}</Text>
-                                    {p.isCreator && (
-                                        <Text style={styles.rosterCreatorLabel}>{t('chat.host')}</Text>
-                                    )}
-                                </View>
-                                <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
-                            </TouchableOpacity>
+                            <View key={p.id} style={styles.rosterRowWrap}>
+                                <TouchableOpacity
+                                    style={[styles.rosterRow, { flex: 1 }]}
+                                    activeOpacity={0.8}
+                                    onPress={() => {
+                                        setShowRoster(false);
+                                        router.push({
+                                            pathname: '/user-profile/[id]',
+                                            params: { id: p.id },
+                                        });
+                                    }}
+                                >
+                                    <Image
+                                        source={{ uri: p.avatar_url || avatarFallback(p.nombre) }}
+                                        style={[styles.rosterAvatar, p.isCreator && styles.stackAvatarCreator]}
+                                    />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.rosterName}>{p.nombre || t('profile.user')}</Text>
+                                        {p.isCreator && (
+                                            <Text style={styles.rosterCreatorLabel}>{t('chat.host')}</Text>
+                                        )}
+                                    </View>
+                                    <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                                </TouchableOpacity>
+                                {isCreator && !p.isCreator && currentUserId && (
+                                    <TouchableOpacity
+                                        style={styles.rosterKickBtn}
+                                        onPress={() => {
+                                            Alert.alert(
+                                                t('planDetail.kickTitle'),
+                                                t('planDetail.kickMsg', { name: p.nombre || t('profile.user') }),
+                                                [
+                                                    { text: t('common.cancel'), style: 'cancel' },
+                                                    {
+                                                        text: t('planDetail.kickConfirm'),
+                                                        style: 'destructive',
+                                                        onPress: async () => {
+                                                            const { error } = await kickParticipant(
+                                                                item.id,
+                                                                p.id,
+                                                                currentUserId,
+                                                            );
+                                                            if (error) Alert.alert(t('feed.error'), error);
+                                                            else onParticipantsChanged?.();
+                                                            setShowRoster(false);
+                                                        },
+                                                    },
+                                                ],
+                                            );
+                                        }}
+                                    >
+                                        <Ionicons name="person-remove" size={20} color={DANGER} />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
                         ))}
                     </Pressable>
                 </Pressable>
@@ -512,6 +569,8 @@ const styles = StyleSheet.create({
     rosterHandle: { width: 40, height: 4, backgroundColor: '#E2E8F0', borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 14 },
     rosterTitle: { fontSize: 16, fontWeight: '900', color: INK, marginBottom: 12 },
     rosterRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+    rosterRowWrap: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+    rosterKickBtn: { padding: 10 },
     rosterAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: '#E3ECFB' },
     rosterName: { fontSize: 16, fontWeight: '700', color: INK },
     rosterCreatorLabel: { fontSize: 11, fontWeight: '700', color: '#B45309', marginTop: 2 },
@@ -519,11 +578,41 @@ const styles = StyleSheet.create({
     cardImage: { width: '100%', height: '100%' },
     imageShade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '70%' },
     fullVeil: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(185,28,28,0.28)' },
-    topRow: { position: 'absolute', top: 14, left: 14, right: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-    topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    categoryTag: { backgroundColor: 'rgba(255,255,255,0.95)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
-    categoryTagText: { color: PRIMARY_DARK, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.3 },
+    topRow: { position: 'absolute', top: 12, left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', zIndex: 4 },
+    topLeftTags: { flexDirection: 'column', alignItems: 'flex-start', gap: 5, flexShrink: 1, maxWidth: '62%' },
+    topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+    mainCategoryTag: {
+        backgroundColor: 'rgba(255,255,255,0.95)',
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 10,
+    },
+    mainCategoryText: {
+        color: PRIMARY_DARK,
+        fontSize: 10,
+        fontWeight: '900',
+        textTransform: 'uppercase',
+        letterSpacing: 0.4,
+    },
+    subCategoryTag: {
+        backgroundColor: 'rgba(255,255,255,0.88)',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 10,
+    },
+    subCategoryText: { color: '#334155', fontSize: 11, fontWeight: '700' },
+    soloChicasTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: 'rgba(219,39,119,0.92)',
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        borderRadius: 10,
+    },
+    soloChicasTagText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
     circleBtn: { backgroundColor: 'rgba(15,42,74,0.4)', width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center' },
+    circleBtnSmall: { backgroundColor: 'rgba(127,29,29,0.75)', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
     fullBadgeCenter: { position: 'absolute', top: 60, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: DANGER_DARK, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, transform: [{ rotate: '-4deg' }], elevation: 4, borderWidth: 2, borderColor: '#FFF' },
     fullBadgeCenterText: { color: '#FFF', fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
     imageBottomRow: { position: 'absolute', left: 16, right: 16, bottom: 14, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
@@ -579,6 +668,18 @@ const styles = StyleSheet.create({
     waitlistJoinText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
     fullClosedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: DANGER_BG, borderWidth: 1, borderColor: '#FECACA' },
     fullClosedText: { color: DANGER_DARK, fontWeight: '800', fontSize: 15 },
+    genderBlockedRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 14,
+        borderRadius: 16,
+        backgroundColor: '#FDF2F8',
+        borderWidth: 1,
+        borderColor: '#FBCFE8',
+    },
+    genderBlockedText: { color: '#DB2777', fontWeight: '800', fontSize: 14, flex: 1, textAlign: 'center' },
     friendsBanner: {
         flexDirection: 'row',
         alignItems: 'center',

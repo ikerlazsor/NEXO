@@ -28,6 +28,10 @@ import {
     type FriendRequest,
 } from '../lib/friends';
 import { useT } from '../lib/i18n';
+import { OPTIMIZED_LIST_PROPS } from '../lib/listConfig';
+import { ScreenKeys } from '../lib/screenState';
+import { useListScrollRestore } from '../hooks/useListScrollRestore';
+import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
 import {
     acceptPlanInvite,
     getIncomingPlanInvites,
@@ -53,6 +57,9 @@ export default function FriendsScreen() {
     const [activeTab, setActiveTab] = useState<TabKey>('friends');
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore<FriendProfile & { friendshipId: string }>(ScreenKeys.FRIENDS);
+    const { scrollRef: requestsScrollRef, onScroll: onRequestsScroll, scrollEventThrottle: requestsScrollThrottle } =
+        useScrollViewRestore(`${ScreenKeys.FRIENDS}-requests`);
     const [friends, setFriends] = useState<(FriendProfile & { friendshipId: string })[]>([]);
     const [incoming, setIncoming] = useState<FriendRequest[]>([]);
     const [outgoing, setOutgoing] = useState<FriendRequest[]>([]);
@@ -532,10 +539,14 @@ export default function FriendsScreen() {
                 </View>
             ) : activeTab === 'friends' ? (
                 <FlatList
+                    ref={listRef}
                     data={friends}
                     keyExtractor={(item) => item.friendshipId}
                     renderItem={renderFriend}
                     contentContainerStyle={styles.listFriends}
+                    onScroll={onScroll}
+                    scrollEventThrottle={scrollEventThrottle}
+                    {...OPTIMIZED_LIST_PROPS}
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />
                     }
@@ -544,6 +555,9 @@ export default function FriendsScreen() {
                 />
             ) : (
                 <ScrollView
+                    ref={requestsScrollRef}
+                    onScroll={onRequestsScroll}
+                    scrollEventThrottle={requestsScrollThrottle}
                     contentContainerStyle={styles.listRequests}
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />

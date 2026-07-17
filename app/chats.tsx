@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -21,12 +21,17 @@ import {
     View
 } from 'react-native';
 import { PlanImage } from '../components/PlanImage';
+import { useListScrollRestore } from '../hooks/useListScrollRestore';
 import { getDirectConversations } from '../lib/directChat';
 import { isGroupChatPlan } from '../lib/feedPlans';
 import { getAvatarUri, getFriends, type FriendProfile } from '../lib/friends';
 import { sendPlanInvite } from '../lib/planInvites';
 import { useT } from '../lib/i18n';
+import { OPTIMIZED_LIST_PROPS } from '../lib/listConfig';
+import { ScreenKeys } from '../lib/screenState';
 import { resolvePlanImageSource } from '../lib/sports';
+import { getChatUnreadMap, markDirectChatRead, markPlanChatRead, subscribeChatUnread } from '../lib/chatUnread';
+import { isPlanChatAlive, runPlanLifecycleMaintenance } from '../lib/planLifecycle';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -40,10 +45,10 @@ type ChatRow = {
     title: string;
     image_url: string | null;
     kind: 'plan' | 'group' | 'direct';
-    /** Para chats directos: id del otro usuario (ruta /direct-chat/[peerId]). */
     peerId?: string;
     ultimoTexto: string;
     lastAt: string;
+    unread: number;
 };
 
 export default function MyChatsScreen() {
@@ -58,12 +63,36 @@ export default function MyChatsScreen() {
     const [selectedFriends, setSelectedFriends] = useState<Set<string>>(new Set());
     const [loadingFriends, setLoadingFriends] = useState(false);
     const [creatingGroup, setCreatingGroup] = useState(false);
+    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const hasDataRef = useRef(false);
+    const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore<ChatRow>(ScreenKeys.CHATS);
 
     useFocusEffect(
         useCallback(() => {
             fetchMyChats();
         }, [])
     );
+
+    useEffect(() => {
+        supabase.auth.getUser().then(({ data: { user } }) => setCurrentUserId(user?.id ?? null));
+    }, []);
+
+    useEffect(() => {
+        const unsub = subscribeChatUnread(() => {
+            void fetchMyChats();
+        });
+        return unsub;
+    }, []);
+
+    useEffect(() => {
+        const channel = supabase
+            .channel(`chats-unread-${Math.random().toString(36).slice(2, 9)}`)
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensajes' }, () => {
+                void fetchMyChats();
+            })
+            .subscribe();
+        return () => { supabase.removeChannel(channel); };
+    }, []);
 
     const formatPreview = (msg: { tipo: string; contenido: string; emisor_id: string }, names: Record<string, string>) => {
         const nombre = names[msg.emisor_id] || t('chats.user');
@@ -81,13 +110,16 @@ export default function MyChatsScreen() {
 
     const fetchMyChats = async () => {
         try {
-            if (!refreshing && chats.length === 0) setLoading(true);
+            if (!refreshing && chats.length === 0 && !hasDataRef.current) setLoading(true);
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            const [{ data: myParts }, directConversations] = await Promise.all([
+            void runPlanLifecycleMaintenance();
+
+            const [{ data: myParts }, directConversations, unreadMap] = await Promise.all([
                 supabase.from('participantes').select('plan_id').eq('usuario_id', user.id).eq('estado', 'aceptado'),
                 getDirectConversations(user.id).catch(() => []),
+                getChatUnreadMap(user.id),
             ]);
 
             const planIds = [...new Set((myParts ?? []).map((p) => p.plan_id))].filter(Boolean);
@@ -96,12 +128,13 @@ export default function MyChatsScreen() {
             if (planIds.length > 0) {
                 const { data: plans, error: plansError } = await supabase
                     .from('planes')
-                    .select('id, titulo, imagen_url, categoria, creador_id, creado_en')
+                    .select('id, titulo, imagen_url, categoria, creador_id, creado_en, fecha_evento, chat_eliminado_en')
                     .in('id', planIds);
 
                 if (plansError) throw plansError;
 
-                const ids = (plans ?? []).map((p) => p.id);
+                const alivePlans = (plans ?? []).filter((p) => isPlanChatAlive(p));
+                const ids = alivePlans.map((p) => p.id);
                 const msgLimit = Math.min(Math.max(ids.length * 4, 40), 300);
 
                 let lastMsgs: any[] = [];
@@ -130,7 +163,7 @@ export default function MyChatsScreen() {
                     (profiles ?? []).forEach((pr) => { names[pr.id] = pr.nombre; });
                 }
 
-                planRows = (plans ?? []).map((p) => {
+                planRows = alivePlans.map((p) => {
                     const ult = lastByPlan.get(p.id);
                     return {
                         id: p.id,
@@ -139,6 +172,7 @@ export default function MyChatsScreen() {
                         kind: isGroupChatPlan(p) ? 'group' as const : 'plan' as const,
                         ultimoTexto: ult ? formatPreview(ult, names) : t('chats.noMessages'),
                         lastAt: ult?.creado_en ?? p.creado_en ?? '',
+                        unread: unreadMap.plans[p.id] ?? 0,
                     };
                 });
             }
@@ -156,6 +190,7 @@ export default function MyChatsScreen() {
                       )
                     : t('chats.noMessages'),
                 lastAt: c.lastMessage?.creado_en ?? '',
+                unread: unreadMap.directs[c.peerId] ?? 0,
             }));
 
             const rows = [...planRows, ...directRows].sort(
@@ -163,6 +198,7 @@ export default function MyChatsScreen() {
             );
 
             setChats(rows);
+            hasDataRef.current = rows.length > 0;
         } catch (error) {
             console.error('Error cargando mis chats:', error);
         } finally {
@@ -313,28 +349,46 @@ export default function MyChatsScreen() {
                 </TouchableOpacity>
             </View>
 
-            {loading && !refreshing ? (
+            {loading && !refreshing && chats.length === 0 ? (
                 <View style={styles.loading}>
                     <ActivityIndicator size="large" color={PRIMARY_DARK} />
                 </View>
-            ) : (
-                <FlatList
-                    data={chats}
-                    keyExtractor={(item) => item.id.toString()}
-                    ListEmptyComponent={renderEmpty}
-                    contentContainerStyle={chats.length === 0 ? { flex: 1 } : styles.listContent}
-                    refreshControl={
-                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />
-                    }
-                    renderItem={({ item }) => (
+            ) : null}
+            <FlatList
+                ref={listRef}
+                data={chats}
+                keyExtractor={(item) => item.id.toString()}
+                ListEmptyComponent={!loading ? renderEmpty : null}
+                contentContainerStyle={chats.length === 0 && !loading ? { flex: 1 } : styles.listContent}
+                onScroll={onScroll}
+                scrollEventThrottle={scrollEventThrottle}
+                {...OPTIMIZED_LIST_PROPS}
+                refreshControl={
+                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />
+                }
+                renderItem={({ item }) => (
                         <TouchableOpacity
                             style={styles.chatCard}
                             activeOpacity={0.85}
-                            onPress={() =>
-                                item.kind === 'direct' && item.peerId
-                                    ? router.push(`/direct-chat/${item.peerId}`)
-                                    : router.push(`/chat/${item.id}`)
-                            }
+                            onPress={() => {
+                                if (currentUserId && item.unread > 0) {
+                                    if (item.kind === 'direct' && item.peerId) {
+                                        void markDirectChatRead(currentUserId, item.peerId);
+                                    } else {
+                                        void markPlanChatRead(currentUserId, item.id);
+                                    }
+                                    setChats((prev) =>
+                                        prev.map((c) =>
+                                            c.id === item.id && c.kind === item.kind ? { ...c, unread: 0 } : c,
+                                        ),
+                                    );
+                                }
+                                if (item.kind === 'direct' && item.peerId) {
+                                    router.push(`/direct-chat/${item.peerId}`);
+                                } else {
+                                    router.push(`/chat/${item.id}`);
+                                }
+                            }}
                         >
                             {item.kind === 'direct' ? (
                                 <Image
@@ -367,12 +421,19 @@ export default function MyChatsScreen() {
                                 <Text style={styles.lastMsg} numberOfLines={1}>{item.ultimoTexto}</Text>
                             </View>
                             <View style={styles.chevronWrap}>
-                                <Ionicons name="chevron-forward" size={16} color={PRIMARY_DARK} />
+                                {item.unread > 0 ? (
+                                    <View style={styles.unreadBadge}>
+                                        <Text style={styles.unreadText}>
+                                            {item.unread > 9 ? '9+' : item.unread}
+                                        </Text>
+                                    </View>
+                                ) : (
+                                    <Ionicons name="chevron-forward" size={16} color={PRIMARY_DARK} />
+                                )}
                             </View>
                         </TouchableOpacity>
                     )}
                 />
-            )}
 
             <Modal visible={showCreateGroup} animationType="slide" transparent>
                 <Pressable style={styles.modalOverlay} onPress={Keyboard.dismiss}>
@@ -479,6 +540,16 @@ const styles = StyleSheet.create({
     chatInfo: { flex: 1, marginLeft: 14 },
     chatTitle: { fontSize: 16, fontWeight: '800', color: INK, marginBottom: 3 },
     lastMsg: { fontSize: 14, color: '#94A3B8' },
+    unreadBadge: {
+        minWidth: 22,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: '#EF4444',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 6,
+    },
+    unreadText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
     chevronWrap: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EEF3FB', justifyContent: 'center', alignItems: 'center' },
     emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
     emptyIconBg: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center', marginBottom: 20, elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },

@@ -13,6 +13,7 @@ import {
     View,
 } from 'react-native';
 import { LangPicker } from '../components/LangPicker';
+import { deleteAccount } from '../lib/profile';
 import { useT } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
 
@@ -45,13 +46,32 @@ export default function SettingsScreen() {
     const router = useRouter();
     const { t, lang, setLang } = useT();
     const [notifications, setNotifications] = useState(true);
-
-    const soon = () => Alert.alert(t('settings.soon'), t('settings.soonMsg'));
+    const [deleting, setDeleting] = useState(false);
 
     const handleLogout = () => {
         Alert.alert(t('settings.logout'), t('settings.logoutConfirm'), [
             { text: t('common.cancel'), style: 'cancel' },
             { text: t('common.yes'), style: 'destructive', onPress: async () => { await supabase.auth.signOut(); router.replace('/login'); } },
+        ]);
+    };
+
+    const confirmDeleteAccount = () => {
+        Alert.alert(t('profile.deleteAccountTitle'), t('profile.deleteAccountMsg'), [
+            { text: t('profile.cancel'), style: 'cancel' },
+            {
+                text: t('profile.deleteAccountConfirm'),
+                style: 'destructive',
+                onPress: async () => {
+                    setDeleting(true);
+                    const { error } = await deleteAccount();
+                    setDeleting(false);
+                    if (error) {
+                        Alert.alert(t('profile.error'), t('profile.deleteAccountError') + (error ? `\n${error}` : ''));
+                        return;
+                    }
+                    router.replace('/login');
+                },
+            },
         ]);
     };
 
@@ -84,15 +104,22 @@ export default function SettingsScreen() {
                     <View style={styles.divider} />
                     <Row icon="ban-outline" label={t('settings.blockedAccounts')} onPress={() => router.push('/blocked-accounts')} />
                     <View style={styles.divider} />
-                    <Row icon="diamond-outline" label={t('settings.nexoPlus')} onPress={soon} />
+                    <Row icon="diamond-outline" label={t('settings.nexoPlus')} onPress={() => router.push('/nexo-plus')} />
                     <View style={styles.divider} />
-                    <Row icon="shield-checkmark-outline" label={t('settings.terms')} onPress={soon} />
+                    <Row icon="shield-checkmark-outline" label={t('settings.terms')} onPress={() => router.push('/terms')} />
                     <View style={styles.divider} />
-                    <Row icon="help-circle-outline" label={t('settings.helpCenter')} onPress={soon} />
+                    <Row icon="help-circle-outline" label={t('settings.helpCenter')} onPress={() => router.push('/help-center')} />
                 </View>
 
                 <View style={[styles.card, { marginTop: 16 }]}>
                     <Row icon="log-out-outline" label={t('settings.logout')} color={DANGER} onPress={handleLogout} />
+                    <View style={styles.divider} />
+                    <Row
+                        icon="trash-outline"
+                        label={deleting ? t('profile.deletingAccount') : t('profile.deleteAccountTitle')}
+                        color={DANGER}
+                        onPress={deleting ? undefined : confirmDeleteAccount}
+                    />
                 </View>
             </ScrollView>
         </View>

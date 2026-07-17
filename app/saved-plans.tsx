@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -14,8 +14,11 @@ import {
     View
 } from 'react-native';
 import { PlanCard, type Membership } from '../components/PlanCard';
+import { useListScrollRestore } from '../hooks/useListScrollRestore';
 import { deletePlanCompletely } from '../lib/deletePlan';
 import { useT } from '../lib/i18n';
+import { OPTIMIZED_LIST_PROPS } from '../lib/listConfig';
+import { ScreenKeys } from '../lib/screenState';
 import {
     isAcceptedParticipant,
     mapEstadoToMembership,
@@ -23,6 +26,9 @@ import {
     promoteWaitlist,
     resolveJoinEstado,
 } from '../lib/participants';
+import { canJoinPlanByGender } from '../lib/soloChicas';
+import { canJoinMorePlans } from '../lib/planLimits';
+import type { Genero } from '../lib/profileFields';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -38,15 +44,25 @@ export default function SavedPlansScreen() {
     const [savedPlans, setSavedPlans] = useState<any[]>([]);
     const [membershipMap, setMembershipMap] = useState<Record<string, Membership>>({});
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(null);
+    const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.SAVED_PLANS);
+    const hasDataRef = useRef(false);
 
     useFocusEffect(useCallback(() => { fetchSavedData(); }, []));
 
     const fetchSavedData = async () => {
         try {
-            setLoading(true);
+            if (!hasDataRef.current) setLoading(true);
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
             setCurrentUserId(user.id);
+
+            const { data: myProfile } = await supabase
+                .from('perfiles')
+                .select('genero')
+                .eq('id', user.id)
+                .maybeSingle();
+            setCurrentUserGenero((myProfile?.genero as Genero) ?? null);
 
             const { data: savedData } = await supabase
                 .from('planes_guardados')
@@ -81,6 +97,7 @@ export default function SavedPlansScreen() {
             });
 
             setSavedPlans(formatted);
+            hasDataRef.current = formatted.length > 0;
 
             const map: Record<string, Membership> = {};
             (joinedData || []).forEach((p: any) => {
@@ -99,6 +116,17 @@ export default function SavedPlansScreen() {
         if (!currentUserId) return;
         const plan = savedPlans.find(p => p.id === planId);
         if (!plan) return;
+
+        if (!canJoinPlanByGender(plan, currentUserGenero)) {
+            Alert.alert(t('feed.error'), t('card.soloChicasOnly'));
+            return;
+        }
+
+        const limitCheck = await canJoinMorePlans(currentUserId, planId);
+        if (!limitCheck.allowed) {
+            Alert.alert(t('feed.error'), t('feed.planLimitReached', { max: limitCheck.max }));
+            return;
+        }
 
         const estado = resolveJoinEstado({
             requiere_aprobacion: plan.requiere_aprobacion,
@@ -166,16 +194,21 @@ export default function SavedPlansScreen() {
                 <View style={styles.headerRight}><Text style={styles.badgeText}>{savedPlans.length}</Text></View>
             </View>
 
-            {loading ? <ActivityIndicator style={{ marginTop: 50 }} color={PRIMARY_DARK} /> : (
+            <View style={{ flex: 1 }}>
                 <FlatList
+                    ref={listRef}
                     data={savedPlans}
                     keyExtractor={(item) => item.id}
                     showsVerticalScrollIndicator={false}
+                    onScroll={onScroll}
+                    scrollEventThrottle={scrollEventThrottle}
+                    {...OPTIMIZED_LIST_PROPS}
                     renderItem={({ item, index }) => (
                         <PlanCard
                             item={item}
                             index={index}
                             currentUserId={currentUserId}
+                            userGenero={currentUserGenero}
                             membership={membershipMap[item.id] || 'none'}
                             isSaved={true}
                             onJoin={handleJoin}
@@ -189,18 +222,23 @@ export default function SavedPlansScreen() {
                     )}
                     contentContainerStyle={styles.list}
                     ListEmptyComponent={
+                        !loading ? (
                         <View style={styles.center}>
                             <View style={styles.emptyIconWrap}>
                                 <Ionicons name="heart-outline" size={48} color={PRIMARY} />
                             </View>
                             <Text style={styles.emptyTitle}>{t('saved.empty')}</Text>
-                            <TouchableOpacity style={styles.exploreBtn} onPress={() => router.replace('/(tabs)')}>
+                            <TouchableOpacity style={styles.exploreBtn} onPress={() => router.back()}>
                                 <Text style={styles.exploreBtnText}>{t('saved.explore')}</Text>
                             </TouchableOpacity>
                         </View>
+                        ) : null
                     }
                 />
-            )}
+                {loading && savedPlans.length === 0 ? (
+                    <ActivityIndicator style={{ position: 'absolute', alignSelf: 'center', top: 80 }} color={PRIMARY_DARK} />
+                ) : null}
+            </View>
         </View>
     );
 }

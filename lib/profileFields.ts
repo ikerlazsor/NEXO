@@ -8,6 +8,9 @@ export const GENERO_OPTIONS: Genero[] = [
     'prefiero_no_decir',
 ];
 
+/** Opciones reducidas solo para el registro inicial */
+export const ONBOARDING_GENERO_OPTIONS: Genero[] = ['masculino', 'femenino', 'otro'];
+
 export type HabitoConsumo = 'no' | 'ocasional' | 'si' | 'no_especificado';
 
 export const HABITO_BEBIDA_OPTIONS: HabitoConsumo[] = ['no_especificado', 'no', 'ocasional', 'si'];

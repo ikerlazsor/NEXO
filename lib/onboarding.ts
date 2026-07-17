@@ -6,6 +6,8 @@ import type { Genero } from './profileFields';
 export type OnboardingData = {
     age: number;
     genero: Genero;
+    avatar_url: string;
+    ambientes_preferidos: string[];
 };
 
 export async function fetchOnboardingStatus(userId: string): Promise<boolean> {
@@ -60,6 +62,9 @@ export async function saveOnboardingPreferences(
     const preferencePayload: Record<string, unknown> = {
         fecha_nacimiento: fechaNacimiento,
         genero: data.genero,
+        avatar_url: data.avatar_url,
+        ambientes_preferidos: data.ambientes_preferidos,
+        etiquetas: data.ambientes_preferidos,
         registro_completado: true,
     };
     if (nombre) preferencePayload.nombre = nombre;
@@ -99,10 +104,13 @@ export async function saveOnboardingPreferences(
         .updateUser({
             data: {
                 registro_completado: true,
+                onboarding_completed: true,
                 ...(nombre ? { nombre } : {}),
             },
         })
         .catch((e) => console.warn('saveOnboardingPreferences updateUser:', e));
+
+    await supabase.auth.refreshSession().catch(() => {});
 
     return { error: null };
 }

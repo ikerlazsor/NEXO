@@ -349,6 +349,9 @@ export default function LoginScreen() {
                                     autoCorrect={false}
                                     keyboardType="email-address"
                                     returnKeyType="next"
+                                    autoComplete="off"
+                                    textContentType={Platform.OS === 'ios' ? 'none' : 'emailAddress'}
+                                    importantForAutofill="no"
                                 />
                             </View>
                         </View>
@@ -367,6 +370,10 @@ export default function LoginScreen() {
                                     onBlur={() => setFocusedField(null)}
                                     secureTextEntry={!showPassword}
                                     autoCapitalize="none"
+                                    autoCorrect={false}
+                                    autoComplete="off"
+                                    textContentType={Platform.OS === 'ios' ? 'oneTimeCode' : 'password'}
+                                    importantForAutofill="no"
                                     returnKeyType="done"
                                     onSubmitEditing={handleAuth}
                                 />

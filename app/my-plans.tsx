@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -15,8 +15,11 @@ import {
     View,
 } from 'react-native';
 import { PlanImage } from '../components/PlanImage';
+import { useListScrollRestore } from '../hooks/useListScrollRestore';
 import { isFeedPlan } from '../lib/feedPlans';
 import { useT } from '../lib/i18n';
+import { OPTIMIZED_LIST_PROPS } from '../lib/listConfig';
+import { ScreenKeys } from '../lib/screenState';
 import { getPlanJoinRequestCount } from '../lib/notifications';
 import { isAcceptedParticipant } from '../lib/participants';
 import { resolvePlanImageSource } from '../lib/sports';
@@ -40,39 +43,77 @@ export default function MyPlansScreen() {
     const [plans, setPlans] = useState<any[]>([]);
     const [busyId, setBusyId] = useState<string | null>(null);
     const [pendingCount, setPendingCount] = useState(0);
+    const hasDataRef = useRef(false);
+    const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.MY_PLANS);
 
     useFocusEffect(useCallback(() => { fetchMyPlans(); }, []));
 
     const fetchMyPlans = async () => {
         try {
+            if (!hasDataRef.current) setLoading(true);
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) { router.replace('/login'); return; }
 
             const pending = await getPlanJoinRequestCount(user.id);
             setPendingCount(pending);
 
-            const { data } = await supabase
-                .from('planes')
-                .select('id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url))')
-                .eq('creador_id', user.id)
-                .order('fecha_evento', { ascending: true });
-
             const now = new Date();
             const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-            const formatted = (data || [])
+            const [createdRes, joinedRes] = await Promise.all([
+                supabase
+                    .from('planes')
+                    .select('id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url))')
+                    .eq('creador_id', user.id)
+                    .order('fecha_evento', { ascending: true }),
+                supabase
+                    .from('participantes')
+                    .select(`
+                        plan_id,
+                        planes (
+                            id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id,
+                            participantes ( usuario_id, estado, perfiles:usuario_id ( id, nombre, avatar_url ) )
+                        )
+                    `)
+                    .eq('usuario_id', user.id)
+                    .eq('estado', 'aceptado'),
+            ]);
+
+            const formatPlan = (p: any, role: 'creator' | 'member') => {
+                const parts = (p.participantes || []) as any[];
+                const accepted = parts.filter((x) => isAcceptedParticipant(x.estado));
+                const pendingReqs = role === 'creator'
+                    ? parts
+                        .filter((x) => x.estado === 'pendiente' && x.usuario_id !== user.id && x.perfiles)
+                        .map((x) => ({ ...x.perfiles, id: x.usuario_id }))
+                    : [];
+                return { ...p, joinedCount: accepted.length, pending: pendingReqs, role };
+            };
+
+            const created = (createdRes.data || [])
                 .filter((p: any) => isFeedPlan(p))
                 .filter((p: any) => !p.fecha_evento || new Date(p.fecha_evento) >= startOfToday)
-                .map((p: any) => {
-                    const parts = (p.participantes || []) as any[];
-                    const accepted = parts.filter(x => isAcceptedParticipant(x.estado));
-                    const pending = parts
-                        .filter(x => x.estado === 'pendiente' && x.usuario_id !== user.id && x.perfiles)
-                        .map(x => ({ ...x.perfiles, id: x.usuario_id }));
-                    return { ...p, joinedCount: accepted.length, pending };
-                });
+                .map((p) => formatPlan(p, 'creator'));
 
-            setPlans(formatted);
+            const joined = (joinedRes.data || [])
+                .map((row) => {
+                    const raw = row.planes;
+                    const plan = Array.isArray(raw) ? raw[0] : raw;
+                    if (!plan || plan.creador_id === user.id) return null;
+                    if (!isFeedPlan(plan)) return null;
+                    if (plan.fecha_evento && new Date(plan.fecha_evento) < startOfToday) return null;
+                    return formatPlan(plan, 'member');
+                })
+                .filter(Boolean) as any[];
+
+            const merged = [...created, ...joined].sort((a, b) => {
+                const da = a.fecha_evento ? new Date(a.fecha_evento).getTime() : 0;
+                const db = b.fecha_evento ? new Date(b.fecha_evento).getTime() : 0;
+                return da - db;
+            });
+
+            setPlans(merged);
+            hasDataRef.current = merged.length > 0;
         } catch (e) {
             console.error(e);
         } finally {
@@ -120,12 +161,20 @@ export default function MyPlansScreen() {
 
     const renderPlan = ({ item }: { item: any }) => {
         const isFull = item.joinedCount >= item.maximo_participantes;
+        const isCreator = item.role === 'creator';
         return (
             <View style={styles.card}>
                 <View style={styles.cardHeader}>
                     <PlanImage source={resolvePlanImageSource(item.imagen_url)} style={styles.thumb} recyclingKey={String(item.id)} />
                     <View style={{ flex: 1, marginLeft: 12 }}>
-                        <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
+                        <View style={styles.titleRow}>
+                            <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
+                            {!isCreator && (
+                                <View style={styles.memberTag}>
+                                    <Text style={styles.memberTagText}>{t('myplans.joined')}</Text>
+                                </View>
+                            )}
+                        </View>
                         <View style={styles.countRow}>
                             <Ionicons name="people" size={14} color={isFull ? '#B8860B' : PRIMARY_DARK} />
                             <Text style={[styles.countText, isFull && { color: '#B8860B' }]}>{item.joinedCount}/{item.maximo_participantes}</Text>
@@ -137,6 +186,7 @@ export default function MyPlansScreen() {
                     </TouchableOpacity>
                 </View>
 
+                {isCreator ? (
                 <View style={styles.requestsBlock}>
                     {item.pending.length === 0 ? (
                         <Text style={styles.noRequestsText}>{t('myplans.noRequests')}</Text>
@@ -180,6 +230,7 @@ export default function MyPlansScreen() {
                         </>
                     )}
                 </View>
+                ) : null}
             </View>
         );
     };
@@ -204,14 +255,19 @@ export default function MyPlansScreen() {
                 <View style={{ width: 45 }} />
             </View>
 
-            {loading ? <ActivityIndicator style={{ marginTop: 50 }} color={PRIMARY_DARK} /> : (
+            <View style={{ flex: 1 }}>
                 <FlatList
+                    ref={listRef}
                     data={plans}
                     keyExtractor={(item) => item.id}
                     renderItem={renderPlan}
                     showsVerticalScrollIndicator={false}
+                    onScroll={onScroll}
+                    scrollEventThrottle={scrollEventThrottle}
+                    {...OPTIMIZED_LIST_PROPS}
                     contentContainerStyle={styles.list}
                     ListEmptyComponent={
+                        !loading ? (
                         <View style={styles.center}>
                             <View style={styles.emptyIconWrap}>
                                 <Ionicons name="calendar-outline" size={48} color={PRIMARY} />
@@ -221,9 +277,13 @@ export default function MyPlansScreen() {
                                 <Text style={styles.exploreBtnText}>{t('feed.create')}</Text>
                             </TouchableOpacity>
                         </View>
+                        ) : null
                     }
                 />
-            )}
+                {loading && plans.length === 0 ? (
+                    <ActivityIndicator style={{ position: 'absolute', alignSelf: 'center', top: 80 }} color={PRIMARY_DARK} />
+                ) : null}
+            </View>
         </View>
     );
 }
@@ -248,7 +308,10 @@ const styles = StyleSheet.create({
     card: { backgroundColor: '#FFF', borderRadius: 22, padding: 16, marginBottom: 16, elevation: 5, shadowColor: '#1E3A8A', shadowOpacity: 0.1, shadowRadius: 14, shadowOffset: { width: 0, height: 8 } },
     cardHeader: { flexDirection: 'row', alignItems: 'center' },
     thumb: { width: 54, height: 54, borderRadius: 16, backgroundColor: '#E3ECFB' },
-    cardTitle: { fontSize: 16, fontWeight: '800', color: INK },
+    cardTitle: { fontSize: 16, fontWeight: '800', color: INK, flex: 1 },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    memberTag: { backgroundColor: '#EFF6FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+    memberTagText: { fontSize: 10, fontWeight: '800', color: PRIMARY_DARK, textTransform: 'uppercase' },
     countRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 },
     countText: { fontSize: 13, fontWeight: '700', color: PRIMARY_DARK },
     fullTag: { marginLeft: 6, fontSize: 10, fontWeight: '900', color: '#B8860B', backgroundColor: '#FEF3C7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },

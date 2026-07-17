@@ -10,6 +10,7 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
+    Keyboard,
     Modal,
     Platform,
     Pressable,
@@ -19,9 +20,11 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
+    TouchableWithoutFeedback,
     View
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
+import { useListScrollRestore } from '../../hooks/useListScrollRestore';
 import { PlanCard, type Membership } from '../../components/PlanCard';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { LangPicker } from '../../components/LangPicker';
@@ -34,7 +37,15 @@ import { reportPlan } from '../../lib/reportPlan';
 import { debounce } from '../../lib/debounce';
 import { getProfileNotificationCount } from '../../lib/notifications';
 import { SPAIN_PROVINCES } from '../../lib/provinces';
-import { MAIN_CATEGORIES } from '../../lib/sports';
+import {
+    MAIN_CATEGORY_IDS,
+    MAIN_CATEGORY_ICONS,
+    normalizeMainCategory,
+    getPlanCategoryDisplay,
+} from '../../lib/categories';
+import { resolvePlanImageSource } from '../../lib/sports';
+import { getScreenFilters, ScreenKeys, setScreenFilters } from '../../lib/screenState';
+import { OPTIMIZED_LIST_PROPS } from '../../lib/listConfig';
 import { supabase } from '../../lib/supabase';
 import {
     isAcceptedParticipant,
@@ -43,6 +54,11 @@ import {
     promoteWaitlist,
     resolveJoinEstado,
 } from '../../lib/participants';
+import { canJoinPlanByGender, isSoloChicasPlan } from '../../lib/soloChicas';
+import { canJoinMorePlans } from '../../lib/planLimits';
+import { getUnreadChatCount, subscribeChatUnread } from '../../lib/chatUnread';
+import { isPlanActiveForFeed, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
+import type { Genero } from '../../lib/profileFields';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -51,18 +67,16 @@ const BG_TOP = '#DCEBFF';
 const BG_BOTTOM = '#F2F7FF';
 
 const CATEGORY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-    'Todos': 'apps',
-    'Deporte': 'fitness',
-    'Fiesta': 'sparkles',
-    'Solo chicas': 'female',
-    'Estudio': 'book',
-    'Tapas': 'restaurant',
+    Todos: 'apps',
+    ...Object.fromEntries(
+        MAIN_CATEGORY_IDS.map((id) => [id, MAIN_CATEGORY_ICONS[id] as keyof typeof Ionicons.glyphMap]),
+    ),
 };
 
 const DATE_KEYS = ['all', 'today', 'week', 'month'];
 
 const FEED_PLAN_COLUMNS =
-    'id, titulo, imagen_url, categoria, tipo_deporte, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion, estado';
+    'id, titulo, imagen_url, categoria, tipo_deporte, solo_chicas, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion, estado';
 
 const EmptySearch = ({ onClear }: { onClear: () => void }) => {
     const { t } = useT();
@@ -83,10 +97,17 @@ const EmptySearch = ({ onClear }: { onClear: () => void }) => {
 export default function HomeScreen() {
     const router = useRouter();
     const { t, lang, setLang } = useT();
-    const [search, setSearch] = useState('');
-    const [selectedFilter, setSelectedFilter] = useState('Todos');
-    const [zoneFilter, setZoneFilter] = useState('');
-    const [dateFilter, setDateFilter] = useState('all');
+    const savedFilters = getScreenFilters<{
+        search: string;
+        selectedFilter: string;
+        zoneFilter: string;
+        dateFilter: string;
+    }>(ScreenKeys.FEED);
+
+    const [search, setSearch] = useState(savedFilters.search ?? '');
+    const [selectedFilter, setSelectedFilter] = useState(savedFilters.selectedFilter ?? 'Todos');
+    const [zoneFilter, setZoneFilter] = useState(savedFilters.zoneFilter ?? '');
+    const [dateFilter, setDateFilter] = useState(savedFilters.dateFilter ?? 'all');
     const [showZoneModal, setShowZoneModal] = useState(false);
     const [showDateModal, setShowDateModal] = useState(false);
     const [showCategoryModal, setShowCategoryModal] = useState(false);
@@ -95,20 +116,32 @@ export default function HomeScreen() {
     const [membershipMap, setMembershipMap] = useState<Record<string, Membership>>({});
     const [savedPlans, setSavedPlans] = useState<string[]>([]);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
     const [notifCount, setNotifCount] = useState(0);
+    const [chatUnreadCount, setChatUnreadCount] = useState(0);
     const [notifBreakdown, setNotifBreakdown] = useState({
         friendRequests: 0,
         planRequests: 0,
         planInvites: 0,
     });
     const [friendIds, setFriendIds] = useState<Set<string>>(new Set());
+    const plansRef = useRef<any[]>([]);
+    const currentUserIdRef = useRef<string | null>(null);
+    const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.FEED);
 
-    const CATEGORY_FILTER_OPTIONS = ['Todos', 'Fiesta', 'Tapas', 'Deporte', 'Estudio', 'Solo chicas'];
+    const CATEGORY_FILTER_OPTIONS = ['Todos', ...MAIN_CATEGORY_IDS];
 
-    const fetchData = async () => {
+    useEffect(() => {
+        setScreenFilters(ScreenKeys.FEED, { search, selectedFilter, zoneFilter, dateFilter });
+    }, [search, selectedFilter, zoneFilter, dateFilter]);
+
+    plansRef.current = plans;
+    currentUserIdRef.current = currentUserId;
+
+    const fetchData = useCallback(async () => {
         let finished = false;
         const safetyTimer = setTimeout(() => {
             if (!finished) {
@@ -118,17 +151,17 @@ export default function HomeScreen() {
         }, 12000);
 
         try {
-            if (!refreshing && plans.length === 0) setLoading(true);
+            const hasCachedPlans = plansRef.current.length > 0;
+            if (!refreshing && !hasCachedPlans) setLoading(true);
 
-            const todayStart = new Date();
-            todayStart.setHours(0, 0, 0, 0);
-            const todayIso = todayStart.toISOString();
+            const nowIso = new Date().toISOString();
+            void runPlanLifecycleMaintenance();
 
             const userPromise = getAuthUser();
             const plansPromise = supabase
                 .from('planes')
                 .select(FEED_PLAN_COLUMNS)
-                .or(`fecha_evento.is.null,fecha_evento.gte.${todayIso}`)
+                .or(`fecha_evento.is.null,fecha_evento.gte.${nowIso}`)
                 .order('fecha_evento', { ascending: true })
                 .limit(100);
 
@@ -157,8 +190,9 @@ export default function HomeScreen() {
 
             const userExtrasPromise = user
                 ? Promise.all([
-                    supabase.from('perfiles').select('avatar_url').eq('id', user.id).maybeSingle(),
+                    supabase.from('perfiles').select('avatar_url, genero').eq('id', user.id).maybeSingle(),
                     getProfileNotificationCount(user.id),
+                    getUnreadChatCount(user.id),
                     supabase.from('participantes').select('plan_id, estado').eq('usuario_id', user.id),
                     supabase.from('planes_guardados').select('plan_id').eq('usuario_id', user.id),
                     getFriends(user.id),
@@ -199,9 +233,11 @@ export default function HomeScreen() {
             setPlans(formattedPlans);
 
             if (user && userExtras) {
-                const [profileRes, notifs, participantsRes, savedRes, friendsData] = userExtras;
+                const [profileRes, notifs, chatUnread, participantsRes, savedRes, friendsData] = userExtras;
                 setAvatarUrl(profileRes.data?.avatar_url || user.user_metadata?.avatar_url || null);
+                setCurrentUserGenero((profileRes.data?.genero as Genero) ?? null);
                 setNotifCount(notifs.total);
+                setChatUnreadCount(chatUnread);
                 setNotifBreakdown({
                     friendRequests: notifs.friendRequests,
                     planRequests: notifs.planRequests,
@@ -217,6 +253,7 @@ export default function HomeScreen() {
                 setSavedPlans(savedRes.data?.map((s) => s.plan_id) || []);
             } else {
                 setNotifCount(0);
+                setChatUnreadCount(0);
                 setNotifBreakdown({ friendRequests: 0, planRequests: 0, planInvites: 0 });
                 setFriendIds(new Set());
             }
@@ -228,10 +265,18 @@ export default function HomeScreen() {
             setLoading(false);
             setRefreshing(false);
         }
-    };
+    }, [refreshing]);
 
-    const fetchDataRef = useRef<() => Promise<void>>(async () => {});
+    const fetchDataRef = useRef(fetchData);
     fetchDataRef.current = fetchData;
+
+    useEffect(() => {
+        const unsub = subscribeChatUnread(() => {
+            const uid = currentUserIdRef.current;
+            if (uid) void getUnreadChatCount(uid).then(setChatUnreadCount);
+        });
+        return unsub;
+    }, []);
 
     useEffect(() => {
         const debouncedRefresh = debounce(() => {
@@ -242,16 +287,35 @@ export default function HomeScreen() {
         channel
             .on('postgres_changes', { event: '*', schema: 'public', table: 'planes' }, debouncedRefresh)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'participantes' }, debouncedRefresh)
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensajes' }, () => {
+                const uid = currentUserIdRef.current;
+                if (uid) void getUnreadChatCount(uid).then(setChatUnreadCount);
+            })
             .subscribe();
         return () => { supabase.removeChannel(channel); };
     }, []);
 
-    useFocusEffect(useCallback(() => { fetchData(); }, []));
+    useFocusEffect(useCallback(() => {
+        void fetchData();
+        const uid = currentUserIdRef.current;
+        if (uid) void getUnreadChatCount(uid).then(setChatUnreadCount);
+    }, [fetchData]));
 
     const handleJoin = async (planId: string) => {
         if (!currentUserId) return;
         const plan = plans.find(p => p.id === planId);
         if (!plan) return;
+
+        if (!canJoinPlanByGender(plan, currentUserGenero)) {
+            Alert.alert(t('feed.error'), t('card.soloChicasOnly'));
+            return;
+        }
+
+        const limitCheck = await canJoinMorePlans(currentUserId, planId);
+        if (!limitCheck.allowed) {
+            Alert.alert(t('feed.error'), t('feed.planLimitReached', { max: limitCheck.max }));
+            return;
+        }
 
         const estado = resolveJoinEstado({
             requiere_aprobacion: plan.requiere_aprobacion,
@@ -392,6 +456,30 @@ export default function HomeScreen() {
         router.push({ pathname: '/create-plan', params: { editId: planId } });
     };
 
+    const renderPlanItem = useCallback(
+        ({ item, index }: { item: any; index: number }) => (
+            <PlanCard
+                item={item}
+                index={index}
+                currentUserId={currentUserId}
+                userGenero={currentUserGenero}
+                membership={membershipMap[item.id] || 'none'}
+                isSaved={savedPlans.includes(item.id)}
+                friendIds={friendIds}
+                onJoin={handleJoin}
+                onLeave={handleLeave}
+                onDelete={handleDeletePlan}
+                onEdit={handleEditPlan}
+                onToggleSave={handleSave}
+                onReport={currentUserId ? handleReportPlan : undefined}
+                onOpenDetail={(planId) => router.push({ pathname: '/plan/[id]', params: { id: planId } })}
+                onParticipantsChanged={() => void fetchDataRef.current()}
+                router={router}
+            />
+        ),
+        [currentUserId, currentUserGenero, membershipMap, savedPlans, friendIds, router],
+    );
+
     const matchesDate = (plan: any) => {
         if (dateFilter === 'all') return true;
         if (!plan.fecha_evento) return false;
@@ -407,9 +495,6 @@ export default function HomeScreen() {
         return d >= startOfToday && d <= limit;
     };
 
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
     const filteredPlans = useMemo(() => {
         const isMinePlan = (p: any) =>
             String(p.creador_id) === String(currentUserId)
@@ -418,9 +503,9 @@ export default function HomeScreen() {
 
         return plans
             .filter(p =>
-                isFeedPlan(p)
-                && (!p.fecha_evento || new Date(p.fecha_evento) >= startOfToday)
-                && (selectedFilter === 'Todos' || p.categoria === selectedFilter)
+                isPlanActiveForFeed(p)
+                && (!isSoloChicasPlan(p) || currentUserGenero === 'femenino')
+                && (selectedFilter === 'Todos' || normalizeMainCategory(p.categoria) === selectedFilter || p.categoria === selectedFilter)
                 && (p.titulo || '').toLowerCase().includes(search.toLowerCase())
                 && (zoneFilter.trim() === '' || (p.nombre_ubicacion || '').toLowerCase().includes(zoneFilter.trim().toLowerCase()))
                 && matchesDate(p)
@@ -433,11 +518,12 @@ export default function HomeScreen() {
                 const bd = b.fecha_evento ? new Date(b.fecha_evento).getTime() : Infinity;
                 return ad - bd;
             });
-    }, [plans, currentUserId, membershipMap, selectedFilter, search, zoneFilter, dateFilter, startOfToday.getTime()]);
+    }, [plans, currentUserId, currentUserGenero, membershipMap, selectedFilter, search, zoneFilter, dateFilter]);
 
     const activeDateLabel = t('date.' + dateFilter);
 
     return (
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <View style={styles.container}>
             <StatusBar barStyle="dark-content" />
             <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
@@ -506,49 +592,43 @@ export default function HomeScreen() {
                 >
                     <Ionicons name="grid" size={15} color={selectedFilter !== 'Todos' ? '#FFF' : PRIMARY_DARK} />
                     <Text style={[styles.quickFilterText, selectedFilter !== 'Todos' ? { color: '#FFF' } : null]} numberOfLines={1}>
-                        {selectedFilter !== 'Todos' ? t('cat.' + selectedFilter) : t('feed.category')}
+                        {selectedFilter !== 'Todos' ? t(`cat.main.${selectedFilter}`) : t('feed.category')}
                     </Text>
                 </TouchableOpacity>
             </View>
 
-            {loading && !refreshing ? (
-                <ActivityIndicator size="large" color={PRIMARY_DARK} style={{ marginTop: 50 }} />
-            ) : (
+            <View style={styles.listWrap}>
                 <FlatList
+                    ref={listRef}
                     data={filteredPlans}
                     keyExtractor={(item) => item.id}
+                    extraData={{ membershipMap, savedPlans, friendIds }}
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
-                    initialNumToRender={6}
-                    maxToRenderPerBatch={5}
-                    windowSize={7}
-                    removeClippedSubviews={Platform.OS === 'android'}
-                    ListEmptyComponent={<EmptySearch onClear={() => { setSearch(''); setSelectedFilter('Todos'); setZoneFilter(''); setDateFilter('all'); }} />}
+                    onScroll={onScroll}
+                    scrollEventThrottle={scrollEventThrottle}
+                    {...OPTIMIZED_LIST_PROPS}
+                    ListEmptyComponent={!loading ? <EmptySearch onClear={() => { setSearch(''); setSelectedFilter('Todos'); setZoneFilter(''); setDateFilter('all'); }} /> : null}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchData} tintColor={PRIMARY_DARK} />}
-                    renderItem={({ item, index }) => (
-                        <PlanCard
-                            item={item}
-                            index={index}
-                            currentUserId={currentUserId}
-                            membership={membershipMap[item.id] || 'none'}
-                            isSaved={savedPlans.includes(item.id)}
-                            friendIds={friendIds}
-                            onJoin={handleJoin}
-                            onLeave={handleLeave}
-                            onDelete={handleDeletePlan}
-                            onEdit={handleEditPlan}
-                            onToggleSave={handleSave}
-                            onReport={currentUserId ? handleReportPlan : undefined}
-                            onOpenDetail={(planId) => router.push({ pathname: '/plan/[id]', params: { id: planId } })}
-                            router={router}
-                        />
-                    )}
+                    renderItem={renderPlanItem}
                 />
-            )}
+                {loading && !refreshing && plans.length === 0 ? (
+                    <View style={styles.listLoadingOverlay}>
+                        <ActivityIndicator size="large" color={PRIMARY_DARK} />
+                    </View>
+                ) : null}
+            </View>
 
             <View style={styles.floatingBar}>
                 <TouchableOpacity style={styles.floatingBtn} onPress={() => router.push('/chats')} activeOpacity={0.9}>
                     <Ionicons name="chatbubbles" size={24} color="#fff" />
+                    {chatUnreadCount > 0 && (
+                        <View style={styles.chatNotifBadge}>
+                            <Text style={styles.chatNotifText}>
+                                {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+                            </Text>
+                        </View>
+                    )}
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.floatingBtnCenter} onPress={() => router.push('/search-profiles')} activeOpacity={0.9}>
                     <Ionicons name="search" size={24} color="#fff" />
@@ -574,7 +654,9 @@ export default function HomeScreen() {
                                 >
                                     <View style={styles.categoryOptionRow}>
                                         <Ionicons name={CATEGORY_ICONS[cat] || 'apps'} size={18} color={active ? PRIMARY_DARK : '#64748B'} />
-                                        <Text style={[styles.dateOptionText, active && { color: PRIMARY_DARK, fontWeight: '800' }]}>{t('cat.' + cat)}</Text>
+                                        <Text style={[styles.dateOptionText, active && { color: PRIMARY_DARK, fontWeight: '800' }]}>
+                                            {cat === 'Todos' ? t('cat.Todos') : t(`cat.main.${cat}`)}
+                                        </Text>
                                     </View>
                                     {active && <Ionicons name="checkmark-circle" size={20} color={PRIMARY_DARK} />}
                                 </TouchableOpacity>
@@ -648,6 +730,7 @@ export default function HomeScreen() {
                 </Pressable>
             </Modal>
         </View>
+        </TouchableWithoutFeedback>
     );
 }
 
@@ -686,6 +769,8 @@ const styles = StyleSheet.create({
     quickFilterText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 12, flexShrink: 1 },
 
     listContent: { paddingHorizontal: 20, paddingBottom: 130, paddingTop: 6 },
+    listWrap: { flex: 1 },
+    listLoadingOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', paddingTop: 40 },
 
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: 60, paddingHorizontal: 20 },
     emptyIconWrap: { width: 110, height: 110, borderRadius: 55, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center', elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
@@ -718,7 +803,23 @@ const styles = StyleSheet.create({
         borderRadius: 18,
         justifyContent: 'center',
         alignItems: 'center',
+        position: 'relative',
     },
+    chatNotifBadge: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        minWidth: 18,
+        height: 18,
+        borderRadius: 9,
+        backgroundColor: '#EF4444',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 4,
+        borderWidth: 2,
+        borderColor: INK,
+    },
+    chatNotifText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
     floatingBtnCenter: {
         width: 52,
         height: 52,

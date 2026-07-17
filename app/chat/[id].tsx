@@ -23,11 +23,20 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PlanImage } from '../../components/PlanImage';
 import { uploadChatFile } from '../../lib/chatUpload';
+import { markPlanChatRead } from '../../lib/chatUnread';
 import { getAvatarUri, getFriends, type FriendProfile } from '../../lib/friends';
+import { kickParticipant } from '../../lib/kickParticipant';
 import { isUserCreatedGroupChat, updateGroupChatPhoto, uploadGroupChatPhoto } from '../../lib/groupChat';
 import { useT } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { sendPlanInvite } from '../../lib/planInvites';
+import {
+    formatCountdown,
+    getChatExpiryMs,
+    isGroupOrChatPlan,
+    isPlanChatAlive,
+    runPlanLifecycleMaintenance,
+} from '../../lib/planLifecycle';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { supabase } from '../../lib/supabase';
 
@@ -111,6 +120,8 @@ export default function ChatScreen() {
     const [hasMore, setHasMore] = useState(true);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [accessDenied, setAccessDenied] = useState(false);
+    const [planFechaEvento, setPlanFechaEvento] = useState<string | null>(null);
+    const [chatExpiryLabel, setChatExpiryLabel] = useState<string | null>(null);
 
     const [recording, setRecording] = useState<Audio.Recording | null>(null);
     const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -161,7 +172,7 @@ export default function ChatScreen() {
         }
 
         (parts ?? []).forEach((p: any) => {
-            if (p.estado === 'pendiente') return;
+            if (p.estado !== 'aceptado') return;
             const uid = p.usuario_id as string;
             if (!uid || byId.has(uid)) return;
             const profile = normalizeProfile(p.perfiles as Message['perfiles']);
@@ -450,9 +461,11 @@ export default function ChatScreen() {
 
                 setCurrentUserId(user.id);
 
+                void runPlanLifecycleMaintenance();
+
                 const { data: planData, error: planError } = await supabase
                     .from('planes')
-                    .select('titulo, imagen_url, creador_id, categoria')
+                    .select('titulo, imagen_url, creador_id, categoria, fecha_evento, chat_eliminado_en')
                     .eq('id', planId)
                     .single();
 
@@ -462,15 +475,24 @@ export default function ChatScreen() {
                     return;
                 }
 
+                if (!isPlanChatAlive(planData)) {
+                    Alert.alert(t('chat.errorTitle'), t('chat.expired'));
+                    router.back();
+                    return;
+                }
+
+                setPlanFechaEvento(planData.fecha_evento ?? null);
+
                 const { data: membership } = await supabase
                     .from('participantes')
-                    .select('usuario_id')
+                    .select('usuario_id, estado')
                     .eq('plan_id', planId)
                     .eq('usuario_id', user.id)
                     .maybeSingle();
 
                 const isCreator = planData.creador_id === user.id;
-                if (!membership && !isCreator) {
+                const canAccessChat = isCreator || membership?.estado === 'aceptado';
+                if (!canAccessChat) {
                     setAccessDenied(true);
                     setPlanName(planData.titulo);
                     setPlanImage(planData.imagen_url);
@@ -496,6 +518,7 @@ export default function ChatScreen() {
 
                 setMessages(initialMessages);
                 setHasMore(initialMessages.length >= PAGE_SIZE);
+                void markPlanChatRead(user.id, planId);
 
                 channel = supabase
                     .channel(`chat:${planId}`)
@@ -563,10 +586,49 @@ export default function ChatScreen() {
         }
     }, [planId, currentUserId, accessDenied]);
 
+    useEffect(() => {
+        if (!planFechaEvento || isGroupOrChatPlan({ categoria: planCategory })) {
+            setChatExpiryLabel(null);
+            return;
+        }
+        const end = new Date(planFechaEvento).getTime();
+        if (!Number.isFinite(end) || Date.now() < end) {
+            setChatExpiryLabel(null);
+            return;
+        }
+        const tick = () => {
+            const expiry = getChatExpiryMs(planFechaEvento);
+            if (!expiry) {
+                setChatExpiryLabel(null);
+                return;
+            }
+            const remaining = expiry - Date.now();
+            if (remaining <= 0) {
+                setChatExpiryLabel('0:00');
+                void runPlanLifecycleMaintenance();
+                Alert.alert(t('chat.errorTitle'), t('chat.expired'));
+                router.back();
+                return;
+            }
+            setChatExpiryLabel(formatCountdown(remaining));
+        };
+        tick();
+        const id = setInterval(tick, 1000);
+        return () => clearInterval(id);
+    }, [planFechaEvento, planCategory, router, t]);
+
     useFocusEffect(
         useCallback(() => {
             refreshChatHeader();
-        }, [refreshChatHeader])
+            if (currentUserId && planId && !accessDenied) {
+                void markPlanChatRead(currentUserId, planId);
+            }
+            return () => {
+                if (currentUserId && planId) {
+                    void markPlanChatRead(currentUserId, planId);
+                }
+            };
+        }, [refreshChatHeader, currentUserId, planId, accessDenied])
     );
 
     const sendMessage = async (
@@ -919,6 +981,15 @@ export default function ChatScreen() {
                 </TouchableOpacity>
             </View>
 
+            {chatExpiryLabel ? (
+                <View style={styles.expiryBanner}>
+                    <Ionicons name="time-outline" size={16} color="#B45309" />
+                    <Text style={styles.expiryBannerText}>
+                        {t('chat.expiresIn', { time: chatExpiryLabel })}
+                    </Text>
+                </View>
+            ) : null}
+
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1082,23 +1153,50 @@ export default function ChatScreen() {
                             keyExtractor={(m) => m.id}
                             style={{ maxHeight: 360 }}
                             renderItem={({ item: m }) => (
-                                <TouchableOpacity
-                                    style={styles.memberRow}
-                                    onPress={() => {
-                                        setShowMembers(false);
-                                        router.push({ pathname: '/user-profile/[id]', params: { id: m.id } });
-                                    }}
-                                >
-                                    <Image
-                                        source={{ uri: m.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.nombre)}&background=4DA6FF&color=fff` }}
-                                        style={styles.memberAvatar}
-                                    />
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.memberName}>{m.nombre}</Text>
-                                        {m.isCreator && <Text style={styles.memberCreator}>{t('chat.host')}</Text>}
-                                    </View>
-                                    <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
-                                </TouchableOpacity>
+                                <View style={styles.memberRowWrap}>
+                                    <TouchableOpacity
+                                        style={[styles.memberRow, { flex: 1 }]}
+                                        onPress={() => {
+                                            setShowMembers(false);
+                                            router.push({ pathname: '/user-profile/[id]', params: { id: m.id } });
+                                        }}
+                                    >
+                                        <Image
+                                            source={{ uri: m.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.nombre)}&background=4DA6FF&color=fff` }}
+                                            style={styles.memberAvatar}
+                                        />
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.memberName}>{m.nombre}</Text>
+                                            {m.isCreator && <Text style={styles.memberCreator}>{t('chat.host')}</Text>}
+                                        </View>
+                                        <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                                    </TouchableOpacity>
+                                    {creatorId === currentUserId && !m.isCreator && currentUserId && planId && (
+                                        <TouchableOpacity
+                                            style={styles.memberKickBtn}
+                                            onPress={() => {
+                                                Alert.alert(
+                                                    t('planDetail.kickTitle'),
+                                                    t('planDetail.kickMsg', { name: m.nombre }),
+                                                    [
+                                                        { text: t('common.cancel'), style: 'cancel' },
+                                                        {
+                                                            text: t('planDetail.kickConfirm'),
+                                                            style: 'destructive',
+                                                            onPress: async () => {
+                                                                const { error } = await kickParticipant(planId, m.id, currentUserId);
+                                                                if (error) Alert.alert(t('chat.errorTitle'), error);
+                                                                else await fetchParticipants(planId);
+                                                            },
+                                                        },
+                                                    ],
+                                                );
+                                            }}
+                                        >
+                                            <Ionicons name="person-remove" size={20} color="#EF4444" />
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
                             )}
                         />
 
@@ -1223,12 +1321,25 @@ const styles = StyleSheet.create({
     headerTitleContainer: { marginLeft: 10, flex: 1 },
     headerTitle: { fontSize: 17, fontWeight: '700', color: '#1E293B' },
     headerSubtitle: { fontSize: 12, color: '#64748B' },
+    expiryBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#FEF3C7',
+        borderBottomWidth: 1,
+        borderBottomColor: '#FCD34D',
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+    },
+    expiryBannerText: { flex: 1, color: '#92400E', fontWeight: '700', fontSize: 13 },
     membersBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EEF3FB', justifyContent: 'center', alignItems: 'center', marginLeft: 6 },
     membersOverlay: { flex: 1, backgroundColor: 'rgba(15,42,74,0.4)', justifyContent: 'flex-end' },
     membersSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 34 },
     membersHandle: { alignSelf: 'center', width: 44, height: 5, borderRadius: 3, backgroundColor: '#E2E8F0', marginBottom: 14 },
     membersTitle: { fontSize: 18, fontWeight: '900', color: '#0F2A4A', marginBottom: 12 },
     memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
+    memberRowWrap: { flexDirection: 'row', alignItems: 'center' },
+    memberKickBtn: { padding: 10 },
     memberAvatar: { width: 46, height: 46, borderRadius: 23, marginRight: 12, backgroundColor: '#E3ECFB' },
     memberName: { fontSize: 16, fontWeight: '700', color: '#0F2A4A' },
     memberCreator: { fontSize: 12, color: PRIMARY, fontWeight: '700', marginTop: 1 },

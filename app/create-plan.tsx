@@ -9,6 +9,7 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
+    Switch,
     Text,
     TextInput,
     TouchableOpacity,
@@ -19,30 +20,37 @@ import type MapView from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PlanCoverPicker } from '../components/PlanCoverPicker';
 import { PlanLocationPicker } from '../components/PlanLocationPicker';
-import { SportIcon } from '../components/SportIcon';
 import { useT } from '../lib/i18n';
-import type { DeporteFormato, DeporteTipo } from '../lib/sportFormations';
+import { canJoinMorePlans } from '../lib/planLimits';
 import {
-    DEFAULT_FORMAT,
-    DEPORTE_TIPOS,
-    FORMATS_BY_SPORT,
     MAIN_CATEGORIES,
-    deriveFormatoFromCapacity,
+    SUBCATEGORIES,
+    SUBCATEGORY_ICONS,
     encodeCoverImageKey,
     getCoverImages,
-    getMinPeopleForSport,
-    isDeporteTipo,
-    sportHasFormats,
-    type MainCategory,
-} from '../lib/sports';
+    getPlanCategoryDisplay,
+    normalizeSubcategory,
+    resolvePlanCategories,
+    type MainCategoryId,
+} from '../lib/categories';
+import type { Genero } from '../lib/profileFields';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
+const PRIMARY_DARK = '#2563EB';
 const PLACEHOLDER_COLOR = '#94A3B8';
 const DANGER = '#EF4444';
+const SOLO_PINK = '#DB2777';
+const SOLO_PINK_LIGHT = '#FDF2F8';
 
 const MAX_PEOPLE = 25;
-const MIN_PEOPLE_DEFAULT = 3;
+const MIN_PEOPLE = 2;
+/** No se puede crear un plan con menos de 30 minutos de margen. */
+const MIN_LEAD_MS = 30 * 60 * 1000;
+
+function minPlanDate(): Date {
+    return new Date(Date.now() + MIN_LEAD_MS);
+}
 
 export default function CreatePlanScreen() {
     const router = useRouter();
@@ -52,17 +60,17 @@ export default function CreatePlanScreen() {
     const [loading, setLoading] = useState(false);
 
     const [title, setTitle] = useState('');
-    const [category, setCategory] = useState<MainCategory>(MAIN_CATEGORIES[0]);
-    const [deporteTipo, setDeporteTipo] = useState<DeporteTipo>('futbol');
-    const [deporteFormato, setDeporteFormato] = useState<DeporteFormato>(DEFAULT_FORMAT.futbol);
+    const [category, setCategory] = useState<MainCategoryId>(MAIN_CATEGORIES[0]);
+    const [subcategory, setSubcategory] = useState<string>(SUBCATEGORIES[MAIN_CATEGORIES[0]][0]);
     const [coverIndex, setCoverIndex] = useState(0);
-    const categoryImages = getCoverImages(category, deporteTipo);
-    const selectedImage = categoryImages[coverIndex] ?? categoryImages[0];
+    const categoryImages = getCoverImages(category, subcategory);
     const [maxPeople, setMaxPeople] = useState(5);
     const [description, setDescription] = useState('');
     const [requiereAprobacion, setRequiereAprobacion] = useState(false);
+    const [soloChicas, setSoloChicas] = useState(false);
+    const [userGenero, setUserGenero] = useState<Genero | null>(null);
 
-    const [date, setDate] = useState(new Date());
+    const [date, setDate] = useState(() => minPlanDate());
     const [isPickerVisible, setPickerVisible] = useState(false); 
     const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
 
@@ -76,24 +84,29 @@ export default function CreatePlanScreen() {
     });
 
     useEffect(() => {
+        supabase.auth.getUser().then(async ({ data: { user } }) => {
+            if (!user) return;
+            const { data } = await supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle();
+            setUserGenero((data?.genero as Genero) ?? null);
+        });
+    }, []);
+
+    useEffect(() => {
         if (editId) {
             const loadPlanData = async () => {
                 const { data, error } = await supabase.from('planes').select('*').eq('id', editId).single();
                 if (data && !error) {
                     setTitle(data.titulo ?? '');
                     setDescription(data.descripcion ?? '');
-                    const loadedCategory = data.categoria;
-                    setCategory(MAIN_CATEGORIES.includes(loadedCategory) ? loadedCategory : 'Deporte');
-                    const tipo = isDeporteTipo(data.tipo_deporte) ? data.tipo_deporte : 'futbol';
-                    setDeporteTipo(tipo);
-                    const formato = deriveFormatoFromCapacity(tipo, data.maximo_participantes);
-                    if (formato) setDeporteFormato(formato);
-                    const min =
-                        loadedCategory === 'Deporte'
-                            ? getMinPeopleForSport(tipo, formato)
-                            : MIN_PEOPLE_DEFAULT;
-                    setMaxPeople(Math.min(MAX_PEOPLE, Math.max(min, data.maximo_participantes)));
+                    const resolved = resolvePlanCategories(data);
+                    if (resolved.main) {
+                        setCategory(resolved.main);
+                        setSubcategory(resolved.sub ?? SUBCATEGORIES[resolved.main][0]);
+                    }
+                    const loadedMax = Math.min(MAX_PEOPLE, Math.max(MIN_PEOPLE, data.maximo_participantes ?? 5));
+                    setMaxPeople(loadedMax);
                     setRequiereAprobacion(!!data.requiere_aprobacion);
+                    setSoloChicas(!!data.solo_chicas);
                     setDate(new Date(data.fecha_evento));
                     setLocation({
                         latitude: data.latitud || 40.416775,
@@ -110,32 +123,38 @@ export default function CreatePlanScreen() {
         if (!editId) {
             setCoverIndex(0);
         }
-    }, [category, deporteTipo, editId]);
+    }, [category, subcategory, editId]);
 
-    const minPeople =
-        category === 'Deporte'
-            ? getMinPeopleForSport(deporteTipo, sportHasFormats(deporteTipo) ? deporteFormato : null)
-            : MIN_PEOPLE_DEFAULT;
+    const selectMainCategory = (main: MainCategoryId) => {
+        setCategory(main);
+        setSubcategory(SUBCATEGORIES[main][0]);
+        setCoverIndex(0);
+    };
 
-    useEffect(() => {
-        if (!editId) {
-            setMaxPeople((prev) => Math.min(MAX_PEOPLE, Math.max(minPeople, prev)));
-        }
-    }, [category, deporteTipo, deporteFormato, minPeople, editId]);
+    const selectSubcategory = (sub: string) => {
+        setSubcategory(sub);
+        setCoverIndex(0);
+    };
 
-    const incrementPeople = () => {
+    const categoryLabel = getPlanCategoryDisplay({ categoria: category, tipo_deporte: subcategory }, t);
+
+    const incrementMax = () => {
         if (maxPeople < MAX_PEOPLE) setMaxPeople(maxPeople + 1);
     };
-    const decrementPeople = () => {
-        if (maxPeople > minPeople) setMaxPeople(maxPeople - 1);
+    const decrementMax = () => {
+        if (maxPeople > MIN_PEOPLE) setMaxPeople(maxPeople - 1);
     };
 
-    const spotsHint =
-        category === 'Deporte' && sportHasFormats(deporteTipo)
-            ? t('createplan.spotsHintSport', { sport: t('sport.' + deporteTipo), formato: deporteFormato, min: minPeople })
-            : t('createplan.spotsHint', { min: minPeople });
+    const spotsHint = t('createplan.spotsHintMax', { max: maxPeople });
 
     const handleConfirm = (selectedDate: Date) => {
+        const min = minPlanDate();
+        if (selectedDate.getTime() < min.getTime()) {
+            setDate(min);
+            setPickerVisible(false);
+            Alert.alert(t('createplan.incomplete'), t('createplan.minLeadTime'));
+            return;
+        }
         setDate(selectedDate);
         setPickerVisible(false);
     };
@@ -146,21 +165,34 @@ export default function CreatePlanScreen() {
     };
 
     // Guardar clave estable del asset (no URI local)
-    const getCoverImageKey = () => encodeCoverImageKey(category, deporteTipo, coverIndex);
+    const getCoverImageKey = () => encodeCoverImageKey(category, subcategory, coverIndex);
 
     const handleCreatePlan = async () => {
         if (!title.trim() || !description.trim()) {
             Alert.alert(t('createplan.incomplete'), t('createplan.incompleteMsg'));
             return;
         }
-        if (category === 'Deporte' && sportHasFormats(deporteTipo) && !deporteFormato) {
-            Alert.alert(t('createplan.incomplete'), t('createplan.needFormat'));
+        if (date.getTime() < minPlanDate().getTime()) {
+            Alert.alert(t('createplan.incomplete'), t('createplan.minLeadTime'));
+            return;
+        }
+        if (maxPeople < MIN_PEOPLE) {
+            Alert.alert(t('createplan.incomplete'), t('createplan.incompleteMsg'));
             return;
         }
         try {
             setLoading(true);
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
+
+            if (!editId) {
+                const limitCheck = await canJoinMorePlans(user.id);
+                if (!limitCheck.allowed) {
+                    Alert.alert(t('createplan.incomplete'), t('feed.planLimitReached', { max: limitCheck.max }));
+                    setLoading(false);
+                    return;
+                }
+            }
 
             const imageKey = getCoverImageKey();
 
@@ -176,7 +208,8 @@ export default function CreatePlanScreen() {
                 latitud: location.latitude,
                 longitud: location.longitude,
                 requiere_aprobacion: requiereAprobacion,
-                tipo_deporte: category === 'Deporte' ? deporteTipo : null,
+                solo_chicas: soloChicas,
+                tipo_deporte: subcategory,
             };
 
             const savePlan = async (payload: Record<string, unknown>) => {
@@ -233,12 +266,8 @@ export default function CreatePlanScreen() {
                 <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
                     <PlanCoverPicker
                         category={category}
-                        coverKey={category === 'Deporte' ? `${category}-${deporteTipo}` : category}
-                        categoryLabel={
-                            category === 'Deporte'
-                                ? `${t('cat.Deporte')} · ${t('sport.' + deporteTipo)}`
-                                : t('cat.' + category)
-                        }
+                        coverKey={`${category}-${subcategory}`}
+                        categoryLabel={categoryLabel}
                         images={categoryImages}
                         selectedIndex={coverIndex}
                         onSelectIndex={setCoverIndex}
@@ -247,79 +276,40 @@ export default function CreatePlanScreen() {
                     <View style={styles.categorySection}>
                         <Text style={styles.sectionTitle}>{t('createplan.category')}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catList}>
-                            {MAIN_CATEGORIES.map(cat => (
+                            {MAIN_CATEGORIES.map((cat) => (
                                 <TouchableOpacity
                                     key={cat}
-                                    onPress={() => { setCategory(cat); setCoverIndex(0); }}
+                                    onPress={() => selectMainCategory(cat)}
                                     style={[styles.catBtn, category === cat && styles.catBtnActive]}
                                 >
                                     <Text style={[styles.catText, category === cat && styles.catTextActive]}>
-                                        {t('cat.' + cat)}
+                                        {t(`cat.main.${cat}`)}
                                     </Text>
                                 </TouchableOpacity>
                             ))}
                         </ScrollView>
 
-                        {category === 'Deporte' && (
-                            <>
-                                <Text style={[styles.label, { marginTop: 16, marginBottom: 10 }]}>
-                                    {t('createplan.pickSport')}
-                                </Text>
-                                <View style={styles.sportGrid}>
-                                    {DEPORTE_TIPOS.map((sport) => (
-                                        <TouchableOpacity
-                                            key={sport}
-                                            onPress={() => {
-                                                setDeporteTipo(sport);
-                                                setCoverIndex(0);
-                                                const formats = FORMATS_BY_SPORT[sport];
-                                                if (formats?.length) {
-                                                    setDeporteFormato(formats.includes(deporteFormato) ? deporteFormato : formats[0]);
-                                                }
-                                            }}
-                                            style={[styles.sportBtn, deporteTipo === sport && styles.sportBtnActive]}
-                                        >
-                                            <SportIcon
-                                                sport={sport}
-                                                size={18}
-                                                color={deporteTipo === sport ? '#FFF' : PRIMARY}
-                                            />
-                                            <Text style={[styles.sportText, deporteTipo === sport && styles.sportTextActive]}>
-                                                {t('sport.' + sport)}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
-
-                                {sportHasFormats(deporteTipo) && (
-                                    <View style={{ marginTop: 16 }}>
-                                        <Text style={[styles.label, { marginBottom: 10 }]}>{t('futbol.format')}</Text>
-                                        <View style={styles.formatRow}>
-                                            {(FORMATS_BY_SPORT[deporteTipo] ?? []).map(f => (
-                                                <TouchableOpacity
-                                                    key={f}
-                                                    onPress={() => {
-                                                        setDeporteFormato(f);
-                                                        const newMin = getMinPeopleForSport(deporteTipo, f);
-                                                        setMaxPeople((prev) => Math.max(newMin, prev));
-                                                    }}
-                                                    style={[styles.formatBtn, deporteFormato === f && styles.formatBtnActive]}
-                                                >
-                                                    <SportIcon
-                                                        sport={deporteTipo}
-                                                        size={18}
-                                                        color={deporteFormato === f ? '#FFF' : PRIMARY}
-                                                    />
-                                                    <Text style={[styles.formatText, deporteFormato === f && styles.formatTextActive]}>
-                                                        {f}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            ))}
-                                        </View>
-                                    </View>
-                                )}
-                            </>
-                        )}
+                        <Text style={[styles.label, { marginTop: 16, marginBottom: 10 }]}>
+                            {t('createplan.pickSubcategory')}
+                        </Text>
+                        <View style={styles.subGrid}>
+                            {SUBCATEGORIES[category].map((sub) => (
+                                <TouchableOpacity
+                                    key={sub}
+                                    onPress={() => selectSubcategory(sub)}
+                                    style={[styles.subBtn, subcategory === sub && styles.subBtnActive]}
+                                >
+                                    <Ionicons
+                                        name={(SUBCATEGORY_ICONS[sub] ?? 'ellipse') as keyof typeof Ionicons.glyphMap}
+                                        size={18}
+                                        color={subcategory === sub ? '#FFF' : PRIMARY}
+                                    />
+                                    <Text style={[styles.subText, subcategory === sub && styles.subTextActive]}>
+                                        {t(`cat.sub.${sub}`)}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
                     </View>
 
                     <View style={styles.section}>
@@ -369,7 +359,7 @@ export default function CreatePlanScreen() {
                             onCancel={() => setPickerVisible(false)}
                             date={date}
                             is24Hour={true}
-                            minimumDate={new Date()}
+                            minimumDate={minPlanDate()}
                             maximumDate={maxDate}
                             confirmTextIOS={t('createplan.confirmDate')}
                             cancelTextIOS={t('createplan.cancelDate')}
@@ -385,17 +375,19 @@ export default function CreatePlanScreen() {
 
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>{t('createplan.spots')}</Text>
+
+                        <Text style={styles.spotsSubLabel}>{t('createplan.maxSpots')}</Text>
                         <View style={styles.peopleSelector}>
                             <TouchableOpacity
-                                onPress={decrementPeople}
-                                style={[styles.stepBtn, maxPeople <= minPeople && styles.stepBtnDisabled]}
-                                disabled={maxPeople <= minPeople}
+                                onPress={decrementMax}
+                                style={[styles.stepBtn, maxPeople <= MIN_PEOPLE && styles.stepBtnDisabled]}
+                                disabled={maxPeople <= MIN_PEOPLE}
                             >
-                                <Ionicons name="remove" size={24} color={maxPeople <= minPeople ? '#CBD5E1' : PRIMARY} />
+                                <Ionicons name="remove" size={24} color={maxPeople <= MIN_PEOPLE ? '#CBD5E1' : PRIMARY} />
                             </TouchableOpacity>
                             <Text style={styles.peopleNum}>{maxPeople}</Text>
                             <TouchableOpacity
-                                onPress={incrementPeople}
+                                onPress={incrementMax}
                                 style={[styles.stepBtn, maxPeople >= MAX_PEOPLE && styles.stepBtnDisabled]}
                                 disabled={maxPeople >= MAX_PEOPLE}
                             >
@@ -404,6 +396,26 @@ export default function CreatePlanScreen() {
                         </View>
                         <Text style={styles.limitsHint}>{spotsHint}</Text>
                     </View>
+
+                    {userGenero === 'femenino' ? (
+                        <View style={[styles.section, styles.soloChicasSection, soloChicas && styles.soloChicasSectionActive]}>
+                            <View style={styles.soloChicasRow}>
+                                <View style={styles.soloChicasIconWrap}>
+                                    <Ionicons name="female" size={22} color={soloChicas ? SOLO_PINK : '#94A3B8'} />
+                                </View>
+                                <View style={styles.soloChicasText}>
+                                    <Text style={styles.soloChicasTitle}>{t('createplan.soloChicasTitle')}</Text>
+                                    <Text style={styles.soloChicasDesc}>{t('createplan.soloChicasDesc')}</Text>
+                                </View>
+                                <Switch
+                                    value={soloChicas}
+                                    onValueChange={setSoloChicas}
+                                    trackColor={{ false: '#E2E8F0', true: '#F9A8D4' }}
+                                    thumbColor={soloChicas ? SOLO_PINK : '#FFF'}
+                                />
+                            </View>
+                        </View>
+                    ) : null}
 
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>{t('createplan.joinHow')}</Text>
@@ -472,6 +484,23 @@ const styles = StyleSheet.create({
     formatText: { color: '#64748B', fontWeight: '800', fontSize: 15 },
     formatTextActive: { color: '#FFF' },
     sportGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    subGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    subBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 14,
+        backgroundColor: '#F1F5F9',
+        borderWidth: 1.5,
+        borderColor: '#E2E8F0',
+        minWidth: '47%',
+        flexGrow: 1,
+    },
+    subBtnActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
+    subText: { color: '#64748B', fontWeight: '800', fontSize: 13, flex: 1 },
+    subTextActive: { color: '#FFF' },
     sportBtn: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -493,12 +522,36 @@ const styles = StyleSheet.create({
     stepBtn: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: PRIMARY, justifyContent: 'center', alignItems: 'center' },
     stepBtnDisabled: { borderColor: '#E2E8F0', backgroundColor: '#F8FAFC' },
     peopleNum: { fontSize: 28, fontWeight: '900', marginHorizontal: 35, color: '#1E293B' },
+    spotsSubLabel: { fontSize: 12, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },
     limitsHint: { textAlign: 'center', fontSize: 11, color: '#94A3B8', marginTop: 8 },
     joinTypeRow: { flexDirection: 'row', gap: 12 },
     joinTypeBtn: { flex: 1, alignItems: 'center', paddingVertical: 16, paddingHorizontal: 8, borderRadius: 16, backgroundColor: '#F8FAFC', borderWidth: 2, borderColor: '#E2E8F0' },
     joinTypeBtnActive: { borderColor: PRIMARY, backgroundColor: '#EFF6FF' },
     joinTypeTitle: { fontSize: 14, fontWeight: '800', color: '#64748B', marginTop: 8 },
     joinTypeDesc: { fontSize: 11, color: '#94A3B8', marginTop: 2, textAlign: 'center' },
+    soloChicasSection: {
+        backgroundColor: '#FFF',
+        borderWidth: 1.5,
+        borderColor: '#FCE7F3',
+    },
+    soloChicasSectionActive: {
+        backgroundColor: SOLO_PINK_LIGHT,
+        borderColor: '#F9A8D4',
+    },
+    soloChicasRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    soloChicasIconWrap: {
+        width: 44,
+        height: 44,
+        borderRadius: 14,
+        backgroundColor: '#FFF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: '#FBCFE8',
+    },
+    soloChicasText: { flex: 1 },
+    soloChicasTitle: { fontSize: 15, fontWeight: '800', color: '#831843' },
+    soloChicasDesc: { fontSize: 12, color: '#9D174D', marginTop: 3, lineHeight: 17 },
     footer: { position: 'absolute', bottom: 0, width: '100%', padding: 20, backgroundColor: '#FFF', borderTopWidth: 1, borderColor: '#F1F5F9' },
     createBtn: { backgroundColor: '#2563EB', padding: 18, borderRadius: 20, alignItems: 'center', elevation: 5, shadowColor: '#2563EB', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
     createBtnText: { color: '#FFF', fontWeight: '800', fontSize: 16, textTransform: 'uppercase', letterSpacing: 1 }

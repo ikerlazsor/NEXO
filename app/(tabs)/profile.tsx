@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { decode } from 'base64-arraybuffer';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -27,6 +27,8 @@ import { getFriendsCount } from '../../lib/friends';
 import { useT } from '../../lib/i18n';
 import { getProfileNotificationCount } from '../../lib/notifications';
 import { getAuthUser } from '../../lib/auth';
+import { formatCountdown } from '../../lib/planLifecycle';
+import { getPendingRatingPlans, type PendingRatingPlan } from '../../lib/ratings';
 import {
     deleteAccount,
     isUsernameTaken,
@@ -42,6 +44,7 @@ import { renderRatingStars } from '../../lib/profileRating';
 import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
 import { getUserBadges, type UserBadge } from '../../lib/badges';
 import { getBadgeStats } from '../../lib/badgeStats';
+import { perfEnd, perfStart, perfTimed } from '../../lib/perfLog';
 import {
     AFICIONES_OPTIONS,
     calcAge,
@@ -54,6 +57,8 @@ import {
     type ProfilePrivacy,
 } from '../../lib/profileFields';
 import { supabase } from '../../lib/supabase';
+import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
+import { ScreenKeys } from '../../lib/screenState';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -86,6 +91,8 @@ export default function ProfileScreen() {
     const [friendsCount, setFriendsCount] = useState(0);
     const [friendsNotifCount, setFriendsNotifCount] = useState(0);
     const [planRequests, setPlanRequests] = useState(0);
+    const [pendingRatings, setPendingRatings] = useState<PendingRatingPlan[]>([]);
+    const [nowTick, setNowTick] = useState(Date.now());
     const [aboutMe, setAboutMe] = useState('');
     const [isEditingAboutMe, setIsEditingAboutMe] = useState(false);
     const [deletingAccount, setDeletingAccount] = useState(false);
@@ -97,10 +104,12 @@ export default function ProfileScreen() {
     const [aficiones, setAficiones] = useState<string[]>([]);
     const [showAficionModal, setShowAficionModal] = useState(false);
     const [badges, setBadges] = useState<UserBadge[]>([]);
+    const [badgesLoading, setBadgesLoading] = useState(true);
     const [selectedBadge, setSelectedBadge] = useState<UserBadge | null>(null);
     const [privacy, setPrivacy] = useState<ProfilePrivacy>({ mostrar_edad: true, mostrar_genero: true, mostrar_bebida: true, mostrar_tabaco: true, mostrar_aficiones: true });
     const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>({});
     const cacheRef = useRef<string | null>(null);
+    const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(ScreenKeys.PROFILE);
 
     useFocusEffect(
         useCallback(() => {
@@ -108,48 +117,31 @@ export default function ProfileScreen() {
         }, [])
     );
 
-    const fetchFriendsStats = useCallback(async (userId: string) => {
-        try {
-            setFriendsCount(await getFriendsCount(userId));
-        } catch {
-            setFriendsCount(0);
-        }
-        try {
-            setStats(await getUserStats(userId));
-        } catch {
-            setStats(EMPTY_STATS);
-        }
-    }, []);
-
-    const fetchNotificationCounts = useCallback(async (userId: string) => {
-        try {
-            const counts = await getProfileNotificationCount(userId);
-            setFriendsNotifCount(counts.friendRequests + counts.planInvites);
-            setPlanRequests(counts.planRequests);
-        } catch {
-            setFriendsNotifCount(0);
-            setPlanRequests(0);
-        }
-    }, []);
-
-    useFocusEffect(
-        useCallback(() => {
-            if (user?.id) {
-                fetchFriendsStats(user.id);
-                fetchNotificationCounts(user.id);
-            }
-        }, [user?.id, fetchFriendsStats, fetchNotificationCounts])
-    );
+    useEffect(() => {
+        if (!pendingRatings.some((p) => p.phase === 'waiting')) return;
+        const id = setInterval(() => setNowTick(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, [pendingRatings]);
 
     const fetchUserData = async (silent = false) => {
+        perfStart('profile.total');
         const authUser = await getAuthUser();
         if (!authUser) return;
 
         setUser(authUser);
-        const [profile, userStats] = await Promise.all([
-            syncProfileFromAuth(authUser),
-            getUserStats(authUser.id),
+        if (!silent) setBadgesLoading(true);
+
+        const [profile, userStats, badgeStats, friendsCountVal, notifs, ratings] = await Promise.all([
+            perfTimed('profile.syncProfile', () => syncProfileFromAuth(authUser)),
+            perfTimed('profile.userStats', () => getUserStats(authUser.id)),
+            perfTimed('profile.badgeStats', () =>
+                getBadgeStats(authUser.id, { userCreatedAt: authUser.created_at }),
+            ),
+            perfTimed('profile.friendsCount', () => getFriendsCount(authUser.id)),
+            perfTimed('profile.notifications', () => getProfileNotificationCount(authUser.id)),
+            perfTimed('profile.ratings', () => getPendingRatingPlans(authUser.id)),
         ]);
+
         cacheRef.current = authUser.id;
 
         setNombre(profile.nombre);
@@ -165,11 +157,13 @@ export default function ProfileScreen() {
         setPrivacy(parsePrivacy(profile.perfil_gustos));
 
         setStats(userStats);
-        const badgeStats = await getBadgeStats(authUser.id);
+        setFriendsCount(friendsCountVal);
+        setFriendsNotifCount(notifs.friendRequests + notifs.planInvites);
+        setPlanRequests(notifs.planRequests);
+        setPendingRatings(ratings);
         setBadges(getUserBadges(badgeStats));
-
-        void fetchFriendsStats(authUser.id);
-        void fetchNotificationCounts(authUser.id);
+        setBadgesLoading(false);
+        perfEnd('profile.total');
     };
 
     const uploadImage = async (uri: string) => {
@@ -263,11 +257,6 @@ export default function ProfileScreen() {
         await updateProfileData({ fecha_nacimiento: birthDateFromAge(newAge) });
     };
 
-    const saveGenero = async (g: Genero) => {
-        setGenero(g);
-        await updateProfileData({ genero: g });
-    };
-
     const saveHabitos = async (bebida: HabitoConsumo, tabaco: HabitoConsumo) => {
         setHabitoBebida(bebida);
         setHabitoTabaco(tabaco);
@@ -358,6 +347,9 @@ export default function ProfileScreen() {
             </View>
 
             <ScrollView
+                ref={scrollRef}
+                onScroll={onScroll}
+                scrollEventThrottle={scrollEventThrottle}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scroll}
                 keyboardShouldPersistTaps="handled"
@@ -432,7 +424,69 @@ export default function ProfileScreen() {
                             <Text style={styles.statLabel}>{t('profile.friendsLabel')}</Text>
                         </TouchableOpacity>
                     </View>
+
+                    <TouchableOpacity
+                        style={styles.historyBtn}
+                        onPress={() => router.push('/plan-history')}
+                        activeOpacity={0.85}
+                    >
+                        <Ionicons name="time-outline" size={18} color={PRIMARY_DARK} />
+                        <Text style={styles.historyBtnText}>{t('history.title')}</Text>
+                        <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+                    </TouchableOpacity>
                 </View>
+
+                <Text style={styles.sectionHeading}>{t('ratings.section')}</Text>
+                {pendingRatings.length === 0 ? (
+                    <View style={styles.ratingsEmpty}>
+                        <Ionicons name="star-outline" size={22} color="#94A3B8" />
+                        <Text style={styles.ratingsEmptyText}>{t('ratings.empty')}</Text>
+                    </View>
+                ) : (
+                    <View style={styles.ratingsList}>
+                        {pendingRatings.map((item) => {
+                            const waiting = item.phase === 'waiting';
+                            const remaining = Math.max(0, item.unlockAt - nowTick);
+                            return (
+                                <TouchableOpacity
+                                    key={item.planId}
+                                    style={[styles.ratingCard, waiting ? styles.ratingCardWait : styles.ratingCardOpen]}
+                                    activeOpacity={waiting ? 1 : 0.85}
+                                    disabled={waiting}
+                                    onPress={() =>
+                                        router.push({ pathname: '/rate-plan', params: { planId: item.planId } })
+                                    }
+                                >
+                                    <View style={[styles.ratingIconWrap, waiting ? styles.ratingIconWait : styles.ratingIconOpen]}>
+                                        <Ionicons
+                                            name={waiting ? 'hourglass-outline' : 'star'}
+                                            size={18}
+                                            color={waiting ? '#B45309' : '#FFF'}
+                                        />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.ratingCardTitle} numberOfLines={1}>{item.titulo}</Text>
+                                        <Text style={styles.ratingCardSub}>
+                                            {waiting
+                                                ? t('ratings.unlockIn', { time: formatCountdown(remaining) })
+                                                : item.pendingCount === 0
+                                                  ? t('ratings.readyContinue')
+                                                  : item.pendingCount === 1
+                                                    ? t('ratings.readyToRateOne')
+                                                    : t('ratings.readyToRate', { n: item.pendingCount })}
+                                        </Text>
+                                    </View>
+                                    {!waiting && (
+                                        <View style={styles.ratingReadyBadge}>
+                                            <Text style={styles.ratingReadyText}>{item.pendingCount}</Text>
+                                        </View>
+                                    )}
+                                    {!waiting && <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />}
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                )}
 
                 {/* Quick actions */}
                 <Text style={styles.sectionHeading}>{t('profile.quickActions')}</Text>
@@ -472,7 +526,6 @@ export default function ProfileScreen() {
                     habitoTabaco={habitoTabaco}
                     privacy={privacy}
                     onSaveAge={saveAge}
-                    onSaveGenero={saveGenero}
                     onSaveHabitos={saveHabitos}
                     onPrivacyChange={savePrivacy}
                 />
@@ -486,13 +539,17 @@ export default function ProfileScreen() {
                         </Text>
                     </View>
                     <View style={styles.badgeGrid}>
-                        {badges.map((badge) => (
-                            <BadgeTile
-                                key={badge.family.id}
-                                badge={badge}
-                                onPress={() => setSelectedBadge(badge)}
-                            />
-                        ))}
+                        {badgesLoading ? (
+                            <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 24, alignSelf: 'center' }} />
+                        ) : (
+                            badges.map((badge) => (
+                                <BadgeTile
+                                    key={badge.family.id}
+                                    badge={badge}
+                                    onPress={() => setSelectedBadge(badge)}
+                                />
+                            ))
+                        )}
                     </View>
                 </View>
 
@@ -748,13 +805,73 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         marginTop: 22,
         marginHorizontal: 16,
-        marginBottom: 20,
+        marginBottom: 12,
         backgroundColor: '#F8FAFC',
         borderRadius: 18,
         paddingVertical: 14,
         borderWidth: 1,
         borderColor: '#EEF3FB',
     },
+    historyBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginHorizontal: 16,
+        marginBottom: 20,
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        backgroundColor: '#EFF6FF',
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: '#DBEAFE',
+    },
+    historyBtnText: { flex: 1, fontSize: 14, fontWeight: '800', color: INK },
+    ratingsEmpty: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        backgroundColor: SURFACE,
+        marginHorizontal: 16,
+        marginBottom: 8,
+        padding: 14,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: BORDER,
+    },
+    ratingsEmptyText: { flex: 1, color: MUTED, fontWeight: '600', fontSize: 13 },
+    ratingsList: { marginHorizontal: 16, marginBottom: 8, gap: 8 },
+    ratingCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        backgroundColor: SURFACE,
+        borderRadius: 14,
+        padding: 14,
+        borderWidth: 1,
+    },
+    ratingCardWait: { borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
+    ratingCardOpen: { borderColor: '#BFDBFE', backgroundColor: '#EFF6FF' },
+    ratingIconWrap: {
+        width: 36,
+        height: 36,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    ratingIconWait: { backgroundColor: '#FDE68A' },
+    ratingIconOpen: { backgroundColor: PRIMARY_DARK },
+    ratingCardTitle: { fontSize: 14, fontWeight: '800', color: INK },
+    ratingCardSub: { fontSize: 12, fontWeight: '600', color: MUTED, marginTop: 2 },
+    ratingReadyBadge: {
+        minWidth: 22,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: '#EF4444',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 6,
+    },
+    ratingReadyText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
     statItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     statDivider: { width: 1, backgroundColor: '#E2E8F0', marginVertical: 4 },
     statValue: { fontSize: 20, fontWeight: '900', color: INK },

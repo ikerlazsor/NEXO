@@ -264,16 +264,20 @@ AS $$
 DECLARE
     v_usuario uuid := COALESCE(NEW.usuario_id, OLD.usuario_id);
 BEGIN
-    INSERT INTO public.estadisticas_usuario (usuario_id)
-    VALUES (v_usuario)
-    ON CONFLICT (usuario_id) DO NOTHING;
+    IF to_regprocedure('public.recalcular_badge_categorias(uuid)') IS NOT NULL THEN
+        PERFORM public.recalcular_badge_categorias(v_usuario);
+    ELSE
+        INSERT INTO public.estadisticas_usuario (usuario_id)
+        VALUES (v_usuario)
+        ON CONFLICT (usuario_id) DO NOTHING;
 
-    UPDATE public.estadisticas_usuario SET
-        numero_planes_realizados = (
-            SELECT COUNT(*) FROM public.historial_planes WHERE usuario_id = v_usuario
-        ),
-        actualizado_en = now()
-    WHERE usuario_id = v_usuario;
+        UPDATE public.estadisticas_usuario SET
+            numero_planes_realizados = (
+                SELECT COUNT(*) FROM public.historial_planes WHERE usuario_id = v_usuario
+            ),
+            actualizado_en = now()
+        WHERE usuario_id = v_usuario;
+    END IF;
 
     RETURN COALESCE(NEW, OLD);
 END;
@@ -543,21 +547,8 @@ DROP POLICY IF EXISTS "historial_insert_own" ON public.historial_planes;
 CREATE POLICY "historial_insert_own" ON public.historial_planes
     FOR INSERT TO authenticated WITH CHECK (usuario_id = auth.uid());
 
--- ---------- insignias (catálogo de solo lectura) ----------
-ALTER TABLE public.insignias ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "insignias_select" ON public.insignias;
-CREATE POLICY "insignias_select" ON public.insignias
-    FOR SELECT TO authenticated USING (true);
-
-ALTER TABLE public.requisitos_insignias ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "requisitos_insignias_select" ON public.requisitos_insignias;
-CREATE POLICY "requisitos_insignias_select" ON public.requisitos_insignias
-    FOR SELECT TO authenticated USING (true);
-
-ALTER TABLE public.usuario_insignias ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "usuario_insignias_select" ON public.usuario_insignias;
-CREATE POLICY "usuario_insignias_select" ON public.usuario_insignias
-    FOR SELECT TO authenticated USING (true);
+-- Insignias: la app usa lib/badges.ts + estadisticas_usuario (materializadas).
+-- Las tablas insignias / usuario_insignias se eliminan con badge-legacy-cleanup.sql.
 
 
 -- ============================================================

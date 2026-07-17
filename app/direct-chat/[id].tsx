@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { Audio, ResizeMode, Video } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { uploadChatFile } from '../../lib/chatUpload';
+import { markDirectChatRead } from '../../lib/chatUnread';
 import { useT } from '../../lib/i18n';
 import { supabase } from '../../lib/supabase';
 
@@ -267,6 +268,7 @@ export default function DirectChatScreen() {
 
                 setMessages(initialMessages);
                 setHasMore(initialMessages.length >= PAGE_SIZE);
+                void markDirectChatRead(user.id, otherUserId);
 
                 channel = supabase
                     .channel(`direct-chat:${user.id}:${otherUserId}`)
@@ -329,6 +331,19 @@ export default function DirectChatScreen() {
             if (channel) supabase.removeChannel(channel);
         };
     }, [otherUserId, router, fetchMessages]);
+
+    useFocusEffect(
+        useCallback(() => {
+            if (currentUserId && otherUserId) {
+                void markDirectChatRead(currentUserId, otherUserId);
+            }
+            return () => {
+                if (currentUserId && otherUserId) {
+                    void markDirectChatRead(currentUserId, otherUserId);
+                }
+            };
+        }, [currentUserId, otherUserId])
+    );
 
     const sendMessage = async (
         tipo: 'texto' | 'imagen' | 'video' | 'audio' = 'texto',

@@ -1,12 +1,34 @@
 import { supabase } from './supabase';
 
+type BlockCols = {
+    blocker: string;
+    blocked: string;
+};
+
+let cachedCols: BlockCols | null = null;
+
+async function resolveBlockColumns(): Promise<BlockCols> {
+    if (cachedCols) return cachedCols;
+
+    // Prefer origen/destino (esquema real de Nexo); fallback bloqueador/bloqueado
+    const probe = await supabase.from('bloqueos').select('*').limit(1);
+    const sample = probe.data?.[0] as Record<string, unknown> | undefined;
+    if (sample && 'usuario_origen_id' in sample) {
+        cachedCols = { blocker: 'usuario_origen_id', blocked: 'usuario_destino_id' };
+    } else {
+        cachedCols = { blocker: 'bloqueador_id', blocked: 'bloqueado_id' };
+    }
+    return cachedCols;
+}
+
 /** true si el usuario actual tiene bloqueado a otherUserId. */
 export async function isUserBlocked(currentUserId: string, otherUserId: string): Promise<boolean> {
+    const cols = await resolveBlockColumns();
     const { data, error } = await supabase
         .from('bloqueos')
         .select('id')
-        .eq('bloqueador_id', currentUserId)
-        .eq('bloqueado_id', otherUserId)
+        .eq(cols.blocker, currentUserId)
+        .eq(cols.blocked, otherUserId)
         .maybeSingle();
     if (error) return false;
     return !!data;
@@ -45,21 +67,23 @@ async function clearRelationshipOnBlock(userA: string, userB: string): Promise<v
 
 export async function blockUser(currentUserId: string, otherUserId: string): Promise<{ error: string | null }> {
     await clearRelationshipOnBlock(currentUserId, otherUserId);
+    const cols = await resolveBlockColumns();
 
     const { error } = await supabase.from('bloqueos').insert({
-        bloqueador_id: currentUserId,
-        bloqueado_id: otherUserId,
+        [cols.blocker]: currentUserId,
+        [cols.blocked]: otherUserId,
     });
     if (error && error.code !== '23505') return { error: error.message };
     return { error: null };
 }
 
 export async function unblockUser(currentUserId: string, otherUserId: string): Promise<{ error: string | null }> {
+    const cols = await resolveBlockColumns();
     const { error } = await supabase
         .from('bloqueos')
         .delete()
-        .eq('bloqueador_id', currentUserId)
-        .eq('bloqueado_id', otherUserId);
+        .eq(cols.blocker, currentUserId)
+        .eq(cols.blocked, otherUserId);
     return { error: error?.message ?? null };
 }
 
@@ -71,19 +95,20 @@ export interface BlockedProfile {
 }
 
 export async function getBlockedUsers(userId: string): Promise<BlockedProfile[]> {
+    const cols = await resolveBlockColumns();
     const { data, error } = await supabase
         .from('bloqueos')
-        .select('bloqueado_id, perfiles:bloqueado_id ( id, nombre, avatar_url, nombre_usuario )')
-        .eq('bloqueador_id', userId)
-        .order('creado_en', { ascending: false });
+        .select(`${cols.blocked}, perfiles:${cols.blocked} ( id, nombre, avatar_url, nombre_usuario )`)
+        .eq(cols.blocker, userId);
 
     if (error) throw error;
 
-    return (data ?? []).map((row) => {
+    return (data ?? []).map((row: any) => {
+        const blockedId = row[cols.blocked] as string;
         const raw = row.perfiles;
         const profile = Array.isArray(raw) ? raw[0] : raw;
         return {
-            id: (profile?.id as string) ?? (row.bloqueado_id as string),
+            id: (profile?.id as string) ?? blockedId,
             nombre: (profile?.nombre as string) || 'Usuario',
             avatar_url: (profile?.avatar_url as string | null) ?? null,
             nombre_usuario: (profile?.nombre_usuario as string | null) ?? null,

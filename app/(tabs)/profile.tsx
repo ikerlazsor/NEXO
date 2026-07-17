@@ -447,6 +447,7 @@ export default function ProfileScreen() {
                         {pendingRatings.map((item) => {
                             const waiting = item.phase === 'waiting';
                             const remaining = Math.max(0, item.unlockAt - nowTick);
+                            const openCount = Math.max(item.pendingCount, waiting ? item.totalPeers : item.pendingCount);
                             return (
                                 <TouchableOpacity
                                     key={item.planId}
@@ -475,8 +476,22 @@ export default function ProfileScreen() {
                                                     ? t('ratings.readyToRateOne')
                                                     : t('ratings.readyToRate', { n: item.pendingCount })}
                                         </Text>
+                                        {!waiting && item.totalPeers > 0 ? (
+                                            <View style={styles.ratingMiniTrack}>
+                                                <View
+                                                    style={[
+                                                        styles.ratingMiniFill,
+                                                        {
+                                                            width: `${Math.round(
+                                                                ((item.totalPeers - item.pendingCount) / item.totalPeers) * 100,
+                                                            )}%`,
+                                                        },
+                                                    ]}
+                                                />
+                                            </View>
+                                        ) : null}
                                     </View>
-                                    {!waiting && (
+                                    {!waiting && openCount > 0 && (
                                         <View style={styles.ratingReadyBadge}>
                                             <Text style={styles.ratingReadyText}>{item.pendingCount}</Text>
                                         </View>
@@ -862,6 +877,14 @@ const styles = StyleSheet.create({
     ratingIconOpen: { backgroundColor: PRIMARY_DARK },
     ratingCardTitle: { fontSize: 14, fontWeight: '800', color: INK },
     ratingCardSub: { fontSize: 12, fontWeight: '600', color: MUTED, marginTop: 2 },
+    ratingMiniTrack: {
+        height: 4,
+        backgroundColor: '#E2E8F0',
+        borderRadius: 2,
+        marginTop: 8,
+        overflow: 'hidden',
+    },
+    ratingMiniFill: { height: '100%', backgroundColor: PRIMARY_DARK, borderRadius: 2 },
     ratingReadyBadge: {
         minWidth: 22,
         height: 22,

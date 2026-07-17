@@ -3,19 +3,43 @@ import { getRatingPhase, getRatingsUnlockMs, isGroupOrChatPlan, runPlanLifecycle
 import { supabase } from './supabase';
 
 const RATING_SKIP_PREFIX = '@nexo_rating_skip:';
+const RATING_STARTED_PREFIX = '@nexo_rating_started:';
 
 function ratingSkipKey(userId: string, planId: string) {
     return `${RATING_SKIP_PREFIX}${userId}:${planId}`;
 }
 
+function ratingStartedKey(userId: string, planId: string) {
+    return `${RATING_STARTED_PREFIX}${userId}:${planId}`;
+}
+
 /** Marca el flujo como cerrado sin historial (p. ej. el plan no se hizo). */
 export async function dismissRatingWithoutHistory(userId: string, planId: string): Promise<void> {
-    await AsyncStorage.setItem(ratingSkipKey(userId, planId), new Date().toISOString());
+    await AsyncStorage.multiSet([
+        [ratingSkipKey(userId, planId), new Date().toISOString()],
+        [ratingStartedKey(userId, planId), ''],
+    ]);
+}
+
+export async function markRatingSessionStarted(userId: string, planId: string): Promise<void> {
+    await AsyncStorage.setItem(ratingStartedKey(userId, planId), '1');
+}
+
+export async function clearRatingSessionFlags(userId: string, planId: string): Promise<void> {
+    await AsyncStorage.multiRemove([
+        ratingSkipKey(userId, planId),
+        ratingStartedKey(userId, planId),
+    ]);
 }
 
 async function isRatingDismissed(userId: string, planId: string): Promise<boolean> {
     const v = await AsyncStorage.getItem(ratingSkipKey(userId, planId));
     return !!v;
+}
+
+export async function hasRatingSessionStarted(userId: string, planId: string): Promise<boolean> {
+    const v = await AsyncStorage.getItem(ratingStartedKey(userId, planId));
+    return v === '1';
 }
 
 export const POSITIVE_ASPECTS = [
@@ -33,6 +57,14 @@ export const NEGATIVE_ASPECTS = [
     'pasivo',
     'cancelo_tarde',
     'mal_ambiente',
+] as const;
+
+export const STAR_LABEL_KEYS = [
+    'ratings.star1',
+    'ratings.star2',
+    'ratings.star3',
+    'ratings.star4',
+    'ratings.star5',
 ] as const;
 
 export type AspectPositivo = (typeof POSITIVE_ASPECTS)[number];
@@ -55,6 +87,7 @@ export type PendingRatingPlan = {
     peers: RatingPeer[];
     ratedIds: string[];
     pendingCount: number;
+    totalPeers: number;
 };
 
 export type RatingDraft = {
@@ -72,6 +105,12 @@ export const EMPTY_RATING_DRAFT: RatingDraft = {
     aspectos_positivos: [],
     aspectos_negativos: [],
 };
+
+export function isPersonDraftComplete(draft: RatingDraft): boolean {
+    if (draft.asistencia === null) return false;
+    if (draft.asistencia === false) return true;
+    return draft.puntuacion_general >= 1 && draft.puntuacion_general <= 5 && !!draft.repetiria_experiencia;
+}
 
 async function getAcceptedPeers(planId: string, excludeUserId: string): Promise<RatingPeer[]> {
     const { data } = await supabase
@@ -94,22 +133,16 @@ async function getAcceptedPeers(planId: string, excludeUserId: string): Promise<
     return peers;
 }
 
-async function countAcceptedParticipants(planId: string): Promise<number> {
-    const { count } = await supabase
-        .from('participantes')
-        .select('id', { count: 'exact', head: true })
-        .eq('plan_id', planId)
-        .eq('estado', 'aceptado');
-    return count ?? 0;
-}
-
 /** Guarda el plan en el historial personal (recuerdo). Idempotente. */
 export async function addPlanToHistory(userId: string, planId: string): Promise<{ error: string | null }> {
     const { error } = await supabase.from('historial_planes').upsert(
         { usuario_id: userId, plan_id: planId },
         { onConflict: 'usuario_id,plan_id', ignoreDuplicates: true },
     );
-    if (!error) return { error: null };
+    if (!error) {
+        await clearRatingSessionFlags(userId, planId);
+        return { error: null };
+    }
 
     const { data: existing } = await supabase
         .from('historial_planes')
@@ -117,15 +150,19 @@ export async function addPlanToHistory(userId: string, planId: string): Promise<
         .eq('usuario_id', userId)
         .eq('plan_id', planId)
         .maybeSingle();
-    if (existing) return { error: null };
+    if (existing) {
+        await clearRatingSessionFlags(userId, planId);
+        return { error: null };
+    }
 
     const { error: insertError } = await supabase
         .from('historial_planes')
         .insert({ usuario_id: userId, plan_id: planId });
+    if (!insertError) await clearRatingSessionFlags(userId, planId);
     return { error: insertError?.message ?? error.message };
 }
 
-/** Planes terminados pendientes de flujo de valoración (no solo el creador). */
+/** Planes terminados pendientes de flujo de valoración (mín. 2 personas). */
 export async function getPendingRatingPlans(userId: string): Promise<PendingRatingPlan[]> {
     await runPlanLifecycleMaintenance();
 
@@ -154,7 +191,7 @@ export async function getPendingRatingPlans(userId: string): Promise<PendingRati
 
     const planIds = candidates.map((c) => c.planId);
 
-    const [{ data: done }, { data: history }, counts] = await Promise.all([
+    const [{ data: done }, { data: history }, { data: allParts }, peerLists, dismissedFlags] = await Promise.all([
         supabase
             .from('valoraciones')
             .select('plan_id, evaluado_id')
@@ -165,25 +202,29 @@ export async function getPendingRatingPlans(userId: string): Promise<PendingRati
             .select('plan_id')
             .eq('usuario_id', userId)
             .in('plan_id', planIds),
-        Promise.all(planIds.map((id) => countAcceptedParticipants(id))),
+        supabase
+            .from('participantes')
+            .select('plan_id')
+            .in('plan_id', planIds)
+            .eq('estado', 'aceptado'),
+        Promise.all(candidates.map((c) => getAcceptedPeers(c.planId, userId))),
+        Promise.all(planIds.map(async (id) => [id, await isRatingDismissed(userId, id)] as const)),
     ]);
 
-    const dismissedFlags = await Promise.all(
-        planIds.map(async (id) => [id, await isRatingDismissed(userId, id)] as const),
-    );
     const dismissed = new Set(dismissedFlags.filter(([, d]) => d).map(([id]) => id));
-
     const inHistory = new Set((history ?? []).map((h) => h.plan_id as string));
     const rated = new Set((done ?? []).map((r) => `${r.plan_id}:${r.evaluado_id}`));
 
+    const countByPlan = new Map<string, number>();
+    for (const row of allParts ?? []) {
+        countByPlan.set(row.plan_id, (countByPlan.get(row.plan_id) ?? 0) + 1);
+    }
+
     const result: PendingRatingPlan[] = [];
-    const peerLists = await Promise.all(candidates.map((c) => getAcceptedPeers(c.planId, userId)));
 
     candidates.forEach((c, i) => {
         if (inHistory.has(c.planId) || dismissed.has(c.planId)) return;
-
-        // Solo 1 integrante: sin valoración ni historial
-        if ((counts[i] ?? 0) < 2) return;
+        if ((countByPlan.get(c.planId) ?? 0) < 2) return;
 
         const peers = peerLists[i];
         if (peers.length === 0) return;
@@ -202,6 +243,7 @@ export async function getPendingRatingPlans(userId: string): Promise<PendingRati
             peers,
             ratedIds,
             pendingCount,
+            totalPeers: peers.length,
         });
     });
 
@@ -224,21 +266,28 @@ export async function submitValoracion(params: {
 }): Promise<{ error: string | null }> {
     const { planId, evaluadorId, evaluadoId, draft } = params;
 
-    const payload = !draft.asistencia
-        ? {
-              plan_id: planId,
-              evaluador_id: evaluadorId,
-              evaluado_id: evaluadoId,
-              asistencia: false,
-              puntuacion_general: null,
-              repetiria_experiencia: null,
-              aspectos_positivos: [],
-              aspectos_negativos: [],
-          }
-        : (() => {
-              if (draft.puntuacion_general < 1 || draft.puntuacion_general > 5) return null;
-              if (!draft.repetiria_experiencia) return null;
-              return {
+    if (evaluadorId === evaluadoId) return { error: 'self_rating' };
+    if (!isPersonDraftComplete(draft)) {
+        if (draft.asistencia === false) {
+            // ok
+        } else {
+            return { error: 'incomplete' };
+        }
+    }
+
+    const payload =
+        draft.asistencia === false
+            ? {
+                  plan_id: planId,
+                  evaluador_id: evaluadorId,
+                  evaluado_id: evaluadoId,
+                  asistencia: false,
+                  puntuacion_general: null,
+                  repetiria_experiencia: null,
+                  aspectos_positivos: [] as string[],
+                  aspectos_negativos: [] as string[],
+              }
+            : {
                   plan_id: planId,
                   evaluador_id: evaluadorId,
                   evaluado_id: evaluadoId,
@@ -248,13 +297,6 @@ export async function submitValoracion(params: {
                   aspectos_positivos: draft.aspectos_positivos,
                   aspectos_negativos: draft.aspectos_negativos,
               };
-          })();
-
-    if (!payload) {
-        if (!draft.asistencia) return { error: null };
-        if (draft.puntuacion_general < 1 || draft.puntuacion_general > 5) return { error: 'invalid_score' };
-        return { error: 'missing_repeat' };
-    }
 
     const { error: upsertError } = await supabase.from('valoraciones').upsert(payload, {
         onConflict: 'plan_id,evaluador_id,evaluado_id',

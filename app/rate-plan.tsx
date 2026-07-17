@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -11,6 +11,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { getAuthUser } from '../lib/auth';
 import { useT } from '../lib/i18n';
@@ -18,9 +19,13 @@ import {
     EMPTY_RATING_DRAFT,
     NEGATIVE_ASPECTS,
     POSITIVE_ASPECTS,
+    STAR_LABEL_KEYS,
     addPlanToHistory,
     dismissRatingWithoutHistory,
     getPendingRatingPlans,
+    hasRatingSessionStarted,
+    isPersonDraftComplete,
+    markRatingSessionStarted,
     submitValoracion,
     type PendingRatingPlan,
     type RatingDraft,
@@ -30,17 +35,41 @@ import {
 
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
+const MUTED = '#64748B';
 const BG_TOP = '#DCEBFF';
 const BG_BOTTOM = '#F2F7FF';
 const SUCCESS = '#16A34A';
 const DANGER = '#DC2626';
+const GOLD = '#F59E0B';
 
 type Stage = 'happened' | 'list' | 'person';
+
+function StepDots({ active }: { active: 1 | 2 | 3 }) {
+    return (
+        <View style={styles.stepsRow}>
+            {[1, 2, 3].map((n) => (
+                <View key={n} style={styles.stepItem}>
+                    <View style={[styles.stepDot, n <= active && styles.stepDotOn, n < active && styles.stepDotDone]}>
+                        {n < active ? (
+                            <Ionicons name="checkmark" size={12} color="#FFF" />
+                        ) : (
+                            <Text style={[styles.stepDotText, n <= active && styles.stepDotTextOn]}>{n}</Text>
+                        )}
+                    </View>
+                    {n < 3 ? <View style={[styles.stepLine, n < active && styles.stepLineOn]} /> : null}
+                </View>
+            ))}
+        </View>
+    );
+}
 
 export default function RatePlanScreen() {
     const router = useRouter();
     const { t } = useT();
+    const insets = useSafeAreaInsets();
+    const scrollRef = useRef<ScrollView>(null);
     const { planId } = useLocalSearchParams<{ planId: string }>();
+
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [userId, setUserId] = useState<string | null>(null);
@@ -49,6 +78,7 @@ export default function RatePlanScreen() {
     const [selectedPeer, setSelectedPeer] = useState<RatingPeer | null>(null);
     const [draft, setDraft] = useState<RatingDraft>(EMPTY_RATING_DRAFT);
     const [ratedIds, setRatedIds] = useState<Set<string>>(new Set());
+    const [justSaved, setJustSaved] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -59,8 +89,15 @@ export default function RatePlanScreen() {
             const plans = await getPendingRatingPlans(user.id);
             const found = plans.find((p) => p.planId === planId && p.phase === 'open') ?? null;
             setPlan(found);
-            setRatedIds(new Set(found?.ratedIds ?? []));
-            setStage('happened');
+            const alreadyRated = new Set(found?.ratedIds ?? []);
+            setRatedIds(alreadyRated);
+
+            const started = found ? await hasRatingSessionStarted(user.id, found.planId) : false;
+            if (found && (started || alreadyRated.size > 0)) {
+                setStage('list');
+            } else {
+                setStage('happened');
+            }
             setSelectedPeer(null);
             setDraft(EMPTY_RATING_DRAFT);
         } finally {
@@ -72,27 +109,30 @@ export default function RatePlanScreen() {
         void load();
     }, [load]);
 
-    const pendingPeers = useMemo(
-        () => (plan?.peers ?? []).filter((p) => !ratedIds.has(p.id)),
-        [plan, ratedIds],
-    );
+    useEffect(() => {
+        scrollRef.current?.scrollTo({ y: 0, animated: false });
+    }, [stage, selectedPeer?.id]);
 
-    const step = useMemo(() => {
-        if (draft.asistencia === null) return 1;
-        if (draft.asistencia === false) return 1;
-        if (draft.puntuacion_general < 1) return 2;
-        if (!draft.repetiria_experiencia) return 3;
-        return 4;
-    }, [draft]);
+    const ratedCount = ratedIds.size;
+    const totalPeers = plan?.peers.length ?? 0;
+    const pendingCount = totalPeers - ratedCount;
+    const progressPct = totalPeers > 0 ? ratedCount / totalPeers : 0;
 
-    const finishAndArchive = async (messageKey: 'ratings.doneMsg' | 'ratings.skippedMsg' | 'ratings.notHappenedMsg') => {
+    const stepActive: 1 | 2 | 3 = stage === 'happened' ? 1 : stage === 'list' ? 2 : 3;
+    const canSubmitPerson = isPersonDraftComplete(draft);
+
+    const finishAndArchive = async (messageKey: 'ratings.doneMsg' | 'ratings.skippedMsg') => {
         if (!userId || !plan) {
             router.back();
             return;
         }
         setSaving(true);
         try {
-            await addPlanToHistory(userId, plan.planId);
+            const { error } = await addPlanToHistory(userId, plan.planId);
+            if (error) {
+                Alert.alert(t('profile.error'), t('ratings.saveError'));
+                return;
+            }
             Alert.alert(t('ratings.doneTitle'), t(messageKey));
             router.back();
         } finally {
@@ -105,6 +145,7 @@ export default function RatePlanScreen() {
             { text: t('common.cancel'), style: 'cancel' },
             {
                 text: t('ratings.omitConfirm'),
+                style: 'destructive',
                 onPress: () => void finishAndArchive('ratings.skippedMsg'),
             },
         ]);
@@ -112,13 +153,12 @@ export default function RatePlanScreen() {
 
     const onPlanHappened = async (happened: boolean) => {
         if (!happened) {
-            if (userId && plan) {
-                await dismissRatingWithoutHistory(userId, plan.planId);
-            }
+            if (userId && plan) await dismissRatingWithoutHistory(userId, plan.planId);
             Alert.alert(t('ratings.doneTitle'), t('ratings.notHappenedMsg'));
             router.back();
             return;
         }
+        if (userId && plan) await markRatingSessionStarted(userId, plan.planId);
         setStage('list');
     };
 
@@ -126,23 +166,20 @@ export default function RatePlanScreen() {
         if (ratedIds.has(peer.id)) return;
         setSelectedPeer(peer);
         setDraft(EMPTY_RATING_DRAFT);
+        setJustSaved(false);
         setStage('person');
     };
 
     const toggleAspect = (list: 'aspectos_positivos' | 'aspectos_negativos', key: string) => {
         setDraft((prev) => {
             const cur = prev[list];
-            const next = cur.includes(key) ? cur.filter((x) => x !== key) : [...cur, key];
+            const next = cur.includes(key) ? cur.filter((x) => x !== key) : [...cur, key].slice(0, 4);
             return { ...prev, [list]: next };
         });
     };
 
     const submitCurrent = async () => {
-        if (!userId || !plan || !selectedPeer || draft.asistencia === null) return;
-        if (draft.asistencia && (draft.puntuacion_general < 1 || !draft.repetiria_experiencia)) {
-            Alert.alert(t('profile.error'), t('ratings.incomplete'));
-            return;
-        }
+        if (!userId || !plan || !selectedPeer || !canSubmitPerson) return;
         setSaving(true);
         try {
             const { error } = await submitValoracion({
@@ -158,14 +195,15 @@ export default function RatePlanScreen() {
             const nextRated = new Set(ratedIds);
             nextRated.add(selectedPeer.id);
             setRatedIds(nextRated);
-            setSelectedPeer(null);
-            setDraft(EMPTY_RATING_DRAFT);
+            setJustSaved(true);
 
             const stillPending = (plan.peers ?? []).filter((p) => !nextRated.has(p.id));
             if (stillPending.length === 0) {
                 await finishAndArchive('ratings.doneMsg');
                 return;
             }
+            setSelectedPeer(null);
+            setDraft(EMPTY_RATING_DRAFT);
             setStage('list');
         } finally {
             setSaving(false);
@@ -174,15 +212,19 @@ export default function RatePlanScreen() {
 
     if (loading) {
         return (
-            <View style={styles.center}>
+            <View style={[styles.center, { paddingTop: insets.top }]}>
                 <ActivityIndicator color={PRIMARY_DARK} size="large" />
+                <Text style={styles.loadingText}>{t('ratings.loading')}</Text>
             </View>
         );
     }
 
     if (!plan) {
         return (
-            <View style={styles.center}>
+            <View style={[styles.center, { paddingTop: insets.top }]}>
+                <View style={styles.emptyIcon}>
+                    <Ionicons name="star-outline" size={32} color={MUTED} />
+                </View>
                 <Text style={styles.empty}>{t('ratings.noneOpen')}</Text>
                 <TouchableOpacity style={styles.primaryBtn} onPress={() => router.back()}>
                     <Text style={styles.primaryBtnText}>{t('common.back')}</Text>
@@ -194,7 +236,7 @@ export default function RatePlanScreen() {
     return (
         <View style={styles.container}>
             <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
-            <View style={styles.header}>
+            <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
                 <TouchableOpacity
                     onPress={() => {
                         if (stage === 'person') {
@@ -214,46 +256,75 @@ export default function RatePlanScreen() {
                     <Text style={styles.sub} numberOfLines={1}>{plan.titulo}</Text>
                 </View>
                 {stage !== 'happened' ? (
-                    <TouchableOpacity onPress={omitFlow} hitSlop={8}>
+                    <TouchableOpacity onPress={omitFlow} hitSlop={8} style={styles.omitChip}>
                         <Text style={styles.omitLink}>{t('ratings.omit')}</Text>
                     </TouchableOpacity>
                 ) : null}
             </View>
 
-            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            <StepDots active={stepActive} />
+
+            <ScrollView
+                ref={scrollRef}
+                contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 28 }]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+            >
                 {stage === 'happened' && (
                     <>
                         <View style={styles.introCard}>
-                            <Ionicons name="help-circle-outline" size={36} color={PRIMARY_DARK} />
+                            <View style={styles.introIcon}>
+                                <Ionicons name="calendar-outline" size={28} color={PRIMARY_DARK} />
+                            </View>
                             <Text style={styles.introTitle}>{t('ratings.happenedQ')}</Text>
                             <Text style={styles.introSub}>{t('ratings.happenedHint')}</Text>
                         </View>
-                        <View style={styles.row}>
-                            <TouchableOpacity
-                                style={[styles.choice, styles.choiceYes]}
-                                onPress={() => onPlanHappened(true)}
-                                disabled={saving}
-                            >
-                                <Text style={[styles.choiceText, styles.choiceTextOn]}>{t('ratings.yes')}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.choice, styles.choiceNo]}
-                                onPress={() => onPlanHappened(false)}
-                                disabled={saving}
-                            >
-                                <Text style={[styles.choiceText, styles.choiceTextOn]}>{t('ratings.no')}</Text>
-                            </TouchableOpacity>
-                        </View>
-                        <TouchableOpacity style={styles.secondaryBtn} onPress={omitFlow} disabled={saving}>
-                            <Text style={styles.secondaryBtnText}>{t('ratings.omit')}</Text>
+
+                        <TouchableOpacity
+                            style={styles.bigChoiceYes}
+                            onPress={() => void onPlanHappened(true)}
+                            disabled={saving}
+                            activeOpacity={0.88}
+                        >
+                            <Ionicons name="checkmark-circle" size={22} color="#FFF" />
+                            <Text style={styles.bigChoiceText}>{t('ratings.happenedYes')}</Text>
                         </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.bigChoiceNo}
+                            onPress={() => void onPlanHappened(false)}
+                            disabled={saving}
+                            activeOpacity={0.88}
+                        >
+                            <Ionicons name="close-circle" size={22} color={DANGER} />
+                            <Text style={styles.bigChoiceNoText}>{t('ratings.happenedNo')}</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.footerHint}>{t('ratings.happenedFooter')}</Text>
                     </>
                 )}
 
                 {stage === 'list' && (
                     <>
-                        <Text style={styles.q}>{t('ratings.pickPeople')}</Text>
-                        <Text style={styles.hint}>{t('ratings.pickPeopleHint')}</Text>
+                        {justSaved ? (
+                            <View style={styles.toastOk}>
+                                <Ionicons name="checkmark-circle" size={18} color={SUCCESS} />
+                                <Text style={styles.toastOkText}>{t('ratings.savedPerson')}</Text>
+                            </View>
+                        ) : null}
+
+                        <View style={styles.progressCard}>
+                            <View style={styles.progressTop}>
+                                <Text style={styles.progressLabel}>{t('ratings.progress')}</Text>
+                                <Text style={styles.progressCount}>
+                                    {ratedCount}/{totalPeers}
+                                </Text>
+                            </View>
+                            <View style={styles.progressTrack}>
+                                <View style={[styles.progressFill, { width: `${Math.round(progressPct * 100)}%` }]} />
+                            </View>
+                            <Text style={styles.hint}>{t('ratings.pickPeopleHint')}</Text>
+                        </View>
+
+                        <Text style={styles.sectionLabel}>{t('ratings.pickPeople')}</Text>
                         {(plan.peers ?? []).map((peer) => {
                             const done = ratedIds.has(peer.id);
                             return (
@@ -267,14 +338,18 @@ export default function RatePlanScreen() {
                                     <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={48} />
                                     <View style={{ flex: 1 }}>
                                         <Text style={styles.peerRowName}>{peer.nombre}</Text>
-                                        <Text style={styles.peerRowMeta}>
+                                        <Text style={[styles.peerRowMeta, done && styles.peerRowMetaDone]}>
                                             {done ? t('ratings.alreadyRated') : t('ratings.tapToRate')}
                                         </Text>
                                     </View>
                                     {done ? (
-                                        <Ionicons name="checkmark-circle" size={22} color={SUCCESS} />
+                                        <View style={styles.donePill}>
+                                            <Ionicons name="checkmark" size={14} color={SUCCESS} />
+                                        </View>
                                     ) : (
-                                        <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                                        <View style={styles.ratePill}>
+                                            <Text style={styles.ratePillText}>{t('ratings.rateCta')}</Text>
+                                        </View>
                                     )}
                                 </TouchableOpacity>
                             );
@@ -289,138 +364,174 @@ export default function RatePlanScreen() {
                                 <ActivityIndicator color="#FFF" />
                             ) : (
                                 <Text style={styles.primaryBtnText}>
-                                    {pendingPeers.length === plan.peers.length
+                                    {ratedCount === 0
                                         ? t('ratings.finishWithoutRating')
-                                        : t('ratings.finish')}
+                                        : pendingCount > 0
+                                          ? t('ratings.finishPartial', { n: ratedCount })
+                                          : t('ratings.finish')}
                                 </Text>
                             )}
                         </TouchableOpacity>
+                        {ratedCount === 0 ? (
+                            <Text style={styles.footerHint}>{t('ratings.finishHint')}</Text>
+                        ) : null}
                     </>
                 )}
 
                 {stage === 'person' && selectedPeer && (
                     <>
                         <View style={styles.peerCard}>
-                            <ProfileAvatar uri={selectedPeer.avatar_url} name={selectedPeer.nombre} size={72} />
+                            <ProfileAvatar uri={selectedPeer.avatar_url} name={selectedPeer.nombre} size={80} />
                             <Text style={styles.peerName}>{selectedPeer.nombre}</Text>
+                            <Text style={styles.peerCardHint}>{t('ratings.personHint')}</Text>
                         </View>
 
-                        <Text style={styles.q}>{t('ratings.attendedQ')}</Text>
-                        <View style={styles.row}>
-                            <TouchableOpacity
-                                style={[styles.choice, draft.asistencia === true && styles.choiceYes]}
-                                onPress={() => setDraft({ ...EMPTY_RATING_DRAFT, asistencia: true })}
-                            >
-                                <Text style={[styles.choiceText, draft.asistencia === true && styles.choiceTextOn]}>
-                                    {t('ratings.yes')}
-                                </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.choice, draft.asistencia === false && styles.choiceNo]}
-                                onPress={() => setDraft({ ...EMPTY_RATING_DRAFT, asistencia: false })}
-                            >
-                                <Text style={[styles.choiceText, draft.asistencia === false && styles.choiceTextOn]}>
-                                    {t('ratings.no')}
-                                </Text>
-                            </TouchableOpacity>
+                        <View style={styles.questionCard}>
+                            <Text style={styles.qNum}>1</Text>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.q}>{t('ratings.attendedQ')}</Text>
+                                <View style={styles.row}>
+                                    <TouchableOpacity
+                                        style={[styles.choice, draft.asistencia === true && styles.choiceYes]}
+                                        onPress={() => setDraft({ ...EMPTY_RATING_DRAFT, asistencia: true })}
+                                    >
+                                        <Text style={[styles.choiceText, draft.asistencia === true && styles.choiceTextOn]}>
+                                            {t('ratings.yes')}
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.choice, draft.asistencia === false && styles.choiceNo]}
+                                        onPress={() => setDraft({ ...EMPTY_RATING_DRAFT, asistencia: false })}
+                                    >
+                                        <Text style={[styles.choiceText, draft.asistencia === false && styles.choiceTextOn]}>
+                                            {t('ratings.no')}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
                         </View>
+
+                        {draft.asistencia === false && (
+                            <View style={styles.infoBanner}>
+                                <Ionicons name="information-circle-outline" size={18} color={MUTED} />
+                                <Text style={styles.infoBannerText}>{t('ratings.noAttendHint')}</Text>
+                            </View>
+                        )}
 
                         {draft.asistencia === true && (
                             <>
-                                <Text style={styles.q}>{t('ratings.starsQ')}</Text>
-                                <View style={styles.starsRow}>
-                                    {[1, 2, 3, 4, 5].map((n) => (
-                                        <TouchableOpacity
-                                            key={n}
-                                            onPress={() => setDraft((d) => ({ ...d, puntuacion_general: n }))}
-                                            hitSlop={6}
-                                        >
-                                            <Ionicons
-                                                name={draft.puntuacion_general >= n ? 'star' : 'star-outline'}
-                                                size={36}
-                                                color={draft.puntuacion_general >= n ? '#F59E0B' : '#CBD5E1'}
-                                            />
-                                        </TouchableOpacity>
-                                    ))}
+                                <View style={styles.questionCard}>
+                                    <Text style={styles.qNum}>2</Text>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.q}>{t('ratings.starsQ')}</Text>
+                                        <View style={styles.starsRow}>
+                                            {[1, 2, 3, 4, 5].map((n) => (
+                                                <TouchableOpacity
+                                                    key={n}
+                                                    onPress={() => setDraft((d) => ({ ...d, puntuacion_general: n }))}
+                                                    hitSlop={8}
+                                                    style={styles.starBtn}
+                                                >
+                                                    <Ionicons
+                                                        name={draft.puntuacion_general >= n ? 'star' : 'star-outline'}
+                                                        size={34}
+                                                        color={draft.puntuacion_general >= n ? GOLD : '#CBD5E1'}
+                                                    />
+                                                </TouchableOpacity>
+                                            ))}
+                                        </View>
+                                        {draft.puntuacion_general > 0 ? (
+                                            <Text style={styles.starLabel}>
+                                                {t(STAR_LABEL_KEYS[draft.puntuacion_general - 1])}
+                                            </Text>
+                                        ) : (
+                                            <Text style={styles.starLabelMuted}>{t('ratings.starHint')}</Text>
+                                        )}
+                                    </View>
                                 </View>
 
-                                {step >= 3 && (
-                                    <>
-                                        <Text style={styles.q}>{t('ratings.repeatQ')}</Text>
-                                        <View style={styles.rowWrap}>
-                                            {([
-                                                ['si', t('ratings.repeatYes')],
-                                                ['tal_vez', t('ratings.repeatMaybe')],
-                                                ['no', t('ratings.repeatNo')],
-                                            ] as [Repetiria, string][]).map(([key, label]) => (
-                                                <TouchableOpacity
-                                                    key={key}
-                                                    style={[
-                                                        styles.chip,
-                                                        draft.repetiria_experiencia === key && styles.chipOn,
-                                                    ]}
-                                                    onPress={() => setDraft((d) => ({ ...d, repetiria_experiencia: key }))}
-                                                >
-                                                    <Text
-                                                        style={[
-                                                            styles.chipText,
-                                                            draft.repetiria_experiencia === key && styles.chipTextOn,
-                                                        ]}
-                                                    >
-                                                        {label}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            ))}
+                                {draft.puntuacion_general >= 1 && (
+                                    <View style={styles.questionCard}>
+                                        <Text style={styles.qNum}>3</Text>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.q}>{t('ratings.repeatQ')}</Text>
+                                            <View style={styles.rowWrap}>
+                                                {([
+                                                    ['si', t('ratings.repeatYes'), SUCCESS],
+                                                    ['tal_vez', t('ratings.repeatMaybe'), PRIMARY_DARK],
+                                                    ['no', t('ratings.repeatNo'), DANGER],
+                                                ] as [Repetiria, string, string][]).map(([key, label, color]) => {
+                                                    const on = draft.repetiria_experiencia === key;
+                                                    return (
+                                                        <TouchableOpacity
+                                                            key={key}
+                                                            style={[
+                                                                styles.chip,
+                                                                on && { backgroundColor: color, borderColor: color },
+                                                            ]}
+                                                            onPress={() =>
+                                                                setDraft((d) => ({ ...d, repetiria_experiencia: key }))
+                                                            }
+                                                        >
+                                                            <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                                                                {label}
+                                                            </Text>
+                                                        </TouchableOpacity>
+                                                    );
+                                                })}
+                                            </View>
                                         </View>
-                                    </>
+                                    </View>
                                 )}
 
-                                {step >= 4 && (
+                                {draft.repetiria_experiencia && (
                                     <>
-                                        <Text style={styles.q}>{t('ratings.positivesQ')}</Text>
-                                        <View style={styles.rowWrap}>
-                                            {POSITIVE_ASPECTS.map((key) => (
-                                                <TouchableOpacity
-                                                    key={key}
-                                                    style={[
-                                                        styles.chip,
-                                                        draft.aspectos_positivos.includes(key) && styles.chipPos,
-                                                    ]}
-                                                    onPress={() => toggleAspect('aspectos_positivos', key)}
-                                                >
-                                                    <Text
-                                                        style={[
-                                                            styles.chipText,
-                                                            draft.aspectos_positivos.includes(key) && styles.chipTextOn,
-                                                        ]}
-                                                    >
-                                                        {t(`ratings.pos.${key}`)}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            ))}
+                                        <View style={styles.questionCard}>
+                                            <Text style={styles.qNum}>4</Text>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={styles.q}>{t('ratings.positivesQ')}</Text>
+                                                <Text style={styles.optionalHint}>{t('ratings.optionalMax')}</Text>
+                                                <View style={styles.rowWrap}>
+                                                    {POSITIVE_ASPECTS.map((key) => {
+                                                        const on = draft.aspectos_positivos.includes(key);
+                                                        return (
+                                                            <TouchableOpacity
+                                                                key={key}
+                                                                style={[styles.chip, on && styles.chipPos]}
+                                                                onPress={() => toggleAspect('aspectos_positivos', key)}
+                                                            >
+                                                                <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                                                                    {t(`ratings.pos.${key}`)}
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        );
+                                                    })}
+                                                </View>
+                                            </View>
                                         </View>
 
-                                        <Text style={styles.q}>{t('ratings.negativesQ')}</Text>
-                                        <View style={styles.rowWrap}>
-                                            {NEGATIVE_ASPECTS.map((key) => (
-                                                <TouchableOpacity
-                                                    key={key}
-                                                    style={[
-                                                        styles.chip,
-                                                        draft.aspectos_negativos.includes(key) && styles.chipNeg,
-                                                    ]}
-                                                    onPress={() => toggleAspect('aspectos_negativos', key)}
-                                                >
-                                                    <Text
-                                                        style={[
-                                                            styles.chipText,
-                                                            draft.aspectos_negativos.includes(key) && styles.chipTextOn,
-                                                        ]}
-                                                    >
-                                                        {t(`ratings.neg.${key}`)}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            ))}
+                                        <View style={styles.questionCard}>
+                                            <Text style={styles.qNum}>5</Text>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={styles.q}>{t('ratings.negativesQ')}</Text>
+                                                <Text style={styles.optionalHint}>{t('ratings.optionalMax')}</Text>
+                                                <View style={styles.rowWrap}>
+                                                    {NEGATIVE_ASPECTS.map((key) => {
+                                                        const on = draft.aspectos_negativos.includes(key);
+                                                        return (
+                                                            <TouchableOpacity
+                                                                key={key}
+                                                                style={[styles.chip, on && styles.chipNeg]}
+                                                                onPress={() => toggleAspect('aspectos_negativos', key)}
+                                                            >
+                                                                <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                                                                    {t(`ratings.neg.${key}`)}
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        );
+                                                    })}
+                                                </View>
+                                            </View>
                                         </View>
                                     </>
                                 )}
@@ -429,9 +540,12 @@ export default function RatePlanScreen() {
 
                         {draft.asistencia !== null && (
                             <TouchableOpacity
-                                style={[styles.primaryBtn, saving && { opacity: 0.7 }]}
+                                style={[
+                                    styles.primaryBtn,
+                                    (!canSubmitPerson || saving) && styles.primaryBtnDisabled,
+                                ]}
                                 onPress={submitCurrent}
-                                disabled={saving}
+                                disabled={!canSubmitPerson || saving}
                             >
                                 {saving ? (
                                     <ActivityIndicator color="#FFF" />
@@ -453,15 +567,30 @@ export default function RatePlanScreen() {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: BG_BOTTOM },
-    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: BG_BOTTOM },
-    empty: { color: '#64748B', fontWeight: '600', marginBottom: 16, textAlign: 'center' },
+    center: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+        backgroundColor: BG_BOTTOM,
+    },
+    loadingText: { marginTop: 12, color: MUTED, fontWeight: '600' },
+    emptyIcon: {
+        width: 64,
+        height: 64,
+        borderRadius: 20,
+        backgroundColor: '#FFF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 12,
+    },
+    empty: { color: MUTED, fontWeight: '600', marginBottom: 16, textAlign: 'center' },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
         paddingHorizontal: 16,
-        paddingTop: 56,
-        paddingBottom: 12,
+        paddingBottom: 8,
     },
     backBtn: {
         width: 42,
@@ -472,28 +601,121 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     title: { fontSize: 18, fontWeight: '900', color: INK },
-    sub: { fontSize: 13, color: '#64748B', fontWeight: '600', marginTop: 2 },
-    omitLink: { fontSize: 13, fontWeight: '800', color: '#94A3B8' },
-    content: { padding: 20, paddingBottom: 40 },
+    sub: { fontSize: 13, color: MUTED, fontWeight: '600', marginTop: 2 },
+    omitChip: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 10,
+        backgroundColor: 'rgba(148,163,184,0.15)',
+    },
+    omitLink: { fontSize: 12, fontWeight: '800', color: MUTED },
+    stepsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 40,
+        marginBottom: 8,
+    },
+    stepItem: { flexDirection: 'row', alignItems: 'center' },
+    stepDot: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: '#E2E8F0',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    stepDotOn: { backgroundColor: PRIMARY_DARK },
+    stepDotDone: { backgroundColor: SUCCESS },
+    stepDotText: { fontSize: 11, fontWeight: '800', color: MUTED },
+    stepDotTextOn: { color: '#FFF' },
+    stepLine: { width: 36, height: 3, backgroundColor: '#E2E8F0', marginHorizontal: 4, borderRadius: 2 },
+    stepLineOn: { backgroundColor: SUCCESS },
+    content: { padding: 20 },
     introCard: {
         backgroundColor: '#FFF',
-        borderRadius: 20,
-        padding: 22,
+        borderRadius: 22,
+        padding: 24,
         alignItems: 'center',
         gap: 10,
-        marginBottom: 16,
+        marginBottom: 18,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
     },
-    introTitle: { fontSize: 18, fontWeight: '900', color: INK, textAlign: 'center' },
-    introSub: { fontSize: 13, color: '#64748B', textAlign: 'center', lineHeight: 18 },
+    introIcon: {
+        width: 56,
+        height: 56,
+        borderRadius: 18,
+        backgroundColor: '#EFF6FF',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    introTitle: { fontSize: 20, fontWeight: '900', color: INK, textAlign: 'center' },
+    introSub: { fontSize: 14, color: MUTED, textAlign: 'center', lineHeight: 20 },
+    bigChoiceYes: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        backgroundColor: SUCCESS,
+        borderRadius: 16,
+        paddingVertical: 16,
+        marginBottom: 10,
+    },
+    bigChoiceText: { color: '#FFF', fontWeight: '800', fontSize: 16 },
+    bigChoiceNo: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        backgroundColor: '#FFF',
+        borderRadius: 16,
+        paddingVertical: 16,
+        borderWidth: 1.5,
+        borderColor: '#FECACA',
+        marginBottom: 12,
+    },
+    bigChoiceNoText: { color: DANGER, fontWeight: '800', fontSize: 16 },
+    footerHint: { textAlign: 'center', color: '#94A3B8', fontSize: 12, fontWeight: '600', marginTop: 8, lineHeight: 17 },
+    toastOk: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#F0FDF4',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#BBF7D0',
+    },
+    toastOkText: { color: SUCCESS, fontWeight: '700', fontSize: 13 },
+    progressCard: {
+        backgroundColor: '#FFF',
+        borderRadius: 18,
+        padding: 16,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    progressTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+    progressLabel: { fontSize: 13, fontWeight: '700', color: MUTED },
+    progressCount: { fontSize: 13, fontWeight: '900', color: PRIMARY_DARK },
+    progressTrack: { height: 8, backgroundColor: '#E2E8F0', borderRadius: 4, overflow: 'hidden', marginBottom: 10 },
+    progressFill: { height: '100%', backgroundColor: PRIMARY_DARK, borderRadius: 4 },
+    sectionLabel: { fontSize: 15, fontWeight: '900', color: INK, marginBottom: 10 },
+    hint: { fontSize: 13, color: MUTED, lineHeight: 18 },
     peerCard: {
         backgroundColor: '#FFF',
-        borderRadius: 20,
-        padding: 20,
+        borderRadius: 22,
+        padding: 22,
         alignItems: 'center',
-        marginBottom: 20,
-        gap: 10,
+        marginBottom: 16,
+        gap: 8,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
     },
-    peerName: { fontSize: 18, fontWeight: '800', color: INK },
+    peerName: { fontSize: 20, fontWeight: '900', color: INK },
+    peerCardHint: { fontSize: 13, color: MUTED, fontWeight: '600' },
     peerRow: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -507,14 +729,52 @@ const styles = StyleSheet.create({
     },
     peerRowDone: { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' },
     peerRowName: { fontSize: 15, fontWeight: '800', color: INK },
-    peerRowMeta: { fontSize: 12, color: '#94A3B8', fontWeight: '600', marginTop: 2 },
-    q: { fontSize: 15, fontWeight: '800', color: INK, marginBottom: 10, marginTop: 8 },
-    hint: { fontSize: 13, color: '#64748B', marginBottom: 14, lineHeight: 18 },
-    row: { flexDirection: 'row', gap: 10, marginBottom: 12 },
-    rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+    peerRowMeta: { fontSize: 12, color: MUTED, fontWeight: '600', marginTop: 2 },
+    peerRowMetaDone: { color: SUCCESS },
+    donePill: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        backgroundColor: '#DCFCE7',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    ratePill: {
+        backgroundColor: '#EFF6FF',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 10,
+    },
+    ratePillText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 12 },
+    questionCard: {
+        flexDirection: 'row',
+        gap: 12,
+        backgroundColor: '#FFF',
+        borderRadius: 18,
+        padding: 16,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    qNum: {
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        backgroundColor: '#EFF6FF',
+        overflow: 'hidden',
+        textAlign: 'center',
+        lineHeight: 26,
+        fontSize: 13,
+        fontWeight: '900',
+        color: PRIMARY_DARK,
+    },
+    q: { fontSize: 15, fontWeight: '800', color: INK, marginBottom: 10 },
+    optionalHint: { fontSize: 12, color: '#94A3B8', fontWeight: '600', marginTop: -6, marginBottom: 8 },
+    row: { flexDirection: 'row', gap: 10 },
+    rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     choice: {
         flex: 1,
-        backgroundColor: '#FFF',
+        backgroundColor: '#F8FAFC',
         borderRadius: 14,
         paddingVertical: 14,
         alignItems: 'center',
@@ -523,22 +783,34 @@ const styles = StyleSheet.create({
     },
     choiceYes: { backgroundColor: SUCCESS, borderColor: SUCCESS },
     choiceNo: { backgroundColor: DANGER, borderColor: DANGER },
-    choiceText: { fontWeight: '800', color: '#64748B' },
+    choiceText: { fontWeight: '800', color: MUTED },
     choiceTextOn: { color: '#FFF' },
-    starsRow: { flexDirection: 'row', gap: 8, marginBottom: 12, justifyContent: 'center' },
+    starsRow: { flexDirection: 'row', gap: 6, marginBottom: 6 },
+    starBtn: { padding: 2 },
+    starLabel: { fontSize: 13, fontWeight: '800', color: GOLD, marginTop: 4 },
+    starLabelMuted: { fontSize: 12, fontWeight: '600', color: '#94A3B8', marginTop: 4 },
     chip: {
-        backgroundColor: '#FFF',
+        backgroundColor: '#F8FAFC',
         borderRadius: 20,
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderWidth: 1,
         borderColor: '#E2E8F0',
     },
-    chipOn: { backgroundColor: PRIMARY_DARK, borderColor: PRIMARY_DARK },
-    chipPos: { backgroundColor: '#16A34A', borderColor: '#16A34A' },
-    chipNeg: { backgroundColor: '#DC2626', borderColor: '#DC2626' },
+    chipPos: { backgroundColor: SUCCESS, borderColor: SUCCESS },
+    chipNeg: { backgroundColor: DANGER, borderColor: DANGER },
     chipText: { fontSize: 13, fontWeight: '700', color: '#475569' },
     chipTextOn: { color: '#FFF' },
+    infoBanner: {
+        flexDirection: 'row',
+        gap: 8,
+        alignItems: 'flex-start',
+        backgroundColor: '#F8FAFC',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 8,
+    },
+    infoBannerText: { flex: 1, fontSize: 13, color: MUTED, fontWeight: '600', lineHeight: 18 },
     primaryBtn: {
         marginTop: 16,
         backgroundColor: PRIMARY_DARK,
@@ -546,11 +818,6 @@ const styles = StyleSheet.create({
         paddingVertical: 16,
         alignItems: 'center',
     },
+    primaryBtnDisabled: { opacity: 0.45 },
     primaryBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
-    secondaryBtn: {
-        marginTop: 8,
-        paddingVertical: 14,
-        alignItems: 'center',
-    },
-    secondaryBtnText: { color: '#94A3B8', fontWeight: '700', fontSize: 14 },
 });

@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
-    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -12,17 +11,23 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { ProfileAvatar } from '../components/ProfileAvatar';
-import { countUnlockedBadges } from '../lib/badges';
-import { getBadgeStats } from '../lib/badgeStats';
-import { useT } from '../lib/i18n';
-import { searchProfilesByUsername } from '../lib/profileFields';
-import { supabase } from '../lib/supabase';
+import { MainChrome } from '../../components/MainChrome';
+import { ProfileAvatar } from '../../components/ProfileAvatar';
+import { getAuthUser } from '../../lib/auth';
+import { useT } from '../../lib/i18n';
+import { searchProfilesByUsername } from '../../lib/profileFields';
+import {
+    fetchRankings,
+    peekRankings,
+    type RankKey,
+    type RankScope,
+    type RankedProfile,
+} from '../../lib/rankings';
+import { screenCacheKey, ScreenCacheTTL } from '../../lib/screenCaches';
+import { cacheSet } from '../../lib/ttlCache';
 
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
-const BG_TOP = '#DCEBFF';
-const BG_BOTTOM = '#F2F7FF';
 
 type PodiumTier = 'gold' | 'silver' | 'bronze';
 
@@ -64,16 +69,6 @@ const PODIUM: Record<PodiumTier, {
     },
 };
 
-type RankKey = 'friends' | 'plans' | 'badges';
-
-type RankedProfile = {
-    id: string;
-    nombre: string;
-    avatar_url: string | null;
-    nombre_usuario: string | null;
-    score: number;
-};
-
 function PodiumAvatar({
     uri,
     name,
@@ -108,75 +103,58 @@ export default function SearchProfilesScreen() {
     const [searching, setSearching] = useState(false);
     const [results, setResults] = useState<RankedProfile[]>([]);
     const [rankKey, setRankKey] = useState<RankKey>('plans');
+    const [rankScope, setRankScope] = useState<RankScope>('global');
+    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [rankings, setRankings] = useState<RankedProfile[]>([]);
     const [loadingRankings, setLoadingRankings] = useState(true);
-    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
-    const loadRankings = useCallback(async (key: RankKey) => {
-        setLoadingRankings(true);
-        try {
-            const fieldMap = {
-                friends: 'numero_amistades',
-                plans: 'numero_planes_realizados',
-                badges: 'numero_planes_realizados',
-            } as const;
-
-            const { data, error } = await supabase
-                .from('estadisticas_usuario')
-                .select(`
-                    numero_planes_realizados,
-                    numero_amistades,
-                    usuario_id,
-                    perfiles:usuario_id ( id, nombre, avatar_url, nombre_usuario )
-                `)
-                .order(fieldMap[key], { ascending: false })
-                .limit(key === 'badges' ? 20 : 10);
-
-            if (error) throw error;
-
-            let mapped: RankedProfile[] = await Promise.all((data ?? []).map(async (row) => {
-                const raw = row.perfiles;
-                const profile = Array.isArray(raw) ? raw[0] : raw;
-                let score = 0;
-
-                if (key === 'badges') {
-                    const stats = await getBadgeStats(row.usuario_id as string);
-                    score = countUnlockedBadges(stats);
-                } else if (key === 'friends') {
-                    score = row.numero_amistades ?? 0;
-                } else {
-                    score = row.numero_planes_realizados ?? 0;
-                }
-
-                return {
-                    id: (profile?.id as string) ?? (row.usuario_id as string),
-                    nombre: (profile?.nombre as string) || t('profile.user'),
-                    avatar_url: (profile?.avatar_url as string | null) ?? null,
-                    nombre_usuario: (profile?.nombre_usuario as string | null) ?? null,
-                    score,
-                };
-            }));
-
-            mapped = mapped.filter((p) => p.id && p.score > 0);
-            if (key === 'badges') {
-                mapped = mapped.sort((a, b) => b.score - a.score).slice(0, 10);
+    useEffect(() => {
+        void getAuthUser().then((user) => {
+            const uid = user?.id ?? null;
+            setCurrentUserId(uid);
+            if (!uid) return;
+            const cached = peekRankings(uid, 'plans', 'global');
+            if (Array.isArray(cached)) {
+                setRankings(cached);
+                setLoadingRankings(false);
             }
+        });
+    }, []);
 
+    const loadRankings = useCallback(async (key: RankKey, scope: RankScope, userId: string | null) => {
+        if (userId) {
+            const cached = peekRankings(userId, key, scope);
+            if (Array.isArray(cached)) {
+                setRankings(cached);
+                setLoadingRankings(false);
+            } else {
+                setLoadingRankings(true);
+            }
+        } else {
+            setLoadingRankings(true);
+        }
+
+        try {
+            const mapped = await fetchRankings(key, scope, {
+                userId,
+                fallbackName: t('profile.user'),
+            });
             setRankings(mapped);
+            if (userId) {
+                cacheSet(screenCacheKey.rankings(userId, key, scope), mapped, ScreenCacheTTL.rankings);
+            }
         } catch {
-            setRankings([]);
+            if (!userId || peekRankings(userId, key, scope) == null) {
+                setRankings([]);
+            }
         } finally {
             setLoadingRankings(false);
         }
     }, [t]);
 
     useEffect(() => {
-        supabase.auth.getUser().then(({ data: { user } }) => setCurrentUserId(user?.id ?? null));
-    }, []);
-
-    useEffect(() => {
-        void loadRankings(rankKey);
-    }, [rankKey, loadRankings]);
+        void loadRankings(rankKey, rankScope, currentUserId);
+    }, [rankKey, rankScope, currentUserId, loadRankings]);
 
     useEffect(() => {
         const run = async () => {
@@ -315,90 +293,92 @@ export default function SearchProfilesScreen() {
     };
 
     return (
-        <View style={styles.container}>
-            <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <Ionicons name="chevron-back" size={24} color={INK} />
-                </TouchableOpacity>
-                <Text style={styles.title}>{t('search.title')}</Text>
-                <View style={{ width: 45 }} />
-            </View>
-
-            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-                <View style={styles.searchBox}>
-                    <Ionicons name="search" size={20} color={PRIMARY_DARK} />
-                    <TextInput
-                        style={styles.searchInput}
-                        placeholder={t('search.placeholder')}
-                        placeholderTextColor="#94A3B8"
-                        value={query}
-                        onChangeText={setQuery}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                    />
-                    {searching && <ActivityIndicator size="small" color={PRIMARY_DARK} />}
+        <MainChrome active="search">
+            <View style={styles.container}>
+                <View style={styles.pageHeader}>
+                    <Text style={styles.pageTitle}>{t('search.title')}</Text>
                 </View>
 
-                {query.trim().length >= 2 && (
+                <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                    <View style={styles.searchBox}>
+                        <Ionicons name="search" size={20} color={PRIMARY_DARK} />
+                        <TextInput
+                            style={styles.searchInput}
+                            placeholder={t('search.placeholder')}
+                            placeholderTextColor="#94A3B8"
+                            value={query}
+                            onChangeText={setQuery}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                        />
+                        {searching && <ActivityIndicator size="small" color={PRIMARY_DARK} />}
+                    </View>
+
+                    {query.trim().length >= 2 && (
+                        <View style={styles.section}>
+                            {results.length === 0 && !searching ? (
+                                <Text style={styles.empty}>{t('search.noResults')}</Text>
+                            ) : (
+                                results.map((r) => renderSearchRow(r))
+                            )}
+                        </View>
+                    )}
+
+                    <Text style={styles.sectionTitle}>{t('search.rankings')}</Text>
+                    <View style={styles.scopeTabs}>
+                        {([
+                            { key: 'global' as const, label: t('search.rankScopeGlobal') },
+                            { key: 'friends' as const, label: t('search.rankScopeFriends') },
+                        ]).map((opt) => (
+                            <TouchableOpacity
+                                key={opt.key}
+                                style={[styles.scopeTab, rankScope === opt.key && styles.scopeTabActive]}
+                                onPress={() => setRankScope(opt.key)}
+                                activeOpacity={0.85}
+                            >
+                                <Text style={[styles.scopeTabText, rankScope === opt.key && styles.scopeTabTextActive]}>
+                                    {opt.label}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                    <View style={styles.rankTabs}>
+                        {(['plans', 'badges', 'friends'] as RankKey[]).map((key) => (
+                            <TouchableOpacity
+                                key={key}
+                                style={[styles.rankTab, rankKey === key && styles.rankTabActive]}
+                                onPress={() => setRankKey(key)}
+                            >
+                                <Text style={[styles.rankTabText, rankKey === key && styles.rankTabTextActive]}>
+                                    {rankLabels[key]}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+
                     <View style={styles.section}>
-                        {results.length === 0 && !searching ? (
+                        {loadingRankings ? (
+                            <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 20 }} />
+                        ) : rankings.length === 0 ? (
                             <Text style={styles.empty}>{t('search.noResults')}</Text>
                         ) : (
-                            results.map((r) => renderSearchRow(r))
+                            rankings.map((r, i) => renderRankingRow(r, i))
                         )}
                     </View>
-                )}
-
-                <Text style={styles.sectionTitle}>{t('search.rankings')}</Text>
-                <View style={styles.rankTabs}>
-                    {(['plans', 'badges', 'friends'] as RankKey[]).map((key) => (
-                        <TouchableOpacity
-                            key={key}
-                            style={[styles.rankTab, rankKey === key && styles.rankTabActive]}
-                            onPress={() => setRankKey(key)}
-                        >
-                            <Text style={[styles.rankTabText, rankKey === key && styles.rankTabTextActive]}>
-                                {rankLabels[key]}
-                            </Text>
-                        </TouchableOpacity>
-                    ))}
-                </View>
-
-                <View style={styles.section}>
-                    {loadingRankings ? (
-                        <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 20 }} />
-                    ) : rankings.length === 0 ? (
-                        <Text style={styles.empty}>{t('search.noResults')}</Text>
-                    ) : (
-                        rankings.map((r, i) => renderRankingRow(r, i))
-                    )}
-                </View>
-            </ScrollView>
-        </View>
+                </ScrollView>
+            </View>
+        </MainChrome>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: BG_BOTTOM },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+    container: { flex: 1, backgroundColor: 'transparent' },
+    pageHeader: {
         paddingHorizontal: 20,
-        paddingTop: Platform.OS === 'ios' ? 60 : 44,
         paddingBottom: 14,
     },
-    backBtn: {
-        width: 45,
-        height: 45,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#FFF',
-        borderRadius: 15,
-    },
-    title: { fontSize: 20, fontWeight: '900', color: INK },
-    content: { paddingHorizontal: 20, paddingBottom: 40 },
+    pageTitle: { fontSize: 22, fontWeight: '900', color: INK },
+    content: { paddingHorizontal: 20, paddingBottom: 130 },
     searchBox: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -419,6 +399,29 @@ const styles = StyleSheet.create({
         letterSpacing: 0.6,
         marginBottom: 10,
     },
+    scopeTabs: {
+        flexDirection: 'row',
+        backgroundColor: '#E2E8F0',
+        borderRadius: 12,
+        padding: 3,
+        marginBottom: 12,
+    },
+    scopeTab: {
+        flex: 1,
+        paddingVertical: 8,
+        borderRadius: 10,
+        alignItems: 'center',
+    },
+    scopeTabActive: {
+        backgroundColor: '#FFF',
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.06,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 1 },
+        elevation: 1,
+    },
+    scopeTabText: { fontSize: 13, fontWeight: '700', color: '#64748B' },
+    scopeTabTextActive: { color: PRIMARY_DARK },
     rankTabs: { flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' },
     rankTab: {
         paddingHorizontal: 14,

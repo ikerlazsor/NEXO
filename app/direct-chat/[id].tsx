@@ -1,12 +1,20 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import { useHeaderHeight } from '@react-navigation/elements';
-import { Audio, ResizeMode, Video } from 'expo-av';
+import { Audio,
+    ResizeMode,
+    Video } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocalSearchParams,
+    useRouter,
+    useFocusEffect } from 'expo-router';
+import { useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     FlatList,
     Image,
     KeyboardAvoidingView,
@@ -18,15 +26,24 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../../lib/nexoAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getAuthUser } from '../../lib/auth';
 import { uploadChatFile } from '../../lib/chatUpload';
 import { markDirectChatRead } from '../../lib/chatUnread';
+import { hideDirectChat } from '../../lib/directChat';
 import { useT } from '../../lib/i18n';
+import { cacheGetStale, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
 const DANGER = '#EF4444';
 const PAGE_SIZE = 50;
+const DIRECT_CHAT_TTL_MS = 15 * 60 * 1000;
+const directChatKey = (a: string, b: string) => {
+    const [x, y] = [a, b].sort();
+    return `directChat:${x}:${y}`;
+};
 
 interface MessageProfile {
     nombre: string;
@@ -76,6 +93,21 @@ function mapMessageRow(row: Record<string, unknown>): Message {
     };
 }
 
+function mergeMessages(a: Message[], b: Message[]): Message[] {
+    const map = new Map<string, Message>();
+    for (const m of [...a, ...b]) map.set(m.id, m);
+    return Array.from(map.values()).sort(
+        (x, y) => new Date(y.creado_en).getTime() - new Date(x.creado_en).getTime(),
+    );
+}
+
+type DirectChatSnapshot = {
+    messages: Message[];
+    otherUserName: string;
+    otherUserAvatar: string | null;
+    hasMore: boolean;
+};
+
 export default function DirectChatScreen() {
     const { id } = useLocalSearchParams<{ id: string | string[] }>();
     const otherUserId = Array.isArray(id) ? id[0] : id;
@@ -92,6 +124,7 @@ export default function DirectChatScreen() {
     const [loadingMore, setLoadingMore] = useState(false);
     const [hasMore, setHasMore] = useState(true);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const cacheUserPairRef = useRef<string | null>(null);
 
     const [recording, setRecording] = useState<Audio.Recording | null>(null);
     const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -151,6 +184,23 @@ export default function DirectChatScreen() {
         [otherUserId]
     );
 
+    const persistDirectChatCache = useCallback((
+        userId: string,
+        peerId: string,
+        patch: Partial<DirectChatSnapshot> & { messages: Message[] },
+    ) => {
+        const key = directChatKey(userId, peerId);
+        const prev = cacheGetStale<DirectChatSnapshot>(key);
+        cacheSet(key, {
+            messages: patch.messages,
+            otherUserName: patch.otherUserName ?? prev?.otherUserName ?? 'Usuario',
+            otherUserAvatar: patch.otherUserAvatar !== undefined
+                ? patch.otherUserAvatar
+                : (prev?.otherUserAvatar ?? null),
+            hasMore: patch.hasMore ?? prev?.hasMore ?? true,
+        }, DIRECT_CHAT_TTL_MS);
+    }, []);
+
     const loadMoreMessages = useCallback(async () => {
         if (!otherUserId || loadingMore || !hasMore || messages.length === 0) return;
 
@@ -159,19 +209,27 @@ export default function DirectChatScreen() {
             const oldest = messages[messages.length - 1];
             const older = await fetchMessages(oldest.creado_en);
 
-            if (older.length < PAGE_SIZE) setHasMore(false);
+            const nextHasMore = older.length >= PAGE_SIZE;
+            if (!nextHasMore) setHasMore(false);
 
             setMessages((prev) => {
                 const existingIds = new Set(prev.map((m) => m.id));
                 const unique = older.filter((m) => !existingIds.has(m.id));
-                return [...prev, ...unique];
+                const next = [...prev, ...unique];
+                if (currentUserId && otherUserId) {
+                    persistDirectChatCache(currentUserId, otherUserId, {
+                        messages: next,
+                        hasMore: nextHasMore,
+                    });
+                }
+                return next;
             });
         } catch (error) {
             console.error('Error cargando más mensajes:', error);
         } finally {
             setLoadingMore(false);
         }
-    }, [otherUserId, loadingMore, hasMore, messages, fetchMessages]);
+    }, [otherUserId, loadingMore, hasMore, messages, fetchMessages, currentUserId, persistDirectChatCache]);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -237,11 +295,8 @@ export default function DirectChatScreen() {
         let channel: ReturnType<typeof supabase.channel> | null = null;
 
         const initChat = async () => {
-            setLoading(true);
-            setHasMore(true);
-
             try {
-                const { data: { user } } = await supabase.auth.getUser();
+                const user = await getAuthUser();
                 if (!isMountedRef.current) return;
 
                 if (!user) {
@@ -250,6 +305,19 @@ export default function DirectChatScreen() {
                 }
 
                 setCurrentUserId(user.id);
+                cacheUserPairRef.current = directChatKey(user.id, otherUserId);
+
+                const stale = cacheGetStale<DirectChatSnapshot>(directChatKey(user.id, otherUserId));
+                if (stale?.messages?.length) {
+                    setMessages(stale.messages);
+                    setOtherUserName(stale.otherUserName);
+                    setOtherUserAvatar(stale.otherUserAvatar);
+                    setHasMore(stale.hasMore);
+                    setLoading(false);
+                } else {
+                    setLoading(true);
+                    setHasMore(true);
+                }
 
                 const { data: otherProfile } = await supabase
                     .from('perfiles')
@@ -266,9 +334,18 @@ export default function DirectChatScreen() {
 
                 if (!isMountedRef.current) return;
 
-                setMessages(initialMessages);
-                setHasMore(initialMessages.length >= PAGE_SIZE);
+                const merged = mergeMessages(initialMessages, stale?.messages ?? []);
+                setMessages(merged);
+                const nextHasMore = initialMessages.length >= PAGE_SIZE || (stale?.hasMore ?? false);
+                setHasMore(nextHasMore);
                 void markDirectChatRead(user.id, otherUserId);
+
+                persistDirectChatCache(user.id, otherUserId, {
+                    messages: merged,
+                    otherUserName: otherProfile?.nombre ?? stale?.otherUserName ?? 'Usuario',
+                    otherUserAvatar: otherProfile?.avatar_url ?? stale?.otherUserAvatar ?? null,
+                    hasMore: nextHasMore,
+                });
 
                 channel = supabase
                     .channel(`direct-chat:${user.id}:${otherUserId}`)
@@ -277,16 +354,15 @@ export default function DirectChatScreen() {
                         {
                             event: 'INSERT',
                             schema: 'public',
-                            table: 'mensajes', // Escucha la tabla unificada
-                            filter: `plan_id=is.null`, // Solo mensajes sin plan asociado (privados)
+                            table: 'mensajes',
+                            filter: `plan_id=is.null`,
                         },
                         async (payload) => {
-                            // Validar que el mensaje pertenezca a esta conversación privada específica
                             const emisor = payload.new.emisor_id;
                             const receptor = payload.new.receptor_id;
-                            const esDeEstaConversacion = 
-                                (emisor === user.id && receptor === otherUserId) || 
-                                (emisor === otherUserId && receptor === user.id);
+                            const esDeEstaConversacion =
+                                (emisor === user.id && receptor === otherUserId)
+                                || (emisor === otherUserId && receptor === user.id);
 
                             if (!esDeEstaConversacion) return;
 
@@ -311,7 +387,9 @@ export default function DirectChatScreen() {
                             if (isMountedRef.current) {
                                 setMessages((prev) => {
                                     if (prev.some((m) => m.id === newMessage.id)) return prev;
-                                    return [newMessage, ...prev];
+                                    const next = [newMessage, ...prev];
+                                    persistDirectChatCache(user.id, otherUserId, { messages: next });
+                                    return next;
                                 });
                             }
                         }
@@ -319,7 +397,9 @@ export default function DirectChatScreen() {
                     .subscribe();
             } catch (error) {
                 console.error('Error en initChat:', error);
-                Alert.alert(t('chat.errorTitle'), t('chat.loadError'));
+                if (!cacheUserPairRef.current || !cacheGetStale<DirectChatSnapshot>(cacheUserPairRef.current)?.messages?.length) {
+                    Alert.alert(t('chat.errorTitle'), t('chat.loadError'));
+                }
             } finally {
                 if (isMountedRef.current) setLoading(false);
             }
@@ -330,7 +410,7 @@ export default function DirectChatScreen() {
         return () => {
             if (channel) supabase.removeChannel(channel);
         };
-    }, [otherUserId, router, fetchMessages]);
+    }, [otherUserId, router, fetchMessages, persistDirectChatCache, t]);
 
     useFocusEffect(
         useCallback(() => {
@@ -638,6 +718,27 @@ export default function DirectChatScreen() {
         );
     };
 
+    const handleDeleteDirectChat = useCallback(() => {
+        if (!currentUserId || !otherUserId) return;
+        Alert.alert(t('chat.deleteDirectTitle'), t('chat.deleteDirectConfirm'), [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: t('chat.deleteChat'),
+                style: 'destructive',
+                onPress: async () => {
+                    const { error } = await hideDirectChat(currentUserId, otherUserId);
+                    if (error) {
+                        Alert.alert(t('profile.error'), error);
+                        return;
+                    }
+                    const cacheKey = directChatKey(currentUserId, otherUserId);
+                    cacheInvalidate(cacheKey);
+                    router.back();
+                },
+            },
+        ]);
+    }, [currentUserId, otherUserId, t, router]);
+
     return (
         <View style={styles.container}>
             <View style={[styles.header, { paddingTop: insets.top }]}>
@@ -645,19 +746,31 @@ export default function DirectChatScreen() {
                     <Ionicons name="chevron-back" size={28} color={PRIMARY} />
                 </TouchableOpacity>
 
-                <Image
-                    source={{ uri: otherUserAvatar || 'https://via.placeholder.com/150' }}
-                    style={styles.planHeaderImage}
-                />
+                <TouchableOpacity
+                    style={styles.headerIdentity}
+                    activeOpacity={0.85}
+                    onPress={() =>
+                        router.push({ pathname: '/user-profile/[id]', params: { id: otherUserId } })
+                    }
+                >
+                    <Image
+                        source={{ uri: otherUserAvatar || 'https://via.placeholder.com/150' }}
+                        style={styles.planHeaderImage}
+                    />
 
-                <View style={styles.headerTitleContainer}>
-                    <Text style={styles.headerTitle} numberOfLines={1}>
-                        {otherUserName}
-                    </Text>
-                    <Text style={styles.headerSubtitle} numberOfLines={1}>
-                        Mensaje directo
-                    </Text>
-                </View>
+                    <View style={styles.headerTitleContainer}>
+                        <Text style={styles.headerTitle} numberOfLines={1}>
+                            {otherUserName}
+                        </Text>
+                        <Text style={styles.headerSubtitle} numberOfLines={1}>
+                            {t('chat.directSubtitle')}
+                        </Text>
+                    </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={handleDeleteDirectChat} style={styles.menuBtn} hitSlop={8}>
+                    <Ionicons name="trash-outline" size={22} color={DANGER} />
+                </TouchableOpacity>
             </View>
 
             <KeyboardAvoidingView
@@ -799,6 +912,8 @@ const styles = StyleSheet.create({
         borderBottomColor: '#EEE',
     },
     backBtn: { padding: 5 },
+    headerIdentity: { flex: 1, flexDirection: 'row', alignItems: 'center', minWidth: 0 },
+    menuBtn: { padding: 8, marginLeft: 4 },
     planHeaderImage: {
         width: 40,
         height: 40,
@@ -806,7 +921,7 @@ const styles = StyleSheet.create({
         marginLeft: 5,
         backgroundColor: '#F1F5F9',
     },
-    headerTitleContainer: { marginLeft: 10, flex: 1 },
+    headerTitleContainer: { marginLeft: 10, flex: 1, minWidth: 0 },
     headerTitle: { fontSize: 17, fontWeight: '700', color: '#1E293B' },
     headerSubtitle: { fontSize: 12, color: '#64748B' },
     loading: { flex: 1, justifyContent: 'center' },
@@ -882,13 +997,25 @@ const styles = StyleSheet.create({
         borderTopWidth: 1,
         borderTopColor: '#EEE',
     },
-    attachBtn: { padding: 8, marginRight: 8 },
-    inputContainer: { flex: 1, marginRight: 8 },
+    attachBtn: { padding: 8, marginRight: 4, marginBottom: 2 },
+    inputContainer: {
+        flex: 1,
+        marginRight: 8,
+        backgroundColor: '#F1F5F9',
+        borderRadius: 20,
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        minHeight: 44,
+        maxHeight: 86,
+        justifyContent: 'center',
+    },
     textInput: {
         fontSize: 16,
+        lineHeight: 22,
         color: '#1E293B',
-        maxHeight: 100,
-        paddingVertical: 8,
+        maxHeight: 66,
+        padding: 0,
+        textAlignVertical: 'top',
     },
     sendCircle: {
         width: 40,
@@ -897,6 +1024,7 @@ const styles = StyleSheet.create({
         backgroundColor: PRIMARY,
         justifyContent: 'center',
         alignItems: 'center',
+        marginBottom: 2,
     },
     recordingActive: { backgroundColor: DANGER },
     sendCircleDisabled: { backgroundColor: '#CBD5E1' },

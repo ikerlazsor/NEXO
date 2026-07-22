@@ -1,18 +1,22 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
+import React,
+    { useCallback,
+    useRef,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     FlatList,
     Platform,
     StyleSheet,
     Text,
     TouchableOpacity,
-    View
+    View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import { PlanCard, type Membership } from '../components/PlanCard';
 import { useListScrollRestore } from '../hooks/useListScrollRestore';
 import { deletePlanCompletely } from '../lib/deletePlan';
@@ -28,7 +32,10 @@ import {
 } from '../lib/participants';
 import { canJoinPlanByGender } from '../lib/soloChicas';
 import { canJoinMorePlans } from '../lib/planLimits';
+import { getAuthUser } from '../lib/auth';
 import type { Genero } from '../lib/profileFields';
+import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
+import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -36,6 +43,12 @@ const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const BG_TOP = '#DCEBFF';
 const BG_BOTTOM = '#F2F7FF';
+
+type SavedPlansSnapshot = {
+    savedPlans: any[];
+    membershipMap: Record<string, Membership>;
+    currentUserGenero: Genero | null;
+};
 
 export default function SavedPlansScreen() {
     const router = useRouter();
@@ -48,21 +61,32 @@ export default function SavedPlansScreen() {
     const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.SAVED_PLANS);
     const hasDataRef = useRef(false);
 
-    useFocusEffect(useCallback(() => { fetchSavedData(); }, []));
+    useFocusEffect(useCallback(() => { void fetchSavedData(); }, []));
 
     const fetchSavedData = async () => {
         try {
-            if (!hasDataRef.current) setLoading(true);
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = await getAuthUser();
             if (!user) return;
             setCurrentUserId(user.id);
+
+            const cached = cacheGetStale<SavedPlansSnapshot>(screenCacheKey.savedPlans(user.id));
+            if (cached && !hasDataRef.current) {
+                setSavedPlans(cached.savedPlans);
+                setMembershipMap(cached.membershipMap);
+                setCurrentUserGenero(cached.currentUserGenero);
+                hasDataRef.current = cached.savedPlans.length > 0;
+                setLoading(false);
+            } else if (!hasDataRef.current) {
+                setLoading(true);
+            }
 
             const { data: myProfile } = await supabase
                 .from('perfiles')
                 .select('genero')
                 .eq('id', user.id)
                 .maybeSingle();
-            setCurrentUserGenero((myProfile?.genero as Genero) ?? null);
+            const nextGenero = (myProfile?.genero as Genero) ?? null;
+            setCurrentUserGenero(nextGenero);
 
             const { data: savedData } = await supabase
                 .from('planes_guardados')
@@ -105,6 +129,12 @@ export default function SavedPlansScreen() {
                 if (m) map[p.plan_id] = m;
             });
             setMembershipMap(map);
+
+            cacheSet(screenCacheKey.savedPlans(user.id), {
+                savedPlans: formatted,
+                membershipMap: map,
+                currentUserGenero: nextGenero,
+            } satisfies SavedPlansSnapshot, ScreenCacheTTL.savedPlans);
         } catch (error) {
             console.error(error);
         } finally {
@@ -172,10 +202,17 @@ export default function SavedPlansScreen() {
     const handleDelete = async (planId: string) => {
         Alert.alert(t('saved.deletePlan'), t('saved.deleteConfirm'), [
             { text: t('common.cancel'), style: "cancel" },
-            { text: t('common.delete'), style: "destructive", onPress: async () => {
-                setSavedPlans(prev => prev.filter(p => p.id !== planId));
-                await deletePlanCompletely(planId);
-            }}
+            {
+                text: t('common.delete'),
+                style: 'destructive',
+                // No async aquí: en Android el Alert espera el Promise y se queda abierto.
+                onPress: () => {
+                    setSavedPlans((prev) => prev.filter((p) => p.id !== planId));
+                    setTimeout(() => {
+                        void deletePlanCompletely(planId);
+                    }, 0);
+                },
+            },
         ]);
     };
 

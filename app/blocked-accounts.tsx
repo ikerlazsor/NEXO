@@ -1,10 +1,12 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useFocusEffect,
+    useRouter } from 'expo-router';
+import { useCallback,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     FlatList,
     Platform,
     StyleSheet,
@@ -12,6 +14,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { getBlockedUsers, unblockUser } from '../lib/blocks';
 import { useT } from '../lib/i18n';

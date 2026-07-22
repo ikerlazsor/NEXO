@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
+import { formatRatingScore } from './stats';
 
 export const STAR_COLOR = '#FFB800';
 
@@ -22,6 +23,7 @@ export function renderRatingStars(scoreOutOf5: number, size = 14) {
     return stars;
 }
 
-export function formatRatingLabel(scoreOutOf5: number, reviewCount: number) {
-    return `${scoreOutOf5.toFixed(1)}/5 · ${reviewCount} reseñas`;
+export function formatRatingLabel(scoreOutOf5: number, reviewCount: number, reviewsWord?: string) {
+    const word = reviewsWord ?? (reviewCount === 1 ? 'reseña' : 'reseñas');
+    return `${formatRatingScore(scoreOutOf5)}/5 · ${reviewCount} ${word}`;
 }

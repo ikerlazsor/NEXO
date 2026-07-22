@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-export const MAX_ACTIVE_PLANS = 2;
+export const MAX_ACTIVE_PLANS = 3;
 export const MAX_ACTIVE_PLANS_PLUS = 5;
 
 /** Planes activos = creados por el usuario + unidos (estado aceptado). */

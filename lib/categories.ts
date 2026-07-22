@@ -33,6 +33,146 @@ export const PLACEHOLDER_COVER_URI = 'https://via.placeholder.com/800x600/E8EEF5
 
 export const PLACEHOLDER_COVER = { uri: PLACEHOLDER_COVER_URI };
 
+export type CoverSource = string | number;
+
+/**
+ * Portadas locales por `main:sub` desde `assets/images`.
+ * Convención: `SUB_1.jpg` … `SUB_3.jpg`, y `{MAIN}_OTRO.jpg` para "otro".
+ */
+const COVER_ASSETS: Partial<Record<string, CoverSource[]>> = {
+    'FOODIES:cafe': [
+        require('../assets/images/CAFE_1.jpg'),
+        require('../assets/images/CAFE_2.jpg'),
+        require('../assets/images/CAFE_3.jpg'),
+    ],
+    'FOODIES:comer': [
+        require('../assets/images/COMER_1.jpg'),
+        require('../assets/images/COMER_2.jpg'),
+        require('../assets/images/COMER_3.jpg'),
+    ],
+    'FOODIES:cenar': [
+        require('../assets/images/CENAR_1.jpg'),
+        require('../assets/images/CENAR_2.jpg'),
+        require('../assets/images/CENAR_3.jpg'),
+    ],
+    'FOODIES:tapas': [
+        require('../assets/images/TAPAS_1.jpg'),
+        require('../assets/images/TAPAS_2.jpg'),
+        require('../assets/images/TAPAS_3.jpg'),
+    ],
+    'FOODIES:otro': [require('../assets/images/FOODIES_OTRO.jpg')],
+
+    'DEPORTES:futbol': [
+        require('../assets/images/FUTBOL_1.jpg'),
+        require('../assets/images/FUTBOL_2.jpg'),
+        require('../assets/images/FUTBOL_3.jpg'),
+    ],
+    'DEPORTES:baloncesto': [
+        require('../assets/images/BALONCESTO_1.jpg'),
+        require('../assets/images/BALONCESTO_2.jpg'),
+        require('../assets/images/BALONCESTO_3.jpg'),
+    ],
+    'DEPORTES:padel': [
+        require('../assets/images/PADEL_1.jpg'),
+        require('../assets/images/PADEL_2.jpg'),
+        require('../assets/images/PADEL_3.jpg'),
+    ],
+    'DEPORTES:running': [
+        require('../assets/images/RUNNING_1.jpg'),
+        require('../assets/images/RUNNING_2.jpg'),
+        require('../assets/images/RUNNING_3.jpg'),
+    ],
+    'DEPORTES:otro': [require('../assets/images/DEPORTES_OTRO.jpg')],
+
+    'AIRE_LIBRE:senderismo': [
+        require('../assets/images/SENDERISMO_1.jpg'),
+        require('../assets/images/SENDERISMO_2.jpg'),
+        require('../assets/images/SENDERISMO_3.jpg'),
+    ],
+    'AIRE_LIBRE:playa': [
+        require('../assets/images/PLAYA_1.jpg'),
+        require('../assets/images/PLAYA_2.jpg'),
+        require('../assets/images/PLAYA_3.jpg'),
+    ],
+    'AIRE_LIBRE:mirador': [
+        require('../assets/images/MIRADOR_1.jpg'),
+        require('../assets/images/MIRADOR_2.jpg'),
+        require('../assets/images/MIRADOR_3.jpg'),
+    ],
+    'AIRE_LIBRE:picnic': [
+        require('../assets/images/PICNIC_1.jpg'),
+        require('../assets/images/PICNIC_2.jpg'),
+        require('../assets/images/PICNIC_3.jpg'),
+    ],
+    'AIRE_LIBRE:otro': [require('../assets/images/AIRE_LIBRE_OTRO.jpg')],
+
+    'SHOWTIME:cine': [
+        require('../assets/images/CINE_1.jpg'),
+        require('../assets/images/CINE_2.jpg'),
+        require('../assets/images/CINE_3.jpg'),
+    ],
+    'SHOWTIME:teatro': [
+        require('../assets/images/TEATRO_1.jpg'),
+        require('../assets/images/TEATRO_2.jpg'),
+        require('../assets/images/TEATRO_3.jpg'),
+    ],
+    'SHOWTIME:concierto': [
+        require('../assets/images/CONCIERTO_1.jpg'),
+        require('../assets/images/CONCIERTO_2.jpg'),
+        require('../assets/images/CONCIERTO_3.jpg'),
+    ],
+    'SHOWTIME:espectaculo': [
+        require('../assets/images/ESPECTACULO_1.jpg'),
+        require('../assets/images/ESPECTACULO_2.jpg'),
+        require('../assets/images/ESPECTACULO_3.jpg'),
+    ],
+    'SHOWTIME:otro': [require('../assets/images/SHOWTIME_OTRO.jpg')],
+
+    'DESCUBRIR:museo': [
+        require('../assets/images/MUSEO_1.jpg'),
+        require('../assets/images/MUSEO_2.jpg'),
+        require('../assets/images/MUSEO_3.jpg'),
+    ],
+    'DESCUBRIR:estudio': [
+        require('../assets/images/ESTUDIO_1.jpg'),
+        require('../assets/images/ESTUDIO_2.jpg'),
+        require('../assets/images/ESTUDIO_3.jpg'),
+    ],
+    'DESCUBRIR:idiomas': [
+        require('../assets/images/IDIOMAS_1.jpg'),
+        require('../assets/images/IDIOMAS_2.jpg'),
+        require('../assets/images/IDIOMAS_3.jpg'),
+    ],
+    'DESCUBRIR:viajes': [
+        require('../assets/images/VIAJES_1.jpg'),
+        require('../assets/images/VIAJES_2.jpg'),
+        require('../assets/images/VIAJES_3.jpg'),
+    ],
+    'DESCUBRIR:otro': [require('../assets/images/DESCUBRIR_OTRO.jpg')],
+
+    'VIBES:fiesta': [
+        require('../assets/images/FIESTA_1.jpg'),
+        require('../assets/images/FIESTA_2.jpg'),
+        require('../assets/images/FIESTA_3.jpg'),
+    ],
+    'VIBES:compras': [
+        require('../assets/images/COMPRAS_1.jpg'),
+        require('../assets/images/COMPRAS_2.jpg'),
+        require('../assets/images/COMPRAS_3.jpg'),
+    ],
+    'VIBES:gaming': [
+        require('../assets/images/GAMING_1.jpg'),
+        require('../assets/images/GAMING_2.jpg'),
+        require('../assets/images/GAMING_3.jpg'),
+    ],
+    'VIBES:juegos_mesa': [
+        require('../assets/images/JUEGOS_DE_MESA_1.jpg'),
+        require('../assets/images/JUEGOS_DE_MESA_2.jpg'),
+        require('../assets/images/JUEGOS_DE_MESA_3.jpg'),
+    ],
+    'VIBES:otro': [require('../assets/images/VIBES_OTRO.jpg')],
+};
+
 const LEGACY_MAIN_MAP: Record<string, MainCategoryId> = {
     Tapas: 'FOODIES',
     Deporte: 'DEPORTES',
@@ -119,7 +259,9 @@ export function resolvePlanSport(plan: {
     return tipo ? { tipo } : null;
 }
 
-export function getCoverImages(main: MainCategoryId, sub: string): string[] {
+export function getCoverImages(main: MainCategoryId, sub: string): CoverSource[] {
+    const custom = COVER_ASSETS[`${main}:${sub}`];
+    if (custom && custom.length > 0) return custom;
     return Array.from({ length: COVERS_PER_SUB }, () => PLACEHOLDER_COVER_URI);
 }
 
@@ -127,12 +269,13 @@ export function encodeCoverImageKey(main: MainCategoryId, sub: string, index: nu
     return `nexo_cover:${main}:${sub}:${index}`;
 }
 
-function buildCoverLookup(): Record<string, string> {
-    const lookup: Record<string, string> = {};
+function buildCoverLookup(): Record<string, CoverSource> {
+    const lookup: Record<string, CoverSource> = {};
     for (const main of MAIN_CATEGORY_IDS) {
         for (const sub of SUBCATEGORIES[main]) {
-            for (let i = 0; i < COVERS_PER_SUB; i++) {
-                lookup[encodeCoverImageKey(main, sub, i)] = PLACEHOLDER_COVER_URI;
+            const images = getCoverImages(main, sub);
+            for (let i = 0; i < Math.max(images.length, COVERS_PER_SUB); i++) {
+                lookup[encodeCoverImageKey(main, sub, i)] = images[i] ?? PLACEHOLDER_COVER_URI;
             }
         }
     }
@@ -145,7 +288,7 @@ export function resolvePlanImageSource(imagenUrl: string | null | undefined): st
     if (!imagenUrl) return PLACEHOLDER_COVER_URI;
     const urlStr = String(imagenUrl);
     if (urlStr.startsWith('http')) return urlStr;
-    if (COVER_IMAGE_LOOKUP[urlStr]) return COVER_IMAGE_LOOKUP[urlStr];
+    if (COVER_IMAGE_LOOKUP[urlStr] != null) return COVER_IMAGE_LOOKUP[urlStr];
     if (urlStr.startsWith('nexo_cover:')) return PLACEHOLDER_COVER_URI;
     const parsedId = parseInt(urlStr, 10);
     if (!isNaN(parsedId)) return parsedId;

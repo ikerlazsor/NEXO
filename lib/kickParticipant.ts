@@ -1,4 +1,5 @@
 import { promoteWaitlist } from './participants';
+import { invalidateUserStatsCache } from './stats';
 import { supabase } from './supabase';
 
 export async function kickParticipant(
@@ -24,6 +25,16 @@ export async function kickParticipant(
         return { error: 'No puedes eliminar al creador del plan' };
     }
 
+    // Registrar expulsión (best effort) antes de borrar la participación
+    await supabase.from('expulsiones_plan').upsert(
+        {
+            plan_id: planId,
+            usuario_id: targetUserId,
+            expulsado_por: requesterId,
+        },
+        { onConflict: 'plan_id,usuario_id', ignoreDuplicates: true },
+    );
+
     const { error } = await supabase
         .from('participantes')
         .delete()
@@ -34,6 +45,7 @@ export async function kickParticipant(
         return { error: error.message };
     }
 
+    invalidateUserStatsCache(targetUserId);
     await promoteWaitlist(planId);
     return { error: null };
 }

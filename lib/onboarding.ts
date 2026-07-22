@@ -4,14 +4,15 @@ import { supabase } from './supabase';
 import type { Genero } from './profileFields';
 
 export type OnboardingData = {
-    age: number;
+    /** YYYY-MM-DD */
+    fecha_nacimiento: string;
     genero: Genero;
     avatar_url: string;
     ambientes_preferidos: string[];
 };
 
 export async function fetchOnboardingStatus(userId: string): Promise<boolean> {
-    const maxAttempts = 4;
+    const maxAttempts = 2;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const { data, error } = await supabase
@@ -27,7 +28,7 @@ export async function fetchOnboardingStatus(userId: string): Promise<boolean> {
 
         if (!data) {
             if (attempt < maxAttempts - 1) {
-                await new Promise((resolve) => setTimeout(resolve, 400));
+                await new Promise((resolve) => setTimeout(resolve, 180));
                 continue;
             }
             return false;
@@ -56,11 +57,8 @@ export async function saveOnboardingPreferences(
     const session = await getAuthSession();
     const nombre = readNombreFromUser(session?.user ?? {});
 
-    const birthYear = new Date().getFullYear() - data.age;
-    const fechaNacimiento = `${birthYear}-06-15`;
-
     const preferencePayload: Record<string, unknown> = {
-        fecha_nacimiento: fechaNacimiento,
+        fecha_nacimiento: data.fecha_nacimiento,
         genero: data.genero,
         avatar_url: data.avatar_url,
         ambientes_preferidos: data.ambientes_preferidos,

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useT } from '../lib/i18n';
@@ -13,14 +13,6 @@ const MUTED = '#64748B';
 const GOLD = '#F5C451';
 const GOLD_DARK = '#D4AF37';
 
-const FEATURES = [
-    { icon: 'timer-outline' as const, key: 'trial', accent: '#60A5FA' },
-    { icon: 'flash-outline' as const, key: 'waitlist', accent: '#F59E0B' },
-    { icon: 'calendar-outline' as const, key: 'limit', accent: '#34D399' },
-    { icon: 'diamond-outline' as const, key: 'badge', accent: GOLD_DARK },
-    { icon: 'gift-outline' as const, key: 'giveaways', accent: '#A78BFA' },
-];
-
 const COMPARE_ROWS = ['activePlans', 'waitlist', 'badge', 'giveaways'] as const;
 
 export default function NexoPlusScreen() {
@@ -30,12 +22,18 @@ export default function NexoPlusScreen() {
 
     return (
         <View style={styles.container}>
-            <LinearGradient colors={['#060D1F', '#0F1F45', '#1E3A8A']} style={styles.heroBg}>
+            <LinearGradient colors={['#060D1F', '#0F1F45', '#1E3A8A']} style={StyleSheet.absoluteFill}>
                 <View style={styles.glowOrb} />
                 <View style={[styles.glowOrb, styles.glowOrbSmall]} />
+            </LinearGradient>
 
-                <ScreenHeader title="Nexo Plus" onBack={() => router.back()} variant="transparent" />
+            <ScreenHeader title="Nexo Plus" onBack={() => router.back()} variant="transparent" />
 
+            <ScrollView
+                style={styles.scroll}
+                contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 120 }]}
+                showsVerticalScrollIndicator={false}
+            >
                 <View style={styles.heroContent}>
                     <LinearGradient colors={['#FDE68A', GOLD, GOLD_DARK]} style={styles.diamondWrap}>
                         <Ionicons name="diamond" size={32} color="#FFF" />
@@ -49,75 +47,58 @@ export default function NexoPlusScreen() {
                     <View style={styles.priceCard}>
                         <Text style={styles.priceTrial}>{t('nexoPlus.trial')}</Text>
                         <View style={styles.priceRow}>
-                            <Text style={styles.priceAmount}>6,99 €</Text>
+                            <Text style={styles.priceAmount}>2,99 €</Text>
                             <Text style={styles.pricePeriod}>/ {t('nexoPlus.perMonth')}</Text>
                         </View>
                         <Text style={styles.priceNote}>{t('nexoPlus.priceNote')}</Text>
                     </View>
                 </View>
-            </LinearGradient>
 
-            <ScrollView
-                style={styles.sheet}
-                contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 120 }]}
-                showsVerticalScrollIndicator={false}
-            >
-                <Text style={styles.sectionLabel}>{t('nexoPlus.includes')}</Text>
-                {FEATURES.map((f, i) => (
-                    <View key={f.key} style={styles.featureRow}>
-                        <View style={styles.featureTimeline}>
-                            <View style={[styles.featureDot, { backgroundColor: f.accent }]} />
-                            {i < FEATURES.length - 1 ? <View style={styles.featureLine} /> : null}
-                        </View>
-                        <View style={styles.featureCard}>
-                            <View style={[styles.featureIcon, { backgroundColor: `${f.accent}18` }]}>
-                                <Ionicons name={f.icon} size={20} color={f.accent} />
-                            </View>
-                            <View style={styles.featureText}>
-                                <Text style={styles.featureTitle}>{t(`nexoPlus.feature.${f.key}.title`)}</Text>
-                                <Text style={styles.featureDesc}>{t(`nexoPlus.feature.${f.key}.desc`)}</Text>
-                            </View>
-                        </View>
+                <View style={styles.sheet}>
+                    <Text style={styles.sectionLabel}>{t('nexoPlus.includes')}</Text>
+                    <View style={styles.comingSoonCard}>
+                        <Text style={styles.comingSoonBadge}>{t('nexoPlus.comingSoon')}</Text>
+                        <Text style={styles.comingSoonTitle}>{t('nexoPlus.comingSoonTitle')}</Text>
+                        <Text style={styles.comingSoonDesc}>{t('nexoPlus.comingSoonDesc')}</Text>
                     </View>
-                ))}
 
-                <View style={styles.compareCard}>
-                    <Text style={styles.compareTitle}>{t('nexoPlus.compareTitle')}</Text>
-                    <View style={styles.compareHeader}>
-                        <Text style={styles.compareColLabel}>{t('nexoPlus.compareFeature')}</Text>
-                        <Text style={styles.compareColFree}>{t('nexoPlus.planFree')}</Text>
-                        <Text style={styles.compareColPlus}>{t('nexoPlus.planPlus')}</Text>
-                    </View>
-                    {COMPARE_ROWS.map((row) => (
-                        <View key={row} style={styles.compareRow}>
-                            <Text style={styles.compareFeature}>{t(`nexoPlus.compare.${row}.label`)}</Text>
-                            <Text style={styles.compareFree}>{t(`nexoPlus.compare.${row}.free`)}</Text>
-                            <View style={styles.comparePlusCell}>
-                                <Ionicons name="checkmark-circle" size={16} color={PRIMARY_DARK} />
-                                <Text style={styles.comparePlus}>{t(`nexoPlus.compare.${row}.plus`)}</Text>
-                            </View>
+                    <View style={styles.compareCard}>
+                        <Text style={styles.compareTitle}>{t('nexoPlus.compareTitle')}</Text>
+                        <View style={styles.compareHeader}>
+                            <Text style={styles.compareColLabel}>{t('nexoPlus.compareFeature')}</Text>
+                            <Text style={styles.compareColFree}>{t('nexoPlus.planFree')}</Text>
+                            <Text style={styles.compareColPlus}>{t('nexoPlus.planPlus')}</Text>
                         </View>
-                    ))}
-                </View>
-
-                <View style={styles.trustRow}>
-                    <View style={styles.trustItem}>
-                        <Ionicons name="shield-checkmark-outline" size={18} color={PRIMARY_DARK} />
-                        <Text style={styles.trustText}>{t('nexoPlus.secure')}</Text>
+                        {COMPARE_ROWS.map((row) => (
+                            <View key={row} style={styles.compareRow}>
+                                <Text style={styles.compareFeature}>{t(`nexoPlus.compare.${row}.label`)}</Text>
+                                <Text style={styles.compareFree}>{t(`nexoPlus.compare.${row}.free`)}</Text>
+                                <View style={styles.comparePlusCell}>
+                                    <Ionicons name="checkmark-circle" size={16} color={PRIMARY_DARK} />
+                                    <Text style={styles.comparePlus}>{t(`nexoPlus.compare.${row}.plus`)}</Text>
+                                </View>
+                            </View>
+                        ))}
                     </View>
-                    <View style={styles.trustItem}>
-                        <Ionicons name="close-circle-outline" size={18} color={PRIMARY_DARK} />
-                        <Text style={styles.trustText}>{t('nexoPlus.cancelAnytime')}</Text>
+
+                    <View style={styles.trustRow}>
+                        <View style={styles.trustItem}>
+                            <Ionicons name="shield-checkmark-outline" size={18} color={PRIMARY_DARK} />
+                            <Text style={styles.trustText}>{t('nexoPlus.secure')}</Text>
+                        </View>
+                        <View style={styles.trustItem}>
+                            <Ionicons name="close-circle-outline" size={18} color={PRIMARY_DARK} />
+                            <Text style={styles.trustText}>{t('nexoPlus.cancelAnytime')}</Text>
+                        </View>
                     </View>
                 </View>
             </ScrollView>
 
             <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-                <TouchableOpacity style={styles.ctaBtn} activeOpacity={0.9}>
-                    <LinearGradient colors={[GOLD, GOLD_DARK]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.ctaGradient}>
-                        <Text style={styles.ctaText}>{t('nexoPlus.cta')}</Text>
-                        <Ionicons name="arrow-forward" size={20} color="#FFF" />
-                    </LinearGradient>
+                <TouchableOpacity style={[styles.ctaBtn, styles.ctaBtnDisabled]} activeOpacity={1} disabled>
+                    <View style={styles.ctaDisabledInner}>
+                        <Text style={styles.ctaText}>{t('nexoPlus.ctaUnavailable')}</Text>
+                    </View>
                 </TouchableOpacity>
                 <Text style={styles.disclaimer}>{t('nexoPlus.disclaimer')}</Text>
             </View>
@@ -126,8 +107,7 @@ export default function NexoPlusScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F8FAFC' },
-    heroBg: { paddingBottom: 28, overflow: 'hidden' },
+    container: { flex: 1, backgroundColor: '#060D1F' },
     glowOrb: {
         position: 'absolute',
         width: 220,
@@ -145,7 +125,9 @@ const styles = StyleSheet.create({
         left: -30,
         backgroundColor: 'rgba(245,196,81,0.1)',
     },
-    heroContent: { alignItems: 'center', paddingHorizontal: 24, paddingTop: 4 },
+    scroll: { flex: 1 },
+    scrollContent: { flexGrow: 1 },
+    heroContent: { alignItems: 'center', paddingHorizontal: 24, paddingTop: 4, paddingBottom: 28 },
     diamondWrap: {
         width: 72,
         height: 72,
@@ -197,13 +179,14 @@ const styles = StyleSheet.create({
     pricePeriod: { fontSize: 15, fontWeight: '600', color: 'rgba(255,255,255,0.7)' },
     priceNote: { fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 6 },
     sheet: {
-        flex: 1,
-        marginTop: -18,
         backgroundColor: '#F8FAFC',
         borderTopLeftRadius: 28,
         borderTopRightRadius: 28,
+        paddingHorizontal: 20,
+        paddingTop: 28,
+        paddingBottom: 8,
+        minHeight: 420,
     },
-    scroll: { paddingHorizontal: 20, paddingTop: 28 },
     sectionLabel: {
         fontSize: 12,
         fontWeight: '800',
@@ -212,30 +195,30 @@ const styles = StyleSheet.create({
         letterSpacing: 1,
         marginBottom: 18,
     },
-    featureRow: { flexDirection: 'row', marginBottom: 4 },
-    featureTimeline: { width: 20, alignItems: 'center', paddingTop: 18 },
-    featureDot: { width: 10, height: 10, borderRadius: 5 },
-    featureLine: { flex: 1, width: 2, backgroundColor: '#E2E8F0', marginVertical: 4 },
-    featureCard: {
-        flex: 1,
-        flexDirection: 'row',
+    comingSoonCard: {
         backgroundColor: '#FFF',
         borderRadius: 18,
-        padding: 14,
-        marginBottom: 10,
-        gap: 12,
+        padding: 20,
         borderWidth: 1,
         borderColor: '#E8EEF5',
-        shadowColor: '#1E3A8A',
-        shadowOpacity: 0.04,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 2,
+        marginBottom: 8,
     },
-    featureIcon: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-    featureText: { flex: 1 },
-    featureTitle: { fontSize: 15, fontWeight: '800', color: INK },
-    featureDesc: { fontSize: 13, color: MUTED, marginTop: 3, lineHeight: 18 },
+    comingSoonBadge: {
+        alignSelf: 'flex-start',
+        fontSize: 11,
+        fontWeight: '800',
+        color: GOLD_DARK,
+        letterSpacing: 0.6,
+        textTransform: 'uppercase',
+        backgroundColor: 'rgba(245,196,81,0.15)',
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 8,
+        overflow: 'hidden',
+        marginBottom: 12,
+    },
+    comingSoonTitle: { fontSize: 17, fontWeight: '800', color: INK },
+    comingSoonDesc: { fontSize: 14, color: MUTED, marginTop: 8, lineHeight: 21 },
     compareCard: {
         backgroundColor: '#FFF',
         borderRadius: 20,
@@ -285,12 +268,13 @@ const styles = StyleSheet.create({
         elevation: 8,
     },
     ctaBtn: { borderRadius: 16, overflow: 'hidden' },
-    ctaGradient: {
-        flexDirection: 'row',
+    ctaBtnDisabled: { opacity: 1 },
+    ctaDisabledInner: {
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 8,
         paddingVertical: 17,
+        backgroundColor: '#CBD5E1',
+        borderRadius: 16,
     },
     ctaText: { color: '#FFF', fontSize: 17, fontWeight: '900', letterSpacing: 0.2 },
     disclaimer: { fontSize: 11, color: MUTED, textAlign: 'center', marginTop: 10, lineHeight: 15 },

@@ -124,12 +124,25 @@ BEGIN
         WHERE invitador_id = uid OR invitado_id = uid;
     END IF;
 
-    -- Reportes
+    -- Reportes / soporte
     IF EXISTS (
         SELECT 1 FROM information_schema.tables
         WHERE table_schema = 'public' AND table_name = 'reportes_planes'
     ) THEN
         DELETE FROM public.reportes_planes WHERE reportador_id = uid;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'reportes_usuarios'
+    ) THEN
+        DELETE FROM public.reportes_usuarios
+        WHERE reportador_id = uid OR denunciado_id = uid;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'mensajes_soporte'
+    ) THEN
+        DELETE FROM public.mensajes_soporte WHERE usuario_id = uid;
     END IF;
 
     -- Mensajes directos / del usuario (emisor_id o usuario_id)

@@ -73,7 +73,11 @@ export async function blockUser(currentUserId: string, otherUserId: string): Pro
         [cols.blocker]: currentUserId,
         [cols.blocked]: otherUserId,
     });
-    if (error && error.code !== '23505') return { error: error.message };
+    if (error) {
+        if (error.code === '23505') return { error: null };
+        if (/block_daily_limit/i.test(error.message)) return { error: 'block_daily_limit' };
+        return { error: error.message };
+    }
     return { error: null };
 }
 

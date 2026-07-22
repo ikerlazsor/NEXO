@@ -3,9 +3,13 @@ import { useCallback, useRef } from 'react';
 import { InteractionManager, type ScrollView } from 'react-native';
 import { getScreenScrollOffset, setScreenScrollOffset, type ScreenKey } from '../lib/screenState';
 
-export function useScrollViewRestore(screenKey: ScreenKey) {
+export function useScrollViewRestore(
+    screenKey: ScreenKey,
+    options?: { restore?: boolean },
+) {
     const scrollRef = useRef<ScrollView>(null);
     const focusedRef = useRef(false);
+    const restoreEnabled = options?.restore !== false;
 
     const onScroll = useCallback(
         (event: { nativeEvent: { contentOffset: { y: number } } }) => {
@@ -15,30 +19,37 @@ export function useScrollViewRestore(screenKey: ScreenKey) {
     );
 
     const restoreScroll = useCallback(() => {
+        if (!restoreEnabled) return;
         const offset = getScreenScrollOffset(screenKey);
         if (offset <= 0) return;
 
         requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                scrollRef.current?.scrollTo({ y: offset, animated: false });
-            });
+            scrollRef.current?.scrollTo({ y: offset, animated: false });
         });
-    }, [screenKey]);
+    }, [screenKey, restoreEnabled]);
 
     useFocusEffect(
         useCallback(() => {
             focusedRef.current = true;
-            restoreScroll();
+            if (!restoreEnabled) {
+                return () => {
+                    focusedRef.current = false;
+                };
+            }
 
+            // Esperar a que el layout asiente; restaurar solo una vez evita el "bote".
             const task = InteractionManager.runAfterInteractions(() => {
-                if (focusedRef.current) restoreScroll();
+                if (!focusedRef.current) return;
+                requestAnimationFrame(() => {
+                    if (focusedRef.current) restoreScroll();
+                });
             });
 
             return () => {
                 focusedRef.current = false;
                 task.cancel();
             };
-        }, [restoreScroll]),
+        }, [restoreScroll, restoreEnabled]),
     );
 
     return { scrollRef, onScroll, restoreScroll, scrollEventThrottle: 16 as const };

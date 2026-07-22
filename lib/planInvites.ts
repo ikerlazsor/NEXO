@@ -40,14 +40,26 @@ export async function sendPlanInvite(
     invitadoId: string,
     tipo: PlanInviteType
 ): Promise<{ error: string | null }> {
+    // Si ya está unido (aceptado) o tiene solicitud pendiente, no se invita de nuevo
     const { data: existing } = await supabase
         .from('participantes')
-        .select('id')
+        .select('id, estado')
         .eq('plan_id', planId)
         .eq('usuario_id', invitadoId)
         .maybeSingle();
 
-    if (existing) return { error: 'already_member' };
+    if (existing) {
+        if (existing.estado === 'aceptado' || existing.estado === 'pendiente') {
+            // Limpia invitación pendiente obsoleta si la hubiera
+            void supabase
+                .from('invitaciones_planes')
+                .delete()
+                .eq('plan_id', planId)
+                .eq('invitado_id', invitadoId)
+                .eq('estado', 'pendiente');
+            return { error: 'already_member' };
+        }
+    }
 
     const { data: pending } = await supabase
         .from('invitaciones_planes')
@@ -142,4 +154,86 @@ export async function countPendingPlanInvites(userId: string): Promise<number> {
         .eq('estado', 'pendiente');
     if (error) return 0;
     return count ?? 0;
+}
+
+export type PlanInvitee = {
+    inviteId: string;
+    id: string;
+    nombre: string;
+    nombre_usuario: string | null;
+    avatar_url: string | null;
+    estado: string;
+    invitadorId: string | null;
+    invitadorNombre: string | null;
+};
+
+/** Invitaciones salientes de un plan (pendientes), con perfil del invitado.
+ * Incluye invitaciones de cualquier integrante (si RLS lo permite).
+ * Excluye a quien ya esté unido (aceptado) y limpia invitaciones obsoletas. */
+export async function getPlanPendingInvitees(planId: string): Promise<PlanInvitee[]> {
+    const { data, error } = await supabase
+        .from('invitaciones_planes')
+        .select('id, invitado_id, invitador_id, estado')
+        .eq('plan_id', planId)
+        .eq('estado', 'pendiente')
+        .order('creado_en', { ascending: false });
+
+    if (error || !data?.length) return [];
+
+    const invitedIds = data.map((r) => r.invitado_id as string);
+    const inviterIds = [...new Set(data.map((r) => r.invitador_id as string).filter(Boolean))];
+    const profileIds = [...new Set([...invitedIds, ...inviterIds])];
+
+    const [{ data: profiles }, { data: joinedRows }] = await Promise.all([
+        supabase.from('perfiles').select('id, nombre, nombre_usuario, avatar_url').in('id', profileIds),
+        supabase
+            .from('participantes')
+            .select('usuario_id')
+            .eq('plan_id', planId)
+            .eq('estado', 'aceptado')
+            .in('usuario_id', invitedIds),
+    ]);
+
+    const joined = new Set((joinedRows ?? []).map((r) => r.usuario_id as string));
+    const stale = invitedIds.filter((id) => joined.has(id));
+    if (stale.length > 0) {
+        void supabase
+            .from('invitaciones_planes')
+            .delete()
+            .eq('plan_id', planId)
+            .eq('estado', 'pendiente')
+            .in('invitado_id', stale);
+    }
+
+    const byId = new Map((profiles ?? []).map((p) => [p.id, p]));
+    return data
+        .filter((r) => !joined.has(r.invitado_id as string))
+        .map((r) => {
+            const p = byId.get(r.invitado_id as string);
+            const inviter = r.invitador_id ? byId.get(r.invitador_id as string) : undefined;
+            return {
+                inviteId: r.id as string,
+                id: r.invitado_id as string,
+                nombre: p?.nombre ?? '—',
+                nombre_usuario: p?.nombre_usuario ?? null,
+                avatar_url: p?.avatar_url ?? null,
+                estado: r.estado as string,
+                invitadorId: (r.invitador_id as string) ?? null,
+                invitadorNombre: inviter?.nombre ?? null,
+            };
+        });
+}
+
+/** Quita una invitación pendiente (el invitado deja de verla). */
+export async function cancelPlanInvite(
+    planId: string,
+    invitadoId: string,
+): Promise<{ error: string | null }> {
+    const { error } = await supabase
+        .from('invitaciones_planes')
+        .delete()
+        .eq('plan_id', planId)
+        .eq('invitado_id', invitadoId)
+        .eq('estado', 'pendiente');
+    return { error: error?.message ?? null };
 }

@@ -15,10 +15,12 @@ export async function deletePlanCompletely(planId: string): Promise<{ error: str
         { table: 'valoraciones', column: 'plan_id' },
     ];
 
-    for (const { table, column } of steps) {
-        const { error } = await supabase.from(table).delete().eq(column, planId);
-        if (error) console.warn(`deletePlanCompletely (${table}):`, error.message);
-    }
+    await Promise.all(
+        steps.map(async ({ table, column }) => {
+            const { error } = await supabase.from(table).delete().eq(column, planId);
+            if (error) console.warn(`deletePlanCompletely (${table}):`, error.message);
+        }),
+    );
 
     const { error } = await supabase.from('planes').delete().eq('id', planId);
     return { error: error?.message ?? null };

@@ -1,5 +1,5 @@
 -- ============================================================
--- Ciclo de vida post-plan: historial, chat 24h, valoraciones +3h
+-- Ciclo de vida post-plan: historial, chat 24h, valoraciones +2h
 -- Ejecutar en Supabase SQL Editor
 -- ============================================================
 
@@ -143,7 +143,7 @@ CREATE POLICY "valoraciones_insert_own" ON public.valoraciones
             SELECT 1 FROM public.planes pl
             WHERE pl.id = valoraciones.plan_id
               AND pl.fecha_evento IS NOT NULL
-              AND pl.fecha_evento + interval '3 hours' <= now()
+              AND pl.fecha_evento + interval '2 hours' <= now()
               AND COALESCE(pl.categoria, '') NOT IN ('Grupo', 'Chat')
         )
     );

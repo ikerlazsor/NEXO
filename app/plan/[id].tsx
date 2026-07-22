@@ -1,10 +1,15 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useFocusEffect,
+    useLocalSearchParams,
+    useRouter } from 'expo-router';
+import { useCallback,
+    useMemo,
+    useRef,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     Dimensions,
     Modal,
     Platform,
@@ -16,14 +21,17 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../../lib/nexoAlert';
 import MapView, { Marker } from 'react-native-maps';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { PlanImage } from '../../components/PlanImage';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { SportIcon } from '../../components/SportIcon';
+import { InvitePeopleSheet, type InviteProfile } from '../../components/InvitePeopleSheet';
 import { getAuthUser } from '../../lib/auth';
 import { getFriends } from '../../lib/friends';
+import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../../lib/planInvites';
 import {
     canJoinWaitlist,
     isAcceptedParticipant,
@@ -36,16 +44,23 @@ import {
 import { canJoinPlanByGender } from '../../lib/soloChicas';
 import { canJoinMorePlans } from '../../lib/planLimits';
 import { kickParticipant } from '../../lib/kickParticipant';
-import type { Genero } from '../../lib/profileFields';
+import { getPersonalityLabel, type Genero } from '../../lib/profileFields';
+import { distanceKm, formatDistanceKm, openDirectionsTo } from '../../lib/geo';
 import { useT } from '../../lib/i18n';
+import { hidePlanFromMyList } from '../../lib/myPlansHide';
+import { isPlanChatAlive } from '../../lib/planLifecycle';
 import { renderRatingStars } from '../../lib/profileRating';
-import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
+import { getOpenRatingForPlan, type PendingRatingPlan } from '../../lib/ratings';
+import { EMPTY_STATS, formatRatingScore, getUserStats, type UserStats } from '../../lib/stats';
 import { resolvePlanImageSource, resolvePlanSport, getPlanCategoryDisplay } from '../../lib/sports';
 import { ScreenKeys } from '../../lib/screenState';
+import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const HERO_H = Math.min(300, SCREEN_W * 0.72);
+const HERO_H = Math.min(380, SCREEN_W * 0.92);
+const PLAN_DETAIL_TTL_MS = 90_000;
+const planDetailKey = (id: string) => `planDetail:${id}`;
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -68,6 +83,7 @@ type Participant = {
     isCreator?: boolean;
     ambientes_preferidos?: string[] | null;
     etiquetas?: string[] | null;
+    genero?: string | null;
 };
 
 type PlanRow = {
@@ -85,6 +101,22 @@ type PlanRow = {
     requiere_aprobacion: boolean;
     descripcion: string | null;
     solo_chicas?: boolean;
+    modo_privado?: boolean;
+    chat_eliminado_en?: string | null;
+};
+
+type PlanDetailSnapshot = {
+    plan: PlanRow;
+    participants: Participant[];
+    joinedCount: number;
+    creator: Participant | null;
+    creatorStats: UserStats;
+    membership: Membership;
+    friendIds: string[];
+    isSaved: boolean;
+    currentUserGenero: Genero | null;
+    openRating: PendingRatingPlan | null;
+    currentUserId: string | null;
 };
 
 function PersonBubble({
@@ -146,32 +178,65 @@ function PersonBubble({
 export default function PlanDetailScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { t } = useT();
+    const { t, lang } = useT();
+    const dateLocale = lang === 'en' ? 'en-GB' : 'es-ES';
     const { id } = useLocalSearchParams<{ id: string | string[] }>();
     const planId = Array.isArray(id) ? id[0] : id;
     const scrollKey = planId ? `${ScreenKeys.PLAN_DETAIL}:${planId}` : ScreenKeys.PLAN_DETAIL;
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(scrollKey);
 
-    const [loading, setLoading] = useState(true);
-    const [plan, setPlan] = useState<PlanRow | null>(null);
-    const [participants, setParticipants] = useState<Participant[]>([]);
-    const [joinedCount, setJoinedCount] = useState(0);
-    const [creator, setCreator] = useState<Participant | null>(null);
-    const [creatorStats, setCreatorStats] = useState<UserStats>(EMPTY_STATS);
-    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-    const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(null);
-    const [membership, setMembership] = useState<Membership>('none');
-    const [friendIds, setFriendIds] = useState<Set<string>>(new Set());
-    const [isSaved, setIsSaved] = useState(false);
+    const cachedDetail = planId ? cacheGetStale<PlanDetailSnapshot>(planDetailKey(planId)) : null;
+
+    const [loading, setLoading] = useState(() => !cachedDetail);
+    const [plan, setPlan] = useState<PlanRow | null>(() => cachedDetail?.plan ?? null);
+    const [participants, setParticipants] = useState<Participant[]>(() => cachedDetail?.participants ?? []);
+    const [joinedCount, setJoinedCount] = useState(() => cachedDetail?.joinedCount ?? 0);
+    const [creator, setCreator] = useState<Participant | null>(() => cachedDetail?.creator ?? null);
+    const [creatorStats, setCreatorStats] = useState<UserStats>(() => cachedDetail?.creatorStats ?? EMPTY_STATS);
+    const [currentUserId, setCurrentUserId] = useState<string | null>(() => cachedDetail?.currentUserId ?? null);
+    const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(
+        () => cachedDetail?.currentUserGenero ?? null,
+    );
+    const [membership, setMembership] = useState<Membership>(() => cachedDetail?.membership ?? 'none');
+    const [friendIds, setFriendIds] = useState<Set<string>>(
+        () => new Set(cachedDetail?.friendIds ?? []),
+    );
+    const [isSaved, setIsSaved] = useState(() => cachedDetail?.isSaved ?? false);
     const [actionBusy, setActionBusy] = useState(false);
     const [mapExpanded, setMapExpanded] = useState(false);
-    const hasLoadedRef = useRef(false);
+    const [openRating, setOpenRating] = useState<PendingRatingPlan | null>(
+        () => cachedDetail?.openRating ?? null,
+    );
+    const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [showInviteSheet, setShowInviteSheet] = useState(false);
+    const [invitees, setInvitees] = useState<InviteProfile[]>([]);
+    const hasLoadedRef = useRef(!!cachedDetail);
+
+    const applyDetailSnapshot = useCallback((snap: PlanDetailSnapshot) => {
+        setPlan(snap.plan);
+        setParticipants(snap.participants);
+        setJoinedCount(snap.joinedCount);
+        setCreator(snap.creator);
+        setCreatorStats(snap.creatorStats);
+        setMembership(snap.membership);
+        setFriendIds(new Set(snap.friendIds));
+        setIsSaved(snap.isSaved);
+        setCurrentUserGenero(snap.currentUserGenero);
+        setOpenRating(snap.openRating);
+        setCurrentUserId(snap.currentUserId);
+        hasLoadedRef.current = true;
+    }, []);
 
     const loadPlan = useCallback(async () => {
         if (!planId) return;
-        const silent = hasLoadedRef.current;
         try {
-            if (!silent) setLoading(true);
+            const stale = cacheGetStale<PlanDetailSnapshot>(planDetailKey(planId));
+            if (stale) {
+                applyDetailSnapshot(stale);
+                setLoading(false);
+            } else if (!hasLoadedRef.current) {
+                setLoading(true);
+            }
 
             const user = await getAuthUser();
             setCurrentUserId(user?.id ?? null);
@@ -179,13 +244,13 @@ export default function PlanDetailScreen() {
             const { data: planRow, error } = await supabase
                 .from('planes')
                 .select(
-                    'id, titulo, imagen_url, categoria, tipo_deporte, solo_chicas, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion',
+                    'id, titulo, imagen_url, categoria, tipo_deporte, solo_chicas, modo_privado, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion, chat_eliminado_en',
                 )
                 .eq('id', planId)
                 .maybeSingle();
 
             if (error || !planRow) {
-                setPlan(null);
+                if (!stale) setPlan(null);
                 return;
             }
 
@@ -199,7 +264,7 @@ export default function PlanDetailScreen() {
                     .eq('estado', 'aceptado'),
                 supabase
                     .from('perfiles')
-                    .select('id, nombre, avatar_url, ambientes_preferidos, etiquetas')
+                    .select('id, nombre, avatar_url, ambientes_preferidos, etiquetas, genero')
                     .eq('id', planRow.creador_id)
                     .maybeSingle(),
                 user
@@ -228,13 +293,10 @@ export default function PlanDetailScreen() {
             const accepted = (partsRes.data || []).filter((p: { estado: string }) =>
                 isAcceptedParticipant(p.estado),
             );
-            setJoinedCount(accepted.length);
 
             const creatorProfile: Participant | null = creatorRes.data
                 ? { ...creatorRes.data, isCreator: true }
                 : null;
-            setCreator(creatorProfile);
-            setCreatorStats(stats);
 
             const list: Participant[] = [];
             if (creatorProfile) list.push(creatorProfile);
@@ -244,22 +306,34 @@ export default function PlanDetailScreen() {
                     list.push({ ...prof, isCreator: false });
                 }
             });
-            setParticipants(list);
 
-            if (myPartRes.data?.estado) {
-                setMembership(mapEstadoToMembership(myPartRes.data.estado) ?? 'none');
-            } else {
-                setMembership('none');
-            }
+            const nextMembership = myPartRes.data?.estado
+                ? (mapEstadoToMembership(myPartRes.data.estado) ?? 'none')
+                : 'none';
+            const nextFriends = friendsData.map((f) => f.id);
+            const nextGenero = (myProfileRes.data?.genero as Genero) ?? null;
+            const nextOpenRating = user ? await getOpenRatingForPlan(user.id, planId) : null;
+            const nextSaved = !!savedRes.data;
 
-            setIsSaved(!!savedRes.data);
-            setFriendIds(new Set(friendsData.map((f) => f.id)));
-            setCurrentUserGenero((myProfileRes.data?.genero as Genero) ?? null);
-            hasLoadedRef.current = true;
+            const snap: PlanDetailSnapshot = {
+                plan: planRow as PlanRow,
+                participants: list,
+                joinedCount: accepted.length,
+                creator: creatorProfile,
+                creatorStats: stats,
+                membership: nextMembership,
+                friendIds: nextFriends,
+                isSaved: nextSaved,
+                currentUserGenero: nextGenero,
+                openRating: nextOpenRating,
+                currentUserId: user?.id ?? null,
+            };
+            applyDetailSnapshot(snap);
+            cacheSet(planDetailKey(planId), snap, PLAN_DETAIL_TTL_MS);
         } finally {
             setLoading(false);
         }
-    }, [planId]);
+    }, [planId, applyDetailSnapshot]);
 
     useFocusEffect(
         useCallback(() => {
@@ -272,11 +346,69 @@ export default function PlanDetailScreen() {
     const requiresApproval = !!plan?.requiere_aprobacion;
     const waitlistOpen = canJoinWaitlist(plan?.fecha_evento);
     const genderBlocked = plan ? !canJoinPlanByGender(plan, currentUserGenero) : false;
+    const isPrivatePlan = !!plan?.modo_privado;
+    const isPastPlan = !!(plan?.fecha_evento && new Date(plan.fecha_evento).getTime() < Date.now());
+    /** Privado: solo creador. Público: creador o integrante. Nunca en planes ya pasados. */
+    const canInvitePeople =
+        !!currentUserId &&
+        !!plan &&
+        !isPastPlan &&
+        (isCreator || (membership === 'joined' && !isPrivatePlan));
+
+    const openInviteSheet = async () => {
+        if (!planId || !canInvitePeople) return;
+        setShowInviteSheet(true);
+        try {
+            const list = await getPlanPendingInvitees(planId);
+            setInvitees(
+                list.map((i) => ({
+                    id: i.id,
+                    nombre: i.nombre,
+                    nombre_usuario: i.nombre_usuario,
+                    avatar_url: i.avatar_url,
+                    invitedByName: i.invitadorNombre,
+                })),
+            );
+        } catch {
+            setInvitees([]);
+        }
+    };
+
+    const handleInviteAdd = useCallback(
+        async (profile: InviteProfile) => {
+            if (!planId || !currentUserId) return { error: 'no_user' };
+            const { error } = await sendPlanInvite(planId, currentUserId, profile.id, 'plan');
+            if (!error) {
+                setInvitees((prev) => (prev.some((p) => p.id === profile.id) ? prev : [...prev, profile]));
+            }
+            return { error };
+        },
+        [planId, currentUserId],
+    );
+
+    const handleInviteRemove = useCallback(
+        async (profileId: string) => {
+            if (!planId) return { error: 'no_plan' };
+            const { error } = await cancelPlanInvite(planId, profileId);
+            if (!error) {
+                setInvitees((prev) => prev.filter((p) => p.id !== profileId));
+            }
+            return { error };
+        },
+        [planId],
+    );
+
+    const inviteExcludeIds = useMemo(
+        () => new Set(participants.map((p) => p.id)),
+        [participants],
+    );
 
     const eventDate = plan?.fecha_evento ? new Date(plan.fecha_evento) : null;
-    const dateString = eventDate ? eventDate.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }) : t('card.noDate');
+    const dateString = eventDate
+        ? eventDate.toLocaleDateString(dateLocale, { weekday: 'long', day: 'numeric', month: 'long' })
+        : t('card.noDate');
     const timeString = eventDate
-        ? eventDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        ? eventDate.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })
         : '';
     const sportPlan = plan ? resolvePlanSport(plan) : null;
     const lat = plan?.latitud ?? 40.4167;
@@ -430,20 +562,62 @@ export default function PlanDetailScreen() {
         ]);
     };
 
+    const chatAlive = plan ? isPlanChatAlive(plan) : false;
+
+    const confirmHideFromMyList = () => {
+        if (!plan || !currentUserId) return;
+        Alert.alert(t('planDetail.hideFromListTitle'), t('planDetail.hideFromListMsg'), [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: t('planDetail.hideFromListConfirm'),
+                style: 'destructive',
+                onPress: async () => {
+                    await hidePlanFromMyList(currentUserId, plan.id);
+                    router.back();
+                },
+            },
+        ]);
+    };
+
     const renderPrimaryAction = () => {
+        if (isPastPlan && (isCreator || membership === 'joined' || membership === 'requested' || membership === 'waitlist')) {
+            return (
+                <View style={styles.joinedActions}>
+                    {chatAlive ? (
+                        <TouchableOpacity
+                            style={styles.chatBtn}
+                            activeOpacity={0.9}
+                            onPress={() => router.push(`/chat/${plan!.id}`)}
+                        >
+                            <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
+                                <Ionicons name="chatbubbles" size={22} color="#FFF" />
+                                <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
+                            </LinearGradient>
+                        </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity style={styles.hideFromListBtn} onPress={confirmHideFromMyList} activeOpacity={0.85}>
+                        <Ionicons name="trash-outline" size={20} color={DANGER} />
+                        <Text style={styles.hideFromListText}>{t('planDetail.hideFromList')}</Text>
+                    </TouchableOpacity>
+                </View>
+            );
+        }
+
         if (isCreator) {
             return (
                 <View style={styles.creatorActions}>
-                    <TouchableOpacity
-                        style={styles.chatBtn}
-                        activeOpacity={0.9}
-                        onPress={() => router.push(`/chat/${plan!.id}`)}
-                    >
-                        <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
-                            <Ionicons name="chatbubbles" size={22} color="#FFF" />
-                            <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
-                        </LinearGradient>
-                    </TouchableOpacity>
+                    {chatAlive ? (
+                        <TouchableOpacity
+                            style={styles.chatBtn}
+                            activeOpacity={0.9}
+                            onPress={() => router.push(`/chat/${plan!.id}`)}
+                        >
+                            <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
+                                <Ionicons name="chatbubbles" size={22} color="#FFF" />
+                                <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
+                            </LinearGradient>
+                        </TouchableOpacity>
+                    ) : null}
                     <TouchableOpacity style={styles.iconRoundBtn} onPress={() => router.push({ pathname: '/create-plan', params: { editId: plan!.id } })}>
                         <Ionicons name="create-outline" size={22} color={PRIMARY_DARK} />
                     </TouchableOpacity>
@@ -454,16 +628,18 @@ export default function PlanDetailScreen() {
         if (membership === 'joined') {
             return (
                 <View style={styles.joinedActions}>
-                    <TouchableOpacity
-                        style={styles.chatBtn}
-                        activeOpacity={0.9}
-                        onPress={() => router.push(`/chat/${plan!.id}`)}
-                    >
-                        <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
-                            <Ionicons name="chatbubbles" size={22} color="#FFF" />
-                            <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
-                        </LinearGradient>
-                    </TouchableOpacity>
+                    {chatAlive ? (
+                        <TouchableOpacity
+                            style={styles.chatBtn}
+                            activeOpacity={0.9}
+                            onPress={() => router.push(`/chat/${plan!.id}`)}
+                        >
+                            <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
+                                <Ionicons name="chatbubbles" size={22} color="#FFF" />
+                                <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
+                            </LinearGradient>
+                        </TouchableOpacity>
+                    ) : null}
                     <TouchableOpacity style={styles.joinedOutlineBtn} onPress={handleLeave} activeOpacity={0.85}>
                         <Ionicons name="checkmark-circle" size={20} color={SUCCESS} />
                         <Text style={styles.joinedOutlineText}>{t('card.joined')}</Text>
@@ -547,12 +723,19 @@ export default function PlanDetailScreen() {
     }
 
     const creatorIsFriend = creator ? friendIds.has(creator.id) : false;
+    const creatorRoleLabel =
+        creator?.genero === 'femenino' ? t('planDetail.creatorFemale') : t('planDetail.creator');
     const ratingLabel =
         creatorStats.numeroValoraciones > 0
-            ? t('planDetail.ratingLabel', {
-                  score: creatorStats.valoracionMedia.toFixed(1),
-                  count: creatorStats.numeroValoraciones,
-              })
+            ? t(
+                  creatorStats.numeroValoraciones === 1
+                      ? 'planDetail.ratingLabelOne'
+                      : 'planDetail.ratingLabel',
+                  {
+                      score: formatRatingScore(creatorStats.valoracionMedia),
+                      count: creatorStats.numeroValoraciones,
+                  },
+              )
             : t('planDetail.noReviews');
 
     return (
@@ -562,7 +745,7 @@ export default function PlanDetailScreen() {
                 onScroll={onScroll}
                 scrollEventThrottle={scrollEventThrottle}
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: insets.bottom + 140 }}
+                contentContainerStyle={{ paddingBottom: insets.bottom + 85 }}
             >
                 <View style={styles.heroWrap}>
                     <PlanImage
@@ -602,6 +785,38 @@ export default function PlanDetailScreen() {
                         )}
                     </View>
 
+                    {openRating ? (
+                        <TouchableOpacity
+                            style={styles.rateBanner}
+                            activeOpacity={0.88}
+                            onPress={() =>
+                                router.push({ pathname: '/rate-plan', params: { planId: plan.id } })
+                            }
+                        >
+                            <View style={styles.rateBannerIcon}>
+                                <Ionicons name="star" size={18} color="#B45309" />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.rateBannerTitle}>
+                                    {openRating.pendingCount < openRating.totalPeers
+                                        ? t('planDetail.rateProgress', {
+                                              done: openRating.totalPeers - openRating.pendingCount,
+                                              total: openRating.totalPeers,
+                                          })
+                                        : t('planDetail.rate')}
+                                </Text>
+                                <Text style={styles.rateBannerSub}>
+                                    {openRating.pendingCount === 1
+                                        ? t('ratings.readyToRateOne')
+                                        : openRating.pendingCount > 1
+                                          ? t('ratings.readyToRate', { n: openRating.pendingCount })
+                                          : t('ratings.readyContinue')}
+                                </Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color="#B45309" />
+                        </TouchableOpacity>
+                    ) : null}
+
                     <View style={styles.dateRow}>
                         <View style={styles.dateCard}>
                             <Ionicons name="calendar" size={20} color={PRIMARY_DARK} />
@@ -623,7 +838,7 @@ export default function PlanDetailScreen() {
 
                     {creator && (
                         <View style={styles.section}>
-                            <Text style={styles.sectionTitle}>{t('planDetail.creator')}</Text>
+                            <Text style={styles.sectionTitle}>{creatorRoleLabel}</Text>
                             <View style={[styles.creatorCard, creatorIsFriend && styles.creatorCardFriend]}>
                                 <TouchableOpacity
                                     style={styles.creatorMain}
@@ -634,7 +849,7 @@ export default function PlanDetailScreen() {
                                         <ProfileAvatar uri={creator.avatar_url} name={creator.nombre} size={72} recyclingKey={creator.id} />
                                     </View>
                                     <View style={styles.creatorInfo}>
-                                        <Text style={styles.creatorLabel}>{t('planDetail.creator')}</Text>
+                                        <Text style={styles.creatorLabel}>{creatorRoleLabel}</Text>
                                         <Text style={[styles.creatorName, creatorIsFriend && styles.creatorNameFriend]}>
                                             {creator.nombre}
                                         </Text>
@@ -652,7 +867,7 @@ export default function PlanDetailScreen() {
                                                     .map((tag) => (
                                                         <View key={tag} style={styles.personalityChip}>
                                                             <Text style={styles.personalityChipText}>
-                                                                {t('personality.' + tag) || tag}
+                                                                {getPersonalityLabel(tag, creator.genero, t)}
                                                             </Text>
                                                         </View>
                                                     ))}
@@ -671,6 +886,13 @@ export default function PlanDetailScreen() {
                                 {participants.length}/{plan.maximo_participantes}
                             </Text>
                         </View>
+                        {canInvitePeople ? (
+                            <TouchableOpacity style={styles.inviteParticipantsBtn} onPress={openInviteSheet} activeOpacity={0.85}>
+                                <Ionicons name="person-add-outline" size={18} color={PRIMARY_DARK} />
+                                <Text style={styles.inviteParticipantsBtnText}>{t('invite.openBtn')}</Text>
+                                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+                            </TouchableOpacity>
+                        ) : null}
                         {participants.length === 0 ? (
                             <View style={styles.emptyParticipants}>
                                 <Ionicons name="people-outline" size={28} color={MUTED} />
@@ -687,7 +909,13 @@ export default function PlanDetailScreen() {
                                         <PersonBubble
                                             person={p}
                                             isFriend={friendIds.has(p.id)}
-                                            subtitle={p.isCreator ? t('planDetail.creator') : undefined}
+                                            subtitle={
+                                                p.isCreator
+                                                    ? p.genero === 'femenino'
+                                                        ? t('planDetail.creatorFemale')
+                                                        : t('planDetail.creator')
+                                                    : undefined
+                                            }
                                             onPress={() => openProfile(p.id)}
                                         />
                                         {isCreator && !p.isCreator && (
@@ -763,6 +991,20 @@ export default function PlanDetailScreen() {
                         rotateEnabled
                         showsUserLocation
                         showsMyLocationButton={Platform.OS === 'android'}
+                        onUserLocationChange={(e) => {
+                            const c = e.nativeEvent.coordinate;
+                            if (!c) return;
+                            setUserCoords((prev) => {
+                                if (
+                                    prev &&
+                                    Math.abs(prev.latitude - c.latitude) < 0.00005 &&
+                                    Math.abs(prev.longitude - c.longitude) < 0.00005
+                                ) {
+                                    return prev;
+                                }
+                                return { latitude: c.latitude, longitude: c.longitude };
+                            });
+                        }}
                         initialRegion={{
                             latitude: lat,
                             longitude: lng,
@@ -770,7 +1012,12 @@ export default function PlanDetailScreen() {
                             longitudeDelta: 0.012,
                         }}
                     >
-                        <Marker coordinate={{ latitude: lat, longitude: lng }} title={plan.titulo} description={plan.nombre_ubicacion ?? undefined} />
+                        <Marker
+                            coordinate={{ latitude: lat, longitude: lng }}
+                            title={plan.titulo}
+                            description={plan.nombre_ubicacion ?? undefined}
+                            onPress={() => void openDirectionsTo(lat, lng, plan.nombre_ubicacion)}
+                        />
                     </MapView>
                     <View style={[styles.fullMapTopBar, { paddingTop: insets.top + 8 }]}>
                         <TouchableOpacity style={styles.fullMapCloseBtn} onPress={() => setMapExpanded(false)} activeOpacity={0.85}>
@@ -782,12 +1029,39 @@ export default function PlanDetailScreen() {
                             <Ionicons name="location" size={20} color={PRIMARY_DARK} />
                             <View style={styles.fullMapFooterText}>
                                 <Text style={styles.fullMapFooterTitle} numberOfLines={1}>{plan.nombre_ubicacion || t('card.location')}</Text>
-                                <Text style={styles.fullMapFooterSub} numberOfLines={1}>{plan.titulo}</Text>
+                                <Text style={styles.fullMapFooterSub} numberOfLines={1}>
+                                    {userCoords
+                                        ? formatDistanceKm(
+                                              distanceKm(userCoords.latitude, userCoords.longitude, lat, lng),
+                                              lang,
+                                          )
+                                        : t('planDetail.distanceUnknown')}
+                                </Text>
                             </View>
+                            <TouchableOpacity
+                                style={styles.directionsBtn}
+                                activeOpacity={0.88}
+                                onPress={() => void openDirectionsTo(lat, lng, plan.nombre_ubicacion)}
+                            >
+                                <Ionicons name="navigate" size={18} color="#FFF" />
+                                <Text style={styles.directionsBtnText}>{t('planDetail.getDirections')}</Text>
+                            </TouchableOpacity>
                         </View>
                     </View>
                 </View>
             </Modal>
+
+            {canInvitePeople ? (
+                <InvitePeopleSheet
+                    visible={showInviteSheet}
+                    onClose={() => setShowInviteSheet(false)}
+                    currentUserId={currentUserId}
+                    selected={invitees}
+                    excludeIds={inviteExcludeIds}
+                    onAdd={handleInviteAdd}
+                    onRemove={handleInviteRemove}
+                />
+            ) : null}
         </View>
     );
 }
@@ -886,6 +1160,19 @@ const styles = StyleSheet.create({
     section: { marginTop: 28 },
     sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
     sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+    inviteParticipantsBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        backgroundColor: '#EFF6FF',
+        borderWidth: 1,
+        borderColor: '#BFDBFE',
+        borderRadius: 14,
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        marginBottom: 14,
+    },
+    inviteParticipantsBtnText: { flex: 1, color: PRIMARY_DARK, fontWeight: '800', fontSize: 14 },
     sectionTitle: { fontSize: 17, fontWeight: '800', color: INK, letterSpacing: -0.2 },
     locationName: { fontSize: 15, color: MUTED, marginBottom: 12, fontWeight: '500' },
     mapCard: {
@@ -913,7 +1200,7 @@ const styles = StyleSheet.create({
         borderRadius: 20,
     },
     mapExpandText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
-    mapBottomSpacer: { height: 28, backgroundColor: SURFACE },
+    mapBottomSpacer: { height: 14, backgroundColor: SURFACE },
 
     fullMapRoot: { flex: 1, backgroundColor: '#000' },
     fullMap: { ...StyleSheet.absoluteFillObject },
@@ -959,6 +1246,16 @@ const styles = StyleSheet.create({
     fullMapFooterText: { flex: 1 },
     fullMapFooterTitle: { fontSize: 16, fontWeight: '800', color: INK },
     fullMapFooterSub: { fontSize: 13, color: MUTED, marginTop: 2 },
+    directionsBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: PRIMARY_DARK,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 12,
+    },
+    directionsBtnText: { color: '#FFF', fontSize: 13, fontWeight: '800' },
 
     creatorCard: {
         marginTop: 12,
@@ -1053,6 +1350,29 @@ const styles = StyleSheet.create({
     emptyParticipantsText: { marginTop: 8, color: MUTED, fontWeight: '600' },
 
     description: { fontSize: 15, lineHeight: 24, color: '#334155', marginTop: 8 },
+    rateBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        marginHorizontal: 0,
+        marginBottom: 16,
+        paddingVertical: 14,
+        paddingHorizontal: 14,
+        backgroundColor: '#FEF3C7',
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#FCD34D',
+    },
+    rateBannerIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: 12,
+        backgroundColor: '#FDE68A',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    rateBannerTitle: { fontSize: 14, fontWeight: '800', color: '#92400E' },
+    rateBannerSub: { fontSize: 12, fontWeight: '600', color: '#B45309', marginTop: 2 },
 
     bottomBar: {
         position: 'absolute',
@@ -1163,6 +1483,18 @@ const styles = StyleSheet.create({
         backgroundColor: '#F0FDF4',
     },
     joinedOutlineText: { color: SUCCESS, fontSize: 15, fontWeight: '700' },
+    hideFromListBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 14,
+        borderRadius: 16,
+        backgroundColor: '#FEF2F2',
+        borderWidth: 1.5,
+        borderColor: '#FECACA',
+    },
+    hideFromListText: { color: DANGER, fontSize: 15, fontWeight: '800' },
     creatorActions: { flexDirection: 'row', gap: 10, alignItems: 'center' },
     iconRoundBtn: {
         width: 52,

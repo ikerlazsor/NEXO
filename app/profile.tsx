@@ -1,15 +1,22 @@
 /*
 perfil del usuario
 */
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import { decode } from 'base64-arraybuffer';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect,
+    useRouter } from 'expo-router';
+import { useCallback,
+    useEffect,
+    useRef,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
+    InteractionManager,
     Modal,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -19,46 +26,57 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ProfileAvatar } from '../../components/ProfileAvatar';
-import { BadgeDetailModal, BadgeTile } from '../../components/TrophyBadge';
-import { ProfileDetailsSection } from '../../components/ProfileDetailsSection';
-import { getFriendsCount } from '../../lib/friends';
-import { useT } from '../../lib/i18n';
-import { getProfileNotificationCount } from '../../lib/notifications';
-import { getAuthUser } from '../../lib/auth';
-import { formatCountdown } from '../../lib/planLifecycle';
-import { getPendingRatingPlans, type PendingRatingPlan } from '../../lib/ratings';
+import { ProfileAvatar } from '../components/ProfileAvatar';
+import { ProfileReputationStats } from '../components/ProfileReputationStats';
+import { BadgeDetailModal, BadgeTile } from '../components/TrophyBadge';
+import { ProfileDetailsSection } from '../components/ProfileDetailsSection';
+import { getFriendsCount } from '../lib/friends';
+import { useT } from '../lib/i18n';
+import { getProfileNotificationCount } from '../lib/notifications';
+import { getAuthUser } from '../lib/auth';
+import { formatCountdown } from '../lib/planLifecycle';
+import { getPendingRatingPlans, type PendingRatingPlan } from '../lib/ratings';
 import {
     deleteAccount,
+    DISPLAY_NAME_MAX_LENGTH,
     isUsernameTaken,
+    isValidDisplayName,
     isValidUsername,
+    normalizeDisplayName,
+    formatUsernameInput,
     normalizeUsername,
+    loadProfileRow,
     resolveDisplayName,
     syncProfileFromAuth,
+    updateDisplayName,
     updateProfileFields,
     updateUsername,
+    getUsernameCooldownDaysLeft,
     USERNAME_MAX_LENGTH,
-} from '../../lib/profile';
-import { renderRatingStars } from '../../lib/profileRating';
-import { EMPTY_STATS, getUserStats, type UserStats } from '../../lib/stats';
-import { getUserBadges, type UserBadge } from '../../lib/badges';
-import { getBadgeStats } from '../../lib/badgeStats';
-import { perfEnd, perfStart, perfTimed } from '../../lib/perfLog';
+} from '../lib/profile';
+import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
+import { cacheGetStale, cacheSet } from '../lib/ttlCache';
+import { renderRatingStars } from '../lib/profileRating';
+import { EMPTY_STATS, formatRatingScore, getUserStats, type UserStats } from '../lib/stats';
+import { getUserBadges, type UserBadge } from '../lib/badges';
+import { getBadgeStats } from '../lib/badgeStats';
+import { perfEnd, perfStart, perfTimed } from '../lib/perfLog';
 import {
     AFICIONES_OPTIONS,
     calcAge,
-    birthDateFromAge,
+    getPersonalityLabel,
     parseHabitos,
     mergePerfilGustosPrivacy,
     parsePrivacy,
     type Genero,
     type HabitoConsumo,
     type ProfilePrivacy,
-} from '../../lib/profileFields';
-import { supabase } from '../../lib/supabase';
-import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
-import { ScreenKeys } from '../../lib/screenState';
+} from '../lib/profileFields';
+import { supabase } from '../lib/supabase';
+import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
+import { ScreenKeys } from '../lib/screenState';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -69,6 +87,7 @@ const SURFACE = '#FFFFFF';
 const BORDER = '#E2E8F0';
 
 const PERSONALITY_OPTIONS = [...AFICIONES_OPTIONS];
+const PERSONALITY_MAX = 3;
 
 type QuickAction = {
     key: string;
@@ -80,13 +99,38 @@ type QuickAction = {
     badge?: number;
 };
 
+type ProfileUiSnapshot = {
+    userId: string;
+    nombre: string;
+    nombreUsuario: string | null;
+    aboutMe: string;
+    avatarUrl: string | null;
+    age: number | null;
+    genero: Genero | null;
+    habitoBebida: HabitoConsumo;
+    habitoTabaco: HabitoConsumo;
+    aficiones: string[];
+    perfilGustos: Record<string, unknown>;
+    privacy: ProfilePrivacy;
+    stats: UserStats;
+    friendsCount: number;
+    friendsNotifCount: number;
+    planRequests: number;
+    pendingRatings: PendingRatingPlan[];
+    badges: UserBadge[];
+};
+
 export default function ProfileScreen() {
     const router = useRouter();
     const { t } = useT();
     const [loading, setLoading] = useState(false);
     const [user, setUser] = useState<any>(null);
     const [nombre, setNombre] = useState('');
+    const [nombreUsuario, setNombreUsuario] = useState<string | null>(null);
     const [isEditing, setIsEditing] = useState(false);
+    const [isEditingUsername, setIsEditingUsername] = useState(false);
+    const [usernameDraft, setUsernameDraft] = useState('');
+    const [usernameCooldownDays, setUsernameCooldownDays] = useState(0);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
     const [friendsCount, setFriendsCount] = useState(0);
     const [friendsNotifCount, setFriendsNotifCount] = useState(0);
@@ -104,16 +148,38 @@ export default function ProfileScreen() {
     const [aficiones, setAficiones] = useState<string[]>([]);
     const [showAficionModal, setShowAficionModal] = useState(false);
     const [badges, setBadges] = useState<UserBadge[]>([]);
-    const [badgesLoading, setBadgesLoading] = useState(true);
+    const [badgesLoading, setBadgesLoading] = useState(false);
     const [selectedBadge, setSelectedBadge] = useState<UserBadge | null>(null);
     const [privacy, setPrivacy] = useState<ProfilePrivacy>({ mostrar_edad: true, mostrar_genero: true, mostrar_bebida: true, mostrar_tabaco: true, mostrar_aficiones: true });
     const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>({});
-    const cacheRef = useRef<string | null>(null);
+    const hasHydratedRef = useRef(false);
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(ScreenKeys.PROFILE);
+
+    const applyProfileSnapshot = useCallback((snap: ProfileUiSnapshot) => {
+        setNombre(snap.nombre);
+        setNombreUsuario(snap.nombreUsuario);
+        setAboutMe(snap.aboutMe);
+        setAvatarUrl(snap.avatarUrl);
+        setAge(snap.age);
+        setGenero(snap.genero);
+        setHabitoBebida(snap.habitoBebida);
+        setHabitoTabaco(snap.habitoTabaco);
+        setAficiones(snap.aficiones);
+        setPerfilGustos(snap.perfilGustos);
+        setPrivacy(snap.privacy);
+        setStats(snap.stats);
+        setFriendsCount(snap.friendsCount);
+        setFriendsNotifCount(snap.friendsNotifCount);
+        setPlanRequests(snap.planRequests);
+        setPendingRatings(snap.pendingRatings);
+        setBadges(snap.badges);
+        setBadgesLoading(false);
+        hasHydratedRef.current = true;
+    }, []);
 
     useFocusEffect(
         useCallback(() => {
-            fetchUserData(!!cacheRef.current);
+            void fetchUserData();
         }, [])
     );
 
@@ -123,16 +189,87 @@ export default function ProfileScreen() {
         return () => clearInterval(id);
     }, [pendingRatings]);
 
-    const fetchUserData = async (silent = false) => {
+    const fetchUserData = async () => {
         perfStart('profile.total');
         const authUser = await getAuthUser();
         if (!authUser) return;
 
         setUser(authUser);
-        if (!silent) setBadgesLoading(true);
 
-        const [profile, userStats, badgeStats, friendsCountVal, notifs, ratings] = await Promise.all([
-            perfTimed('profile.syncProfile', () => syncProfileFromAuth(authUser)),
+        const stale = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
+        if (stale && stale.userId === authUser.id) {
+            applyProfileSnapshot(stale);
+        } else if (!hasHydratedRef.current) {
+            setBadgesLoading(true);
+        }
+
+        const applyProfileFields = (profile: {
+            nombre: string;
+            nombre_usuario: string | null;
+            avatar_url: string | null;
+            descripcion: string;
+            etiquetas: string[];
+            fecha_nacimiento: string | null;
+            genero: string | null;
+            habitos_consumo: Record<string, unknown>;
+            ambientes_preferidos: string[];
+            perfil_gustos: Record<string, unknown>;
+        }) => {
+            setNombre(profile.nombre);
+            setNombreUsuario(profile.nombre_usuario);
+            setAboutMe(profile.descripcion);
+            setAvatarUrl(profile.avatar_url);
+            setAge(calcAge(profile.fecha_nacimiento));
+            setGenero((profile.genero as Genero) || null);
+            const habitos = parseHabitos(profile.habitos_consumo);
+            setHabitoBebida(habitos.bebida);
+            setHabitoTabaco(habitos.tabaco);
+            setAficiones(profile.ambientes_preferidos?.length ? profile.ambientes_preferidos : profile.etiquetas);
+            setPerfilGustos(profile.perfil_gustos);
+            setPrivacy(parsePrivacy(profile.perfil_gustos));
+        };
+
+        const row = await perfTimed('profile.loadRow', () => loadProfileRow(authUser.id));
+        let profileFields: {
+            nombre: string;
+            nombre_usuario: string | null;
+            avatar_url: string | null;
+            descripcion: string;
+            etiquetas: string[];
+            fecha_nacimiento: string | null;
+            genero: string | null;
+            habitos_consumo: Record<string, unknown>;
+            ambientes_preferidos: string[];
+            perfil_gustos: Record<string, unknown>;
+        };
+
+        if (row.data) {
+            profileFields = {
+                nombre: row.data.nombre?.trim() || resolveDisplayName(authUser),
+                nombre_usuario: row.data.nombre_usuario ?? null,
+                avatar_url:
+                    row.data.avatar_url
+                    ?? (typeof authUser.user_metadata?.avatar_url === 'string'
+                        ? authUser.user_metadata.avatar_url
+                        : null),
+                descripcion: row.data.descripcion ?? '',
+                etiquetas: row.data.etiquetas ?? [],
+                fecha_nacimiento: row.data.fecha_nacimiento ?? null,
+                genero: row.data.genero ?? null,
+                habitos_consumo: (row.data.habitos_consumo as Record<string, unknown>) ?? {},
+                ambientes_preferidos: row.data.ambientes_preferidos ?? [],
+                perfil_gustos: (row.data.perfil_gustos as Record<string, unknown>) ?? {},
+            };
+        } else {
+            profileFields = await perfTimed('profile.syncProfile', () => syncProfileFromAuth(authUser));
+        }
+        applyProfileFields(profileFields);
+
+        await new Promise<void>((resolve) => {
+            InteractionManager.runAfterInteractions(() => resolve());
+        });
+
+        const [userStats, badgeStats, friendsCountVal, notifs, ratings] = await Promise.all([
             perfTimed('profile.userStats', () => getUserStats(authUser.id)),
             perfTimed('profile.badgeStats', () =>
                 getBadgeStats(authUser.id, { userCreatedAt: authUser.created_at }),
@@ -142,27 +279,41 @@ export default function ProfileScreen() {
             perfTimed('profile.ratings', () => getPendingRatingPlans(authUser.id)),
         ]);
 
-        cacheRef.current = authUser.id;
-
-        setNombre(profile.nombre);
-        setAboutMe(profile.descripcion);
-        setAvatarUrl(profile.avatar_url);
-        setAge(calcAge(profile.fecha_nacimiento));
-        setGenero((profile.genero as Genero) || null);
-        const habitos = parseHabitos(profile.habitos_consumo);
-        setHabitoBebida(habitos.bebida);
-        setHabitoTabaco(habitos.tabaco);
-        setAficiones(profile.ambientes_preferidos?.length ? profile.ambientes_preferidos : profile.etiquetas);
-        setPerfilGustos(profile.perfil_gustos);
-        setPrivacy(parsePrivacy(profile.perfil_gustos));
+        const nextBadges = getUserBadges(badgeStats);
+        const friendsNotif = notifs.friendRequests + notifs.planInvites;
 
         setStats(userStats);
         setFriendsCount(friendsCountVal);
-        setFriendsNotifCount(notifs.friendRequests + notifs.planInvites);
+        setFriendsNotifCount(friendsNotif);
         setPlanRequests(notifs.planRequests);
         setPendingRatings(ratings);
-        setBadges(getUserBadges(badgeStats));
+        setBadges(nextBadges);
         setBadgesLoading(false);
+        hasHydratedRef.current = true;
+
+        const snap: ProfileUiSnapshot = {
+            userId: authUser.id,
+            nombre: profileFields.nombre,
+            nombreUsuario: profileFields.nombre_usuario,
+            aboutMe: profileFields.descripcion,
+            avatarUrl: profileFields.avatar_url,
+            age: calcAge(profileFields.fecha_nacimiento),
+            genero: (profileFields.genero as Genero) || null,
+            habitoBebida: parseHabitos(profileFields.habitos_consumo).bebida,
+            habitoTabaco: parseHabitos(profileFields.habitos_consumo).tabaco,
+            aficiones: profileFields.ambientes_preferidos?.length
+                ? profileFields.ambientes_preferidos
+                : profileFields.etiquetas,
+            perfilGustos: profileFields.perfil_gustos,
+            privacy: parsePrivacy(profileFields.perfil_gustos),
+            stats: userStats,
+            friendsCount: friendsCountVal,
+            friendsNotifCount: friendsNotif,
+            planRequests: notifs.planRequests,
+            pendingRatings: ratings,
+            badges: nextBadges,
+        };
+        cacheSet(screenCacheKey.profileUI(authUser.id), snap, ScreenCacheTTL.profileUI);
         perfEnd('profile.total');
     };
 
@@ -227,14 +378,14 @@ export default function ProfileScreen() {
     };
 
     const addAficion = (tag: string) => {
-        if (aficiones.length >= 5) {
+        if (aficiones.length >= PERSONALITY_MAX) {
             Alert.alert(t('profile.tagLimitTitle'), t('profile.tagLimit'));
             return;
         }
         if (!aficiones.includes(tag)) {
             const updated = [...aficiones, tag];
             setAficiones(updated);
-            updateProfileData({ ambientes_preferidos: updated });
+            updateProfileData({ ambientes_preferidos: updated, etiquetas: updated });
         }
         setShowAficionModal(false);
     };
@@ -242,7 +393,7 @@ export default function ProfileScreen() {
     const removeAficion = (tagToRemove: string) => {
         const updated = aficiones.filter((tag) => tag !== tagToRemove);
         setAficiones(updated);
-        updateProfileData({ ambientes_preferidos: updated });
+        updateProfileData({ ambientes_preferidos: updated, etiquetas: updated });
     };
 
     const savePrivacy = async (next: ProfilePrivacy) => {
@@ -250,11 +401,6 @@ export default function ProfileScreen() {
         await updateProfileData({
             perfil_gustos: mergePerfilGustosPrivacy(perfilGustos, next),
         });
-    };
-
-    const saveAge = async (newAge: number) => {
-        setAge(newAge);
-        await updateProfileData({ fecha_nacimiento: birthDateFromAge(newAge) });
     };
 
     const saveHabitos = async (bebida: HabitoConsumo, tabaco: HabitoConsumo) => {
@@ -270,37 +416,92 @@ export default function ProfileScreen() {
 
     const saveName = async () => {
         if (!user?.id) return;
-        const trimmed = normalizeUsername(nombre);
-        if (!trimmed) {
-            Alert.alert(t('profile.error'), t('login.fillAll'));
-            return;
-        }
-        if (!isValidUsername(trimmed)) {
-            Alert.alert(t('profile.error'), t('login.usernameMaxHint'));
-            return;
-        }
-        const taken = await isUsernameTaken(trimmed, user.id);
-        if (taken) {
-            Alert.alert(t('profile.error'), t('login.usernameTaken'));
+        const trimmed = normalizeDisplayName(nombre);
+        if (!isValidDisplayName(trimmed)) {
+            Alert.alert(t('profile.error'), t('profile.displayNameHint'));
             return;
         }
         setNombre(trimmed);
         setIsEditing(false);
-        const { error } = await updateUsername(user.id, trimmed);
+        const { error } = await updateDisplayName(user.id, trimmed);
         if (error) {
-            const isDuplicate =
-                error.toLowerCase().includes('unique') ||
-                error.toLowerCase().includes('duplicate');
-            Alert.alert(t('profile.error'), isDuplicate ? t('login.usernameTaken') : error);
+            Alert.alert(t('profile.error'), error);
             await fetchUserData();
         }
     };
 
+    const saveUsername = async () => {
+        if (!user?.id) return;
+        const handle = normalizeUsername(usernameDraft);
+        if (!isValidUsername(handle)) {
+            Alert.alert(t('profile.error'), t('login.usernameInvalid'));
+            return;
+        }
+        if (handle === normalizeUsername(nombreUsuario ?? '')) {
+            setIsEditingUsername(false);
+            return;
+        }
+        try {
+            const taken = await isUsernameTaken(handle, user.id);
+            if (taken) {
+                Alert.alert(t('profile.error'), t('login.usernameTaken'));
+                return;
+            }
+        } catch {
+            Alert.alert(t('profile.error'), t('login.usernameCheckFailed'));
+            return;
+        }
+        const prev = nombreUsuario;
+        setNombreUsuario(handle);
+        setIsEditingUsername(false);
+        const { error, daysLeft } = await updateUsername(user.id, handle);
+        if (error) {
+            setNombreUsuario(prev);
+            if (error === 'username_cooldown') {
+                const days = (daysLeft ?? (await getUsernameCooldownDaysLeft(user.id))) || 1;
+                setUsernameCooldownDays(days);
+                Alert.alert(
+                    t('profile.error'),
+                    t('profile.usernameCooldown', { days }),
+                );
+                return;
+            }
+            const isDuplicate =
+                error === 'username_taken' ||
+                error.toLowerCase().includes('unique') ||
+                error.toLowerCase().includes('duplicate');
+            Alert.alert(
+                t('profile.error'),
+                isDuplicate ? t('login.usernameTaken') : t('login.usernameInvalid'),
+            );
+            await fetchUserData();
+            return;
+        }
+        const days = await getUsernameCooldownDaysLeft(user.id);
+        setUsernameCooldownDays(days);
+    };
+
+    const beginEditUsername = async () => {
+        if (!user?.id) return;
+        const days = await getUsernameCooldownDaysLeft(user.id);
+        setUsernameCooldownDays(days);
+        if (days > 0) {
+            Alert.alert(t('profile.error'), t('profile.usernameCooldown', { days }));
+            return;
+        }
+        setUsernameDraft(formatUsernameInput(nombreUsuario ?? ''));
+        setIsEditingUsername(true);
+    };
+
+    const cancelEditUsername = () => {
+        if (!isEditingUsername) return;
+        setIsEditingUsername(false);
+        setUsernameDraft(formatUsernameInput(nombreUsuario ?? ''));
+    };
+
     const quickActions: QuickAction[] = [
-        { key: 'plans', icon: 'albums', labelKey: 'profile.myPlans', route: '/my-plans', color: INK, bg: '#F1F5F9', badge: planRequests },
         { key: 'friends', icon: 'people', labelKey: 'profile.friends', route: '/friends', color: INK, bg: '#F1F5F9', badge: friendsNotifCount },
         { key: 'saved', icon: 'heart', labelKey: 'profile.saved', route: '/saved-plans', color: INK, bg: '#F1F5F9' },
-        { key: 'chats', icon: 'chatbubbles', labelKey: 'profile.chats', route: '/chats', color: INK, bg: '#F1F5F9' },
     ];
 
     const displayName = nombre.trim() || (user ? resolveDisplayName(user, t('profile.user')) : t('profile.user'));
@@ -335,7 +536,13 @@ export default function ProfileScreen() {
     };
 
     return (
-        <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+        <View style={styles.safe}>
+            <LinearGradient
+                colors={['#DBEAFE', '#EFF6FF', BG]}
+                locations={[0, 0.35, 0.7]}
+                style={StyleSheet.absoluteFill}
+            />
+            <SafeAreaView style={styles.safeInner} edges={['top', 'left', 'right']}>
             <View style={styles.topBar}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} activeOpacity={0.8}>
                     <Ionicons name="chevron-back" size={22} color={INK} />
@@ -353,14 +560,20 @@ export default function ProfileScreen() {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scroll}
                 keyboardShouldPersistTaps="handled"
+                onScrollBeginDrag={cancelEditUsername}
             >
+                <Pressable style={styles.scrollPressable} onPress={cancelEditUsername}>
                 <View style={styles.heroCard}>
+                    <LinearGradient
+                        colors={['#FFFFFF', '#F8FBFF']}
+                        style={styles.heroGlow}
+                    />
                     <View style={styles.avatarBlock}>
                         <TouchableOpacity onPress={showPhotoMenu} activeOpacity={0.9}>
-                            <ProfileAvatar uri={avatarUrl} name={displayName} size={96} recyclingKey={user?.id} />
+                            <ProfileAvatar uri={avatarUrl} name={displayName} size={104} recyclingKey={user?.id} />
                         </TouchableOpacity>
                         <TouchableOpacity onPress={showPhotoMenu} style={styles.cameraBtn} activeOpacity={0.85}>
-                            <Ionicons name="camera-outline" size={14} color="#FFF" />
+                            <Ionicons name="camera" size={15} color="#FFF" />
                         </TouchableOpacity>
                     </View>
 
@@ -370,9 +583,10 @@ export default function ProfileScreen() {
                                 <TextInput
                                     style={styles.nameInput}
                                     value={nombre}
-                                    onChangeText={(text) => setNombre(text.slice(0, USERNAME_MAX_LENGTH))}
+                                    onChangeText={(text) => setNombre(text.slice(0, DISPLAY_NAME_MAX_LENGTH))}
                                     autoFocus
-                                    maxLength={USERNAME_MAX_LENGTH}
+                                    maxLength={DISPLAY_NAME_MAX_LENGTH}
+                                    autoCapitalize="words"
                                 />
                                 <TouchableOpacity
                                     onPress={saveName}
@@ -383,27 +597,60 @@ export default function ProfileScreen() {
                             </View>
                         ) : (
                             <TouchableOpacity style={styles.nameRow} onPress={() => setIsEditing(true)} activeOpacity={0.7}>
+                                <View style={styles.nameSideSlot} />
                                 <Text style={styles.displayName} numberOfLines={1}>{displayName}</Text>
                                 <View style={styles.editNameChip}>
                                     <Ionicons name="pencil" size={12} color={PRIMARY_DARK} />
                                 </View>
                             </TouchableOpacity>
                         )}
-                        {user?.email ? (
-                            <Text style={styles.email} numberOfLines={1}>{user.email}</Text>
-                        ) : null}
+                        {isEditingUsername ? (
+                            <Pressable style={styles.usernameEditRow} onPress={(e) => e.stopPropagation()}>
+                                <Text style={styles.atPrefix}>@</Text>
+                                <TextInput
+                                    style={styles.usernameInput}
+                                    value={usernameDraft}
+                                    onChangeText={(text) => setUsernameDraft(formatUsernameInput(text))}
+                                    autoFocus
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                    spellCheck={false}
+                                    maxLength={USERNAME_MAX_LENGTH}
+                                />
+                                <TouchableOpacity onPress={saveUsername} style={styles.nameSaveBtn}>
+                                    <Ionicons name="checkmark" size={18} color="#FFF" />
+                                </TouchableOpacity>
+                            </Pressable>
+                        ) : (
+                            <TouchableOpacity
+                                style={styles.usernameTap}
+                                onPress={beginEditUsername}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.username} numberOfLines={1}>
+                                    @{nombreUsuario || '—'}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
 
                     <View style={styles.statsRow}>
-                        <View style={styles.statItem}>
+                        <TouchableOpacity
+                            style={styles.statItem}
+                            onPress={() => router.push('/my-plans')}
+                            activeOpacity={0.8}
+                        >
                             <Text style={styles.statValue}>{stats.numeroPlanesRealizados}</Text>
                             <Text style={styles.statLabel}>{t('profile.plansDone')}</Text>
-                        </View>
+                        </TouchableOpacity>
                         <View style={styles.statDivider} />
                         <View style={styles.statItem}>
-                            <Text style={styles.statValue}>{stats.valoracionMedia.toFixed(1)}</Text>
+                            <Text style={styles.statValue}>{formatRatingScore(stats.valoracionMedia)}</Text>
                             <View style={styles.starsRow}>{renderRatingStars(stats.valoracionMedia, 12)}</View>
-                            <Text style={styles.statMeta}>{stats.numeroValoraciones} {t('profile.reviews')}</Text>
+                            <Text style={styles.statMeta}>
+                                {stats.numeroValoraciones}{' '}
+                                {t(stats.numeroValoraciones === 1 ? 'profile.review' : 'profile.reviews')}
+                            </Text>
                         </View>
                         <View style={styles.statDivider} />
                         <TouchableOpacity
@@ -425,86 +672,78 @@ export default function ProfileScreen() {
                         </TouchableOpacity>
                     </View>
 
-                    <TouchableOpacity
-                        style={styles.historyBtn}
-                        onPress={() => router.push('/plan-history')}
-                        activeOpacity={0.85}
-                    >
-                        <Ionicons name="time-outline" size={18} color={PRIMARY_DARK} />
-                        <Text style={styles.historyBtnText}>{t('history.title')}</Text>
-                        <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
-                    </TouchableOpacity>
+                    <ProfileReputationStats
+                        stats={stats}
+                        isSelf
+                        displayName={displayName}
+                        genero={genero}
+                    />
                 </View>
 
-                <Text style={styles.sectionHeading}>{t('ratings.section')}</Text>
-                {pendingRatings.length === 0 ? (
-                    <View style={styles.ratingsEmpty}>
-                        <Ionicons name="star-outline" size={22} color="#94A3B8" />
-                        <Text style={styles.ratingsEmptyText}>{t('ratings.empty')}</Text>
-                    </View>
-                ) : (
-                    <View style={styles.ratingsList}>
-                        {pendingRatings.map((item) => {
-                            const waiting = item.phase === 'waiting';
-                            const remaining = Math.max(0, item.unlockAt - nowTick);
-                            const openCount = Math.max(item.pendingCount, waiting ? item.totalPeers : item.pendingCount);
-                            return (
-                                <TouchableOpacity
-                                    key={item.planId}
-                                    style={[styles.ratingCard, waiting ? styles.ratingCardWait : styles.ratingCardOpen]}
-                                    activeOpacity={waiting ? 1 : 0.85}
-                                    disabled={waiting}
-                                    onPress={() =>
-                                        router.push({ pathname: '/rate-plan', params: { planId: item.planId } })
-                                    }
-                                >
-                                    <View style={[styles.ratingIconWrap, waiting ? styles.ratingIconWait : styles.ratingIconOpen]}>
-                                        <Ionicons
-                                            name={waiting ? 'hourglass-outline' : 'star'}
-                                            size={18}
-                                            color={waiting ? '#B45309' : '#FFF'}
-                                        />
-                                    </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.ratingCardTitle} numberOfLines={1}>{item.titulo}</Text>
-                                        <Text style={styles.ratingCardSub}>
-                                            {waiting
-                                                ? t('ratings.unlockIn', { time: formatCountdown(remaining) })
-                                                : item.pendingCount === 0
-                                                  ? t('ratings.readyContinue')
-                                                  : item.pendingCount === 1
-                                                    ? t('ratings.readyToRateOne')
-                                                    : t('ratings.readyToRate', { n: item.pendingCount })}
-                                        </Text>
-                                        {!waiting && item.totalPeers > 0 ? (
-                                            <View style={styles.ratingMiniTrack}>
-                                                <View
-                                                    style={[
-                                                        styles.ratingMiniFill,
-                                                        {
-                                                            width: `${Math.round(
-                                                                ((item.totalPeers - item.pendingCount) / item.totalPeers) * 100,
-                                                            )}%`,
-                                                        },
-                                                    ]}
-                                                />
-                                            </View>
-                                        ) : null}
-                                    </View>
-                                    {!waiting && openCount > 0 && (
-                                        <View style={styles.ratingReadyBadge}>
-                                            <Text style={styles.ratingReadyText}>{item.pendingCount}</Text>
+                {pendingRatings.length > 0 ? (
+                    <>
+                        <Text style={styles.sectionHeading}>{t('ratings.section')}</Text>
+                        <View style={styles.ratingsList}>
+                            {pendingRatings.map((item) => {
+                                const waiting = item.phase === 'waiting';
+                                const remaining = Math.max(0, item.unlockAt - nowTick);
+                                const openCount = Math.max(item.pendingCount, waiting ? item.totalPeers : item.pendingCount);
+                                return (
+                                    <TouchableOpacity
+                                        key={item.planId}
+                                        style={[styles.ratingCard, waiting ? styles.ratingCardWait : styles.ratingCardOpen]}
+                                        activeOpacity={waiting ? 1 : 0.85}
+                                        disabled={waiting}
+                                        onPress={() =>
+                                            router.push({ pathname: '/rate-plan', params: { planId: item.planId } })
+                                        }
+                                    >
+                                        <View style={[styles.ratingIconWrap, waiting ? styles.ratingIconWait : styles.ratingIconOpen]}>
+                                            <Ionicons
+                                                name={waiting ? 'hourglass-outline' : 'star'}
+                                                size={18}
+                                                color={waiting ? '#B45309' : '#FFF'}
+                                            />
                                         </View>
-                                    )}
-                                    {!waiting && <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />}
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </View>
-                )}
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.ratingCardTitle} numberOfLines={1}>{item.titulo}</Text>
+                                            <Text style={styles.ratingCardSub}>
+                                                {waiting
+                                                    ? t('ratings.unlockIn', { time: formatCountdown(remaining) })
+                                                    : item.pendingCount === 0
+                                                      ? t('ratings.readyContinue')
+                                                      : item.pendingCount === 1
+                                                        ? t('ratings.readyToRateOne')
+                                                        : t('ratings.readyToRate', { n: item.pendingCount })}
+                                            </Text>
+                                            {!waiting && item.totalPeers > 0 ? (
+                                                <View style={styles.ratingMiniTrack}>
+                                                    <View
+                                                        style={[
+                                                            styles.ratingMiniFill,
+                                                            {
+                                                                width: `${Math.round(
+                                                                    ((item.totalPeers - item.pendingCount) / item.totalPeers) * 100,
+                                                                )}%`,
+                                                            },
+                                                        ]}
+                                                    />
+                                                </View>
+                                            ) : null}
+                                        </View>
+                                        {!waiting && openCount > 0 && (
+                                            <View style={styles.ratingReadyBadge}>
+                                                <Text style={styles.ratingReadyText}>{item.pendingCount}</Text>
+                                            </View>
+                                        )}
+                                        {!waiting && <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />}
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                    </>
+                ) : null}
 
-                {/* Quick actions */}
-                <Text style={styles.sectionHeading}>{t('profile.quickActions')}</Text>
                 <View style={styles.quickGrid}>
                     {quickActions.map((action) => (
                         <TouchableOpacity
@@ -540,33 +779,9 @@ export default function ProfileScreen() {
                     habitoBebida={habitoBebida}
                     habitoTabaco={habitoTabaco}
                     privacy={privacy}
-                    onSaveAge={saveAge}
                     onSaveHabitos={saveHabitos}
                     onPrivacyChange={savePrivacy}
                 />
-
-                {/* Insignias */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Text style={styles.cardTitle}>{t('profile.badges')}</Text>
-                        <Text style={styles.cardMeta}>
-                            {badges.filter((b) => b.unlocked).length}/{badges.length}
-                        </Text>
-                    </View>
-                    <View style={styles.badgeGrid}>
-                        {badgesLoading ? (
-                            <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 24, alignSelf: 'center' }} />
-                        ) : (
-                            badges.map((badge) => (
-                                <BadgeTile
-                                    key={badge.family.id}
-                                    badge={badge}
-                                    onPress={() => setSelectedBadge(badge)}
-                                />
-                            ))
-                        )}
-                    </View>
-                </View>
 
                 {/* About me */}
                 <View style={styles.card}>
@@ -610,7 +825,7 @@ export default function ProfileScreen() {
                     <View style={styles.cardHeader}>
                         <Text style={styles.cardTitle}>{t('profile.personality')}</Text>
                         <View style={styles.hobbyHeaderRight}>
-                            <Text style={styles.cardMeta}>{aficiones.length}/5</Text>
+                            <Text style={styles.cardMeta}>{aficiones.length}/{PERSONALITY_MAX}</Text>
                             <Switch
                                 value={privacy.mostrar_aficiones}
                                 onValueChange={(v) => savePrivacy({ ...privacy, mostrar_aficiones: v })}
@@ -620,19 +835,48 @@ export default function ProfileScreen() {
                         </View>
                     </View>
                     <View style={styles.tagsWrap}>
-                        {aficiones.map((tag) => (
-                            <View key={tag} style={styles.tagChip}>
-                                <Text style={styles.tagText}>{t('personality.' + tag) || tag}</Text>
-                                <TouchableOpacity onPress={() => removeAficion(tag)} hitSlop={8}>
-                                    <Ionicons name="close" size={14} color={PRIMARY_DARK} />
-                                </TouchableOpacity>
-                            </View>
-                        ))}
-                        {aficiones.length < 5 && (
-                            <TouchableOpacity style={styles.addTag} onPress={() => setShowAficionModal(true)} activeOpacity={0.85}>
-                                <Ionicons name="add" size={18} color={PRIMARY_DARK} />
-                                <Text style={styles.addTagText}>{t('profile.addPersonality')}</Text>
-                            </TouchableOpacity>
+                        {!privacy.mostrar_aficiones ? (
+                            <Text style={styles.personalityHidden}>{t('profile.hidden')}</Text>
+                        ) : (
+                            <>
+                                {aficiones.map((tag) => (
+                                    <View key={tag} style={styles.tagChip}>
+                                        <Text style={styles.tagText}>{getPersonalityLabel(tag, genero, t)}</Text>
+                                        <TouchableOpacity onPress={() => removeAficion(tag)} hitSlop={8}>
+                                            <Ionicons name="close" size={14} color={PRIMARY_DARK} />
+                                        </TouchableOpacity>
+                                    </View>
+                                ))}
+                                {aficiones.length < PERSONALITY_MAX && (
+                                    <TouchableOpacity style={styles.addTag} onPress={() => setShowAficionModal(true)} activeOpacity={0.85}>
+                                        <Ionicons name="add" size={18} color={PRIMARY_DARK} />
+                                        <Text style={styles.addTagText}>{t('profile.addPersonality')}</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </>
+                        )}
+                    </View>
+                </View>
+
+                {/* Insignias */}
+                <View style={styles.card}>
+                    <View style={styles.cardHeader}>
+                        <Text style={styles.cardTitle}>{t('profile.badges')}</Text>
+                        <Text style={styles.cardMeta}>
+                            {badges.filter((b) => b.unlocked).length}/{badges.length}
+                        </Text>
+                    </View>
+                    <View style={styles.badgeGrid}>
+                        {badgesLoading ? (
+                            <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 24, alignSelf: 'center' }} />
+                        ) : (
+                            badges.map((badge) => (
+                                <BadgeTile
+                                    key={badge.family.id}
+                                    badge={badge}
+                                    onPress={() => setSelectedBadge(badge)}
+                                />
+                            ))
                         )}
                     </View>
                 </View>
@@ -664,6 +908,7 @@ export default function ProfileScreen() {
                         </>
                     )}
                 </TouchableOpacity>
+                </Pressable>
             </ScrollView>
 
             <Modal visible={showAficionModal} transparent animationType="slide">
@@ -684,7 +929,7 @@ export default function ProfileScreen() {
                                         activeOpacity={0.8}
                                     >
                                         <Text style={[styles.modalTagText, selected && styles.modalTagTextDisabled]}>
-                                            {t('personality.' + option) || option}
+                                            {getPersonalityLabel(option, genero, t)}
                                         </Text>
                                         {selected && <Ionicons name="checkmark-circle" size={18} color="#94A3B8" />}
                                     </TouchableOpacity>
@@ -712,12 +957,14 @@ export default function ProfileScreen() {
                     </View>
                 </View>
             )}
-        </SafeAreaView>
+            </SafeAreaView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
     safe: { flex: 1, backgroundColor: BG },
+    safeInner: { flex: 1 },
     topBar: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -726,70 +973,72 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
     },
     iconBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        backgroundColor: SURFACE,
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        backgroundColor: 'rgba(255,255,255,0.92)',
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: 'rgba(226,232,240,0.9)',
+        ...Platform.select({
+            ios: { shadowColor: '#0F2A4A', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+            android: { elevation: 2 },
+        }),
     },
-    topTitle: { fontSize: 17, fontWeight: '700', color: INK },
-    scroll: { paddingHorizontal: 20, paddingBottom: 40 },
+    topTitle: { fontSize: 18, fontWeight: '800', color: INK, letterSpacing: -0.3 },
+    scroll: { paddingHorizontal: 18, paddingBottom: 48 },
+    scrollPressable: { flexGrow: 1 },
     heroCard: {
         backgroundColor: SURFACE,
-        borderRadius: 16,
-        paddingVertical: 24,
-        paddingHorizontal: 20,
-        marginBottom: 16,
-        borderWidth: 1,
-        borderColor: BORDER,
+        borderRadius: 28,
+        paddingVertical: 28,
+        paddingHorizontal: 18,
+        marginBottom: 12,
         alignItems: 'center',
-    },
-    avatarBlock: { position: 'relative', marginBottom: 14 },
-    avatarRing: {
-        width: 108,
-        height: 108,
-        borderRadius: 54,
-        padding: 4,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    avatar: {
-        width: 100,
-        height: 100,
-        borderRadius: 50,
         overflow: 'hidden',
-        backgroundColor: '#E3ECFB',
+        ...Platform.select({
+            ios: { shadowColor: '#1E3A8A', shadowOpacity: 0.1, shadowRadius: 20, shadowOffset: { width: 0, height: 8 } },
+            android: { elevation: 4 },
+        }),
     },
-    avatarImg: { width: '100%', height: '100%' },
-    avatarFallback: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    avatarInitial: { fontSize: 38, fontWeight: '900', color: '#FFF' },
+    heroGlow: {
+        ...StyleSheet.absoluteFillObject,
+    },
+    avatarBlock: { position: 'relative', marginBottom: 16 },
     cameraBtn: {
         position: 'absolute',
-        bottom: 0,
-        right: 0,
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: INK,
+        bottom: 2,
+        right: 2,
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        backgroundColor: PRIMARY_DARK,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2,
+        borderWidth: 3,
         borderColor: SURFACE,
     },
     hobbyHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    nameBlock: { alignItems: 'center', paddingHorizontal: 24, marginTop: 10 },
-    nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' },
-    displayName: { fontSize: 22, fontWeight: '900', color: INK, letterSpacing: -0.4 },
+    nameBlock: { alignItems: 'center', paddingHorizontal: 16, marginTop: 4, width: '100%' },
+    nameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', maxWidth: '100%' },
+    nameSideSlot: { width: 28, height: 28 },
+    displayName: {
+        fontSize: 26,
+        fontWeight: '800',
+        color: INK,
+        letterSpacing: -0.6,
+        textAlign: 'center',
+        flexShrink: 1,
+    },
     editNameChip: {
-        width: 26,
-        height: 26,
-        borderRadius: 13,
+        width: 28,
+        height: 28,
+        borderRadius: 14,
         backgroundColor: '#EFF6FF',
         justifyContent: 'center',
         alignItems: 'center',
+        marginLeft: 8,
     },
     nameEditRow: {
         flexDirection: 'row',
@@ -815,17 +1064,39 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    email: { fontSize: 13, color: '#64748B', marginTop: 4, fontWeight: '500' },
+    usernameTap: { alignItems: 'center', marginTop: 4 },
+    username: { fontSize: 14, color: '#64748B', fontWeight: '600', textAlign: 'center' },
+    usernameEditRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 6,
+        gap: 4,
+        maxWidth: '100%',
+    },
+    atPrefix: { fontSize: 14, fontWeight: '700', color: '#94A3B8' },
+    usernameInput: {
+        minWidth: 120,
+        maxWidth: 200,
+        fontSize: 14,
+        fontWeight: '600',
+        color: INK,
+        borderBottomWidth: 1.5,
+        borderBottomColor: PRIMARY,
+        paddingVertical: 4,
+        textAlign: 'center',
+    },
     statsRow: {
         flexDirection: 'row',
         marginTop: 22,
-        marginHorizontal: 16,
-        marginBottom: 12,
-        backgroundColor: '#F8FAFC',
-        borderRadius: 18,
-        paddingVertical: 14,
+        marginHorizontal: 4,
+        marginBottom: 8,
+        backgroundColor: '#F1F7FF',
+        borderRadius: 20,
+        paddingVertical: 16,
         borderWidth: 1,
-        borderColor: '#EEF3FB',
+        borderColor: '#DBEAFE',
+        width: '100%',
     },
     historyBtn: {
         flexDirection: 'row',
@@ -846,28 +1117,29 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 10,
         backgroundColor: SURFACE,
-        marginHorizontal: 16,
         marginBottom: 8,
-        padding: 14,
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: BORDER,
+        padding: 16,
+        borderRadius: 18,
+        ...Platform.select({
+            ios: { shadowColor: '#0F2A4A', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 3 } },
+            android: { elevation: 1 },
+        }),
     },
     ratingsEmptyText: { flex: 1, color: MUTED, fontWeight: '600', fontSize: 13 },
-    ratingsList: { marginHorizontal: 16, marginBottom: 8, gap: 8 },
+    ratingsList: { marginBottom: 8, gap: 10 },
     ratingCard: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
         backgroundColor: SURFACE,
-        borderRadius: 14,
-        padding: 14,
+        borderRadius: 18,
+        padding: 15,
         borderWidth: 1,
     },
     ratingCardWait: { borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
     ratingCardOpen: { borderColor: '#BFDBFE', backgroundColor: '#EFF6FF' },
     ratingIconWrap: {
-        width: 36,
+        width: 40,
         height: 36,
         borderRadius: 12,
         alignItems: 'center',
@@ -923,35 +1195,39 @@ const styles = StyleSheet.create({
     },
     statNotifText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
     sectionHeading: {
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: '800',
-        color: '#64748B',
-        textTransform: 'uppercase',
-        letterSpacing: 0.8,
+        color: INK,
+        letterSpacing: -0.2,
         marginBottom: 12,
-        marginLeft: 4,
+        marginTop: 14,
+        marginLeft: 2,
     },
     quickGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         gap: 12,
-        marginBottom: 24,
+        marginTop: 2,
+        marginBottom: 20,
     },
     quickTile: {
         flexGrow: 1,
         flexBasis: '46%',
         maxWidth: '48%',
         backgroundColor: SURFACE,
-        borderRadius: 14,
-        padding: 14,
+        borderRadius: 20,
+        paddingVertical: 18,
+        paddingHorizontal: 12,
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: BORDER,
+        ...Platform.select({
+            ios: { shadowColor: '#0F2A4A', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
+            android: { elevation: 2 },
+        }),
     },
     quickIconWrap: {
-        width: 52,
-        height: 52,
-        borderRadius: 16,
+        width: 56,
+        height: 56,
+        borderRadius: 18,
         justifyContent: 'center',
         alignItems: 'center',
         marginBottom: 10,
@@ -981,11 +1257,13 @@ const styles = StyleSheet.create({
     },
     card: {
         backgroundColor: SURFACE,
-        borderRadius: 16,
-        padding: 18,
-        marginBottom: 14,
-        borderWidth: 1,
-        borderColor: BORDER,
+        borderRadius: 22,
+        padding: 20,
+        marginBottom: 16,
+        ...Platform.select({
+            ios: { shadowColor: '#0F2A4A', shadowOpacity: 0.05, shadowRadius: 14, shadowOffset: { width: 0, height: 4 } },
+            android: { elevation: 2 },
+        }),
     },
     cardHeader: {
         flexDirection: 'row',
@@ -1001,8 +1279,8 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    cardTitle: { fontSize: 16, fontWeight: '800', color: INK },
-    cardMeta: { fontSize: 11, color: '#94A3B8', fontWeight: '700' },
+    cardTitle: { fontSize: 17, fontWeight: '800', color: INK, letterSpacing: -0.2 },
+    cardMeta: { fontSize: 12, color: '#94A3B8', fontWeight: '700' },
     aboutEdit: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
     aboutInput: {
         flex: 1,
@@ -1031,6 +1309,13 @@ const styles = StyleSheet.create({
     aboutText: { flex: 1, fontSize: 15, color: INK, lineHeight: 22 },
     aboutPlaceholder: { flex: 1, fontSize: 15, color: '#94A3B8', lineHeight: 22 },
     tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    personalityHidden: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#94A3B8',
+        fontStyle: 'italic',
+        paddingVertical: 4,
+    },
     tagChip: {
         flexDirection: 'row',
         alignItems: 'center',

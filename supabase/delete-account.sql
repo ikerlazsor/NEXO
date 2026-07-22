@@ -3,12 +3,14 @@
 -- Ejecutar en Supabase SQL Editor
 -- ============================================================
 
--- Índice único case-insensitive (ignora vacíos)
-CREATE UNIQUE INDEX IF NOT EXISTS perfiles_nombre_lower_unique
-    ON public.perfiles (lower(trim(nombre)))
-    WHERE nombre IS NOT NULL AND trim(nombre) <> '';
+-- El nombre visible puede repetirse; el handle (nombre_usuario) es único
+DROP INDEX IF EXISTS public.perfiles_nombre_lower_unique;
 
--- Comprobar si un nombre ya está en uso (registro y edición de perfil)
+CREATE UNIQUE INDEX IF NOT EXISTS perfiles_nombre_usuario_lower_unique
+    ON public.perfiles (lower(nombre_usuario))
+    WHERE nombre_usuario IS NOT NULL AND btrim(nombre_usuario) <> '';
+
+-- Comprobar si un handle ya está en uso (registro y edición de perfil)
 CREATE OR REPLACE FUNCTION public.is_username_taken(
     check_name text,
     exclude_id uuid DEFAULT NULL
@@ -22,8 +24,8 @@ AS $$
     SELECT EXISTS (
         SELECT 1
         FROM public.perfiles
-        WHERE lower(trim(nombre)) = lower(trim(check_name))
-          AND trim(check_name) <> ''
+        WHERE lower(nombre_usuario) = lower(btrim(check_name))
+          AND btrim(check_name) <> ''
           AND (exclude_id IS NULL OR id <> exclude_id)
     );
 $$;

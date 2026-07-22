@@ -119,6 +119,13 @@ AS $$
 DECLARE
     v_count integer := 0;
 BEGIN
+    IF p_usuario IS NULL THEN
+        RETURN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.perfiles WHERE id = p_usuario) THEN
+        RETURN;
+    END IF;
+
     INSERT INTO public.estadisticas_usuario (usuario_id)
     VALUES (p_usuario)
     ON CONFLICT (usuario_id) DO NOTHING;

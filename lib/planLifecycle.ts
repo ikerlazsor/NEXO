@@ -3,8 +3,8 @@ import { supabase } from './supabase';
 
 /** Chat de plan se elimina 24h después de fecha_evento. */
 export const CHAT_TTL_MS = 24 * 60 * 60 * 1000;
-/** Valoraciones se desbloquean 3h después de fecha_evento. */
-export const RATINGS_DELAY_MS = 3 * 60 * 60 * 1000;
+/** Valoraciones se desbloquean 2h después de fecha_evento. */
+export const RATINGS_DELAY_MS = 2 * 60 * 60 * 1000;
 /** Ventana para valorar tras el plan (7 días). */
 export const RATINGS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 

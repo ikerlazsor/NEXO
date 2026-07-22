@@ -1,15 +1,18 @@
 /*
 inicio de sesión / registro
 */
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import React, { useState } from 'react';
+import React,
+    { useEffect,
+    useRef,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     Image,
     KeyboardAvoidingView,
     Platform,
@@ -18,11 +21,29 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    View
+    View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import { LangPicker } from '../components/LangPicker';
+import { setPendingVerifyEmail, isEmailVerified } from '../lib/emailVerification';
 import { useT } from '../lib/i18n';
-import { ensureProfile, isUsernameTaken, isValidUsername, normalizeUsername, USERNAME_MAX_LENGTH } from '../lib/profile';
+import { clearPendingSignup } from '../lib/pendingSignup';
+import { scheduleOnboardingPrefetch } from '../lib/prefetchHome';
+import {
+    DISPLAY_NAME_MAX_LENGTH,
+    ensureProfile,
+    isValidDisplayName,
+    isEmailTaken,
+    isUsernameTaken,
+    isValidUsername,
+    normalizeDisplayName,
+    formatUsernameInput,
+    normalizeUsername,
+    getLoginEmailByUsername,
+    EmailCheckError,
+    UsernameCheckError,
+    USERNAME_MAX_LENGTH,
+} from '../lib/profile';
 import { supabase } from '../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -34,8 +55,10 @@ const MUTED = '#64748B';
 const PLACEHOLDER = '#94A3B8';
 const FIELD_BG = '#F5F9FF';
 const FIELD_BORDER = '#E3ECFB';
+const DANGER = '#DC2626';
 
-type FieldName = 'nombre' | 'email' | 'password' | null;
+type FieldName = 'nombre' | 'username' | 'email' | 'password' | null;
+type UsernameStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
 const parseAuthParams = (url: string): Record<string, string> => {
     const out: Record<string, string> = {};
@@ -53,25 +76,52 @@ const parseAuthParams = (url: string): Record<string, string> => {
     return out;
 };
 
-const COMMUNITY_AVATARS = [
-    'https://i.pravatar.cc/150?img=32',
-    'https://i.pravatar.cc/150?img=11',
-    'https://i.pravatar.cc/150?img=18',
-    'https://i.pravatar.cc/150?img=21',
-    'https://i.pravatar.cc/150?img=20',
-    'https://i.pravatar.cc/150?img=12',
-];
-
 export default function LoginScreen() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [nombre, setNombre] = useState('');
+    const [username, setUsername] = useState('');
     const [loading, setLoading] = useState(false);
     const [isRegistering, setIsRegistering] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
     const [focusedField, setFocusedField] = useState<FieldName>(null);
+    const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>('idle');
+    const usernameCheckGen = useRef(0);
     const router = useRouter();
     const { t, lang, setLang } = useT();
+
+    useEffect(() => {
+        if (!isRegistering) {
+            setUsernameStatus('idle');
+            return;
+        }
+        const handle = normalizeUsername(username);
+        if (!handle) {
+            setUsernameStatus('idle');
+            return;
+        }
+        if (!isValidUsername(handle)) {
+            setUsernameStatus('invalid');
+            return;
+        }
+
+        const gen = ++usernameCheckGen.current;
+        setUsernameStatus('checking');
+        const timer = setTimeout(() => {
+            void (async () => {
+                try {
+                    const taken = await isUsernameTaken(handle);
+                    if (usernameCheckGen.current !== gen) return;
+                    setUsernameStatus(taken ? 'taken' : 'available');
+                } catch {
+                    if (usernameCheckGen.current !== gen) return;
+                    setUsernameStatus('idle');
+                }
+            })();
+        }, 400);
+
+        return () => clearTimeout(timer);
+    }, [username, isRegistering]);
 
     const validatePassword = (pass: string) => {
         const hasNumber = /\d/.test(pass);
@@ -132,12 +182,45 @@ export default function LoginScreen() {
         }
     };
 
+    const handleForgotPassword = async () => {
+        if (!email.trim()) {
+            return Alert.alert(t('login.notice'), t('login.resetNeedEmail'));
+        }
+
+        setLoading(true);
+        try {
+            let loginEmail = email.trim().toLowerCase();
+            if (!loginEmail.includes('@')) {
+                const resolved = await getLoginEmailByUsername(loginEmail.replace(/^@/, ''));
+                if (!resolved) {
+                    Alert.alert(t('login.notice'), t('login.userNotFound'));
+                    return;
+                }
+                loginEmail = resolved;
+            } else if (!validateEmail(loginEmail)) {
+                Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
+                return;
+            }
+
+            const redirectTo = Linking.createURL('reset-password');
+            const { error } = await supabase.auth.resetPasswordForEmail(loginEmail, {
+                redirectTo,
+            });
+            if (error) throw error;
+            Alert.alert(t('login.resetSentTitle'), t('login.resetSentMsg'));
+        } catch (e: any) {
+            Alert.alert(t('login.authError'), e?.message || t('login.emailCheckFailed'));
+        } finally {
+            setLoading(false);
+        }
+    };
+
     async function handleAuth() {
-        if (!email || !password || (isRegistering && !nombre)) {
+        if (!email || !password || (isRegistering && (!nombre.trim() || !username.trim()))) {
             return Alert.alert(t('login.notice'), t('login.fillAll'));
         }
 
-        if (!validateEmail(email)) {
+        if (isRegistering && !validateEmail(email)) {
             return Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
         }
 
@@ -145,13 +228,17 @@ export default function LoginScreen() {
             return Alert.alert(t('login.weakPassword'), t('login.weakPasswordMsg'));
         }
 
-        const trimmedName = normalizeUsername(nombre);
+        const displayName = normalizeDisplayName(nombre);
+        const handle = normalizeUsername(username);
         if (isRegistering) {
-            if (!isValidUsername(trimmedName)) {
-                return Alert.alert(t('login.notice'), t('login.usernameMaxHint'));
+            if (!isValidDisplayName(displayName)) {
+                return Alert.alert(t('login.notice'), t('login.displayNameHint'));
             }
-            const taken = await isUsernameTaken(trimmedName);
-            if (taken) {
+            if (!isValidUsername(handle) || usernameStatus === 'invalid') {
+                setUsernameStatus('invalid');
+                return Alert.alert(t('login.notice'), t('login.usernameInvalid'));
+            }
+            if (usernameStatus === 'taken') {
                 return Alert.alert(t('login.notice'), t('login.usernameTaken'));
             }
         }
@@ -159,57 +246,139 @@ export default function LoginScreen() {
         setLoading(true);
         try {
             if (isRegistering) {
-                const { data, error } = await supabase.auth.signUp({
-                    email: email.trim(),
-                    password,
-                    options: { data: { nombre: trimmedName, registro_completado: false } }
-                });
-
-                if (error) throw error;
-
-                if (data.user) {
-                    const { error: profileError } = await ensureProfile(
-                        {
-                            ...data.user,
-                            user_metadata: { ...data.user.user_metadata, nombre: trimmedName, registro_completado: false },
-                        },
-                        trimmedName
-                    );
-                    if (profileError) {
-                        console.error('Error al crear perfil:', profileError);
+                try {
+                    const taken = await isUsernameTaken(handle);
+                    if (taken) {
+                        setUsernameStatus('taken');
+                        return Alert.alert(t('login.notice'), t('login.usernameTaken'));
                     }
+                } catch (e) {
+                    if (e instanceof UsernameCheckError) {
+                        return Alert.alert(t('login.notice'), t('login.usernameCheckFailed'));
+                    }
+                    return Alert.alert(t('login.notice'), t('login.usernameCheckFailed'));
                 }
 
-                if (data.session) {
+                try {
+                    const emailTaken = await isEmailTaken(email);
+                    if (emailTaken) {
+                        return Alert.alert(t('login.notice'), t('login.emailTaken'));
+                    }
+                } catch (e) {
+                    if (e instanceof EmailCheckError) {
+                        return Alert.alert(t('login.notice'), t('login.emailCheckFailed'));
+                    }
+                    return Alert.alert(t('login.notice'), t('login.emailCheckFailed'));
+                }
+
+                const registerEmail = email.trim().toLowerCase();
+                const redirectTo = Linking.createURL('verify-email');
+                const { data, error } = await supabase.auth.signUp({
+                    email: registerEmail,
+                    password,
+                    options: {
+                        emailRedirectTo: redirectTo,
+                        data: {
+                            nombre: displayName,
+                            nombre_usuario: handle,
+                            registro_completado: false,
+                        },
+                    },
+                });
+                if (error) throw error;
+
+                // Supabase a veces no errora: user sin identities = email ya registrado
+                if ((data.user?.identities?.length ?? 0) === 0) {
+                    Alert.alert(t('login.notice'), t('login.emailTaken'));
+                    return;
+                }
+
+                await clearPendingSignup();
+                await setPendingVerifyEmail(registerEmail);
+
+                if (data.session?.user && isEmailVerified(data.session.user)) {
+                    const { error: profileError } = await ensureProfile(data.session.user, {
+                        nombre: displayName,
+                        nombreUsuario: handle,
+                    });
+                    if (profileError) {
+                        await supabase.auth.signOut({ scope: 'local' });
+                        Alert.alert(
+                            t('login.authError'),
+                            profileError === 'username_taken' || /unique|duplicate/i.test(profileError)
+                                ? t('login.usernameTaken')
+                                : profileError === 'db_error'
+                                  ? t('login.dbSignupError')
+                                  : profileError,
+                        );
+                        return;
+                    }
+                    scheduleOnboardingPrefetch();
                     router.replace('/onboarding');
-                } else {
-                    Alert.alert(t('login.success'), t('login.successMsg'));
-                    setIsRegistering(false);
+                    return;
+                }
+
+                // Confirmación requerida (o sesión aún sin verificar)
+                if (data.session?.user) {
+                    await ensureProfile(data.session.user, {
+                        nombre: displayName,
+                        nombreUsuario: handle,
+                    }).catch(() => {});
+                }
+                scheduleOnboardingPrefetch();
+                router.replace('/verify-email');
+                return;
+            }
+
+            let loginEmail = email.trim();
+            if (loginEmail.includes('@')) {
+                loginEmail = loginEmail.toLowerCase();
+                if (!validateEmail(loginEmail)) {
+                    Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
+                    return;
                 }
             } else {
-                const { data, error } = await supabase.auth.signInWithPassword({
-                    email: email.trim(),
-                    password
-                });
-                if (error) throw error;
+                const resolved = await getLoginEmailByUsername(loginEmail.replace(/^@/, ''));
+                if (!resolved) {
+                    Alert.alert(t('login.authError'), t('login.userNotFound'));
+                    return;
+                }
+                loginEmail = resolved;
+            }
 
-                if (data.user) {
-                    const { error: profileError } = await ensureProfile(data.user);
-                    if (profileError) {
-                        console.error('Error al crear perfil:', profileError);
-                    }
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email: loginEmail,
+                password,
+            });
+            if (error) throw error;
+
+            if (data.user) {
+                if (!isEmailVerified(data.user)) {
+                    await setPendingVerifyEmail(data.user.email || loginEmail);
+                    router.replace('/verify-email');
+                    return;
+                }
+                const { error: profileError } = await ensureProfile(data.user);
+                if (profileError) {
+                    console.error('Error al crear perfil:', profileError);
                 }
             }
         } catch (error: any) {
-            let errorMessage = error.message;
-            if (error.message === 'User already registered') {
-                errorMessage = 'Este correo electrónico ya está registrado. Intenta iniciar sesión.';
-            } else if (error.message === 'Invalid login credentials') {
+            const msg = typeof error?.message === 'string' ? error.message : '';
+            if (/email not confirmed|email_not_confirmed/i.test(msg)) {
+                const fallbackEmail = email.includes('@') ? email.trim().toLowerCase() : null;
+                if (fallbackEmail) await setPendingVerifyEmail(fallbackEmail);
+                router.replace('/verify-email');
+                return;
+            }
+
+            let errorMessage = msg || String(error);
+            if (msg === 'User already registered'
+                || /already\s*(been\s*)?registered|already\s*exists|email.*exist/i.test(msg)) {
+                errorMessage = t('login.emailTaken');
+            } else if (msg === 'Invalid login credentials') {
                 errorMessage = 'El correo o la contraseña son incorrectos.';
-            } else if (
-                typeof error.message === 'string' &&
-                error.message.toLowerCase().includes('database error saving new user')
-            ) {
+            } else if (msg.toLowerCase().includes('database error saving new user')) {
                 errorMessage = t('login.dbSignupError');
             }
 
@@ -224,11 +393,15 @@ export default function LoginScreen() {
         setIsRegistering(registering);
         setPassword('');
         setShowPassword(false);
+        setUsernameStatus('idle');
     };
 
     const fieldStyle = (name: FieldName) => [
         styles.fieldWrapper,
         focusedField === name && styles.fieldWrapperFocused,
+        name === 'username' &&
+            (usernameStatus === 'taken' || (usernameStatus === 'invalid' && username.length > 0)) &&
+            styles.fieldWrapperError,
     ];
 
     return (
@@ -255,32 +428,13 @@ export default function LoginScreen() {
                 >
                     {/* ---------- Hero ---------- */}
                     <View style={styles.hero}>
-                        <View style={styles.logoBadge}>
-                            <Ionicons name="people" size={26} color="#FFF" />
-                        </View>
+                        <Image
+                            source={require('../assets/images/nexo-logo.png')}
+                            style={styles.logoImage}
+                            accessibilityLabel="Nexo"
+                            fadeDuration={0}
+                        />
                         <Text style={styles.brandTitle}>NEXO</Text>
-                        <Text style={styles.brandSubtitle}>
-                            {isRegistering ? t('login.subtitleRegister') : t('login.subtitleLogin')}
-                        </Text>
-
-                        <View style={styles.communityRow}>
-                            <View style={styles.avatarsOverlap}>
-                                {COMMUNITY_AVATARS.map((url, index) => (
-                                    <Image
-                                        key={index}
-                                        source={{ uri: url }}
-                                        style={[
-                                            styles.communityAvatar,
-                                            {
-                                                marginLeft: index === 0 ? 0 : -10,
-                                                zIndex: COMMUNITY_AVATARS.length - index,
-                                            },
-                                        ]}
-                                    />
-                                ))}
-                            </View>
-                            <Text style={styles.communityText}>{t('login.welcomeSub')}</Text>
-                        </View>
                     </View>
 
                     {/* ---------- Tarjeta ---------- */}
@@ -312,33 +466,85 @@ export default function LoginScreen() {
                         </View>
 
                         {isRegistering && (
-                            <View style={styles.fieldBlock}>
-                                <Text style={styles.label}>{t('login.username')}</Text>
-                                <View style={fieldStyle('nombre')}>
-                                    <Ionicons name="person-outline" size={20} color={focusedField === 'nombre' ? PRIMARY_DARK : PLACEHOLDER} />
-                                    <TextInput
-                                        placeholder={t('login.usernamePlaceholder')}
-                                        placeholderTextColor={PLACEHOLDER}
-                                        style={styles.fieldInput}
-                                        value={nombre}
-                                        onChangeText={(text) => setNombre(text.slice(0, USERNAME_MAX_LENGTH))}
-                                        onFocus={() => setFocusedField('nombre')}
-                                        onBlur={() => setFocusedField(null)}
-                                        autoCapitalize="words"
-                                        maxLength={USERNAME_MAX_LENGTH}
-                                        returnKeyType="next"
-                                    />
+                            <>
+                                <View style={styles.fieldBlock}>
+                                    <Text style={styles.label}>{t('login.displayName')}</Text>
+                                    <View style={fieldStyle('nombre')}>
+                                        <Ionicons name="person-outline" size={20} color={focusedField === 'nombre' ? PRIMARY_DARK : PLACEHOLDER} />
+                                        <TextInput
+                                            placeholder={t('login.displayNamePlaceholder')}
+                                            placeholderTextColor={PLACEHOLDER}
+                                            style={styles.fieldInput}
+                                            value={nombre}
+                                            onChangeText={(text) => setNombre(text.slice(0, DISPLAY_NAME_MAX_LENGTH))}
+                                            onFocus={() => setFocusedField('nombre')}
+                                            onBlur={() => setFocusedField(null)}
+                                            autoCapitalize="words"
+                                            maxLength={DISPLAY_NAME_MAX_LENGTH}
+                                            returnKeyType="next"
+                                        />
+                                    </View>
                                 </View>
-                                <Text style={styles.inputHint}>{t('login.usernameMaxHint')}</Text>
-                            </View>
+                                <View style={styles.fieldBlock}>
+                                    <Text style={styles.label}>{t('login.username')}</Text>
+                                    <View style={fieldStyle('username')}>
+                                        <Text
+                                            style={[
+                                                styles.atPrefix,
+                                                (usernameStatus === 'taken' ||
+                                                    (usernameStatus === 'invalid' && username.length > 0)) &&
+                                                    styles.atPrefixError,
+                                            ]}
+                                        >
+                                            @
+                                        </Text>
+                                        <TextInput
+                                            placeholder={t('login.usernamePlaceholder')}
+                                            placeholderTextColor={PLACEHOLDER}
+                                            style={[
+                                                styles.fieldInput,
+                                                (usernameStatus === 'taken' ||
+                                                    (usernameStatus === 'invalid' && username.length > 0)) &&
+                                                    styles.fieldInputError,
+                                            ]}
+                                            value={username}
+                                            onChangeText={(text) => setUsername(formatUsernameInput(text))}
+                                            onFocus={() => setFocusedField('username')}
+                                            onBlur={() => setFocusedField(null)}
+                                            autoCapitalize="none"
+                                            autoCorrect={false}
+                                            spellCheck={false}
+                                            maxLength={USERNAME_MAX_LENGTH}
+                                            returnKeyType="next"
+                                        />
+                                        {usernameStatus === 'checking' ? (
+                                            <ActivityIndicator size="small" color={PRIMARY_DARK} />
+                                        ) : usernameStatus === 'available' ? (
+                                            <Ionicons name="checkmark-circle" size={22} color="#16A34A" />
+                                        ) : null}
+                                    </View>
+                                    {usernameStatus === 'taken' ? (
+                                        <Text style={styles.fieldErrorText}>{t('login.usernameTaken')}</Text>
+                                    ) : null}
+                                    {usernameStatus === 'invalid' && username.length > 0 ? (
+                                        <Text style={styles.fieldErrorText}>{t('login.usernameInvalid')}</Text>
+                                    ) : null}
+                                </View>
+                            </>
                         )}
 
                         <View style={styles.fieldBlock}>
-                            <Text style={styles.label}>{t('login.email')}</Text>
+                            <Text style={styles.label}>
+                                {isRegistering ? t('login.email') : t('login.emailOrUsername')}
+                            </Text>
                             <View style={fieldStyle('email')}>
                                 <Ionicons name="mail-outline" size={20} color={focusedField === 'email' ? PRIMARY_DARK : PLACEHOLDER} />
                                 <TextInput
-                                    placeholder={t('login.emailPlaceholder')}
+                                    placeholder={
+                                        isRegistering
+                                            ? t('login.emailPlaceholder')
+                                            : t('login.emailOrUsernamePlaceholder')
+                                    }
                                     placeholderTextColor={PLACEHOLDER}
                                     style={styles.fieldInput}
                                     value={email}
@@ -347,7 +553,7 @@ export default function LoginScreen() {
                                     onBlur={() => setFocusedField(null)}
                                     autoCapitalize="none"
                                     autoCorrect={false}
-                                    keyboardType="email-address"
+                                    keyboardType={isRegistering ? 'email-address' : 'default'}
                                     returnKeyType="next"
                                     autoComplete="off"
                                     textContentType={Platform.OS === 'ios' ? 'none' : 'emailAddress'}
@@ -391,6 +597,16 @@ export default function LoginScreen() {
                             </View>
                             {isRegistering && (
                                 <Text style={styles.inputHint}>{t('login.weakPasswordMsg')}</Text>
+                            )}
+                            {!isRegistering && (
+                                <TouchableOpacity
+                                    onPress={handleForgotPassword}
+                                    disabled={loading}
+                                    style={styles.forgotBtn}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                    <Text style={styles.forgotText}>{t('login.forgotPassword')}</Text>
+                                </TouchableOpacity>
                             )}
                         </View>
 
@@ -488,61 +704,21 @@ const styles = StyleSheet.create({
     },
     hero: {
         alignItems: 'center',
-        paddingTop: Platform.OS === 'ios' ? 76 : 56,
-        paddingBottom: 26,
+        paddingTop: Platform.OS === 'ios' ? 118 : 96,
+        paddingBottom: 36,
     },
-    logoBadge: {
-        width: 56,
-        height: 56,
-        borderRadius: 18,
-        backgroundColor: 'rgba(255,255,255,0.18)',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.35)',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 14,
+    logoImage: {
+        width: 76,
+        height: 76,
+        borderRadius: 20,
+        marginBottom: 12,
     },
     brandTitle: {
         fontSize: 40,
         fontWeight: '900',
         color: '#FFF',
         letterSpacing: 12,
-        marginLeft: 12, // compensa el letterSpacing del último carácter
-    },
-    brandSubtitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: 'rgba(255,255,255,0.9)',
-        marginTop: 6,
-        textAlign: 'center',
-        paddingHorizontal: 30,
-    },
-    communityRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        marginTop: 18,
-        backgroundColor: 'rgba(255,255,255,0.14)',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.25)',
-        borderRadius: 999,
-        paddingVertical: 8,
-        paddingHorizontal: 14,
-        maxWidth: '96%',
-    },
-    avatarsOverlap: { flexDirection: 'row', alignItems: 'center' },
-    communityAvatar: {
-        width: 26,
-        height: 26,
-        borderRadius: 13,
-        borderWidth: 2,
-        borderColor: '#FFF',
-    },
-    communityText: {
-        flexShrink: 1,
-        fontSize: 12,
-        fontWeight: '600',
-        color: '#FFF',
+        marginLeft: 12,
     },
     card: {
         backgroundColor: '#FFF',
@@ -611,11 +787,33 @@ const styles = StyleSheet.create({
         borderColor: PRIMARY,
         backgroundColor: '#FFF',
     },
+    fieldWrapperError: {
+        borderColor: DANGER,
+        backgroundColor: '#FEF2F2',
+    },
+    fieldInputError: {
+        color: DANGER,
+    },
+    atPrefixError: {
+        color: DANGER,
+    },
+    fieldErrorText: {
+        marginTop: 6,
+        fontSize: 12,
+        fontWeight: '700',
+        color: DANGER,
+    },
     fieldInput: {
         flex: 1,
         paddingVertical: 15,
         fontSize: 15.5,
         color: INK,
+    },
+    atPrefix: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: MUTED,
+        paddingVertical: 15,
     },
     eyeButton: { padding: 2 },
     inputHint: {
@@ -625,6 +823,8 @@ const styles = StyleSheet.create({
         marginTop: 6,
         marginLeft: 4,
     },
+    forgotBtn: { alignSelf: 'flex-end', marginTop: 10 },
+    forgotText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 13.5 },
     btnPrimaryWrapper: {
         marginTop: 6,
         borderRadius: 16,

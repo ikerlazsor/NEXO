@@ -1,10 +1,14 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useFocusEffect,
+    useLocalSearchParams,
+    useRouter } from 'expo-router';
+import { useCallback,
+    useRef,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     FlatList,
     Image,
     RefreshControl,
@@ -14,6 +18,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
     acceptFriendRequest,
@@ -38,6 +43,9 @@ import {
     rejectPlanInvite,
     type PlanInvite,
 } from '../lib/planInvites';
+import { getAuthUser } from '../lib/auth';
+import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
+import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -69,11 +77,27 @@ export default function FriendsScreen() {
 
     const loadData = useCallback(async () => {
         try {
-            if (!refreshing && !hasLoadedRef.current) setLoading(true);
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = await getAuthUser();
             if (!user) {
                 router.replace('/login');
                 return;
+            }
+
+            const cached = cacheGetStale<{
+                friends: (FriendProfile & { friendshipId: string })[];
+                incoming: FriendRequest[];
+                outgoing: FriendRequest[];
+                planInvites: PlanInvite[];
+            }>(screenCacheKey.friends(user.id));
+            if (cached && !hasLoadedRef.current) {
+                setFriends(cached.friends);
+                setIncoming(cached.incoming);
+                setOutgoing(cached.outgoing);
+                setPlanInvites(cached.planInvites);
+                hasLoadedRef.current = true;
+                setLoading(false);
+            } else if (!refreshing && !hasLoadedRef.current) {
+                setLoading(true);
             }
 
             const [friendsData, incomingData, outgoingData, invitesData] = await Promise.all([
@@ -87,6 +111,12 @@ export default function FriendsScreen() {
             setIncoming(incomingData);
             setOutgoing(outgoingData);
             setPlanInvites(invitesData);
+            cacheSet(screenCacheKey.friends(user.id), {
+                friends: friendsData,
+                incoming: incomingData,
+                outgoing: outgoingData,
+                planInvites: invitesData,
+            }, ScreenCacheTTL.friends);
         } catch {
             Alert.alert(t('profile.error'), t('friends.loadError'));
         } finally {

@@ -13,6 +13,7 @@ import {
     View,
 } from 'react-native';
 import { useT } from '../lib/i18n';
+import { MAIN_CATEGORY_ICONS } from '../lib/categories';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -23,8 +24,6 @@ const H_PAD = 20;
 const PREVIEW_W = SCREEN_W - H_PAD * 2;
 const PREVIEW_H = 248;
 const THUMB = 72;
-
-import { MAIN_CATEGORY_ICONS } from '../lib/categories';
 
 const CATEGORY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
     ...Object.fromEntries(
@@ -60,7 +59,7 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
             const clamped = Math.max(0, Math.min(images.length - 1, idx));
             if (clamped !== selectedIndex) onSelectIndex(clamped);
         },
-        [images.length, selectedIndex, onSelectIndex]
+        [images.length, selectedIndex, onSelectIndex],
     );
 
     const pickThumb = (index: number) => {
@@ -78,10 +77,7 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
     return (
         <View style={styles.wrap}>
             <View style={styles.headerRow}>
-                <View>
-                    <Text style={styles.title}>{t('createplan.coverPhoto')}</Text>
-                    <Text style={styles.subtitle}>{t('createplan.coverPhotoSub')}</Text>
-                </View>
+                <Text style={styles.title}>{t('createplan.coverPhoto')}</Text>
                 <View style={styles.counterPill}>
                     <Text style={styles.counterText}>
                         {t('createplan.coverPhotoOf', { current: selectedIndex + 1, total: images.length })}
@@ -111,7 +107,11 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
                             index,
                         })}
                         renderItem={({ item }) => (
-                            <Image source={{ uri: item }} style={styles.previewImage} resizeMode="cover" />
+                            <Image
+                                source={typeof item === 'number' ? item : { uri: item }}
+                                style={styles.previewImage}
+                                resizeMode="cover"
+                            />
                         )}
                     />
 
@@ -144,7 +144,11 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
                             onPress={() => pickThumb(i)}
                             style={[styles.thumbWrap, active && styles.thumbWrapActive]}
                         >
-                            <Image source={{ uri: img }} style={styles.thumbImage} resizeMode="cover" />
+                            <Image
+                                source={typeof img === 'number' ? img : { uri: img }}
+                                style={styles.thumbImage}
+                                resizeMode="cover"
+                            />
                             {active && (
                                 <View style={styles.thumbCheck}>
                                     <Ionicons name="checkmark" size={14} color="#FFF" />
@@ -175,7 +179,6 @@ const styles = StyleSheet.create({
         gap: 12,
     },
     title: { fontSize: 17, fontWeight: '800', color: INK, letterSpacing: -0.3 },
-    subtitle: { fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 18 },
     counterPill: {
         backgroundColor: '#FFF',
         paddingHorizontal: 12,

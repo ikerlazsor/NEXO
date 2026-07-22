@@ -1,11 +1,15 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
+import DateTimePicker,
+    { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect,
+    useMemo,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     Image,
     KeyboardAvoidingView,
     Platform,
@@ -13,16 +17,29 @@ import {
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAuthUser } from '../lib/auth';
 import { uploadAvatarFromUri } from '../lib/avatar';
+import { clearPendingVerifyEmail } from '../lib/emailVerification';
 import { useT } from '../lib/i18n';
 import { saveOnboardingPreferences } from '../lib/onboarding';
-import { AFICIONES_OPTIONS, ONBOARDING_GENERO_OPTIONS, type Genero } from '../lib/profileFields';
+import { clearPendingSignup } from '../lib/pendingSignup';
+import {
+    prepareCachesForNewUser,
+    warmAppCaches,
+} from '../lib/prefetchHome';
+import {
+    AFICIONES_OPTIONS,
+    calcAge,
+    getPersonalityLabel,
+    ONBOARDING_GENERO_OPTIONS,
+    type Genero,
+} from '../lib/profileFields';
+import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -31,29 +48,66 @@ const MUTED = '#64748B';
 
 const MIN_AGE = 18;
 const MAX_AGE = 99;
-const PERSONALITY_COUNT = 3;
+const PERSONALITY_MIN = 1;
+const PERSONALITY_MAX = 3;
 const TOTAL_STEPS = 4;
+
+function dateYearsAgo(years: number): Date {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - years);
+    return d;
+}
+
+function toIsoDate(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
 
 export default function OnboardingScreen() {
     const router = useRouter();
-    const { t } = useT();
+    const { t, lang } = useT();
+    const maxBirthDate = useMemo(() => dateYearsAgo(MIN_AGE), []);
+    const minBirthDate = useMemo(() => dateYearsAgo(MAX_AGE), []);
     const [step, setStep] = useState(0);
-    const [age, setAge] = useState('');
+    const [birthDate, setBirthDate] = useState<Date>(maxBirthDate);
+    const [showDatePicker, setShowDatePicker] = useState(Platform.OS === 'ios');
     const [genero, setGenero] = useState<Genero | null>(null);
     const [avatarUri, setAvatarUri] = useState<string | null>(null);
     const [personalities, setPersonalities] = useState<string[]>([]);
     const [saving, setSaving] = useState(false);
     const [completing, setCompleting] = useState(false);
+    const [bootstrapped, setBootstrapped] = useState(false);
 
-    const parsedAge = parseInt(age, 10);
-    const ageValid = Number.isFinite(parsedAge) && parsedAge >= MIN_AGE && parsedAge <= MAX_AGE;
-    const personalitiesValid = personalities.length === PERSONALITY_COUNT;
+    useEffect(() => {
+        let alive = true;
+        void (async () => {
+            const user = await getAuthUser();
+            if (!alive) return;
+            if (!user) {
+                router.replace('/login');
+                return;
+            }
+            setBootstrapped(true);
+            void warmAppCaches(user);
+        })();
+        return () => {
+            alive = false;
+        };
+    }, [router]);
+
+    const ageFromBirth = calcAge(toIsoDate(birthDate));
+    const birthValid =
+        ageFromBirth != null && ageFromBirth >= MIN_AGE && ageFromBirth <= MAX_AGE;
+    const personalitiesValid =
+        personalities.length >= PERSONALITY_MIN && personalities.length <= PERSONALITY_MAX;
 
     const togglePersonality = (tag: string) => {
         setPersonalities((prev) => {
             if (prev.includes(tag)) return prev.filter((p) => p !== tag);
-            if (prev.length >= PERSONALITY_COUNT) {
-                Alert.alert(t('onboarding.notice'), t('onboarding.personalitiesLimit', { n: PERSONALITY_COUNT }));
+            if (prev.length >= PERSONALITY_MAX) {
+                Alert.alert(t('onboarding.notice'), t('onboarding.personalitiesLimit', { n: PERSONALITY_MAX }));
                 return prev;
             }
             return [...prev, tag];
@@ -61,26 +115,52 @@ export default function OnboardingScreen() {
     };
 
     const pickPhoto = async (useCamera: boolean) => {
-        const result = useCamera
-            ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.5 })
-            : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.5 });
+        try {
+            if (useCamera) {
+                const cam = await ImagePicker.requestCameraPermissionsAsync();
+                if (!cam.granted) {
+                    Alert.alert(t('onboarding.notice'), t('onboarding.cameraPermission'));
+                    return;
+                }
+            } else {
+                const lib = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                if (!lib.granted) {
+                    Alert.alert(t('onboarding.notice'), t('onboarding.galleryPermission'));
+                    return;
+                }
+            }
 
-        if (!result.canceled && result.assets[0]?.uri) {
-            setAvatarUri(result.assets[0].uri);
+            const result = useCamera
+                ? await ImagePicker.launchCameraAsync({
+                      mediaTypes: ['images'],
+                      allowsEditing: true,
+                      aspect: [1, 1],
+                      quality: 0.5,
+                  })
+                : await ImagePicker.launchImageLibraryAsync({
+                      mediaTypes: ['images'],
+                      allowsEditing: true,
+                      aspect: [1, 1],
+                      quality: 0.5,
+                  });
+
+            if (!result.canceled && result.assets[0]?.uri) {
+                setAvatarUri(result.assets[0].uri);
+            }
+        } catch (e) {
+            console.warn('pickPhoto', e);
+            Alert.alert(t('onboarding.notice'), t('onboarding.photoError'));
         }
     };
 
-    const showPhotoMenu = () => {
-        Alert.alert(t('onboarding.photoTitle'), t('onboarding.photoChoice'), [
-            { text: t('profile.camera'), onPress: () => pickPhoto(true) },
-            { text: t('profile.gallery'), onPress: () => pickPhoto(false) },
-            { text: t('profile.cancel'), style: 'cancel' },
-        ]);
+    const onBirthChange = (_: DateTimePickerEvent, selected?: Date) => {
+        if (Platform.OS === 'android') setShowDatePicker(false);
+        if (selected) setBirthDate(selected);
     };
 
     const handleFinish = async () => {
-        if (!ageValid) {
-            Alert.alert(t('onboarding.notice'), t('onboarding.ageInvalid'));
+        if (!birthValid) {
+            Alert.alert(t('onboarding.notice'), t('onboarding.birthInvalid'));
             return;
         }
         if (!genero) {
@@ -92,7 +172,7 @@ export default function OnboardingScreen() {
             return;
         }
         if (!personalitiesValid) {
-            Alert.alert(t('onboarding.notice'), t('onboarding.pickPersonalities', { n: PERSONALITY_COUNT }));
+            Alert.alert(t('onboarding.notice'), t('onboarding.pickPersonalities', { min: PERSONALITY_MIN, max: PERSONALITY_MAX }));
             return;
         }
         if (saving || completing) return;
@@ -100,20 +180,22 @@ export default function OnboardingScreen() {
         setSaving(true);
         setCompleting(true);
         try {
-            const user = await getAuthUser();
-            if (!user) {
+            const authUser = await getAuthUser();
+            if (!authUser) {
                 router.replace('/login');
                 return;
             }
+            const userId = authUser.id;
 
-            const { url, error: uploadError } = await uploadAvatarFromUri(user.id, avatarUri);
+            const { url, error: uploadError } = await uploadAvatarFromUri(userId, avatarUri);
             if (uploadError || !url) {
                 Alert.alert(t('onboarding.error'), uploadError ?? t('profile.uploadError'));
+                setCompleting(false);
                 return;
             }
 
-            const { error } = await saveOnboardingPreferences(user.id, {
-                age: parsedAge,
+            const { error } = await saveOnboardingPreferences(userId, {
+                fecha_nacimiento: toIsoDate(birthDate),
                 genero,
                 avatar_url: url,
                 ambientes_preferidos: personalities,
@@ -123,6 +205,13 @@ export default function OnboardingScreen() {
                 setCompleting(false);
                 return;
             }
+
+            await clearPendingSignup();
+            await clearPendingVerifyEmail();
+
+            prepareCachesForNewUser(authUser.id);
+            void warmAppCaches(authUser);
+
             router.replace('/(tabs)');
         } catch (e) {
             const msg = e instanceof Error ? e.message : t('onboarding.error');
@@ -149,6 +238,12 @@ export default function OnboardingScreen() {
     return (
         <View style={styles.root}>
             <LinearGradient colors={['#DCEBFF', '#F2F7FF', '#FFFFFF']} style={StyleSheet.absoluteFill} />
+
+            {!bootstrapped ? (
+                <View style={styles.completingOverlay}>
+                    <ActivityIndicator size="large" color={PRIMARY_DARK} />
+                </View>
+            ) : null}
 
             {completing ? (
                 <View style={styles.completingOverlay}>
@@ -180,22 +275,57 @@ export default function OnboardingScreen() {
 
                             {step === 0 && (
                                 <>
-                                    <Text style={styles.question}>{t('onboarding.ageQuestion')}</Text>
-                                    <Text style={styles.hint}>{t('onboarding.ageHint')}</Text>
-                                    <TextInput
-                                        style={styles.ageInput}
-                                        value={age}
-                                        onChangeText={(v) => setAge(v.replace(/[^0-9]/g, '').slice(0, 2))}
-                                        placeholder="18"
-                                        placeholderTextColor="#94A3B8"
-                                        keyboardType="number-pad"
-                                        maxLength={2}
-                                        autoFocus
-                                    />
+                                    <Pressable
+                                        onPress={async () => {
+                                            await clearPendingSignup();
+                                            await clearPendingVerifyEmail();
+                                            await supabase.auth.signOut({ scope: 'local' });
+                                            router.replace('/login');
+                                        }}
+                                        style={styles.backLink}
+                                    >
+                                        <Ionicons name="chevron-back" size={18} color={PRIMARY_DARK} />
+                                        <Text style={styles.backText}>{t('onboarding.cancelRegister')}</Text>
+                                    </Pressable>
+                                    <Text style={styles.question}>{t('onboarding.birthQuestion')}</Text>
+                                    <Text style={styles.hint}>{t('onboarding.birthHint')}</Text>
+                                    {Platform.OS === 'android' && (
+                                        <TouchableOpacity
+                                            style={styles.dateBtn}
+                                            onPress={() => setShowDatePicker(true)}
+                                            activeOpacity={0.85}
+                                        >
+                                            <Ionicons name="calendar-outline" size={22} color={PRIMARY_DARK} />
+                                            <Text style={styles.dateBtnText}>
+                                                {birthDate.toLocaleDateString(lang === 'en' ? 'en-GB' : 'es-ES', {
+                                                    day: 'numeric',
+                                                    month: 'long',
+                                                    year: 'numeric',
+                                                })}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                    {(showDatePicker || Platform.OS === 'ios') && (
+                                        <DateTimePicker
+                                            value={birthDate}
+                                            mode="date"
+                                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                            onChange={onBirthChange}
+                                            maximumDate={maxBirthDate}
+                                            minimumDate={minBirthDate}
+                                            locale={lang === 'en' ? 'en-GB' : 'es-ES'}
+                                            style={styles.datePicker}
+                                        />
+                                    )}
+                                    {ageFromBirth != null && (
+                                        <Text style={styles.agePreview}>
+                                            {t('onboarding.birthAgePreview', { age: ageFromBirth })}
+                                        </Text>
+                                    )}
                                     <TouchableOpacity
-                                        style={[styles.btn, !ageValid && styles.btnDisabled]}
-                                        onPress={() => ageValid && setStep(1)}
-                                        disabled={!ageValid}
+                                        style={[styles.btn, !birthValid && styles.btnDisabled]}
+                                        onPress={() => birthValid && setStep(1)}
+                                        disabled={!birthValid}
                                         activeOpacity={0.9}
                                     >
                                         <Text style={styles.btnText}>{t('onboarding.continue')}</Text>
@@ -245,16 +375,34 @@ export default function OnboardingScreen() {
                                     </Pressable>
                                     <Text style={styles.question}>{t('onboarding.photoQuestion')}</Text>
                                     <Text style={styles.hint}>{t('onboarding.photoHint')}</Text>
-                                    <TouchableOpacity style={styles.photoPicker} onPress={showPhotoMenu} activeOpacity={0.9}>
+                                    <View style={styles.photoPicker}>
                                         {avatarUri ? (
                                             <Image source={{ uri: avatarUri }} style={styles.photoPreview} />
                                         ) : (
                                             <View style={styles.photoPlaceholder}>
-                                                <Ionicons name="camera" size={36} color={PRIMARY_DARK} />
+                                                <Ionicons name="person" size={36} color={PRIMARY_DARK} />
                                                 <Text style={styles.photoPlaceholderText}>{t('onboarding.addPhoto')}</Text>
                                             </View>
                                         )}
-                                    </TouchableOpacity>
+                                    </View>
+                                    <View style={styles.photoActions}>
+                                        <TouchableOpacity
+                                            style={styles.photoActionBtn}
+                                            onPress={() => void pickPhoto(true)}
+                                            activeOpacity={0.85}
+                                        >
+                                            <Ionicons name="camera" size={20} color={PRIMARY_DARK} />
+                                            <Text style={styles.photoActionText}>{t('profile.camera')}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={styles.photoActionBtn}
+                                            onPress={() => void pickPhoto(false)}
+                                            activeOpacity={0.85}
+                                        >
+                                            <Ionicons name="images" size={20} color={PRIMARY_DARK} />
+                                            <Text style={styles.photoActionText}>{t('profile.gallery')}</Text>
+                                        </TouchableOpacity>
+                                    </View>
                                     <TouchableOpacity
                                         style={[styles.btn, !avatarUri && styles.btnDisabled]}
                                         onPress={() => avatarUri && setStep(3)}
@@ -274,11 +422,6 @@ export default function OnboardingScreen() {
                                         <Text style={styles.backText}>{t('onboarding.back')}</Text>
                                     </Pressable>
                                     <Text style={styles.question}>{t('onboarding.personalitiesQuestion')}</Text>
-                                    <Text style={styles.hint}>
-                                        {t('onboarding.personalitiesHint', { n: PERSONALITY_COUNT })}
-                                        {' · '}
-                                        {personalities.length}/{PERSONALITY_COUNT}
-                                    </Text>
                                     <View style={styles.personalityGrid}>
                                         {AFICIONES_OPTIONS.map((tag) => {
                                             const active = personalities.includes(tag);
@@ -290,7 +433,7 @@ export default function OnboardingScreen() {
                                                     activeOpacity={0.85}
                                                 >
                                                     <Text style={[styles.personalityText, active && styles.personalityTextActive]}>
-                                                        {t('personality.' + tag)}
+                                                        {getPersonalityLabel(tag, genero, t)}
                                                     </Text>
                                                 </TouchableOpacity>
                                             );
@@ -364,17 +507,27 @@ const styles = StyleSheet.create({
     stepLineActive: { backgroundColor: PRIMARY },
     question: { fontSize: 20, fontWeight: '800', color: INK, textAlign: 'center', marginBottom: 8 },
     hint: { fontSize: 13, color: MUTED, textAlign: 'center', marginBottom: 20 },
-    ageInput: {
-        fontSize: 48,
-        fontWeight: '900',
-        color: INK,
-        textAlign: 'center',
+    dateBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
         backgroundColor: '#F8FAFC',
-        borderRadius: 20,
-        paddingVertical: 20,
-        borderWidth: 2,
+        borderRadius: 16,
+        borderWidth: 1.5,
         borderColor: '#E3ECFB',
-        marginBottom: 24,
+        paddingVertical: 16,
+        paddingHorizontal: 18,
+        marginBottom: 12,
+    },
+    dateBtnText: { fontSize: 16, fontWeight: '700', color: INK, flexShrink: 1 },
+    datePicker: { alignSelf: 'center', marginBottom: 8 },
+    agePreview: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: MUTED,
+        textAlign: 'center',
+        marginBottom: 20,
     },
     photoPicker: {
         alignSelf: 'center',
@@ -396,17 +549,43 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     photoPlaceholderText: { fontSize: 13, fontWeight: '700', color: PRIMARY_DARK },
-    personalityGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20, justifyContent: 'center' },
+    photoActions: {
+        flexDirection: 'row',
+        gap: 10,
+        marginBottom: 20,
+        justifyContent: 'center',
+    },
+    photoActionBtn: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#EFF6FF',
+        borderWidth: 1.5,
+        borderColor: '#BFDBFE',
+        borderRadius: 14,
+        paddingVertical: 14,
+    },
+    photoActionText: { fontSize: 14, fontWeight: '800', color: PRIMARY_DARK },
+    personalityGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 10,
+        marginTop: 20,
+        marginBottom: 20,
+        justifyContent: 'center',
+    },
     personalityChip: {
-        paddingVertical: 10,
-        paddingHorizontal: 14,
-        borderRadius: 20,
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+        borderRadius: 22,
         backgroundColor: '#F8FAFC',
         borderWidth: 1.5,
         borderColor: '#E3ECFB',
     },
     personalityChipActive: { backgroundColor: '#EFF6FF', borderColor: PRIMARY },
-    personalityText: { fontSize: 13, fontWeight: '700', color: MUTED },
+    personalityText: { fontSize: 15, fontWeight: '700', color: MUTED },
     personalityTextActive: { color: PRIMARY_DARK },
     btnWrapper: { borderRadius: 16, overflow: 'hidden', marginTop: 8 },
     btn: {

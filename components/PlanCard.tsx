@@ -1,8 +1,13 @@
-import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef, useState, memo } from 'react';
 import {
-    Alert,
+    Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    memo } from 'react';
+import {
     Animated,
     Easing,
     Image,
@@ -16,13 +21,16 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import MapView, { Marker } from 'react-native-maps';
 import { resolvePlanImageSource, resolvePlanCategories } from '../lib/sports';
 import { canJoinWaitlist, type Membership } from '../lib/participants';
 import { canJoinPlanByGender, isSoloChicasPlan } from '../lib/soloChicas';
 import { kickParticipant } from '../lib/kickParticipant';
 import { useT } from '../lib/i18n';
+import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../lib/planInvites';
 import { PlanImage } from './PlanImage';
+import { InvitePeopleSheet, type InviteProfile } from './InvitePeopleSheet';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -47,17 +55,19 @@ const AvatarStack = ({
     participants,
     maxPeople,
     onOpenRoster,
+    dark,
 }: {
     participants: any[];
     maxPeople: number;
     onOpenRoster: () => void;
+    dark?: boolean;
 }) => {
     const { t } = useT();
     if (!participants || participants.length === 0) {
         return (
             <View style={styles.avatarStackRow}>
-                <Text style={styles.beFirstText}>{t('card.beFirst')} · </Text>
-                <Text style={styles.maxText}>({t('card.max', { n: maxPeople })})</Text>
+                <Text style={[styles.beFirstText, dark && styles.beFirstTextDark]}>{t('card.beFirst')} · </Text>
+                <Text style={[styles.maxText, dark && styles.maxTextDark]}>({t('card.max', { n: maxPeople })})</Text>
             </View>
         );
     }
@@ -92,9 +102,9 @@ const AvatarStack = ({
                 </View>
             </TouchableOpacity>
             <TouchableOpacity activeOpacity={0.85} onPress={onOpenRoster}>
-                <Text style={styles.goingText}>{t('card.weAre', { n: participants.length })}</Text>
+                <Text style={[styles.goingText, dark && styles.goingTextDark]}>{t('card.weAre', { n: participants.length })}</Text>
             </TouchableOpacity>
-            <Text style={styles.maxText}> ({t('card.max', { n: maxPeople })})</Text>
+            <Text style={[styles.maxText, dark && styles.maxTextDark]}> ({t('card.max', { n: maxPeople })})</Text>
         </View>
     );
 };
@@ -107,6 +117,7 @@ interface PlanCardProps {
     membership: Membership;
     isSaved: boolean;
     friendIds?: Set<string>;
+    coincidedIds?: Set<string>;
     onJoin: (id: string) => void;
     onLeave: (id: string) => void;
     onDelete: (id: string) => void;
@@ -126,6 +137,7 @@ function PlanCardInner({
     membership,
     isSaved,
     friendIds,
+    coincidedIds,
     onJoin,
     onLeave,
     onDelete,
@@ -139,6 +151,8 @@ function PlanCardInner({
     const { t } = useT();
     const [expanded, setExpanded] = useState(false);
     const [showRoster, setShowRoster] = useState(false);
+    const [showInviteSheet, setShowInviteSheet] = useState(false);
+    const [invitees, setInvitees] = useState<InviteProfile[]>([]);
     const entrance = useRef(new Animated.Value(0)).current;
     const scale = useRef(new Animated.Value(1)).current;
 
@@ -163,6 +177,16 @@ function PlanCardInner({
     const friendsInPlan = friendIds
         ? participants.filter((p: { id?: string }) => p.id && friendIds.has(p.id)).length
         : 0;
+    // Conocidos = coincidencia previa real; no se solapa con amigos (un amigo no cuenta aquí).
+    const coincidedInPlan = coincidedIds
+        ? participants.filter(
+            (p: { id?: string }) =>
+                p.id &&
+                p.id !== currentUserId &&
+                coincidedIds.has(p.id) &&
+                !(friendIds && friendIds.has(p.id)),
+        ).length
+        : 0;
 
     const { main: mainCategory, sub: subCategory } = resolvePlanCategories(item);
     const mainCategoryLabel = mainCategory ? t(`cat.main.${mainCategory}`) : '';
@@ -170,9 +194,13 @@ function PlanCardInner({
 
     const eventDate = item.fecha_evento ? new Date(item.fecha_evento) : null;
     const isToday = eventDate ? isSameCalendarDay(eventDate, new Date()) : false;
+    const isPast = eventDate ? eventDate.getTime() < Date.now() : false;
     const isSoloChicas = isSoloChicasPlan(item);
+    const isFriendsOnly = !!item.solo_amigos && !item.modo_privado;
+    const isPrivate = !!item.modo_privado;
+    const canInvite = isCreator && isPrivate && !isPast;
     const genderBlocked = !canJoinPlanByGender(item, userGenero as any);
-    const isCalmPremium = !isToday && !isFull && !isSoloChicas;
+    const isCalmPremium = !isToday && !isFull && !isSoloChicas && !isFriendsOnly && !isPrivate;
     const dateString = eventDate ? eventDate.toLocaleDateString() : t('card.noDate');
     const timeString = eventDate ? eventDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
@@ -223,20 +251,74 @@ function PlanCardInner({
 
     const getPlanImageSource = (): string | number => resolvePlanImageSource(item.imagen_url);
 
+    const openInviteSheet = async () => {
+        setShowInviteSheet(true);
+        try {
+            const list = await getPlanPendingInvitees(String(item.id));
+            setInvitees(
+                list.map((i) => ({
+                    id: i.id,
+                    nombre: i.nombre,
+                    nombre_usuario: i.nombre_usuario,
+                    avatar_url: i.avatar_url,
+                    invitedByName: i.invitadorNombre,
+                })),
+            );
+        } catch {
+            setInvitees([]);
+        }
+    };
+
+    const handleInviteAdd = useCallback(
+        async (profile: InviteProfile) => {
+            if (!currentUserId) return { error: 'no_user' };
+            const { error } = await sendPlanInvite(String(item.id), currentUserId, profile.id, 'plan');
+            if (!error) {
+                setInvitees((prev) => (prev.some((p) => p.id === profile.id) ? prev : [...prev, profile]));
+            }
+            return { error };
+        },
+        [currentUserId, item.id],
+    );
+
+    const handleInviteRemove = useCallback(
+        async (profileId: string) => {
+            const { error } = await cancelPlanInvite(String(item.id), profileId);
+            if (!error) {
+                setInvitees((prev) => prev.filter((p) => p.id !== profileId));
+            }
+            return { error };
+        },
+        [item.id],
+    );
+
+    const memberExcludeIds = useMemo(() => {
+        const list = item.participantsList || [];
+        return new Set(list.map((p: { id?: string }) => p.id).filter(Boolean) as string[]);
+    }, [item.participantsList]);
+
     const renderFooter = () => {
         if (isCreator) {
             return (
-                <View style={styles.creatorFooterRow}>
-                    <View style={styles.creatorBadge}>
-                        <Ionicons name="star" size={15} color={PRIMARY_DARK} />
-                        <Text style={styles.creatorBadgeText}>{t('card.myPlan')}</Text>
+                <View style={styles.creatorFooterCol}>
+                    {canInvite ? (
+                        <TouchableOpacity style={styles.creatorInviteBtn} onPress={openInviteSheet} activeOpacity={0.85}>
+                            <Ionicons name="person-add" size={18} color="#FFF" />
+                            <Text style={styles.creatorInviteBtnText}>{t('card.invite')}</Text>
+                        </TouchableOpacity>
+                    ) : null}
+                    <View style={styles.creatorFooterRow}>
+                        <View style={[styles.creatorBadge, isPrivate && styles.creatorBadgePrivate]}>
+                            <Ionicons name="star" size={15} color={isPrivate ? '#0F172A' : PRIMARY_DARK} />
+                            <Text style={[styles.creatorBadgeText, isPrivate && styles.creatorBadgeTextPrivate]}>{t('card.myPlan')}</Text>
+                        </View>
+                        <TouchableOpacity style={[styles.iconActionBtn, { backgroundColor: PRIMARY }]} onPress={() => onEdit(item.id)}>
+                            <Ionicons name="create" size={20} color="#FFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.iconActionBtn, { backgroundColor: DANGER }]} onPress={() => onDelete(item.id)}>
+                            <Ionicons name="trash" size={20} color="#FFF" />
+                        </TouchableOpacity>
                     </View>
-                    <TouchableOpacity style={[styles.iconActionBtn, { backgroundColor: PRIMARY }]} onPress={() => onEdit(item.id)}>
-                        <Ionicons name="create" size={20} color="#FFF" />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.iconActionBtn, { backgroundColor: DANGER }]} onPress={() => onDelete(item.id)}>
-                        <Ionicons name="trash" size={20} color="#FFF" />
-                    </TouchableOpacity>
                 </View>
             );
         }
@@ -299,7 +381,15 @@ function PlanCardInner({
     return (
         <Animated.View style={{ opacity: entrance, transform: [{ scale }, { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }] }}>
             <Pressable onPressIn={pressIn} onPressOut={pressOut} onPress={onOpenDetail ? () => onOpenDetail(item.id) : undefined}>
-                <View style={[styles.card, isToday && styles.cardToday, isSoloChicas && styles.cardSoloChicas, isCalmPremium && styles.cardPremium, isFull && !isToday && !isSoloChicas && styles.cardFull]}>
+                <View style={[
+                    styles.card,
+                    isToday && styles.cardToday,
+                    isSoloChicas && styles.cardSoloChicas,
+                    isFriendsOnly && styles.cardFriends,
+                    isPrivate && styles.cardPrivate,
+                    isCalmPremium && styles.cardPremium,
+                    isFull && !isToday && !isSoloChicas && !isFriendsOnly && !isPrivate && styles.cardFull,
+                ]}>
                     {isToday && (
                         <LinearGradient
                             colors={['#F59E0B', '#D97706', '#B45309']}
@@ -314,6 +404,22 @@ function PlanCardInner({
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 1 }}
                             style={styles.soloChicasBorder}
+                        />
+                    )}
+                    {isFriendsOnly && (
+                        <LinearGradient
+                            colors={['#86EFAC', '#22C55E', '#15803D']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.friendsBorder}
+                        />
+                    )}
+                    {isPrivate && (
+                        <LinearGradient
+                            colors={['#475569', '#1E293B', '#020617']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.privateBorder}
                         />
                     )}
                     {isCalmPremium && (
@@ -332,7 +438,15 @@ function PlanCardInner({
                             style={styles.fullBorder}
                         />
                     )}
-                    <View style={[styles.cardInner, isToday && styles.cardInnerToday, isSoloChicas && styles.cardInnerSoloChicas, isCalmPremium && styles.cardInnerPremium, isFull && styles.cardInnerFull]}>
+                    <View style={[
+                        styles.cardInner,
+                        isToday && styles.cardInnerToday,
+                        isSoloChicas && styles.cardInnerSoloChicas,
+                        isFriendsOnly && styles.cardInnerFriends,
+                        isPrivate && styles.cardInnerPrivate,
+                        isCalmPremium && styles.cardInnerPremium,
+                        isFull && styles.cardInnerFull,
+                    ]}>
                     <View style={styles.imageWrap}>
                         <PlanImage
                             source={getPlanImageSource()}
@@ -341,7 +455,15 @@ function PlanCardInner({
                             priority={index < 3 ? 'high' : 'normal'}
                         />
                         <LinearGradient
-                            colors={isToday ? ['rgba(180,83,9,0)', 'rgba(120,53,15,0.65)'] : ['rgba(15,42,74,0)', 'rgba(15,42,74,0.55)']}
+                            colors={
+                                isPrivate
+                                    ? ['rgba(15,23,42,0)', 'rgba(15,23,42,0.45)']
+                                    : isFriendsOnly
+                                      ? ['rgba(21,128,61,0)', 'rgba(21,128,61,0.28)']
+                                      : isToday
+                                        ? ['rgba(180,83,9,0)', 'rgba(120,53,15,0.65)']
+                                        : ['rgba(15,42,74,0)', 'rgba(15,42,74,0.55)']
+                            }
                             style={styles.imageShade}
                         />
                         {isFull && <View style={styles.fullVeil} />}
@@ -368,6 +490,18 @@ function PlanCardInner({
                                     <View style={styles.soloChicasTag}>
                                         <Ionicons name="female" size={11} color="#FFF" />
                                         <Text style={styles.soloChicasTagText}>{t('createplan.soloChicasTitle')}</Text>
+                                    </View>
+                                ) : null}
+                                {isFriendsOnly ? (
+                                    <View style={styles.friendsOnlyTag}>
+                                        <Ionicons name="people" size={11} color="#FFF" />
+                                        <Text style={styles.friendsOnlyTagText}>{t('createplan.friendsOnlyTitle')}</Text>
+                                    </View>
+                                ) : null}
+                                {isPrivate ? (
+                                    <View style={styles.privateTag}>
+                                        <Ionicons name="lock-closed" size={11} color="#FFF" />
+                                        <Text style={styles.privateTagText}>{t('card.privateTag')}</Text>
                                     </View>
                                 ) : null}
                             </View>
@@ -403,49 +537,83 @@ function PlanCardInner({
                         </View>
                     </View>
 
-                    <View style={styles.cardContent}>
+                    <View style={[styles.cardContent, isPrivate && styles.cardContentPrivate, isFriendsOnly && styles.cardContentFriends]}>
                         <AvatarStack
                             participants={participants}
                             maxPeople={item.maximo_participantes}
+                            dark={false}
                             onOpenRoster={() => {
                                 if (onOpenDetail) onOpenDetail(item.id);
                                 else if (participants.length > 0) setShowRoster(true);
                             }}
                         />
 
-                        {friendsInPlan > 0 && (
-                            <View style={styles.friendsBanner}>
-                                <Ionicons name="people" size={16} color={PRIMARY_DARK} />
-                                <Text style={styles.friendsBannerText}>
-                                    {t(friendsInPlan === 1 ? 'card.friendsJoinedOne' : 'card.friendsJoinedMany', { n: friendsInPlan })}
-                                </Text>
-                            </View>
-                        )}
+                        {(friendsInPlan > 0 || coincidedInPlan > 0 || isToday) && (
+                            <View style={styles.bannerStack}>
+                                {friendsInPlan > 0 && (
+                                    <View style={[styles.friendsBanner, isPrivate && styles.friendsBannerOnPrivate, isFriendsOnly && styles.friendsBannerOnFriends]}>
+                                        <Ionicons name="people" size={16} color={isFriendsOnly ? '#15803D' : PRIMARY_DARK} />
+                                        <Text style={[styles.friendsBannerText, isFriendsOnly && styles.friendsBannerTextFriends]}>
+                                            {t(friendsInPlan === 1 ? 'card.friendsJoinedOne' : 'card.friendsJoinedMany', { n: friendsInPlan })}
+                                        </Text>
+                                    </View>
+                                )}
 
-                        {isToday && (
-                            <View style={styles.todayBanner}>
-                                <Ionicons name="time" size={16} color="#B45309" />
-                                <Text style={styles.todayBannerText}>{t('card.today')}</Text>
+                                {coincidedInPlan > 0 && (
+                                    <View style={[styles.coincidedBanner, isPrivate && styles.coincidedBannerOnPrivate]}>
+                                        <Ionicons name="sparkles" size={14} color="#7C3AED" />
+                                        <Text style={styles.coincidedBannerText}>
+                                            {t(
+                                                coincidedInPlan === 1 ? 'card.coincidedOne' : 'card.coincidedMany',
+                                                { n: coincidedInPlan },
+                                            )}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {isToday && (
+                                    <View style={styles.todayBanner}>
+                                        <Ionicons name="time" size={16} color="#B45309" />
+                                        <Text style={styles.todayBannerText}>{t('card.today')}</Text>
+                                    </View>
+                                )}
                             </View>
                         )}
 
                         <View style={styles.metaRow}>
                             <View style={styles.metaItem}>
-                                <Ionicons name="calendar-outline" size={15} color={isToday ? '#B45309' : PRIMARY_DARK} />
-                                <Text style={[styles.metaText, isToday && styles.metaTextToday]}>
+                                <Ionicons
+                                    name="calendar-outline"
+                                    size={15}
+                                    color={isPrivate ? INK : isFriendsOnly ? '#15803D' : isToday ? '#B45309' : PRIMARY_DARK}
+                                />
+                                <Text style={[
+                                    styles.metaText,
+                                    isToday && styles.metaTextToday,
+                                    isFriendsOnly && styles.metaTextFriends,
+                                    isPrivate && styles.metaTextPrivate,
+                                ]}>
                                     {dateString}{timeString ? ` · ${timeString}` : ''}
                                 </Text>
                             </View>
                             <View style={styles.metaItem}>
-                                <Ionicons name="location-outline" size={15} color={PRIMARY_DARK} />
-                                <Text style={styles.metaText} numberOfLines={1}>{item.nombre_ubicacion || t('card.location')}</Text>
+                                <Ionicons
+                                    name="location-outline"
+                                    size={15}
+                                    color={isPrivate ? INK : isFriendsOnly ? '#15803D' : PRIMARY_DARK}
+                                />
+                                <Text style={[
+                                    styles.metaText,
+                                    isFriendsOnly && styles.metaTextFriends,
+                                    isPrivate && styles.metaTextPrivate,
+                                ]} numberOfLines={1}>{item.nombre_ubicacion || t('card.location')}</Text>
                             </View>
                         </View>
 
                         {expanded && !onOpenDetail && (
                             <View style={styles.expandedSection}>
-                                <Text style={styles.descLabel}>{t('card.aboutPlan')}</Text>
-                                <Text style={styles.descriptionText}>{item.descripcion || t('card.noDescription')}</Text>
+                                <Text style={[styles.descLabel, isPrivate && styles.descLabelPrivate]}>{t('card.aboutPlan')}</Text>
+                                <Text style={[styles.descriptionText, isPrivate && styles.descriptionTextPrivate]}>{item.descripcion || t('card.noDescription')}</Text>
                                 <View style={styles.miniMapContainer}>
                                     <MapView
                                         style={styles.miniMap}
@@ -460,10 +628,10 @@ function PlanCardInner({
                         )}
 
                         <TouchableOpacity style={styles.expandHint} onPress={toggleExpand} activeOpacity={0.7}>
-                            <Text style={styles.expandHintText}>
+                            <Text style={[styles.expandHintText, isPrivate && styles.expandHintTextPrivate]}>
                                 {onOpenDetail ? t('card.tapDetail') : expanded ? t('card.tapCollapse') : t('card.tapExpand')}
                             </Text>
-                            <Ionicons name={onOpenDetail ? 'open-outline' : expanded ? 'chevron-up' : 'chevron-down'} size={16} color="#94A3B8" />
+                            <Ionicons name={onOpenDetail ? 'open-outline' : expanded ? 'chevron-up' : 'chevron-down'} size={16} color={isPrivate ? '#334155' : '#94A3B8'} />
                         </TouchableOpacity>
 
                         <View style={styles.cardFooter}>{renderFooter()}</View>
@@ -539,6 +707,18 @@ function PlanCardInner({
                     </Pressable>
                 </Pressable>
             </Modal>
+
+            {canInvite ? (
+                <InvitePeopleSheet
+                    visible={showInviteSheet}
+                    onClose={() => setShowInviteSheet(false)}
+                    currentUserId={currentUserId}
+                    selected={invitees}
+                    excludeIds={memberExcludeIds}
+                    onAdd={handleInviteAdd}
+                    onRemove={handleInviteRemove}
+                />
+            ) : null}
         </Animated.View>
     );
 }
@@ -552,6 +732,46 @@ const styles = StyleSheet.create({
     cardSoloChicas: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#DB2777', shadowOpacity: 0.35, borderRadius: 28 },
     soloChicasBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
     cardInnerSoloChicas: { backgroundColor: '#FDF2F8', borderColor: '#F9A8D4', borderWidth: 1.5 },
+    cardFriends: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#16A34A', shadowOpacity: 0.32, borderRadius: 28 },
+    friendsBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
+    cardInnerFriends: { backgroundColor: '#FAFDFB', borderColor: '#86EFAC', borderWidth: 1.5 },
+    cardPrivate: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#020617', shadowOpacity: 0.45, borderRadius: 28 },
+    privateBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
+    cardInnerPrivate: { backgroundColor: '#EEF2F7', borderColor: '#64748B', borderWidth: 1.5 },
+    cardContentFriends: { backgroundColor: '#FAFDFB' },
+    cardContentPrivate: { backgroundColor: '#EEF2F7' },
+    friendsOnlyTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: 'rgba(22,163,74,0.92)',
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        borderRadius: 10,
+    },
+    friendsOnlyTagText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
+    privateTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: 'rgba(15,23,42,0.92)',
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.35)',
+    },
+    privateTagText: { color: '#F8FAFC', fontSize: 9, fontWeight: '800' },
+    metaTextFriends: { color: '#166534', fontWeight: '700' },
+    metaTextPrivate: { color: '#0F172A', fontWeight: '800' },
+    friendsBannerOnFriends: { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' },
+    friendsBannerTextFriends: { color: '#15803D' },
+    friendsBannerOnPrivate: { backgroundColor: '#E0E7FF', borderColor: '#A5B4FC' },
+    friendsBannerTextPrivate: { color: '#3730A3' },
+    coincidedBannerOnPrivate: { backgroundColor: '#EDE9FE', borderColor: '#C4B5FD' },
+    expandHintTextPrivate: { color: '#1E293B', fontWeight: '800' },
+    descLabelPrivate: { color: '#0F172A' },
+    descriptionTextPrivate: { color: '#334155' },
     cardPremium: { padding: 2, overflow: 'visible', elevation: 12, shadowColor: '#2563EB', shadowOpacity: 0.2, borderRadius: 28 },
     todayBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
     premiumBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
@@ -560,7 +780,7 @@ const styles = StyleSheet.create({
     cardInnerPremium: { backgroundColor: '#FAFCFF', borderColor: 'rgba(96,165,250,0.35)', borderWidth: 1 },
     todayBadge: { position: 'absolute', top: 14, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#D97706', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, zIndex: 5, elevation: 6, shadowColor: '#92400E', shadowOpacity: 0.4, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
     todayBadgeText: { color: '#FFF', fontSize: 12, fontWeight: '900', letterSpacing: 1.2 },
-    todayBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEF3C7', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: '#FCD34D' },
+    todayBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEF3C7', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: '#FCD34D' },
     todayBannerText: { color: '#B45309', fontWeight: '800', fontSize: 14 },
     metaTextToday: { color: '#92400E', fontWeight: '800' },
     avatarStackTouchable: { flexDirection: 'row', alignItems: 'center' },
@@ -574,7 +794,7 @@ const styles = StyleSheet.create({
     rosterAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: '#E3ECFB' },
     rosterName: { fontSize: 16, fontWeight: '700', color: INK },
     rosterCreatorLabel: { fontSize: 11, fontWeight: '700', color: '#B45309', marginTop: 2 },
-    imageWrap: { width: '100%', height: 190, position: 'relative' },
+    imageWrap: { width: '100%', height: 240, position: 'relative' },
     cardImage: { width: '100%', height: '100%' },
     imageShade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '70%' },
     fullVeil: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(185,28,28,0.28)' },
@@ -628,8 +848,11 @@ const styles = StyleSheet.create({
     extraBubble: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#FFF', backgroundColor: PRIMARY_DARK, justifyContent: 'center', alignItems: 'center' },
     extraBubbleText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
     goingText: { marginLeft: 10, fontSize: 13, fontWeight: '800', color: INK },
+    goingTextDark: { color: '#F1F5F9' },
     maxText: { fontSize: 13, fontWeight: '700', color: '#94A3B8' },
+    maxTextDark: { color: '#CBD5E1' },
     beFirstText: { fontSize: 13, fontWeight: '600', color: '#94A3B8' },
+    beFirstTextDark: { color: '#CBD5E1' },
 
     futbolChip: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, backgroundColor: '#EAF3E9', borderRadius: 16, paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: '#CDE7CB' },
     futbolBall: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#2E9E5B', justifyContent: 'center', alignItems: 'center' },
@@ -680,23 +903,55 @@ const styles = StyleSheet.create({
         borderColor: '#FBCFE8',
     },
     genderBlockedText: { color: '#DB2777', fontWeight: '800', fontSize: 14, flex: 1, textAlign: 'center' },
+    bannerStack: {
+        gap: 6,
+        marginBottom: 12,
+    },
     friendsBanner: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
         backgroundColor: '#EFF6FF',
         borderRadius: 12,
-        paddingVertical: 10,
+        paddingVertical: 8,
         paddingHorizontal: 12,
-        marginBottom: 12,
         borderWidth: 1,
         borderColor: '#BFDBFE',
     },
     friendsBannerText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 13, flex: 1 },
+    coincidedBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: '#F5F3FF',
+        borderRadius: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        borderWidth: 1,
+        borderColor: '#DDD6FE',
+    },
+    coincidedBannerText: { color: '#6D28D9', fontWeight: '700', fontSize: 12, flex: 1 },
     fullButtonText: { color: DANGER_DARK, fontWeight: '800', fontSize: 14 },
+    creatorFooterCol: { gap: 10 },
+    creatorInviteBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#1E293B',
+        paddingVertical: 12,
+        borderRadius: 16,
+    },
+    creatorInviteBtnText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
     creatorFooterRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     creatorBadge: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 13, borderRadius: 16, backgroundColor: '#EEF3FB' },
+    creatorBadgePrivate: {
+        backgroundColor: '#FFF',
+        borderWidth: 2,
+        borderColor: '#0F172A',
+    },
     creatorBadgeText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 14 },
+    creatorBadgeTextPrivate: { color: '#0F172A' },
     iconActionBtn: { width: 48, height: 48, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
 });
 

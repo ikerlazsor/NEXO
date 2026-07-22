@@ -1,6 +1,23 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getRatingPhase, getRatingsUnlockMs, isGroupOrChatPlan, runPlanLifecycleMaintenance } from './planLifecycle';
 import { supabase } from './supabase';
+import { cacheGetOrFetch, cacheInvalidate, cacheInvalidatePrefix } from './ttlCache';
+
+const PENDING_RATINGS_TTL_MS = 45_000;
+
+function pendingRatingsKey(userId: string) {
+    return `pendingRatings:${userId}`;
+}
+
+export function invalidatePendingRatingsCache(userId?: string): void {
+    if (userId) {
+        cacheInvalidate(pendingRatingsKey(userId));
+        cacheInvalidate(`notifCount:${userId}`);
+        return;
+    }
+    cacheInvalidatePrefix('pendingRatings:');
+    cacheInvalidatePrefix('notifCount:');
+}
 
 const RATING_SKIP_PREFIX = '@nexo_rating_skip:';
 const RATING_STARTED_PREFIX = '@nexo_rating_started:';
@@ -13,12 +30,18 @@ function ratingStartedKey(userId: string, planId: string) {
     return `${RATING_STARTED_PREFIX}${userId}:${planId}`;
 }
 
-/** Marca el flujo como cerrado sin historial (p. ej. el plan no se hizo). */
+/** Marca que el usuario no asistió: sin historial ni “planes hechos”. */
 export async function dismissRatingWithoutHistory(userId: string, planId: string): Promise<void> {
     await AsyncStorage.multiSet([
         [ratingSkipKey(userId, planId), new Date().toISOString()],
         [ratingStartedKey(userId, planId), ''],
     ]);
+    await supabase.from('historial_planes').delete().eq('usuario_id', userId).eq('plan_id', planId);
+    invalidatePendingRatingsCache(userId);
+}
+
+export async function isPlanAttendanceDismissed(userId: string, planId: string): Promise<boolean> {
+    return isRatingDismissed(userId, planId);
 }
 
 export async function markRatingSessionStarted(userId: string, planId: string): Promise<void> {
@@ -42,22 +65,26 @@ export async function hasRatingSessionStarted(userId: string, planId: string): P
     return v === '1';
 }
 
+/** Valores permitidos por CHECK en public.valoraciones (máx. 2). */
 export const POSITIVE_ASPECTS = [
+    'agradable',
     'puntual',
-    'amable',
-    'divertido',
     'respetuoso',
-    'buena_conversacion',
-    'colaborador',
+    'cercano',
+    'divertido',
+    'social',
 ] as const;
 
+/** Valores permitidos por CHECK en public.valoraciones (máx. 2). */
 export const NEGATIVE_ASPECTS = [
     'impuntual',
-    'poco_respetuoso',
-    'pasivo',
-    'cancelo_tarde',
-    'mal_ambiente',
+    'irrespetuoso',
+    'frio',
+    'poco_participativo',
+    'incomodo',
 ] as const;
+
+export const MAX_ASPECTS = 2;
 
 export const STAR_LABEL_KEYS = [
     'ratings.star1',
@@ -69,7 +96,8 @@ export const STAR_LABEL_KEYS = [
 
 export type AspectPositivo = (typeof POSITIVE_ASPECTS)[number];
 export type AspectNegativo = (typeof NEGATIVE_ASPECTS)[number];
-export type Repetiria = 'si' | 'no' | 'tal_vez';
+/** Coincide con CHECK: si | indiferente | no */
+export type Repetiria = 'si' | 'no' | 'indiferente';
 
 export type RatingPeer = {
     id: string;
@@ -134,15 +162,13 @@ async function getAcceptedPeers(planId: string, excludeUserId: string): Promise<
 }
 
 /** Guarda el plan en el historial personal (recuerdo). Idempotente. */
-export async function addPlanToHistory(userId: string, planId: string): Promise<{ error: string | null }> {
+/** Suma el plan al historial (planes hechos) sin cerrar la sesión de valoración. */
+export async function ensurePlanInHistory(userId: string, planId: string): Promise<{ error: string | null }> {
     const { error } = await supabase.from('historial_planes').upsert(
         { usuario_id: userId, plan_id: planId },
         { onConflict: 'usuario_id,plan_id', ignoreDuplicates: true },
     );
-    if (!error) {
-        await clearRatingSessionFlags(userId, planId);
-        return { error: null };
-    }
+    if (!error) return { error: null };
 
     const { data: existing } = await supabase
         .from('historial_planes')
@@ -150,20 +176,24 @@ export async function addPlanToHistory(userId: string, planId: string): Promise<
         .eq('usuario_id', userId)
         .eq('plan_id', planId)
         .maybeSingle();
-    if (existing) {
-        await clearRatingSessionFlags(userId, planId);
-        return { error: null };
-    }
+    if (existing) return { error: null };
 
     const { error: insertError } = await supabase
         .from('historial_planes')
         .insert({ usuario_id: userId, plan_id: planId });
-    if (!insertError) await clearRatingSessionFlags(userId, planId);
     return { error: insertError?.message ?? error.message };
 }
 
-/** Planes terminados pendientes de flujo de valoración (mín. 2 personas). */
-export async function getPendingRatingPlans(userId: string): Promise<PendingRatingPlan[]> {
+export async function addPlanToHistory(userId: string, planId: string): Promise<{ error: string | null }> {
+    const result = await ensurePlanInHistory(userId, planId);
+    if (!result.error) {
+        await clearRatingSessionFlags(userId, planId);
+        invalidatePendingRatingsCache(userId);
+    }
+    return result;
+}
+
+async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPlan[]> {
     await runPlanLifecycleMaintenance();
 
     const { data: parts } = await supabase
@@ -253,9 +283,57 @@ export async function getPendingRatingPlans(userId: string): Promise<PendingRati
     });
 }
 
+/** Planes terminados pendientes de flujo de valoración (mín. 2 personas). */
+export async function getPendingRatingPlans(
+    userId: string,
+    opts?: { force?: boolean },
+): Promise<PendingRatingPlan[]> {
+    return cacheGetOrFetch(
+        pendingRatingsKey(userId),
+        PENDING_RATINGS_TTL_MS,
+        () => fetchPendingRatingPlans(userId),
+        opts,
+    );
+}
+
 export async function countOpenRatings(userId: string): Promise<number> {
     const plans = await getPendingRatingPlans(userId);
     return plans.filter((p) => p.phase === 'open').length;
+}
+
+/** Planes con valoración abierta (fase open), indexados por planId. */
+export async function getOpenRatingPlanMap(
+    userId: string,
+): Promise<Record<string, PendingRatingPlan>> {
+    const plans = await getPendingRatingPlans(userId);
+    const map: Record<string, PendingRatingPlan> = {};
+    for (const p of plans) {
+        if (p.phase === 'open') map[p.planId] = p;
+    }
+    return map;
+}
+
+export async function getOpenRatingForPlan(
+    userId: string,
+    planId: string,
+): Promise<PendingRatingPlan | null> {
+    const plans = await getPendingRatingPlans(userId);
+    return plans.find((p) => p.planId === planId && p.phase === 'open') ?? null;
+}
+
+/** Etiqueta de aspecto según género (sin “/a”). */
+export function getAspectLabel(
+    kind: 'pos' | 'neg',
+    key: string,
+    genero: string | null | undefined,
+    t: (k: string) => string,
+): string {
+    const gender =
+        genero === 'femenino' ? 'f' : genero === 'masculino' ? 'm' : 'n';
+    const gendered = t(`ratings.${kind}.${key}.${gender}`);
+    if (gendered && gendered !== `ratings.${kind}.${key}.${gender}`) return gendered;
+    const fallback = t(`ratings.${kind}.${key}`);
+    return fallback !== `ratings.${kind}.${key}` ? fallback : key;
 }
 
 export async function submitValoracion(params: {
@@ -275,34 +353,86 @@ export async function submitValoracion(params: {
         }
     }
 
-    const payload =
-        draft.asistencia === false
-            ? {
-                  plan_id: planId,
-                  evaluador_id: evaluadorId,
-                  evaluado_id: evaluadoId,
-                  asistencia: false,
-                  puntuacion_general: null,
-                  repetiria_experiencia: null,
-                  aspectos_positivos: [] as string[],
-                  aspectos_negativos: [] as string[],
-              }
-            : {
-                  plan_id: planId,
-                  evaluador_id: evaluadorId,
-                  evaluado_id: evaluadoId,
-                  asistencia: true,
-                  puntuacion_general: draft.puntuacion_general,
-                  repetiria_experiencia: draft.repetiria_experiencia,
-                  aspectos_positivos: draft.aspectos_positivos,
-                  aspectos_negativos: draft.aspectos_negativos,
-              };
+    const asistencia = draft.asistencia === false ? false : true;
+    const posAllowed = new Set<string>(POSITIVE_ASPECTS);
+    const negAllowed = new Set<string>(NEGATIVE_ASPECTS);
+    const pos = (draft.aspectos_positivos || [])
+        .filter((a) => posAllowed.has(a))
+        .filter((a, i, arr) => arr.indexOf(a) === i)
+        .slice(0, MAX_ASPECTS);
+    const neg = (draft.aspectos_negativos || [])
+        .filter((a) => negAllowed.has(a))
+        .filter((a, i, arr) => arr.indexOf(a) === i)
+        .slice(0, MAX_ASPECTS);
 
-    const { error: upsertError } = await supabase.from('valoraciones').upsert(payload, {
-        onConflict: 'plan_id,evaluador_id,evaluado_id',
-    });
-    if (!upsertError) return { error: null };
+    const rpcArgs = {
+        p_plan_id: planId,
+        p_evaluado_id: evaluadoId,
+        p_asistencia: asistencia,
+        p_puntuacion_general: asistencia ? draft.puntuacion_general : null,
+        p_repetiria_experiencia: asistencia ? draft.repetiria_experiencia : null,
+        p_aspectos_positivos: asistencia ? pos : [],
+        p_aspectos_negativos: asistencia ? neg : [],
+    };
+
+    const { data: rpcData, error: rpcError } = await supabase.rpc('guardar_valoracion', rpcArgs);
+    if (!rpcError) {
+        const result = rpcData as { ok?: boolean; error?: string } | null;
+        if (result && typeof result === 'object' && 'ok' in result) {
+            if (result.ok) return { error: null };
+            console.warn('[submitValoracion] rpc rejected', result.error);
+            return { error: result.error || 'rpc_rejected' };
+        }
+        return { error: null };
+    }
+
+    // Fallback: update si ya existe esa pareja, si no insert
+    const payload = {
+        plan_id: planId,
+        evaluador_id: evaluadorId,
+        evaluado_id: evaluadoId,
+        asistencia,
+        puntuacion_general: asistencia ? draft.puntuacion_general : null,
+        repetiria_experiencia: asistencia ? draft.repetiria_experiencia : null,
+        aspectos_positivos: asistencia ? pos : ([] as string[]),
+        aspectos_negativos: asistencia ? neg : ([] as string[]),
+        motivos_seguridad: [] as string[],
+        incidencia_seguridad: false,
+    };
+
+    const { data: existing } = await supabase
+        .from('valoraciones')
+        .select('id')
+        .eq('plan_id', planId)
+        .eq('evaluador_id', evaluadorId)
+        .eq('evaluado_id', evaluadoId)
+        .maybeSingle();
+
+    if (existing?.id) {
+        const { error: updateError } = await supabase
+            .from('valoraciones')
+            .update({
+                asistencia: payload.asistencia,
+                puntuacion_general: payload.puntuacion_general,
+                repetiria_experiencia: payload.repetiria_experiencia,
+                aspectos_positivos: payload.aspectos_positivos,
+                aspectos_negativos: payload.aspectos_negativos,
+            })
+            .eq('id', existing.id);
+        if (!updateError) {
+            invalidatePendingRatingsCache(evaluadorId);
+            return { error: null };
+        }
+        console.warn('[submitValoracion]', { rpcError: rpcError.message, updateError });
+        return { error: updateError.message || rpcError.message };
+    }
 
     const { error: insertError } = await supabase.from('valoraciones').insert(payload);
-    return { error: insertError?.message ?? upsertError.message };
+    if (!insertError) {
+        invalidatePendingRatingsCache(evaluadorId);
+        return { error: null };
+    }
+
+    console.warn('[submitValoracion]', { rpcError: rpcError.message, insertError });
+    return { error: insertError.message || rpcError.message };
 }

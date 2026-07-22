@@ -23,6 +23,22 @@ export const AFICIONES_OPTIONS = [
 
 export type Aficion = (typeof AFICIONES_OPTIONS)[number];
 
+type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
+
+/** Etiqueta de personalidad acorde al género (masculino/femenino). */
+export function getPersonalityLabel(
+    tag: string,
+    genero: string | null | undefined,
+    t: TranslateFn,
+): string {
+    if (genero === 'femenino') {
+        const feminine = t(`personality.${tag}.f`);
+        if (feminine !== `personality.${tag}.f`) return feminine;
+    }
+    const label = t(`personality.${tag}`);
+    return label !== `personality.${tag}` ? label : tag;
+}
+
 export interface HabitosConsumo {
     bebida: HabitoConsumo;
     tabaco: HabitoConsumo;
@@ -98,13 +114,15 @@ export function birthDateFromAge(age: number): string {
 
 export async function searchProfilesByUsername(query: string, excludeUserId?: string) {
     const { supabase } = await import('./supabase');
-    const normalized = query.trim();
+    const { normalizeUsername } = await import('./profile');
+    const normalized = normalizeUsername(query.replace(/^@+/, ''));
     if (normalized.length < 2) return [];
 
+    // Solo por handle (nombre_usuario), no por nombre visible
     let q = supabase
         .from('perfiles')
         .select('id, nombre, nombre_usuario, avatar_url')
-        .or(`nombre_usuario.ilike.%${normalized}%,nombre.ilike.%${normalized}%`)
+        .ilike('nombre_usuario', `%${normalized}%`)
         .limit(12);
 
     if (excludeUserId) q = q.neq('id', excludeUserId);

@@ -3,12 +3,11 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 import {
     Modal,
+    Platform,
     Pressable,
-    ScrollView,
     StyleSheet,
     Switch,
     Text,
-    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
@@ -16,7 +15,6 @@ import { useT } from '../lib/i18n';
 import {
     HABITO_BEBIDA_OPTIONS,
     HABITO_TABACO_OPTIONS,
-    isValidAge,
     type Genero,
     type HabitoConsumo,
     type ProfilePrivacy,
@@ -59,33 +57,31 @@ function DetailRow({
 }) {
     return (
         <View style={styles.row}>
-            <View style={styles.rowMain}>
-                <View style={styles.labelRow}>
-                    {labelIcon}
-                    <Text style={styles.rowLabel}>{label}</Text>
-                </View>
-                <TouchableOpacity onPress={onEdit} disabled={!onEdit} activeOpacity={onEdit ? 0.7 : 1}>
-                    <View style={styles.valueRow}>
-                        {!hidden && valueIcon}
-                        <Text style={[styles.rowValue, hidden && styles.rowValueHidden]}>
-                            {hidden ? hiddenLabel : value}
-                        </Text>
-                    </View>
-                </TouchableOpacity>
+            <View style={styles.labelRow}>
+                {labelIcon}
+                <Text style={styles.rowLabel}>{label}</Text>
             </View>
-            <View style={styles.rowActions}>
+            <TouchableOpacity
+                style={styles.valueHit}
+                onPress={onEdit}
+                disabled={!onEdit}
+                activeOpacity={onEdit ? 0.7 : 1}
+            >
+                {!hidden && valueIcon}
+                <Text style={[styles.rowValue, hidden && styles.rowValueHidden]} numberOfLines={1}>
+                    {hidden ? hiddenLabel : value}
+                </Text>
                 {onEdit && !hidden ? (
-                    <TouchableOpacity onPress={onEdit} style={styles.editBtn} hitSlop={8}>
-                        <Ionicons name="pencil-outline" size={16} color={MUTED} />
-                    </TouchableOpacity>
+                    <Ionicons name="pencil-outline" size={14} color={MUTED} style={styles.editIcon} />
                 ) : null}
-                <Switch
-                    value={!hidden}
-                    onValueChange={(v) => onToggleVisible(v)}
-                    trackColor={{ false: '#E2E8F0', true: '#BFDBFE' }}
-                    thumbColor={hidden ? '#94A3B8' : ACCENT}
-                />
-            </View>
+            </TouchableOpacity>
+            <Switch
+                value={!hidden}
+                onValueChange={(v) => onToggleVisible(v)}
+                trackColor={{ false: '#E2E8F0', true: '#BFDBFE' }}
+                thumbColor={hidden ? '#94A3B8' : ACCENT}
+                style={styles.switch}
+            />
         </View>
     );
 }
@@ -96,7 +92,6 @@ interface Props {
     habitoBebida: HabitoConsumo;
     habitoTabaco: HabitoConsumo;
     privacy: ProfilePrivacy;
-    onSaveAge: (age: number) => void;
     onSaveHabitos: (bebida: HabitoConsumo, tabaco: HabitoConsumo) => void;
     onPrivacyChange: (privacy: ProfilePrivacy) => void;
 }
@@ -107,13 +102,10 @@ export function ProfileDetailsSection({
     habitoBebida,
     habitoTabaco,
     privacy,
-    onSaveAge,
     onSaveHabitos,
     onPrivacyChange,
 }: Props) {
     const { t } = useT();
-    const [editAge, setEditAge] = useState(false);
-    const [ageDraft, setAgeDraft] = useState('');
     const [editBebida, setEditBebida] = useState(false);
     const [editTabaco, setEditTabaco] = useState(false);
 
@@ -130,36 +122,26 @@ export function ProfileDetailsSection({
 
     return (
         <View style={styles.card}>
-            <Text style={styles.sectionTitle}>{t('profile.details')}</Text>
-            <Text style={styles.sectionSub}>{t('profile.detailsSub')}</Text>
-
             <DetailRow
                 label={t('profile.age')}
                 value={ageValue}
                 hidden={!privacy.mostrar_edad}
                 hiddenLabel={t('profile.hidden')}
                 showLabel={t('profile.visible')}
-                onEdit={() => {
-                    setAgeDraft(age != null ? String(age) : '');
-                    setEditAge(true);
-                }}
                 onToggleVisible={(v) => updatePrivacy('mostrar_edad', v)}
             />
-            <View style={styles.divider} />
             <DetailRow
                 label={t('profile.gender')}
                 value={generoValue}
-                valueIcon={genero ? <Ionicons name={generoIcon(genero)} size={18} color={ACCENT} /> : null}
+                valueIcon={genero ? <Ionicons name={generoIcon(genero)} size={15} color={ACCENT} /> : null}
                 hidden={!privacy.mostrar_genero}
                 hiddenLabel={t('profile.hidden')}
                 showLabel={t('profile.visible')}
                 onToggleVisible={(v) => updatePrivacy('mostrar_genero', v)}
             />
-            <Text style={styles.genderLockedHint}>{t('profile.genderLocked')}</Text>
-            <View style={styles.divider} />
             <DetailRow
                 label={t('profile.alcohol')}
-                labelIcon={<Ionicons name="wine-outline" size={16} color={MUTED} />}
+                labelIcon={<Ionicons name="wine-outline" size={14} color={MUTED} />}
                 value={bebidaValue}
                 hidden={!privacy.mostrar_bebida}
                 hiddenLabel={t('profile.hidden')}
@@ -167,10 +149,9 @@ export function ProfileDetailsSection({
                 onEdit={() => setEditBebida(true)}
                 onToggleVisible={(v) => updatePrivacy('mostrar_bebida', v)}
             />
-            <View style={styles.divider} />
             <DetailRow
                 label={t('profile.smoking')}
-                labelIcon={<MaterialCommunityIcons name="smoking" size={16} color={MUTED} />}
+                labelIcon={<MaterialCommunityIcons name="smoking" size={14} color={MUTED} />}
                 value={tabacoValue}
                 hidden={!privacy.mostrar_tabaco}
                 hiddenLabel={t('profile.hidden')}
@@ -178,33 +159,6 @@ export function ProfileDetailsSection({
                 onEdit={() => setEditTabaco(true)}
                 onToggleVisible={(v) => updatePrivacy('mostrar_tabaco', v)}
             />
-
-            <Modal visible={editAge} transparent animationType="fade" onRequestClose={() => setEditAge(false)}>
-                <Pressable style={styles.modalBg} onPress={() => setEditAge(false)}>
-                    <Pressable style={styles.modalBox} onPress={(e) => e.stopPropagation()}>
-                        <Text style={styles.modalTitle}>{t('profile.editAge')}</Text>
-                        <TextInput
-                            style={styles.modalInput}
-                            value={ageDraft}
-                            onChangeText={(v) => setAgeDraft(v.replace(/[^0-9]/g, '').slice(0, 2))}
-                            keyboardType="number-pad"
-                            placeholder="18"
-                            autoFocus
-                        />
-                        <TouchableOpacity
-                            style={styles.modalBtn}
-                            onPress={() => {
-                                const n = parseInt(ageDraft, 10);
-                                if (!isValidAge(n)) return;
-                                onSaveAge(n);
-                                setEditAge(false);
-                            }}
-                        >
-                            <Text style={styles.modalBtnText}>{t('common.save')}</Text>
-                        </TouchableOpacity>
-                    </Pressable>
-                </Pressable>
-            </Modal>
 
             <Modal visible={editBebida} transparent animationType="slide" onRequestClose={() => setEditBebida(false)}>
                 <Pressable style={styles.modalBg} onPress={() => setEditBebida(false)}>
@@ -255,52 +209,51 @@ const styles = StyleSheet.create({
     card: {
         backgroundColor: '#FFF',
         borderRadius: 16,
-        padding: 18,
-        marginBottom: 14,
-        borderWidth: 1,
-        borderColor: BORDER,
+        paddingHorizontal: 14,
+        paddingTop: 8,
+        paddingBottom: 6,
+        marginBottom: 16,
+        shadowColor: '#0F2A4A',
+        shadowOpacity: 0.04,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 1,
     },
-    sectionTitle: { fontSize: 16, fontWeight: '700', color: INK, letterSpacing: -0.2 },
-    sectionSub: { fontSize: 13, color: MUTED, marginTop: 4, marginBottom: 16, lineHeight: 18 },
-    row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
-    rowMain: { flex: 1 },
-    labelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    rowLabel: { fontSize: 12, fontWeight: '600', color: MUTED, textTransform: 'uppercase', letterSpacing: 0.4 },
-    valueRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-    rowValue: { fontSize: 16, fontWeight: '600', color: INK },
-    rowValueHidden: { color: MUTED, fontStyle: 'italic' },
-    rowActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    editBtn: { padding: 4 },
-    divider: { height: 1, backgroundColor: BORDER },
-    genderLockedHint: {
-        fontSize: 12,
+    row: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        minHeight: 40,
+        paddingVertical: 4,
+        gap: 8,
+    },
+    labelRow: {
+        width: 88,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        flexShrink: 0,
+    },
+    rowLabel: {
+        fontSize: 13,
+        fontWeight: '600',
         color: MUTED,
-        marginTop: -4,
-        marginBottom: 8,
-        paddingHorizontal: 2,
-        lineHeight: 17,
+        flexShrink: 1,
+    },
+    valueHit: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+    },
+    rowValue: { flexShrink: 1, fontSize: 14, fontWeight: '600', color: INK },
+    rowValueHidden: { color: MUTED, fontStyle: 'italic', fontWeight: '500' },
+    editIcon: { marginLeft: 2 },
+    switch: {
+        transform: Platform.OS === 'ios' ? [{ scaleX: 0.78 }, { scaleY: 0.78 }] : [{ scaleX: 0.9 }, { scaleY: 0.9 }],
     },
     modalBg: { flex: 1, backgroundColor: 'rgba(15,23,42,0.4)', justifyContent: 'center', padding: 24 },
-    modalBox: { backgroundColor: '#FFF', borderRadius: 16, padding: 20 },
     modalTitle: { fontSize: 17, fontWeight: '700', color: INK, marginBottom: 14 },
-    modalInput: {
-        fontSize: 28,
-        fontWeight: '700',
-        textAlign: 'center',
-        borderWidth: 1,
-        borderColor: BORDER,
-        borderRadius: 12,
-        paddingVertical: 12,
-        marginBottom: 16,
-        color: INK,
-    },
-    modalBtn: {
-        backgroundColor: ACCENT,
-        borderRadius: 12,
-        paddingVertical: 14,
-        alignItems: 'center',
-    },
-    modalBtnText: { color: '#FFF', fontWeight: '700', fontSize: 15 },
     sheet: {
         backgroundColor: '#FFF',
         borderTopLeftRadius: 20,

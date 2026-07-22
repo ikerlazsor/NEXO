@@ -70,11 +70,17 @@ function accountAgeDays(userCreatedAt?: string | null): number {
 
 function parseRpcBadgeStats(raw: Record<string, unknown>): BadgeStats {
     return {
+        ...EMPTY_BADGE_STATS,
         valoracionMedia: Number(raw.valoracionMedia) || 0,
         porcentajeRepetiria: Number(raw.porcentajeRepetiria) || 0,
+        porcentajeAsistencia: Number(raw.porcentajeAsistencia) || 0,
         numeroValoraciones: Number(raw.numeroValoraciones) || 0,
+        numeroEvaluadoresDistintos: Number(raw.numeroEvaluadoresDistintos) || 0,
         numeroPlanesRealizados: Number(raw.numeroPlanesRealizados) || 0,
         numeroAmistades: Number(raw.numeroAmistades) || 0,
+        aspectoPositivoMasVotado: (raw.aspectoPositivoMasVotado as string | null) ?? null,
+        aspectoNegativoMasVotado: (raw.aspectoNegativoMasVotado as string | null) ?? null,
+        numeroExpulsiones: Number(raw.numeroExpulsiones) || 0,
         planesTapas: Number(raw.planesTapas) || 0,
         planesDeporte: Number(raw.planesDeporte) || 0,
         planesFiesta: Number(raw.planesFiesta) || 0,

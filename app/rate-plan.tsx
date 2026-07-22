@@ -1,27 +1,35 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocalSearchParams,
+    useRouter } from 'expo-router';
+import { useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { getAuthUser } from '../lib/auth';
 import { useT } from '../lib/i18n';
 import {
     EMPTY_RATING_DRAFT,
+    MAX_ASPECTS,
     NEGATIVE_ASPECTS,
     POSITIVE_ASPECTS,
     STAR_LABEL_KEYS,
     addPlanToHistory,
     dismissRatingWithoutHistory,
+    ensurePlanInHistory,
     getPendingRatingPlans,
     hasRatingSessionStarted,
     isPersonDraftComplete,
@@ -151,14 +159,22 @@ export default function RatePlanScreen() {
         ]);
     };
 
-    const onPlanHappened = async (happened: boolean) => {
-        if (!happened) {
+    const onPlanHappened = async (attended: boolean) => {
+        if (!attended) {
             if (userId && plan) await dismissRatingWithoutHistory(userId, plan.planId);
-            Alert.alert(t('ratings.doneTitle'), t('ratings.notHappenedMsg'));
+            Alert.alert(t('ratings.doneTitle'), t('ratings.notAttendedMsg'));
             router.back();
             return;
         }
-        if (userId && plan) await markRatingSessionStarted(userId, plan.planId);
+        if (userId && plan) {
+            await markRatingSessionStarted(userId, plan.planId);
+            // Al confirmar asistencia, suma ya a planes hechos
+            const { error } = await ensurePlanInHistory(userId, plan.planId);
+            if (error) {
+                Alert.alert(t('profile.error'), t('ratings.saveError'));
+                return;
+            }
+        }
         setStage('list');
     };
 
@@ -173,8 +189,11 @@ export default function RatePlanScreen() {
     const toggleAspect = (list: 'aspectos_positivos' | 'aspectos_negativos', key: string) => {
         setDraft((prev) => {
             const cur = prev[list];
-            const next = cur.includes(key) ? cur.filter((x) => x !== key) : [...cur, key].slice(0, 4);
-            return { ...prev, [list]: next };
+            if (cur.includes(key)) {
+                return { ...prev, [list]: cur.filter((x) => x !== key) };
+            }
+            if (cur.length >= MAX_ASPECTS) return prev;
+            return { ...prev, [list]: [...cur, key] };
         });
     };
 
@@ -189,7 +208,11 @@ export default function RatePlanScreen() {
                 draft,
             });
             if (error) {
-                Alert.alert(t('profile.error'), t('ratings.saveError'));
+                console.warn('[rate-plan] submit failed', error);
+                Alert.alert(
+                    t('profile.error'),
+                    `${t('ratings.saveError')}${error && error !== 'rpc_rejected' ? `\n\n${error}` : ''}`,
+                );
                 return;
             }
             const nextRated = new Set(ratedIds);
@@ -276,8 +299,8 @@ export default function RatePlanScreen() {
                             <View style={styles.introIcon}>
                                 <Ionicons name="calendar-outline" size={28} color={PRIMARY_DARK} />
                             </View>
-                            <Text style={styles.introTitle}>{t('ratings.happenedQ')}</Text>
-                            <Text style={styles.introSub}>{t('ratings.happenedHint')}</Text>
+                            <Text style={styles.introTitle}>{t('ratings.attendedPlanQ')}</Text>
+                            <Text style={styles.introSub}>{t('ratings.attendedPlanHint')}</Text>
                         </View>
 
                         <TouchableOpacity
@@ -287,7 +310,7 @@ export default function RatePlanScreen() {
                             activeOpacity={0.88}
                         >
                             <Ionicons name="checkmark-circle" size={22} color="#FFF" />
-                            <Text style={styles.bigChoiceText}>{t('ratings.happenedYes')}</Text>
+                            <Text style={styles.bigChoiceText}>{t('ratings.attendedPlanYes')}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={styles.bigChoiceNo}
@@ -296,9 +319,9 @@ export default function RatePlanScreen() {
                             activeOpacity={0.88}
                         >
                             <Ionicons name="close-circle" size={22} color={DANGER} />
-                            <Text style={styles.bigChoiceNoText}>{t('ratings.happenedNo')}</Text>
+                            <Text style={styles.bigChoiceNoText}>{t('ratings.attendedPlanNo')}</Text>
                         </TouchableOpacity>
-                        <Text style={styles.footerHint}>{t('ratings.happenedFooter')}</Text>
+                        <Text style={styles.footerHint}>{t('ratings.attendedPlanFooter')}</Text>
                     </>
                 )}
 
@@ -372,9 +395,6 @@ export default function RatePlanScreen() {
                                 </Text>
                             )}
                         </TouchableOpacity>
-                        {ratedCount === 0 ? (
-                            <Text style={styles.footerHint}>{t('ratings.finishHint')}</Text>
-                        ) : null}
                     </>
                 )}
 
@@ -411,13 +431,6 @@ export default function RatePlanScreen() {
                             </View>
                         </View>
 
-                        {draft.asistencia === false && (
-                            <View style={styles.infoBanner}>
-                                <Ionicons name="information-circle-outline" size={18} color={MUTED} />
-                                <Text style={styles.infoBannerText}>{t('ratings.noAttendHint')}</Text>
-                            </View>
-                        )}
-
                         {draft.asistencia === true && (
                             <>
                                 <View style={styles.questionCard}>
@@ -444,9 +457,7 @@ export default function RatePlanScreen() {
                                             <Text style={styles.starLabel}>
                                                 {t(STAR_LABEL_KEYS[draft.puntuacion_general - 1])}
                                             </Text>
-                                        ) : (
-                                            <Text style={styles.starLabelMuted}>{t('ratings.starHint')}</Text>
-                                        )}
+                                        ) : null}
                                     </View>
                                 </View>
 
@@ -458,7 +469,7 @@ export default function RatePlanScreen() {
                                             <View style={styles.rowWrap}>
                                                 {([
                                                     ['si', t('ratings.repeatYes'), SUCCESS],
-                                                    ['tal_vez', t('ratings.repeatMaybe'), PRIMARY_DARK],
+                                                    ['indiferente', t('ratings.repeatMaybe'), PRIMARY_DARK],
                                                     ['no', t('ratings.repeatNo'), DANGER],
                                                 ] as [Repetiria, string, string][]).map(([key, label, color]) => {
                                                     const on = draft.repetiria_experiencia === key;
@@ -490,7 +501,6 @@ export default function RatePlanScreen() {
                                             <Text style={styles.qNum}>4</Text>
                                             <View style={{ flex: 1 }}>
                                                 <Text style={styles.q}>{t('ratings.positivesQ')}</Text>
-                                                <Text style={styles.optionalHint}>{t('ratings.optionalMax')}</Text>
                                                 <View style={styles.rowWrap}>
                                                     {POSITIVE_ASPECTS.map((key) => {
                                                         const on = draft.aspectos_positivos.includes(key);
@@ -514,7 +524,6 @@ export default function RatePlanScreen() {
                                             <Text style={styles.qNum}>5</Text>
                                             <View style={{ flex: 1 }}>
                                                 <Text style={styles.q}>{t('ratings.negativesQ')}</Text>
-                                                <Text style={styles.optionalHint}>{t('ratings.optionalMax')}</Text>
                                                 <View style={styles.rowWrap}>
                                                     {NEGATIVE_ASPECTS.map((key) => {
                                                         const on = draft.aspectos_negativos.includes(key);

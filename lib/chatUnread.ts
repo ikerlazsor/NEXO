@@ -1,8 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import { isAcceptedParticipant } from './participants';
+import { cacheGetOrFetch, cacheGetStale, cacheInvalidate } from './ttlCache';
 
 const PREFIX = '@nexo_chat_read:';
+const UNREAD_TTL_MS = 25_000;
 
 const optimisticClearedPlans = new Set<string>();
 const optimisticClearedDirects = new Set<string>();
@@ -25,6 +27,10 @@ function directReadKey(userId: string, peerId: string) {
     return `${userId}|direct|${peerId}`;
 }
 
+function unreadMapKey(userId: string) {
+    return `chatUnread:${userId}`;
+}
+
 export function subscribeChatUnread(listener: () => void): () => void {
     listeners.add(listener);
     return () => {
@@ -38,12 +44,14 @@ function notifyChatUnreadChanged() {
 
 export async function markPlanChatRead(userId: string, planId: string): Promise<void> {
     optimisticClearedPlans.add(planReadKey(userId, planId));
+    cacheInvalidate(unreadMapKey(userId));
     notifyChatUnreadChanged();
     await AsyncStorage.setItem(planKey(userId, planId), new Date().toISOString());
 }
 
 export async function markDirectChatRead(userId: string, peerId: string): Promise<void> {
     optimisticClearedDirects.add(directReadKey(userId, peerId));
+    cacheInvalidate(unreadMapKey(userId));
     notifyChatUnreadChanged();
     await AsyncStorage.setItem(directKey(userId, peerId), new Date().toISOString());
 }
@@ -104,14 +112,16 @@ async function getAccessiblePlanIds(userId: string): Promise<string[]> {
     return [...planIds];
 }
 
-export async function getChatUnreadMap(userId: string): Promise<ChatUnreadMap> {
+async function fetchChatUnreadMap(userId: string): Promise<ChatUnreadMap> {
     try {
         const planIds = await getAccessiblePlanIds(userId);
         const plans: Record<string, number> = {};
         let total = 0;
 
-        for (const planId of planIds) {
-            const n = await countPlanUnread(userId, planId);
+        const planCounts = await Promise.all(
+            planIds.map(async (planId) => [planId, await countPlanUnread(userId, planId)] as const),
+        );
+        for (const [planId, n] of planCounts) {
             if (n > 0) plans[planId] = n;
             total += n;
         }
@@ -131,8 +141,10 @@ export async function getChatUnreadMap(userId: string): Promise<ChatUnreadMap> {
         });
 
         const directs: Record<string, number> = {};
-        for (const peerId of peers) {
-            const n = await countDirectUnread(userId, peerId);
+        const directCounts = await Promise.all(
+            [...peers].map(async (peerId) => [peerId, await countDirectUnread(userId, peerId)] as const),
+        );
+        for (const [peerId, n] of directCounts) {
             if (n > 0) directs[peerId] = n;
             total += n;
         }
@@ -143,8 +155,24 @@ export async function getChatUnreadMap(userId: string): Promise<ChatUnreadMap> {
     }
 }
 
-export async function getUnreadChatCount(userId: string): Promise<number> {
-    const map = await getChatUnreadMap(userId);
+export function peekChatUnreadMap(userId: string): ChatUnreadMap | null {
+    return cacheGetStale<ChatUnreadMap>(unreadMapKey(userId));
+}
+
+export async function getChatUnreadMap(
+    userId: string,
+    opts?: { force?: boolean },
+): Promise<ChatUnreadMap> {
+    return cacheGetOrFetch(
+        unreadMapKey(userId),
+        UNREAD_TTL_MS,
+        () => fetchChatUnreadMap(userId),
+        opts,
+    );
+}
+
+export async function getUnreadChatCount(userId: string, opts?: { force?: boolean }): Promise<number> {
+    const map = await getChatUnreadMap(userId, opts);
     return map.total;
 }
 

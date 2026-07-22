@@ -104,7 +104,13 @@ export async function sendFriendRequest(
             .update({ estado: 'pendiente', actualizado_en: new Date().toISOString() })
             .eq('id', rejectedRow.id);
 
-        return { error: error?.message ?? null };
+        if (error) {
+            if (/friend_request_daily_limit/i.test(error.message)) {
+                return { error: 'friend_request_daily_limit' };
+            }
+            return { error: error.message };
+        }
+        return { error: null };
     }
 
     const { error } = await supabase.from('amistades').insert({
@@ -115,6 +121,9 @@ export async function sendFriendRequest(
 
     if (error) {
         if (error.code === '23505') return { error: 'Ya existe una solicitud entre vosotros' };
+        if (/friend_request_daily_limit/i.test(error.message)) {
+            return { error: 'friend_request_daily_limit' };
+        }
         return { error: error.message };
     }
 

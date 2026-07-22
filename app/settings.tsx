@@ -1,9 +1,11 @@
-import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
 import {
-    Alert,
+    Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect,
+    useRouter } from 'expo-router';
+import { useCallback,
+    useState } from 'react';
+import {
     Platform,
     ScrollView,
     StyleSheet,
@@ -12,9 +14,15 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { Alert } from '../lib/nexoAlert';
 import { LangPicker } from '../components/LangPicker';
-import { deleteAccount } from '../lib/profile';
 import { useT } from '../lib/i18n';
+import {
+    fetchModerationCounts,
+    type ModerationCounts,
+} from '../lib/moderation';
+import { deleteAccount } from '../lib/profile';
+import { fetchAccountAccess } from '../lib/roles';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -47,6 +55,28 @@ export default function SettingsScreen() {
     const { t, lang, setLang } = useT();
     const [notifications, setNotifications] = useState(true);
     const [deleting, setDeleting] = useState(false);
+    const [isStaff, setIsStaff] = useState(false);
+    const [modCounts, setModCounts] = useState<ModerationCounts | null>(null);
+
+    useFocusEffect(
+        useCallback(() => {
+            let alive = true;
+            void (async () => {
+                const access = await fetchAccountAccess();
+                if (!alive) return;
+                setIsStaff(access.isStaff);
+                if (access.isStaff) {
+                    const counts = await fetchModerationCounts();
+                    if (alive) setModCounts(counts);
+                } else {
+                    setModCounts(null);
+                }
+            })();
+            return () => {
+                alive = false;
+            };
+        }, []),
+    );
 
     const handleLogout = () => {
         Alert.alert(t('settings.logout'), t('settings.logoutConfirm'), [
@@ -106,9 +136,25 @@ export default function SettingsScreen() {
                     <View style={styles.divider} />
                     <Row icon="diamond-outline" label={t('settings.nexoPlus')} onPress={() => router.push('/nexo-plus')} />
                     <View style={styles.divider} />
+                    <Row icon="lock-closed-outline" label={t('settings.privacy')} onPress={() => router.push('/privacy')} />
+                    <View style={styles.divider} />
                     <Row icon="shield-checkmark-outline" label={t('settings.terms')} onPress={() => router.push('/terms')} />
                     <View style={styles.divider} />
                     <Row icon="help-circle-outline" label={t('settings.helpCenter')} onPress={() => router.push('/help-center')} />
+                    {isStaff ? (
+                        <>
+                            <View style={styles.divider} />
+                            <Row
+                                icon="shield-outline"
+                                label={
+                                    modCounts && modCounts.total > 0
+                                        ? `${t('settings.moderation')} (${modCounts.total})`
+                                        : t('settings.moderation')
+                                }
+                                onPress={() => router.push('/admin')}
+                            />
+                        </>
+                    ) : null}
                 </View>
 
                 <View style={[styles.card, { marginTop: 16 }]}>

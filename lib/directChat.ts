@@ -192,8 +192,6 @@ export async function hideDirectChat(
 ): Promise<{ error: string | null }> {
     if (!userId || !peerId || userId === peerId) return { error: 'invalid_target' };
 
-    await removeOpenedPeer(userId, peerId);
-
     const { error } = await supabase.from('chats_directos_ocultos').upsert(
         {
             usuario_id: userId,
@@ -204,18 +202,11 @@ export async function hideDirectChat(
     );
 
     if (error) {
-        // Tabla aún no migrada: fallback borrar mensajes propios (best effort)
-        if (/chats_directos_ocultos|relation|does not exist/i.test(error.message)) {
-            const { error: delErr } = await supabase
-                .from('mensajes')
-                .delete()
-                .is('plan_id', null)
-                .or(
-                    `and(emisor_id.eq.${userId},receptor_id.eq.${peerId}),and(emisor_id.eq.${peerId},receptor_id.eq.${userId})`,
-                );
-            return { error: delErr?.message ?? null };
-        }
+        // Ocultar una conversación nunca debe borrar mensajes como alternativa.
+        // Se conserva todo y se muestra el error para poder corregir la migración.
         return { error: error.message };
     }
+
+    await removeOpenedPeer(userId, peerId);
     return { error: null };
 }

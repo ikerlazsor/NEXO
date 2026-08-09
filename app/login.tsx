@@ -38,13 +38,11 @@ import {
     deleteAccount,
     ensureProfile,
     isValidDisplayName,
-    isEmailTaken,
     isUsernameTaken,
     isValidUsername,
     normalizeDisplayName,
     formatUsernameInput,
     normalizeUsername,
-    EmailCheckError,
     UsernameCheckError,
     USERNAME_MAX_LENGTH,
 } from '../lib/profile';
@@ -294,21 +292,6 @@ export default function LoginScreen() {
                         return Alert.alert(t('login.notice'), t('login.usernameCheckFailed'));
                     }
                     return Alert.alert(t('login.notice'), t('login.usernameCheckFailed'));
-                }
-
-                try {
-                    const emailTaken = await isEmailTaken(email);
-                    if (emailTaken) {
-                        const reclaimed = await tryReclaimIncompleteEmail(email, password);
-                        if (!reclaimed) {
-                            return Alert.alert(t('login.notice'), t('login.emailTaken'));
-                        }
-                    }
-                } catch (e) {
-                    if (e instanceof EmailCheckError) {
-                        return Alert.alert(t('login.notice'), t('login.emailCheckFailed'));
-                    }
-                    return Alert.alert(t('login.notice'), t('login.emailCheckFailed'));
                 }
 
                 const registerEmail = email.trim().toLowerCase();
@@ -622,7 +605,7 @@ export default function LoginScreen() {
                             }}
                         >
                             <Text style={styles.label}>
-                                {isRegistering ? t('login.email') : t('login.emailOrUsername')}
+                                {isRegistering ? t('login.email') : t('login.email')}
                             </Text>
                             <View style={fieldStyle('email')}>
                                 {isRegistering ? (
@@ -633,7 +616,7 @@ export default function LoginScreen() {
                                     placeholder={
                                         isRegistering
                                             ? t('login.emailPlaceholder')
-                                            : t('login.emailOrUsernamePlaceholder')
+                                            : t('login.emailPlaceholder')
                                     }
                                     placeholderTextColor={PLACEHOLDER}
                                     style={styles.fieldInput}
@@ -643,7 +626,7 @@ export default function LoginScreen() {
                                     onBlur={() => setFocusedField(null)}
                                     autoCapitalize="none"
                                     autoCorrect={false}
-                                    keyboardType={isRegistering ? 'email-address' : 'default'}
+                                    keyboardType="email-address"
                                     returnKeyType="next"
                                     blurOnSubmit={false}
                                     onSubmitEditing={() => focusNextField('email')}

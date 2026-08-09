@@ -168,29 +168,6 @@ export async function isEmailTaken(email: string): Promise<boolean> {
     }
 }
 
-/** Resuelve el email de login a partir de un @usuario. */
-export async function getLoginEmailByUsername(username: string): Promise<string | null> {
-    const handle = normalizeUsername(username);
-    if (!handle) return null;
-    try {
-        const { data, error } = await runWithTimeout(
-            () =>
-                supabase.rpc('get_login_email_by_username', {
-                    p_username: handle,
-                }),
-            8000,
-        );
-        if (error) {
-            console.warn('getLoginEmailByUsername:', error.message);
-            return null;
-        }
-        return typeof data === 'string' && data.includes('@') ? data : null;
-    } catch (e) {
-        console.warn('getLoginEmailByUsername failed:', e);
-        return null;
-    }
-}
-
 export async function deleteAccount(): Promise<{ error: string | null }> {
     const session = await getAuthSession();
     if (!session?.user) {

@@ -1,32 +1,53 @@
 // Supabase Edge Function: expande búsquedas del feed (sinónimos + multidioma).
 // Secret requerido: OPENAI_API_KEY
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
 const cors = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+const jsonHeaders = { ...cors, 'Content-Type': 'application/json' };
+const MAX_QUERY_LENGTH = 120;
+
+function json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), { status, headers: jsonHeaders });
+}
 
 serve(async (req) => {
-    if (req.method === 'OPTIONS') {
-        return new Response('ok', { headers: cors });
-    }
+    if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
+    if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 
     try {
-        const apiKey = Deno.env.get('OPENAI_API_KEY');
-        if (!apiKey) {
-            return new Response(JSON.stringify({ terms: [] }), {
-                status: 200,
-                headers: { ...cors, 'Content-Type': 'application/json' },
-            });
-        }
+        const authHeader = req.headers.get('Authorization') ?? '';
+        const accessToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+        if (!accessToken) return json({ error: 'unauthorized' }, 401);
 
-        const { query } = await req.json();
-        if (!query || typeof query !== 'string' || query.trim().length < 2) {
-            return new Response(JSON.stringify({ terms: [] }), {
-                headers: { ...cors, 'Content-Type': 'application/json' },
-            });
+        const supabaseUrl = Deno.env.get('SUPABASE_URL');
+        const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
+        if (!supabaseUrl || !anonKey) return json({ error: 'server_misconfigured' }, 500);
+
+        const supabase = createClient(supabaseUrl, anonKey, {
+            global: { headers: { Authorization: `Bearer ${accessToken}` } },
+            auth: { persistSession: false },
+        });
+        const { data: { user }, error: authError } = await supabase.auth.getUser(accessToken);
+        if (authError || !user) return json({ error: 'unauthorized' }, 401);
+
+        const body = await req.json().catch(() => null);
+        const query = typeof body?.query === 'string' ? body.query.trim() : '';
+        if (query.length < 2) return json({ terms: [] });
+        if (query.length > MAX_QUERY_LENGTH) return json({ error: 'query_too_long' }, 400);
+
+        const { data: allowed, error: quotaError } = await supabase.rpc('consume_ai_search_quota');
+        if (quotaError) {
+            console.error('AI search quota error:', quotaError.message);
+            return json({ error: 'quota_unavailable' }, 503);
         }
+        if (allowed !== true) return json({ error: 'rate_limit_exceeded' }, 429);
+
+        const apiKey = Deno.env.get('OPENAI_API_KEY');
+        if (!apiKey) return json({ terms: [] });
 
         const res = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -44,44 +65,40 @@ serve(async (req) => {
                         content:
                             'You expand search queries for a Spanish social plans app (NEXO). '
                             + 'Given a user query in ANY language, return related keywords/synonyms in Spanish and English '
-                            + 'that could match plan titles (e.g. "jiu jitsu brasileño" → open mat, bjj, grappling; '
-                            + '"fortnite" → videojuegos, gaming). '
-                            + 'Reply ONLY JSON: {"terms":["..."]}. Max 18 short terms.',
+                            + 'that could match plan titles. Reply ONLY JSON: {"terms":["..."]}. '
+                            + 'Maximum 18 short terms.',
                     },
-                    { role: 'user', content: query.trim() },
+                    { role: 'user', content: query },
                 ],
             }),
         });
 
         if (!res.ok) {
-            return new Response(JSON.stringify({ terms: [] }), {
-                headers: { ...cors, 'Content-Type': 'application/json' },
-            });
+            console.error('OpenAI response:', res.status);
+            return json({ terms: [] });
         }
 
-        const json = await res.json();
-        const text = json?.choices?.[0]?.message?.content?.trim() || '';
-        const match = text.match(/\{[\s\S]*\}/);
+        const payload = await res.json();
+        const rawText = payload?.choices?.[0]?.message?.content?.trim() || '';
+        const match = rawText.match(/\{[\s\S]*\}/);
         let terms: string[] = [];
         if (match) {
             try {
                 const parsed = JSON.parse(match[0]);
                 if (Array.isArray(parsed.terms)) {
-                    terms = parsed.terms.map((t: unknown) => String(t).toLowerCase().trim()).filter((t: string) => t.length >= 2).slice(0, 18);
+                    terms = parsed.terms
+                        .map((term: unknown) => String(term).toLowerCase().trim())
+                        .filter((term: string) => term.length >= 2 && term.length <= 60)
+                        .slice(0, 18);
                 }
             } catch {
                 terms = [];
             }
         }
 
-        return new Response(JSON.stringify({ terms }), {
-            headers: { ...cors, 'Content-Type': 'application/json' },
-        });
-    } catch (e) {
-        console.error(e);
-        return new Response(JSON.stringify({ terms: [] }), {
-            status: 200,
-            headers: { ...cors, 'Content-Type': 'application/json' },
-        });
+        return json({ terms });
+    } catch (error) {
+        console.error(error);
+        return json({ terms: [] });
     }
 });

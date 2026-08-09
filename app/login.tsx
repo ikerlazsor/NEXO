@@ -44,7 +44,6 @@ import {
     normalizeDisplayName,
     formatUsernameInput,
     normalizeUsername,
-    getLoginEmailByUsername,
     EmailCheckError,
     UsernameCheckError,
     USERNAME_MAX_LENGTH,
@@ -234,15 +233,8 @@ export default function LoginScreen() {
 
         setLoading(true);
         try {
-            let loginEmail = email.trim().toLowerCase();
-            if (!loginEmail.includes('@')) {
-                const resolved = await getLoginEmailByUsername(loginEmail.replace(/^@/, ''));
-                if (!resolved) {
-                    Alert.alert(t('login.notice'), t('login.userNotFound'));
-                    return;
-                }
-                loginEmail = resolved;
-            } else if (!validateEmail(loginEmail)) {
+            const loginEmail = email.trim().toLowerCase();
+            if (!validateEmail(loginEmail)) {
                 Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
                 return;
             }
@@ -265,7 +257,7 @@ export default function LoginScreen() {
             return Alert.alert(t('login.notice'), t('login.fillAll'));
         }
 
-        if (isRegistering && !validateEmail(email)) {
+        if (!validateEmail(email)) {
             return Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
         }
 
@@ -358,7 +350,6 @@ export default function LoginScreen() {
 
                 await setPendingSignup({
                     email: registerEmail,
-                    password,
                     nombre: displayName,
                     nombreUsuario: handle,
                 });
@@ -398,21 +389,7 @@ export default function LoginScreen() {
                 return;
             }
 
-            let loginEmail = email.trim();
-            if (loginEmail.includes('@')) {
-                loginEmail = loginEmail.toLowerCase();
-                if (!validateEmail(loginEmail)) {
-                    Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
-                    return;
-                }
-            } else {
-                const resolved = await getLoginEmailByUsername(loginEmail.replace(/^@/, ''));
-                if (!resolved) {
-                    Alert.alert(t('login.authError'), t('login.userNotFound'));
-                    return;
-                }
-                loginEmail = resolved;
-            }
+            const loginEmail = email.trim().toLowerCase();
 
             const { data, error } = await supabase.auth.signInWithPassword({
                 email: loginEmail,

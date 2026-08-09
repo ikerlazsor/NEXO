@@ -1,25 +1,30 @@
 -- ============================================================
--- NEXO · Seed demo ampliado (10 cuentas + muchos planes/chats)
--- Ejecutar ENTERO en Supabase SQL Editor.
--- Contraseña de todas: Demo1234!
+-- NEXO · Seed demo para amigos (10 perfiles + 4 planes en feed)
+-- Ejecutar ENTERO en Supabase → SQL Editor → Run.
 --
---   lucia.demo@nexo.test   → ~5.0
---   marco.demo@nexo.test   → ~4.6
---   sofia.demo@nexo.test   → ~4.2
---   diego.demo@nexo.test   → ~3.8
---   emma.demo@nexo.test    → ~3.4
---   nora.demo@nexo.test    → ~4.8
---   alex.demo@nexo.test    → ~4.4
---   carmen.demo@nexo.test  → ~4.0
---   pablo.demo@nexo.test   → ~3.6
---   laura.demo@nexo.test   → ~4.9
+-- Contraseña de todas las cuentas demo: Demo1234!
 --
+--   carlos.demo@nexo.test
+--   lucia.demo@nexo.test
+--   ana.demo@nexo.test
+--   mario.demo@nexo.test
+--   tomas.demo@nexo.test
+--   carla.demo@nexo.test
+--   vanesa.demo@nexo.test
+--   maria.demo@nexo.test
+--   selena.demo@nexo.test
+--   antonio.demo@nexo.test
+--
+-- Feed: 4 planes públicos
+--   1) HOY (~23:30 del día actual → badge "hoy")
+--   2) COMPLETO (cupo lleno)
+--   3) Pádel (mañana)
+--   4) Picnic (en 3 días)
 -- Idempotente: borra demos @nexo.test anteriores.
 -- ============================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Evita el error FK al borrar usuarios (trigger de participantes)
 CREATE OR REPLACE FUNCTION public.recalcular_personas_distintas(p_usuario uuid)
 RETURNS void
 LANGUAGE plpgsql
@@ -32,7 +37,6 @@ BEGIN
     IF p_usuario IS NULL THEN
         RETURN;
     END IF;
-    -- Si el perfil ya no existe (borrado en cascada), no insertar stats
     IF NOT EXISTS (SELECT 1 FROM public.perfiles WHERE id = p_usuario) THEN
         RETURN;
     END IF;
@@ -59,76 +63,91 @@ $$;
 DO $$
 DECLARE
     u uuid[] := ARRAY[
-        'a1111111-1111-4111-8111-111111111111'::uuid,
-        'a2222222-2222-4222-8222-222222222222'::uuid,
-        'a3333333-3333-4333-8333-333333333333'::uuid,
-        'a4444444-4444-4444-8444-444444444444'::uuid,
-        'a5555555-5555-4555-8555-555555555555'::uuid,
-        'a6666666-6666-4666-8666-666666666666'::uuid,
-        'a7777777-7777-4777-8777-777777777777'::uuid,
-        'a8888888-8888-4888-8888-888888888888'::uuid,
-        'a9999999-9999-4999-8999-999999999999'::uuid,
-        'aa101010-1010-4101-8101-101010101010'::uuid
+        'a1111111-1111-4111-8111-111111111111'::uuid, -- Carlos
+        'a2222222-2222-4222-8222-222222222222'::uuid, -- Lucía
+        'a3333333-3333-4333-8333-333333333333'::uuid, -- Ana
+        'a4444444-4444-4444-8444-444444444444'::uuid, -- Mario
+        'a5555555-5555-4555-8555-555555555555'::uuid, -- Tomás
+        'a6666666-6666-4666-8666-666666666666'::uuid, -- Carla
+        'a7777777-7777-4777-8777-777777777777'::uuid, -- Vanesa
+        'a8888888-8888-4888-8888-888888888888'::uuid, -- María
+        'a9999999-9999-4999-8999-999999999999'::uuid, -- Selena
+        'aa101010-1010-4101-8101-101010101010'::uuid  -- Antonio
     ];
     emails text[] := ARRAY[
+        'carlos.demo@nexo.test',
         'lucia.demo@nexo.test',
-        'marco.demo@nexo.test',
-        'sofia.demo@nexo.test',
-        'diego.demo@nexo.test',
-        'emma.demo@nexo.test',
-        'nora.demo@nexo.test',
-        'alex.demo@nexo.test',
-        'carmen.demo@nexo.test',
-        'pablo.demo@nexo.test',
-        'laura.demo@nexo.test'
+        'ana.demo@nexo.test',
+        'mario.demo@nexo.test',
+        'tomas.demo@nexo.test',
+        'carla.demo@nexo.test',
+        'vanesa.demo@nexo.test',
+        'maria.demo@nexo.test',
+        'selena.demo@nexo.test',
+        'antonio.demo@nexo.test'
     ];
     nombres text[] := ARRAY[
-        'Lucía', 'Marco', 'Sofía', 'Diego', 'Emma',
-        'Nora', 'Alex', 'Carmen', 'Pablo', 'Laura'
+        'Carlos', 'Lucía', 'Ana', 'Mario', 'Tomás',
+        'Carla', 'Vanesa', 'María', 'Selena', 'Antonio'
     ];
     handles text[] := ARRAY[
-        'lucia_demo', 'marco_demo', 'sofia_demo', 'diego_demo', 'emma_demo',
-        'nora_demo', 'alex_demo', 'carmen_demo', 'pablo_demo', 'laura_demo'
+        'carlos_m', 'lucia_r', 'ana_g', 'mario_p', 'tomas_v',
+        'carla_s', 'vanesa_l', 'maria_c', 'selena_n', 'antonio_f'
     ];
     generos text[] := ARRAY[
-        'femenino', 'masculino', 'femenino', 'masculino', 'femenino',
-        'femenino', 'masculino', 'femenino', 'masculino', 'femenino'
+        'masculino', 'femenino', 'femenino', 'masculino', 'masculino',
+        'femenino', 'femenino', 'femenino', 'femenino', 'masculino'
     ];
     bios text[] := ARRAY[
-        'Me encantan los planes espontáneos y conocer gente nueva.',
-        'Deporte, tapas y buena conversación.',
-        'Cine, museos y cafés con vistas.',
-        'Quedadas de fútbol y afters improvisados.',
-        'Senderismo, picnic y planes chill.',
-        'Fiestas, conciertos y cero drama.',
-        'Running por la mañana y vermut por la tarde.',
-        'Cultura, teatro y buen rollo.',
-        'Pádel, gaming y pizza.',
-        'Viajes cortos y planes foodie.'
+        'Ingeniero de día y foodie de noche. Me encantan las tapas y conocer gente nueva.',
+        'Arquitecta. Cafés, cine y paseos sin prisa. Siempre abierta a planes espontáneos.',
+        'Estudiante de diseño. Museos, picnic y buena conversación.',
+        'Profe de edu. física. Fútbol, pádel y afters improvisados.',
+        'Periodista. Running, vermut y planes al aire libre.',
+        'Marketing. Terraza, conciertos y cero drama.',
+        'Enfermera. Yoga, brunch y quedadas tranquilas.',
+        'Abogada. Teatro, buena comida y planes culturales.',
+        'Fotógrafa freelance. Miradores, viajes cortos y estética.',
+        'Chef. Cocina, mercados y planes foodie con amigos.'
     ];
-    ratings numeric[] := ARRAY[5.00, 4.60, 4.20, 3.80, 3.40, 4.80, 4.40, 4.00, 3.60, 4.90];
+    -- Media objetivo, % repetiría, planes hechos, aspecto +, aspecto -
+    ratings numeric[] := ARRAY[4.70, 4.90, 4.40, 4.20, 4.50, 4.60, 4.30, 4.80, 4.55, 4.75];
+    pct_rep int[] := ARRAY[92, 97, 88, 84, 90, 93, 86, 95, 91, 94];
+    planes_hechos int[] := ARRAY[14, 18, 11, 16, 13, 15, 10, 17, 12, 19];
+    aspecto_pos text[] := ARRAY[
+        'agradable', 'social', 'divertido', 'puntual', 'cercano',
+        'divertido', 'respetuoso', 'agradable', 'social', 'cercano'
+    ];
+    aspecto_neg text[] := ARRAY[
+        'impuntual', NULL, 'poco_participativo', 'frio', NULL,
+        NULL, 'impuntual', NULL, 'poco_participativo', NULL
+    ];
     v_pwd text;
     i int;
     j int;
+    k int;
     r record;
     pid uuid;
     plan_ids uuid[] := ARRAY[]::uuid[];
     today_start timestamptz := date_trunc('day', now());
     v_hoy timestamptz;
     demo_ids uuid[];
+    evaluador uuid;
+    evaluado uuid;
+    score int;
+    pos_arr text[];
+    neg_arr text[];
 BEGIN
     v_pwd := crypt('Demo1234!', gen_salt('bf'));
     demo_ids := u;
-    -- Planes "hoy" siempre futuros y del día actual (diseño oro del feed)
-    v_hoy := LEAST(
-        GREATEST(now() + interval '2 hours', today_start + interval '14 hours'),
-        today_start + interval '23 hours'
-    );
-    IF v_hoy <= now() THEN
-        v_hoy := now() + interval '30 minutes';
+
+    -- Badge "hoy": mismo día civil, casi al final (~23:30) → queda casi todo el día
+    v_hoy := today_start + interval '23 hours 30 minutes';
+    IF v_hoy <= now() + interval '45 minutes' THEN
+        -- Si se ejecuta muy tarde, mañana 23:30 (no tendrá badge hoy)
+        v_hoy := today_start + interval '1 day' + interval '23 hours 30 minutes';
     END IF;
 
-    -- Incluir cualquier @nexo.test ya existente
     FOR r IN SELECT id FROM auth.users WHERE lower(email) LIKE '%@nexo.test'
     LOOP
         IF NOT (r.id = ANY (demo_ids)) THEN
@@ -136,7 +155,6 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- Limpieza sin disparar triggers rotos (orden seguro)
     SET LOCAL session_replication_role = replica;
 
     DELETE FROM public.mensajes
@@ -163,7 +181,6 @@ BEGIN
     WHERE usuario_origen_id = ANY (demo_ids) OR usuario_destino_id = ANY (demo_ids);
 
     DELETE FROM public.planes WHERE creador_id = ANY (demo_ids);
-    -- planes demo con ids fijos
     DELETE FROM public.planes WHERE id::text LIKE 'd1000001%' OR id::text LIKE 'c1000000%';
 
     DELETE FROM public.estadisticas_usuario WHERE usuario_id = ANY (demo_ids);
@@ -173,7 +190,7 @@ BEGIN
 
     SET LOCAL session_replication_role = DEFAULT;
 
-    -- Crear 10 usuarios
+    -- ---------- 10 usuarios ----------
     FOR i IN 1..10 LOOP
         INSERT INTO auth.users (
             instance_id, id, aud, role, email, encrypted_password,
@@ -192,7 +209,7 @@ BEGIN
                 'onboarding_completed', true,
                 'avatar_url', 'https://i.pravatar.cc/400?u=nexo-' || handles[i]
             ),
-            now() - ((130 - i * 8) || ' days')::interval,
+            now() - ((160 - i * 9) || ' days')::interval,
             now(), '', '', '', ''
         );
 
@@ -210,23 +227,43 @@ BEGIN
             nombre_usuario = handles[i],
             descripcion = bios[i],
             genero = generos[i]::public.tipo_genero,
-            fecha_nacimiento = (date '1996-01-01' + (i * 137)),
-            ambientes_preferidos = CASE
-                WHEN generos[i] = 'femenino' THEN ARRAY['Viajero', 'Foodie', 'Fiestero']
-                ELSE ARRAY['Deportista', 'Aventurero', 'Tranquilo']
+            fecha_nacimiento = (date '1994-03-12' + ((i - 1) * 211)),
+            ambientes_preferidos = CASE i
+                WHEN 1 THEN ARRAY['Foodie', 'Deportista', 'De terraceo']::text[]
+                WHEN 2 THEN ARRAY['Viajero', 'Foodie', 'Lectura']::text[]
+                WHEN 3 THEN ARRAY['Tranquilo', 'Foodie', 'Más de día']::text[]
+                WHEN 4 THEN ARRAY['Deportista', 'Aventurero', 'Fiestero']::text[]
+                WHEN 5 THEN ARRAY['Deportista', 'Viajero', 'Más de día']::text[]
+                WHEN 6 THEN ARRAY['Fiestero', 'Foodie', 'Más de noche']::text[]
+                WHEN 7 THEN ARRAY['Yoga', 'Tranquilo', 'Foodie']::text[]
+                WHEN 8 THEN ARRAY['Lectura', 'Foodie', 'De terraceo']::text[]
+                WHEN 9 THEN ARRAY['Viajero', 'Aventurero', 'Foodie']::text[]
+                ELSE ARRAY['Foodie', 'De terraceo', 'Más de noche']::text[]
             END,
-            etiquetas = CASE
-                WHEN generos[i] = 'femenino' THEN ARRAY['Viajero', 'Foodie', 'Fiestero']
-                ELSE ARRAY['Deportista', 'Aventurero', 'Tranquilo']
+            etiquetas = CASE i
+                WHEN 1 THEN ARRAY['Foodie', 'Deportista', 'De terraceo']::text[]
+                WHEN 2 THEN ARRAY['Viajero', 'Foodie', 'Lectura']::text[]
+                WHEN 3 THEN ARRAY['Tranquilo', 'Foodie', 'Más de día']::text[]
+                WHEN 4 THEN ARRAY['Deportista', 'Aventurero', 'Fiestero']::text[]
+                WHEN 5 THEN ARRAY['Deportista', 'Viajero', 'Más de día']::text[]
+                WHEN 6 THEN ARRAY['Fiestero', 'Foodie', 'Más de noche']::text[]
+                WHEN 7 THEN ARRAY['Yoga', 'Tranquilo', 'Foodie']::text[]
+                WHEN 8 THEN ARRAY['Lectura', 'Foodie', 'De terraceo']::text[]
+                WHEN 9 THEN ARRAY['Viajero', 'Aventurero', 'Foodie']::text[]
+                ELSE ARRAY['Foodie', 'De terraceo', 'Más de noche']::text[]
             END,
-            habitos_consumo = '{"bebida":"ocasional","tabaco":"no"}'::jsonb,
+            habitos_consumo = CASE
+                WHEN i IN (1, 4, 6, 10) THEN '{"bebida":"si","tabaco":"no"}'::jsonb
+                WHEN i IN (2, 7, 8) THEN '{"bebida":"ocasional","tabaco":"no"}'::jsonb
+                ELSE '{"bebida":"ocasional","tabaco":"ocasional"}'::jsonb
+            END,
             perfil_gustos = '{"privacidad":{"mostrar_edad":true,"mostrar_genero":true,"mostrar_bebida":true,"mostrar_tabaco":true,"mostrar_aficiones":true}}'::jsonb,
             registro_completado = true,
             avatar_url = 'https://i.pravatar.cc/400?u=nexo-' || handles[i]
         WHERE id = u[i];
     END LOOP;
 
-    -- Amistades: casi todos amigos entre sí
+    -- Amigos entre casi todos
     FOR i IN 1..10 LOOP
         FOR j IN (i + 1)..10 LOOP
             INSERT INTO public.amistades (usuario_origen_id, usuario_destino_id, estado)
@@ -235,41 +272,30 @@ BEGIN
         END LOOP;
     END LOOP;
 
-    -- Lucía: solicitudes recibidas + enviadas (y deja de ser amiga de esos)
-    DELETE FROM public.amistades
-    WHERE (usuario_origen_id = u[1] AND usuario_destino_id IN (u[2], u[3], u[4], u[5], u[9]))
-       OR (usuario_destino_id = u[1] AND usuario_origen_id IN (u[2], u[3], u[4], u[5], u[9]));
-
-    INSERT INTO public.amistades (usuario_origen_id, usuario_destino_id, estado) VALUES
-        (u[2], u[1], 'pendiente'),  -- Marco → Lucía (recibida)
-        (u[3], u[1], 'pendiente'),  -- Sofía → Lucía (recibida)
-        (u[9], u[1], 'pendiente'),  -- Pablo → Lucía (recibida)
-        (u[1], u[4], 'pendiente'),  -- Lucía → Diego (enviada)
-        (u[1], u[5], 'pendiente')   -- Lucía → Emma (enviada)
-    ON CONFLICT DO NOTHING;
-
-    -- ---------- Planes pasados (historial + valoraciones) ----------
-    FOR i IN 1..8 LOOP
+    -- ---------- Planes PASADOS (historial + valoraciones) ----------
+    FOR i IN 1..10 LOOP
         pid := ('c1000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid;
         plan_ids := array_append(plan_ids, pid);
         INSERT INTO public.planes (
             id, titulo, descripcion, categoria, tipo_deporte, creador_id,
-            fecha_evento, maximo_participantes, imagen_url,
+            fecha_evento, maximo_participantes, minimo_participantes, imagen_url,
             nombre_ubicacion, latitud, longitud,
             requiere_aprobacion, solo_chicas, solo_amigos, modo_privado
         ) VALUES (
             pid,
             CASE i
-                WHEN 1 THEN 'Tapas en el centro'
+                WHEN 1 THEN 'Tapas en La Latina'
                 WHEN 2 THEN 'Partido de fútbol 7'
                 WHEN 3 THEN 'Cine + cañas'
-                WHEN 4 THEN 'Picnic en el parque'
+                WHEN 4 THEN 'Picnic en Retiro'
                 WHEN 5 THEN 'Café y estudio'
-                WHEN 6 THEN 'Concierto improvisado'
+                WHEN 6 THEN 'Concierto en sala'
                 WHEN 7 THEN 'Running atardecer'
-                ELSE 'Noche de juegos de mesa'
+                WHEN 8 THEN 'Noche de juegos de mesa'
+                WHEN 9 THEN 'Vermut del domingo'
+                ELSE 'Pádel dobles'
             END,
-            'Plan demo pasado para valoraciones e historial.',
+            'Plan pasado demo — historial y valoraciones.',
             CASE i
                 WHEN 1 THEN 'FOODIES'
                 WHEN 2 THEN 'DEPORTES'
@@ -278,7 +304,9 @@ BEGIN
                 WHEN 5 THEN 'DESCUBRIR'
                 WHEN 6 THEN 'SHOWTIME'
                 WHEN 7 THEN 'DEPORTES'
-                ELSE 'VIBES'
+                WHEN 8 THEN 'VIBES'
+                WHEN 9 THEN 'FOODIES'
+                ELSE 'DEPORTES'
             END,
             CASE i
                 WHEN 1 THEN 'tapas'
@@ -288,11 +316,14 @@ BEGIN
                 WHEN 5 THEN 'estudio'
                 WHEN 6 THEN 'concierto'
                 WHEN 7 THEN 'running'
-                ELSE 'juegos_mesa'
+                WHEN 8 THEN 'juegos_mesa'
+                WHEN 9 THEN 'tapas'
+                ELSE 'padel'
             END,
             u[((i - 1) % 10) + 1],
-            now() - ((25 - i) || ' days')::interval,
-            10,
+            now() - ((40 - i * 3) || ' days')::interval - interval '3 hours',
+            8,
+            2,
             CASE i
                 WHEN 1 THEN 'nexo_cover:FOODIES:tapas:0'
                 WHEN 2 THEN 'nexo_cover:DEPORTES:futbol:0'
@@ -301,241 +332,254 @@ BEGIN
                 WHEN 5 THEN 'nexo_cover:DESCUBRIR:estudio:0'
                 WHEN 6 THEN 'nexo_cover:SHOWTIME:concierto:1'
                 WHEN 7 THEN 'nexo_cover:DEPORTES:running:0'
-                ELSE 'nexo_cover:VIBES:juegos_mesa:0'
+                WHEN 8 THEN 'nexo_cover:VIBES:juegos_mesa:0'
+                WHEN 9 THEN 'nexo_cover:FOODIES:tapas:1'
+                ELSE 'nexo_cover:DEPORTES:padel:0'
             END,
-            'Madrid centro', 40.4168, -3.7038,
+            CASE i
+                WHEN 1 THEN 'La Latina'
+                WHEN 2 THEN 'Polideportivo Sur'
+                WHEN 3 THEN 'Yelmo Ideal'
+                WHEN 4 THEN 'Parque del Retiro'
+                WHEN 5 THEN 'Café Central'
+                WHEN 6 THEN 'Sala El Sol'
+                WHEN 7 THEN 'Madrid Río'
+                WHEN 8 THEN 'Malasaña'
+                WHEN 9 THEN 'Bar El Rincón'
+                ELSE 'Club Pádel Chamberí'
+            END,
+            40.4168 + (i * 0.002), -3.7038 - (i * 0.001),
             false, false, false, false
         ) ON CONFLICT (id) DO NOTHING;
 
-        -- 5 participantes por plan pasado
-        FOR j IN 0..4 LOOP
+        FOR j IN 0..5 LOOP
             INSERT INTO public.participantes (plan_id, usuario_id, estado)
             VALUES (pid, u[((i + j - 1) % 10) + 1], 'aceptado')
             ON CONFLICT DO NOTHING;
 
             INSERT INTO public.historial_planes (usuario_id, plan_id, creado_en)
-            VALUES (u[((i + j - 1) % 10) + 1], pid, now() - ((25 - i) || ' days')::interval)
+            VALUES (
+                u[((i + j - 1) % 10) + 1],
+                pid,
+                now() - ((40 - i * 3) || ' days')::interval
+            )
             ON CONFLICT DO NOTHING;
         END LOOP;
     END LOOP;
 
-    -- Valoraciones cruzadas (medias aproximadas forzadas luego en stats)
+    -- Valoraciones cruzadas con aspectos + / −
     FOR i IN 1..10 LOOP
-        FOR j IN 1..5 LOOP
+        evaluado := u[i];
+        FOR j IN 1..7 LOOP
+            evaluador := u[((i + j - 1) % 10) + 1];
+            IF evaluador = evaluado THEN
+                CONTINUE;
+            END IF;
+            score := GREATEST(3, LEAST(5, round(ratings[i])::int + ((j % 3) - 1)));
+            pos_arr := CASE (j % 4)
+                WHEN 0 THEN ARRAY[aspecto_pos[i], 'social']
+                WHEN 1 THEN ARRAY[aspecto_pos[i], 'divertido']
+                WHEN 2 THEN ARRAY['agradable', 'puntual']
+                ELSE ARRAY['cercano', 'respetuoso']
+            END;
+            IF aspecto_neg[i] IS NOT NULL AND j IN (1, 4) AND score <= 4 THEN
+                neg_arr := ARRAY[aspecto_neg[i]];
+            ELSE
+                neg_arr := '{}';
+            END IF;
+
             INSERT INTO public.valoraciones (
                 plan_id, evaluador_id, evaluado_id, asistencia, puntuacion_general,
                 repetiria_experiencia, aspectos_positivos, aspectos_negativos
             ) VALUES (
                 plan_ids[((j - 1) % array_length(plan_ids, 1)) + 1],
-                u[((i + j) % 10) + 1],
-                u[i],
+                evaluador,
+                evaluado,
                 true,
-                GREATEST(3, LEAST(5, round(ratings[i])::int + ((j % 3) - 1))),
-                CASE WHEN ratings[i] >= 4 THEN 'si' ELSE CASE WHEN j = 1 THEN 'no' ELSE 'si' END END,
-                ARRAY['agradable', 'social'],
-                '{}'
+                score,
+                CASE
+                    WHEN ratings[i] >= 4.5 AND j <> 2 THEN 'si'
+                    WHEN j = 2 AND ratings[i] < 4.4 THEN 'no'
+                    WHEN j = 5 THEN 'indiferente'
+                    ELSE 'si'
+                END,
+                pos_arr,
+                neg_arr
             ) ON CONFLICT DO NOTHING;
         END LOOP;
     END LOOP;
 
-    -- ---------- Planes FUTUROS (feed) ----------
-    -- Hoy (varios)
+    -- ---------- 4 PLANES EN FEED ----------
     INSERT INTO public.planes (
         id, titulo, descripcion, categoria, tipo_deporte, creador_id,
-        fecha_evento, maximo_participantes, imagen_url,
+        fecha_evento, maximo_participantes, minimo_participantes, imagen_url,
         nombre_ubicacion, latitud, longitud,
         requiere_aprobacion, solo_chicas, solo_amigos, modo_privado
     ) VALUES
-        ('d1000001-0001-4001-8001-000000000001', 'Café esta tarde', 'Hoy: café improvisado.', 'FOODIES', 'cafe', u[1],
-         v_hoy, 6, 'nexo_cover:FOODIES:cafe:0',
-         'Malasaña', 40.426, -3.704, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000002', 'Pádel hoy', 'Hoy por la noche, dobles.', 'DEPORTES', 'padel', u[2],
-         v_hoy + interval '2 hours', 4, 'nexo_cover:DEPORTES:padel:0',
-         'Club Pádel', 40.45, -3.69, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000003', 'Cine hoy', 'Peli de estreno.', 'SHOWTIME', 'cine', u[3],
-         v_hoy + interval '3 hours', 5, 'nexo_cover:SHOWTIME:cine:1',
-         'Yelmo Luxury', 40.42, -3.70, false, false, false, false),
-        -- LLENOS
-        ('d1000001-0001-4001-8001-000000000004', 'Vermut completo', 'Plan LLENO — lista de espera mental.', 'FOODIES', 'tapas', u[6],
-         today_start + interval '2 days' + interval '13 hours', 4, 'nexo_cover:FOODIES:tapas:1',
-         'Bar El Rincón', 40.41, -3.70, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000005', 'Fútbol completo', 'Ya no caben más.', 'DEPORTES', 'futbol', u[4],
-         today_start + interval '3 days' + interval '19 hours', 6, 'nexo_cover:DEPORTES:futbol:1',
-         'Polideportivo Sur', 40.39, -3.70, false, false, false, false),
-        -- Esta semana / próximos
-        ('d1000001-0001-4001-8001-000000000006', 'Senderismo domingo', 'Ruta fácil 8 km.', 'AIRE_LIBRE', 'senderismo', u[5],
-         today_start + interval '4 days' + interval '9 hours', 12, 'nexo_cover:AIRE_LIBRE:senderismo:0',
-         'Casa de Campo', 40.40, -3.75, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000007', 'Museo + vermú', 'Exposición nueva.', 'DESCUBRIR', 'museo', u[8],
-         today_start + interval '5 days' + interval '12 hours', 8, 'nexo_cover:DESCUBRIR:museo:0',
-         'Reina Sofía', 40.408, -3.694, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000008', 'Noche gaming', 'FIFA + snacks.', 'VIBES', 'gaming', u[9],
-         today_start + interval '2 days' + interval '22 hours', 8, 'nexo_cover:VIBES:gaming:0',
-         'Local gaming', 40.43, -3.70, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000009', 'Comida de domingo', 'Arroz para compartir.', 'FOODIES', 'comer', u[10],
-         today_start + interval '6 days' + interval '14 hours', 7, 'nexo_cover:FOODIES:comer:0',
-         'Lavapiés', 40.409, -3.700, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000010', 'Baloncesto 3x3', 'Nivel medio.', 'DEPORTES', 'baloncesto', u[7],
-         today_start + interval '1 day' + interval '18 hours', 6, 'nexo_cover:DEPORTES:baloncesto:0',
-         'Cancha Retiro', 40.415, -3.684, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000011', 'Teatro off', 'Entradas baratas.', 'SHOWTIME', 'teatro', u[8],
-         today_start + interval '7 days' + interval '20 hours', 6, 'nexo_cover:SHOWTIME:teatro:0',
-         'Teatro del Barrio', 40.41, -3.70, false, false, true, false),
-        ('d1000001-0001-4001-8001-000000000012', 'Playa urbana', 'Toalla y buena música.', 'AIRE_LIBRE', 'playa', u[5],
-         today_start + interval '8 days' + interval '11 hours', 10, 'nexo_cover:AIRE_LIBRE:playa:0',
-         'Madrid Río', 40.40, -3.72, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000013', 'Intercambio idiomas', 'EN/ES café.', 'DESCUBRIR', 'idiomas', u[3],
-         today_start + interval '3 days' + interval '18 hours', 10, 'nexo_cover:DESCUBRIR:idiomas:0',
-         'Café Central', 40.416, -3.707, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000014', 'Fiesta terraza', 'Solo buena vibra.', 'VIBES', 'fiesta', u[6],
-         today_start + interval '9 days' + interval '22 hours', 15, 'nexo_cover:VIBES:fiesta:0',
-         'Azotea', 40.42, -3.70, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000015', 'Cenita improvisada', 'Sitio por decidir.', 'FOODIES', 'cenar', u[1],
-         today_start + interval '1 day' + interval '21 hours', 5, 'nexo_cover:FOODIES:cenar:0',
-         'Chamberí', 40.434, -3.703, true, false, false, false),
-        ('d1000001-0001-4001-8001-000000000016', 'Mirador atardecer', 'Fotos y picnic light.', 'AIRE_LIBRE', 'mirador', u[10],
-         today_start + interval '2 days' + interval '19 hours', 8, 'nexo_cover:AIRE_LIBRE:mirador:0',
-         'Templo Debod', 40.424, -3.718, false, false, false, false),
-        -- LLENO pequeño
-        ('d1000001-0001-4001-8001-000000000017', 'Estudio exprés', 'Cupos llenos.', 'DESCUBRIR', 'estudio', u[3],
-         today_start + interval '1 day' + interval '16 hours', 3, 'nexo_cover:DESCUBRIR:estudio:1',
-         'Biblioteca', 40.42, -3.70, false, false, false, false),
-        ('d1000001-0001-4001-8001-000000000018', 'Compras vintage', 'Rastro + brunch.', 'VIBES', 'compras', u[8],
-         today_start + interval '10 days' + interval '11 hours', 6, 'nexo_cover:VIBES:compras:0',
-         'El Rastro', 40.408, -3.707, false, false, false, false)
-    ON CONFLICT (id) DO NOTHING;
+        -- 1) HOY (~23:30) — badge hoy, casi 24h si se ejecuta de mañana
+        (
+            'd1000001-0001-4001-8001-000000000001',
+            'Cañas esta noche en Malasaña',
+            'Plan de hoy: terraza, cañas y buena conversación. Ambiente relajado, ven cuando puedas.',
+            'FOODIES', 'tapas', u[1],
+            v_hoy, 8, 2, 'nexo_cover:FOODIES:tapas:0',
+            'Malasaña · Plaza de San Ildefonso', 40.4258, -3.7039,
+            false, false, false, false
+        ),
+        -- 2) COMPLETO
+        (
+            'd1000001-0001-4001-8001-000000000002',
+            'Fútbol 7 — cupo completo',
+            'Partido amistoso nivel medio. Ya estamos completos; mira lista de espera si te apuntas.',
+            'DEPORTES', 'futbol', u[4],
+            today_start + interval '2 days' + interval '19 hours', 6, 2,
+            'nexo_cover:DEPORTES:futbol:0',
+            'Polideportivo Vallecas', 40.393, -3.652,
+            false, false, false, false
+        ),
+        -- 3) Pádel mañana
+        (
+            'd1000001-0001-4001-8001-000000000003',
+            'Pádel dobles mañana',
+            'Dos pistas, nivel intermedio. Luego vermut cerca del club.',
+            'DEPORTES', 'padel', u[5],
+            today_start + interval '1 day' + interval '18 hours', 4, 2,
+            'nexo_cover:DEPORTES:padel:0',
+            'Club Pádel Chamberí', 40.435, -3.704,
+            false, false, false, false
+        ),
+        -- 4) Picnic
+        (
+            'd1000001-0001-4001-8001-000000000004',
+            'Picnic en el Retiro',
+            'Mantas, snacks y playlist chill. Ideal para conocer gente nueva un domingo.',
+            'AIRE_LIBRE', 'picnic', u[2],
+            today_start + interval '3 days' + interval '12 hours', 10, 2,
+            'nexo_cover:AIRE_LIBRE:picnic:0',
+            'Parque del Retiro · Estanque', 40.417, -3.683,
+            false, false, false, false
+        )
+    ON CONFLICT (id) DO UPDATE SET
+        titulo = EXCLUDED.titulo,
+        descripcion = EXCLUDED.descripcion,
+        fecha_evento = EXCLUDED.fecha_evento,
+        maximo_participantes = EXCLUDED.maximo_participantes,
+        creador_id = EXCLUDED.creador_id,
+        imagen_url = EXCLUDED.imagen_url,
+        nombre_ubicacion = EXCLUDED.nombre_ubicacion;
 
-    -- Participantes futuros (llenos = max alcanzado)
-    -- Hoy café: 3/6
+    -- Participantes feed
     INSERT INTO public.participantes (plan_id, usuario_id, estado) VALUES
+        -- Hoy cañas 5/8
         ('d1000001-0001-4001-8001-000000000001', u[1], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000001', u[3], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000001', u[2], 'aceptado'),
         ('d1000001-0001-4001-8001-000000000001', u[6], 'aceptado'),
-        -- Pádel hoy 3/4
-        ('d1000001-0001-4001-8001-000000000002', u[2], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000001', u[8], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000001', u[10], 'aceptado'),
+        -- Fútbol COMPLETO 6/6 + 1 espera
         ('d1000001-0001-4001-8001-000000000002', u[4], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000002', u[1], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000002', u[5], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000002', u[9], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000002', u[3], 'aceptado'),
         ('d1000001-0001-4001-8001-000000000002', u[7], 'aceptado'),
-        -- Cine hoy 2/5
-        ('d1000001-0001-4001-8001-000000000003', u[3], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000003', u[8], 'aceptado'),
-        -- Vermut LLENO 4/4
-        ('d1000001-0001-4001-8001-000000000004', u[6], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000004', u[1], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000002', u[2], 'lista_espera'),
+        -- Pádel 3/4
+        ('d1000001-0001-4001-8001-000000000003', u[5], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000003', u[4], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000003', u[10], 'aceptado'),
+        -- Picnic 6/10
+        ('d1000001-0001-4001-8001-000000000004', u[2], 'aceptado'),
         ('d1000001-0001-4001-8001-000000000004', u[3], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000004', u[10], 'aceptado'),
-        -- Fútbol LLENO 6/6
-        ('d1000001-0001-4001-8001-000000000005', u[4], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000005', u[2], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000005', u[7], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000005', u[9], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000005', u[1], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000005', u[5], 'aceptado'),
-        -- Senderismo 5/12
-        ('d1000001-0001-4001-8001-000000000006', u[5], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000006', u[2], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000006', u[3], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000006', u[7], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000006', u[10], 'aceptado'),
-        -- Museo 3/8
-        ('d1000001-0001-4001-8001-000000000007', u[8], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000007', u[3], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000007', u[6], 'aceptado'),
-        -- Gaming 4/8
-        ('d1000001-0001-4001-8001-000000000008', u[9], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000008', u[4], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000008', u[2], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000008', u[7], 'aceptado'),
-        -- Comida 2/7
-        ('d1000001-0001-4001-8001-000000000009', u[10], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000009', u[1], 'aceptado'),
-        -- Basket 4/6
-        ('d1000001-0001-4001-8001-000000000010', u[7], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000010', u[2], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000010', u[4], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000010', u[9], 'aceptado'),
-        -- Teatro 2/6
-        ('d1000001-0001-4001-8001-000000000011', u[8], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000011', u[3], 'aceptado'),
-        -- Playa 3/10
-        ('d1000001-0001-4001-8001-000000000012', u[5], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000012', u[6], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000012', u[10], 'aceptado'),
-        -- Idiomas 4/10
-        ('d1000001-0001-4001-8001-000000000013', u[3], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000013', u[1], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000013', u[8], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000013', u[7], 'aceptado'),
-        -- Fiesta 6/15
-        ('d1000001-0001-4001-8001-000000000014', u[6], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000014', u[1], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000014', u[4], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000014', u[5], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000014', u[9], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000014', u[10], 'aceptado'),
-        -- Cena 2/5
-        ('d1000001-0001-4001-8001-000000000015', u[1], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000015', u[6], 'aceptado'),
-        -- Mirador 3/8
-        ('d1000001-0001-4001-8001-000000000016', u[10], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000016', u[5], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000016', u[3], 'aceptado'),
-        -- Estudio LLENO 3/3
-        ('d1000001-0001-4001-8001-000000000017', u[3], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000017', u[8], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000017', u[2], 'aceptado'),
-        -- Compras 2/6
-        ('d1000001-0001-4001-8001-000000000018', u[8], 'aceptado'),
-        ('d1000001-0001-4001-8001-000000000018', u[10], 'aceptado')
+        ('d1000001-0001-4001-8001-000000000004', u[6], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000004', u[7], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000004', u[8], 'aceptado'),
+        ('d1000001-0001-4001-8001-000000000004', u[9], 'aceptado')
     ON CONFLICT DO NOTHING;
 
-    -- ---------- Muchos mensajes en chats de plan ----------
-    FOR i IN 1..18 LOOP
-        pid := ('d1000001-0001-4001-8001-' || lpad(i::text, 12, '0'))::uuid;
-        FOR j IN 1..14 LOOP
-            INSERT INTO public.mensajes (plan_id, emisor_id, receptor_id, contenido, tipo, creado_en)
-            VALUES (
-                pid,
-                u[((i + j - 1) % 10) + 1],
-                NULL,
-                CASE (j % 8)
-                    WHEN 0 THEN '¿Confirmáis?'
-                    WHEN 1 THEN 'Yo voy seguro 🙌'
-                    WHEN 2 THEN '¿Alguien acerca coche?'
-                    WHEN 3 THEN 'Genial, nos vemos allí'
-                    WHEN 4 THEN 'Llevo snacks por si acaso'
-                    WHEN 5 THEN '¿Cambiamos la hora?'
-                    WHEN 6 THEN 'Perfecto, apuntadme'
-                    ELSE 'Última hora: todo ok'
-                END,
-                'texto',
-                now() - ((j * 41 + i) || ' minutes')::interval
-            );
-        END LOOP;
-    END LOOP;
+    -- ---------- Chats de plan (conversaciones naturales) ----------
+    -- Plan HOY
+    INSERT INTO public.mensajes (plan_id, emisor_id, receptor_id, contenido, tipo, creado_en) VALUES
+        ('d1000001-0001-4001-8001-000000000001', u[1], NULL, '¡Hecho el plan! Cañas esta noche en Malasaña 🍻', 'texto', now() - interval '5 hours'),
+        ('d1000001-0001-4001-8001-000000000001', u[2], NULL, 'Yo voy! ¿Quedamos en la plaza a esa hora?', 'texto', now() - interval '4 hours 50 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[1], NULL, 'Sí, San Ildefonso. Si hay cola nos vamos al de al lado.', 'texto', now() - interval '4 hours 40 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[6], NULL, 'Apuntadme. ¿Llevo patatas o algo?', 'texto', now() - interval '4 hours'),
+        ('d1000001-0001-4001-8001-000000000001', u[8], NULL, 'Yo también. Me viene genial después de currar.', 'texto', now() - interval '3 hours 20 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[10], NULL, 'Si queréis puedo reservar mesa por si se llena.', 'texto', now() - interval '2 hours 50 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[1], NULL, 'Antonio crack. Reserva para 6–8 por si se anima más gente.', 'texto', now() - interval '2 hours 40 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[2], NULL, 'Perfecto. Yo llego puntual, prometido 😄', 'texto', now() - interval '2 hours'),
+        ('d1000001-0001-4001-8001-000000000001', u[6], NULL, '¿Alguien viene en metro? Yo bajo en Tribunal.', 'texto', now() - interval '90 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[8], NULL, 'Yo también Tribunal. Quedamos abajo y vamos juntos?', 'texto', now() - interval '80 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[6], NULL, 'Dale!', 'texto', now() - interval '75 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[10], NULL, 'Mesa confirmada. Hasta luego!', 'texto', now() - interval '40 minutes'),
+        ('d1000001-0001-4001-8001-000000000001', u[1], NULL, 'Top. Os escribo cuando esté llegando.', 'texto', now() - interval '25 minutes');
 
-    -- Chats directos densos entre varios pares
+    -- Plan COMPLETO fútbol
+    INSERT INTO public.mensajes (plan_id, emisor_id, receptor_id, contenido, tipo, creado_en) VALUES
+        ('d1000001-0001-4001-8001-000000000002', u[4], NULL, 'Partido el jueves 19:00. Nivel medio, nada de agresividad.', 'texto', now() - interval '2 days'),
+        ('d1000001-0001-4001-8001-000000000002', u[1], NULL, 'Yo de defensa. Apuntadme.', 'texto', now() - interval '2 days' + interval '12 minutes'),
+        ('d1000001-0001-4001-8001-000000000002', u[5], NULL, 'Voy de portero si hace falta.', 'texto', now() - interval '47 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[9], NULL, 'Yo ataque. ¿Hay chalecos?', 'texto', now() - interval '46 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[4], NULL, 'Llevo chalecos y balón. Solo faltan botas.', 'texto', now() - interval '45 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[3], NULL, 'Me uno! Primera vez en Nexo y con ganas.', 'texto', now() - interval '30 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[7], NULL, 'Última plaza? Si cabe yo también.', 'texto', now() - interval '28 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[4], NULL, 'Completo! Lucía queda en lista de espera.', 'texto', now() - interval '20 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[2], NULL, 'Ok, avísame si alguien cae 🙏', 'texto', now() - interval '19 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[5], NULL, 'Quedamos 10 min antes en la puerta del poli.', 'texto', now() - interval '12 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[1], NULL, 'Hecho. ¿Alguien acerca coche?', 'texto', now() - interval '10 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[9], NULL, 'Yo puedo llevar a 2 desde Atocha.', 'texto', now() - interval '9 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[3], NULL, 'Yo me apunto al coche de Selena!', 'texto', now() - interval '8 hours'),
+        ('d1000001-0001-4001-8001-000000000002', u[4], NULL, 'Perfecto equipo. Nos vemos ahí ⚽', 'texto', now() - interval '3 hours');
+
+    -- Pádel
+    INSERT INTO public.mensajes (plan_id, emisor_id, receptor_id, contenido, tipo, creado_en) VALUES
+        ('d1000001-0001-4001-8001-000000000003', u[5], NULL, 'Pádel mañana 18:00. Queda 1 plaza.', 'texto', now() - interval '26 hours'),
+        ('d1000001-0001-4001-8001-000000000003', u[4], NULL, 'Yo estoy. Nivel medio ok?', 'texto', now() - interval '25 hours'),
+        ('d1000001-0001-4001-8001-000000000003', u[5], NULL, 'Sí, nada pro. Luego vermut.', 'texto', now() - interval '24 hours 50 minutes'),
+        ('d1000001-0001-4001-8001-000000000003', u[10], NULL, 'Me apunto. Llevo pelotas nuevas.', 'texto', now() - interval '20 hours'),
+        ('d1000001-0001-4001-8001-000000000003', u[5], NULL, 'Genial Antonio. Parejas: yo+Mario / Tomás+Antonio?', 'texto', now() - interval '18 hours'),
+        ('d1000001-0001-4001-8001-000000000003', u[4], NULL, 'Me vale.', 'texto', now() - interval '17 hours'),
+        ('d1000001-0001-4001-8001-000000000003', u[10], NULL, 'Perfecto. ¿Alquilamos raquetas o traéis?', 'texto', now() - interval '10 hours'),
+        ('d1000001-0001-4001-8001-000000000003', u[5], NULL, 'Yo llevo la mía. En recepción hay alquiler barato.', 'texto', now() - interval '9 hours'),
+        ('d1000001-0001-4001-8001-000000000003', u[4], NULL, 'Yo también llevo. Nos vemos en recepción 10 min antes.', 'texto', now() - interval '4 hours'),
+        ('d1000001-0001-4001-8001-000000000003', u[10], NULL, 'Dale. Después proponed sitio de vermut 😄', 'texto', now() - interval '2 hours');
+
+    -- Picnic
+    INSERT INTO public.mensajes (plan_id, emisor_id, receptor_id, contenido, tipo, creado_en) VALUES
+        ('d1000001-0001-4001-8001-000000000004', u[2], NULL, 'Picnic el domingo cerca del estanque. Traed manta si podéis!', 'texto', now() - interval '3 days'),
+        ('d1000001-0001-4001-8001-000000000004', u[3], NULL, 'Qué mono. Yo llevo frutas y zumos.', 'texto', now() - interval '3 days' + interval '20 minutes'),
+        ('d1000001-0001-4001-8001-000000000004', u[6], NULL, 'Yo croissants y café termos.', 'texto', now() - interval '2 days 12 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[7], NULL, 'Llevo una manta grande y altavoz bajito.', 'texto', now() - interval '2 days'),
+        ('d1000001-0001-4001-8001-000000000004', u[8], NULL, 'Yo quesos y pan. Qué ganas.', 'texto', now() - interval '40 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[9], NULL, 'Yo cámara + postre. Site: ¿lado del monumento?', 'texto', now() - interval '30 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[2], NULL, 'Sí, hierba a la derecha del estanque mirando al monumento.', 'texto', now() - interval '29 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[3], NULL, 'Si llueve movemos a un café cercano?', 'texto', now() - interval '20 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[2], NULL, 'Plan B: Café del Retiro. Pero la previsión es buena.', 'texto', now() - interval '19 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[6], NULL, 'Yo llego en bici. Os mando ubicación cuando esté.', 'texto', now() - interval '12 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[7], NULL, 'Playlist colaborativa? Paso link luego.', 'texto', now() - interval '8 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[8], NULL, 'Sííí. Nada de reggaeton a todo volumen please 😂', 'texto', now() - interval '7 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[9], NULL, 'Chill indie + bossa. Hecho.', 'texto', now() - interval '5 hours'),
+        ('d1000001-0001-4001-8001-000000000004', u[2], NULL, 'Equipo soñado. Nos vemos domingo ☀️', 'texto', now() - interval '90 minutes');
+
+    -- Chats directos entre algunos pares
     FOR i IN 1..10 LOOP
-        FOR j IN 1..8 LOOP
+        FOR j IN 1..5 LOOP
             INSERT INTO public.mensajes (plan_id, emisor_id, receptor_id, contenido, tipo, creado_en)
             VALUES (
-                NULL,
-                u[i],
-                u[(i % 10) + 1],
+                NULL, u[i], u[(i % 10) + 1],
                 CASE (j % 5)
                     WHEN 0 THEN 'Ey! ¿Vienes al plan de esta semana?'
-                    WHEN 1 THEN 'Sí, yo me apunto'
+                    WHEN 1 THEN 'Sí, me apunto seguro'
                     WHEN 2 THEN '¿Quedamos antes un café?'
-                    WHEN 3 THEN 'He guardado el de senderismo'
+                    WHEN 3 THEN 'He visto el picnic, tiene muy buena pinta'
                     ELSE 'Hablamos luego!'
                 END,
                 'texto',
-                now() - ((i * 10 + j) || ' hours')::interval
+                now() - ((i * 8 + j) || ' hours')::interval
             );
             INSERT INTO public.mensajes (plan_id, emisor_id, receptor_id, contenido, tipo, creado_en)
             VALUES (
-                NULL,
-                u[(i % 10) + 1],
-                u[i],
+                NULL, u[(i % 10) + 1], u[i],
                 CASE (j % 4)
                     WHEN 0 THEN 'Dale, me va bien'
                     WHEN 1 THEN 'Aviso si llego tarde'
@@ -543,50 +587,23 @@ BEGIN
                     ELSE 'Nos vemos!'
                 END,
                 'texto',
-                now() - ((i * 10 + j) || ' hours')::interval + interval '3 minutes'
+                now() - ((i * 8 + j) || ' hours')::interval + interval '4 minutes'
             );
         END LOOP;
     END LOOP;
 
-    -- Planes guardados (muchos)
-    FOR i IN 1..10 LOOP
-        FOR j IN 1..18 LOOP
-            IF ((i + j) % 3) <> 0 THEN
-                CONTINUE;
-            END IF;
-            pid := ('d1000001-0001-4001-8001-' || lpad(j::text, 12, '0'))::uuid;
-            INSERT INTO public.planes_guardados (usuario_id, plan_id)
-            VALUES (u[i], pid)
-            ON CONFLICT DO NOTHING;
-        END LOOP;
-    END LOOP;
-
-    -- Valoración pendiente para Lucía (plan terminado hace ~4h, ventana abierta)
-    pid := 'c1000000-0000-4000-8000-000000000099'::uuid;
-    INSERT INTO public.planes (
-        id, titulo, descripcion, categoria, tipo_deporte, creador_id,
-        fecha_evento, maximo_participantes, imagen_url,
-        nombre_ubicacion, latitud, longitud,
-        requiere_aprobacion, solo_chicas, solo_amigos, modo_privado
-    ) VALUES (
-        pid,
-        'Cañas después del trabajo',
-        'Plan reciente — pendiente de valorar.',
-        'FOODIES', 'tapas', u[2],
-        now() - interval '4 hours',
-        4, 'nexo_cover:FOODIES:tapas:0',
-        'Bar Demo', 40.42, -3.70,
-        false, false, false, false
-    ) ON CONFLICT (id) DO UPDATE SET fecha_evento = EXCLUDED.fecha_evento;
-
-    INSERT INTO public.participantes (plan_id, usuario_id, estado) VALUES
-        (pid, u[1], 'aceptado'),
-        (pid, u[2], 'aceptado'),
-        (pid, u[6], 'aceptado')
+    -- Guardados
+    INSERT INTO public.planes_guardados (usuario_id, plan_id) VALUES
+        (u[3], 'd1000001-0001-4001-8001-000000000001'),
+        (u[7], 'd1000001-0001-4001-8001-000000000001'),
+        (u[2], 'd1000001-0001-4001-8001-000000000002'),
+        (u[6], 'd1000001-0001-4001-8001-000000000003'),
+        (u[1], 'd1000001-0001-4001-8001-000000000004'),
+        (u[4], 'd1000001-0001-4001-8001-000000000004'),
+        (u[10], 'd1000001-0001-4001-8001-000000000004')
     ON CONFLICT DO NOTHING;
-    -- Sin historial_planes ni valoraciones de Lucía → sale como pendiente abierta
 
-    -- Stats por usuario
+    -- Stats
     FOR i IN 1..10 LOOP
         INSERT INTO public.estadisticas_usuario (usuario_id) VALUES (u[i])
         ON CONFLICT (usuario_id) DO NOTHING;
@@ -594,42 +611,44 @@ BEGIN
         BEGIN
             PERFORM public.recalcular_estadisticas_valoraciones(u[i]);
             PERFORM public.recalcular_numero_amistades(u[i]);
+            PERFORM public.recalcular_personas_distintas(u[i]);
         EXCEPTION WHEN undefined_function THEN
             NULL;
         END;
 
         UPDATE public.estadisticas_usuario SET
             valoracion_media = ratings[i],
-            numero_valoraciones = CASE WHEN i = 5 THEN 1 ELSE 12 + i END,
-            numero_evaluadores_distintos = 8,
-            porcentaje_repetiria = LEAST(100, 70 + i * 3),
-            porcentaje_asistencia = 100,
-            -- Insignias desbloqueadas (umbrales bronce = 5; Sin límites = 5 categorías)
-            numero_planes_realizados = 12 + i,
-            numero_amistades = CASE WHEN i = 1 THEN 4 ELSE 9 END,
-            planes_tapas = 8 + (i % 5),          -- Foodie bronce/plata
-            planes_deporte = 7 + ((i + 1) % 6),  -- MVP
-            planes_fiesta = 6 + (i % 4),         -- Mr/Mrs Aura
-            planes_estudio = 5 + ((i + 2) % 5),  -- Genio
-            planes_solo_chicas = CASE WHEN generos[i] = 'femenino' THEN 5 + (i % 3) ELSE 0 END,
-            categorias_probadas = 6,             -- Sin límites (elite)
-            planes_creados = 6 + (i % 5),
-            personas_distintas = 15 + i,
-            aspecto_positivo_mas_votado = 'agradable',
-            votos_aspecto_positivo = 4,
+            numero_valoraciones = 8 + i,
+            numero_evaluadores_distintos = 7,
+            porcentaje_repetiria = pct_rep[i],
+            porcentaje_asistencia = 96 + (i % 4),
+            numero_planes_realizados = planes_hechos[i],
+            numero_amistades = 9,
+            planes_tapas = 6 + (i % 6),
+            planes_deporte = 5 + ((i + 1) % 7),
+            planes_fiesta = 4 + (i % 5),
+            planes_estudio = 3 + ((i + 2) % 4),
+            planes_solo_chicas = CASE WHEN generos[i] = 'femenino' THEN 4 + (i % 3) ELSE 0 END,
+            categorias_probadas = 5,
+            planes_creados = 3 + (i % 4),
+            personas_distintas = 12 + i,
+            aspecto_positivo_mas_votado = aspecto_pos[i],
+            votos_aspecto_positivo = 5 + (i % 4),
+            aspecto_negativo_mas_votado = aspecto_neg[i],
+            votos_aspecto_negativo = CASE WHEN aspecto_neg[i] IS NULL THEN 0 ELSE 1 + (i % 2) END,
             actualizado_en = now()
         WHERE usuario_id = u[i];
     END LOOP;
 
-    -- Lucía / Laura: más “top” (Foodie/MVP plata)
+    -- Lucía y Antonio un poco más “top”
     UPDATE public.estadisticas_usuario SET
-        planes_tapas = 22,
-        planes_deporte = 21,
-        planes_fiesta = 20,
-        planes_estudio = 8,
-        planes_creados = 12,
-        categorias_probadas = 6
-    WHERE usuario_id IN (u[1], u[10]);
+        planes_tapas = 18,
+        planes_deporte = 14,
+        planes_fiesta = 12,
+        planes_creados = 8,
+        categorias_probadas = 6,
+        numero_planes_realizados = 22
+    WHERE usuario_id IN (u[2], u[10]);
 
-    RAISE NOTICE 'Seed demo ampliado listo: 10 cuentas @nexo.test / Demo1234!';
+    RAISE NOTICE 'Seed listo: 10 perfiles + 4 planes feed. Pass: Demo1234! Hoy=%', v_hoy;
 END $$;

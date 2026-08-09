@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Alert } from '../lib/nexoAlert';
 import { useT } from '../lib/i18n';
+import { isStrongPassword } from '../lib/passwordRules';
 import { setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { supabase } from '../lib/supabase';
 
@@ -104,7 +105,7 @@ export default function ResetPasswordScreen() {
         };
     }, [router, t]);
 
-    const validatePassword = (pass: string) => /\d/.test(pass) && pass.length >= 6;
+    const validatePassword = (pass: string) => isStrongPassword(pass);
 
     const handleSave = async () => {
         if (!validatePassword(password)) {

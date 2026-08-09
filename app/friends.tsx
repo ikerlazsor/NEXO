@@ -7,10 +7,9 @@ import { useFocusEffect,
 import { useCallback,
     useRef,
     useState } from 'react';
+import { FlashList } from '@shopify/flash-list';
 import {
     ActivityIndicator,
-    FlatList,
-    Image,
     RefreshControl,
     ScrollView,
     StyleSheet,
@@ -20,20 +19,28 @@ import {
 } from 'react-native';
 import { Alert } from '../lib/nexoAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import {
     acceptFriendRequest,
     cancelFriendRequest,
-    getAvatarUri,
     getFriends,
     getIncomingRequests,
     getOutgoingRequests,
     rejectFriendRequest,
     removeFriend,
+    sendFriendRequest,
     type FriendProfile,
     type FriendRequest,
 } from '../lib/friends';
+import {
+    dismissFriendSuggestion,
+    getFriendSuggestions,
+    type FriendSuggestion,
+} from '../lib/friendSuggestions';
+import { ensureDirectConversation } from '../lib/directChat';
+import { hapticError, hapticLight, hapticSelection, hapticSuccess } from '../lib/haptics';
 import { useT } from '../lib/i18n';
-import { OPTIMIZED_LIST_PROPS } from '../lib/listConfig';
+import { FLASH_LIST_DRAW_DISTANCE } from '../lib/listConfig';
 import { ScreenKeys } from '../lib/screenState';
 import { useListScrollRestore } from '../hooks/useListScrollRestore';
 import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
@@ -44,8 +51,8 @@ import {
     type PlanInvite,
 } from '../lib/planInvites';
 import { getAuthUser } from '../lib/auth';
-import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
-import { cacheGetStale, cacheSet } from '../lib/ttlCache';
+import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
+import { cacheGetStale, cacheInvalidate, cacheIsFresh, cacheSet } from '../lib/ttlCache';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -72,10 +79,18 @@ export default function FriendsScreen() {
     const [incoming, setIncoming] = useState<FriendRequest[]>([]);
     const [outgoing, setOutgoing] = useState<FriendRequest[]>([]);
     const [planInvites, setPlanInvites] = useState<PlanInvite[]>([]);
-    const [actionId, setActionId] = useState<string | null>(null);
+    const [suggestions, setSuggestions] = useState<FriendSuggestion[]>([]);
+    const [suggestBusyId, setSuggestBusyId] = useState<string | null>(null);
+    const [suggestSentIds, setSuggestSentIds] = useState<Set<string>>(new Set());
+    /** Solo para aceptar invitación a plan (hay que validar cupo/límite antes de cambiar UI). */
+    const [inviteAcceptId, setInviteAcceptId] = useState<string | null>(null);
     const hasLoadedRef = useRef(false);
+    const userIdRef = useRef<string | null>(null);
+    const loadGenRef = useRef(0);
+    const refreshingRef = useRef(false);
 
-    const loadData = useCallback(async () => {
+    const loadData = useCallback(async (opts?: { force?: boolean }) => {
+        const gen = ++loadGenRef.current;
         try {
             const user = await getAuthUser();
             if (!user) {
@@ -83,12 +98,13 @@ export default function FriendsScreen() {
                 return;
             }
 
+            const cacheKey = screenCacheKey.friends(user.id);
             const cached = cacheGetStale<{
                 friends: (FriendProfile & { friendshipId: string })[];
                 incoming: FriendRequest[];
                 outgoing: FriendRequest[];
                 planInvites: PlanInvite[];
-            }>(screenCacheKey.friends(user.id));
+            }>(cacheKey);
             if (cached && !hasLoadedRef.current) {
                 setFriends(cached.friends);
                 setIncoming(cached.incoming);
@@ -96,108 +112,184 @@ export default function FriendsScreen() {
                 setPlanInvites(cached.planInvites);
                 hasLoadedRef.current = true;
                 setLoading(false);
-            } else if (!refreshing && !hasLoadedRef.current) {
+            } else if (!refreshingRef.current && !hasLoadedRef.current) {
                 setLoading(true);
             }
 
-            const [friendsData, incomingData, outgoingData, invitesData] = await Promise.all([
+            userIdRef.current = user.id;
+
+            const cachedLooksPopulated =
+                (cached?.friends?.length ?? 0) > 0
+                || (cached?.incoming?.length ?? 0) > 0
+                || (cached?.outgoing?.length ?? 0) > 0
+                || (cached?.planInvites?.length ?? 0) > 0;
+
+            // Caché vacía “fresca” no debe saltarse la red (semilla antigua / sin amigos aún).
+            if (
+                !opts?.force
+                && cacheIsFresh(cacheKey)
+                && hasLoadedRef.current
+                && cachedLooksPopulated
+            ) {
+                setLoading(false);
+                setRefreshing(false);
+                refreshingRef.current = false;
+                void getFriendSuggestions(user.id, 10)
+                    .then((rows) => {
+                        if (gen === loadGenRef.current) setSuggestions(rows);
+                    })
+                    .catch(() => {});
+                return;
+            }
+
+            // Si la caché estaba vacía, fuerza red siempre al enfocar.
+            const [friendsData, incomingData, outgoingData, invitesData, suggestData] = await Promise.all([
                 getFriends(user.id),
                 getIncomingRequests(user.id),
                 getOutgoingRequests(user.id),
                 getIncomingPlanInvites(user.id).catch(() => [] as PlanInvite[]),
+                getFriendSuggestions(user.id, 10).catch(() => [] as FriendSuggestion[]),
             ]);
+            if (gen !== loadGenRef.current) return;
 
             setFriends(friendsData);
             setIncoming(incomingData);
             setOutgoing(outgoingData);
             setPlanInvites(invitesData);
-            cacheSet(screenCacheKey.friends(user.id), {
+            setSuggestions(suggestData);
+            cacheSet(cacheKey, {
                 friends: friendsData,
                 incoming: incomingData,
                 outgoing: outgoingData,
                 planInvites: invitesData,
             }, ScreenCacheTTL.friends);
         } catch {
-            Alert.alert(t('profile.error'), t('friends.loadError'));
+            if (gen === loadGenRef.current) {
+                Alert.alert(t('profile.error'), t('friends.loadError'));
+            }
         } finally {
-            hasLoadedRef.current = true;
-            setLoading(false);
-            setRefreshing(false);
+            if (gen === loadGenRef.current) {
+                hasLoadedRef.current = true;
+                setLoading(false);
+                setRefreshing(false);
+                refreshingRef.current = false;
+            }
         }
-    }, [router, t, refreshing]);
+    }, [router, t]);
 
     useFocusEffect(
         useCallback(() => {
             if (tab === 'requests') setActiveTab('requests');
             else if (tab === 'friends') setActiveTab('friends');
-            loadData();
+            void loadData();
         }, [loadData, tab])
     );
 
     const onRefresh = () => {
+        refreshingRef.current = true;
         setRefreshing(true);
-        loadData();
+        void loadData({ force: true });
     };
 
-    const handleAccept = async (requestId: string) => {
-        setActionId(requestId);
-        const { error } = await acceptFriendRequest(requestId);
-        setActionId(null);
-        if (error) {
-            Alert.alert(t('profile.error'), error.message);
-            return;
-        }
-        await loadData();
+    const invalidatePeerProfile = (peerId: string | undefined) => {
+        if (!peerId) return;
+        cacheInvalidate(`userProfile:${peerId}`);
     };
 
-    const handleReject = async (requestId: string) => {
-        setActionId(requestId);
-        const { error } = await rejectFriendRequest(requestId);
-        setActionId(null);
-        if (error) {
-            Alert.alert(t('profile.error'), error.message);
-            return;
+    const handleAccept = (requestId: string) => {
+        hapticSuccess();
+        const removed = incoming.find((r) => r.id === requestId);
+        setIncoming((prev) => prev.filter((r) => r.id !== requestId));
+        if (removed) {
+            setFriends((prev) =>
+                prev.some((f) => f.id === removed.perfil.id)
+                    ? prev
+                    : [...prev, { ...removed.perfil, friendshipId: requestId }],
+            );
+            invalidatePeerProfile(removed.perfil.id);
         }
-        await loadData();
+        void acceptFriendRequest(requestId).then(({ error }) => {
+            if (error) {
+                if (removed) {
+                    setIncoming((prev) => [removed, ...prev]);
+                    setFriends((prev) => prev.filter((f) => f.friendshipId !== requestId));
+                }
+                hapticError();
+                Alert.alert(t('profile.error'), error.message);
+            }
+        });
     };
 
-    const handleCancel = async (requestId: string) => {
-        setActionId(requestId);
-        const { error } = await cancelFriendRequest(requestId);
-        setActionId(null);
-        if (error) {
-            Alert.alert(t('profile.error'), error.message);
-            return;
-        }
-        await loadData();
+    const handleReject = (requestId: string) => {
+        hapticLight();
+        const removed = incoming.find((r) => r.id === requestId);
+        setIncoming((prev) => prev.filter((r) => r.id !== requestId));
+        invalidatePeerProfile(removed?.perfil.id);
+        void rejectFriendRequest(requestId).then(({ error }) => {
+            if (error) {
+                if (removed) setIncoming((prev) => [removed, ...prev]);
+                hapticError();
+                Alert.alert(t('profile.error'), error.message);
+            }
+        });
+    };
+
+    const handleCancel = (requestId: string) => {
+        hapticLight();
+        const removed = outgoing.find((r) => r.id === requestId);
+        setOutgoing((prev) => prev.filter((r) => r.id !== requestId));
+        invalidatePeerProfile(removed?.perfil.id);
+        void cancelFriendRequest(requestId).then(({ error }) => {
+            if (error) {
+                if (removed) setOutgoing((prev) => [removed, ...prev]);
+                hapticError();
+                Alert.alert(t('profile.error'), error.message);
+            }
+        });
     };
 
     const handleAcceptPlanInvite = async (invite: PlanInvite) => {
-        setActionId('pinv_' + invite.id);
+        // Validar cupo/límite antes de quitar la invitación de la UI.
+        setInviteAcceptId(invite.id);
         try {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
-            const { error, chatId } = await acceptPlanInvite(invite, user.id);
+            const { error, chatId, max } = await acceptPlanInvite(invite, user.id);
             if (error === 'full') {
+                hapticError();
                 Alert.alert(t('profile.error'), t('friends.inviteFull'));
                 return;
             }
+            if (error === 'limit') {
+                hapticError();
+                Alert.alert(t('profile.error'), t('feed.planLimitReached', { max: max ?? 3 }));
+                return;
+            }
             if (error) {
+                hapticError();
                 Alert.alert(t('profile.error'), error);
                 return;
             }
-            await loadData();
+            hapticSuccess();
+            setPlanInvites((prev) => prev.filter((i) => i.id !== invite.id));
+            invalidatePlanMembershipCaches(user.id);
             if (chatId) router.push(`/chat/${chatId}`);
         } finally {
-            setActionId(null);
+            setInviteAcceptId(null);
         }
     };
 
-    const handleRejectPlanInvite = async (inviteId: string) => {
-        setActionId('pinv_' + inviteId);
-        await rejectPlanInvite(inviteId);
-        setActionId(null);
-        await loadData();
+    const handleRejectPlanInvite = (inviteId: string) => {
+        hapticLight();
+        const removed = planInvites.find((i) => i.id === inviteId);
+        setPlanInvites((prev) => prev.filter((i) => i.id !== inviteId));
+        void rejectPlanInvite(inviteId).then(({ error }) => {
+            if (error) {
+                if (removed) setPlanInvites((prev) => [removed, ...prev]);
+                hapticError();
+                Alert.alert(t('profile.error'), error);
+            }
+        });
     };
 
     const handleRemoveFriend = (friend: FriendProfile & { friendshipId: string }) => {
@@ -209,15 +301,15 @@ export default function FriendsScreen() {
                 {
                     text: t('friends.removeBtn'),
                     style: 'destructive',
-                    onPress: async () => {
-                        setActionId(friend.friendshipId);
-                        const { error } = await removeFriend(friend.friendshipId);
-                        setActionId(null);
-                        if (error) {
-                            Alert.alert(t('profile.error'), error.message);
-                            return;
-                        }
-                        await loadData();
+                    onPress: () => {
+                        setFriends((prev) => prev.filter((f) => f.friendshipId !== friend.friendshipId));
+                        invalidatePeerProfile(friend.id);
+                        void removeFriend(friend.friendshipId).then(({ error }) => {
+                            if (error) {
+                                setFriends((prev) => [friend, ...prev]);
+                                Alert.alert(t('profile.error'), error.message);
+                            }
+                        });
                     },
                 },
             ]
@@ -226,14 +318,18 @@ export default function FriendsScreen() {
 
     const handleOpenChat = (friendId: string) => {
         // Los chats 1:1 ya no crean "planes falsos": van directos a mensajes con receptor_id.
+        const uid = userIdRef.current;
+        if (uid) {
+            void ensureDirectConversation(uid, friendId).then(() => {
+                cacheInvalidate(screenCacheKey.chatsList(uid));
+            });
+        }
         router.push(`/direct-chat/${friendId}`);
     };
 
     const pendingCount = incoming.length + planInvites.length;
 
     const renderFriend = ({ item, index }: { item: FriendProfile & { friendshipId: string }; index: number }) => {
-        const busy = actionId === item.friendshipId;
-        const isChatting = actionId === 'chat_' + item.id;
         const accentPair =
             index % 3 === 0
                 ? (['#2563EB', '#7C3AED'] as const)
@@ -258,8 +354,12 @@ export default function FriendsScreen() {
                             activeOpacity={0.9}
                         >
                             <View style={styles.avatarRingWrap}>
-                                <Image source={{ uri: getAvatarUri(item) }} style={styles.avatarPremium} />
-                                <View style={styles.avatarRingBorder} />
+                                <ProfileAvatar
+                                    uri={item.avatar_url}
+                                    name={item.nombre}
+                                    size={54}
+                                    recyclingKey={item.id}
+                                />
                             </View>
                             <View style={styles.premiumHeaderText}>
                                 <Text style={styles.premiumNameLight} numberOfLines={1}>
@@ -274,46 +374,29 @@ export default function FriendsScreen() {
                     </LinearGradient>
 
                     <View style={styles.premiumBody}>
-                        <View style={styles.friendStatusRow}>
-                            <Ionicons name="heart" size={14} color={PRIMARY_DARK} />
-                            <Text style={styles.friendStatusText}>{t('friends.tabFriends')}</Text>
-                        </View>
-
                         <View style={styles.premiumActions}>
                             <TouchableOpacity
                                 style={styles.premiumChatWrap}
                                 onPress={() => handleOpenChat(item.id)}
-                                disabled={isChatting || busy}
                                 activeOpacity={0.88}
                             >
                                 <LinearGradient
                                     colors={[accentPair[0], accentPair[1]]}
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 0 }}
-                                    style={[styles.premiumChatBtn, (isChatting || busy) && styles.btnDisabled]}
+                                    style={styles.premiumChatBtn}
                                 >
-                                    {isChatting ? (
-                                        <ActivityIndicator color="#FFF" size="small" />
-                                    ) : (
-                                        <>
-                                            <Ionicons name="chatbubble-ellipses" size={18} color="#FFF" />
-                                            <Text style={styles.premiumChatText}>{t('friends.message')}</Text>
-                                        </>
-                                    )}
+                                    <Ionicons name="chatbubble-ellipses" size={18} color="#FFF" />
+                                    <Text style={styles.premiumChatText}>{t('friends.message')}</Text>
                                 </LinearGradient>
                             </TouchableOpacity>
 
                             <TouchableOpacity
-                                style={[styles.premiumRemoveBtn, busy && styles.btnDisabled]}
+                                style={styles.premiumRemoveBtn}
                                 onPress={() => handleRemoveFriend(item)}
-                                disabled={busy || isChatting}
                                 activeOpacity={0.85}
                             >
-                                {busy ? (
-                                    <ActivityIndicator color={DANGER} size="small" />
-                                ) : (
-                                    <Ionicons name="person-remove-outline" size={20} color={DANGER} />
-                                )}
+                                <Ionicons name="heart-dislike-outline" size={20} color={DANGER} />
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -323,7 +406,6 @@ export default function FriendsScreen() {
     };
 
     const renderIncoming = (item: FriendRequest) => {
-        const busy = actionId === item.id;
         return (
             <View key={item.id} style={styles.card}>
                 <TouchableOpacity
@@ -331,7 +413,12 @@ export default function FriendsScreen() {
                     onPress={() => router.push({ pathname: '/user-profile/[id]', params: { id: item.perfil.id } })}
                     activeOpacity={0.85}
                 >
-                    <Image source={{ uri: getAvatarUri(item.perfil) }} style={styles.avatarLg} />
+                    <ProfileAvatar
+                        uri={item.perfil.avatar_url}
+                        name={item.perfil.nombre}
+                        size={54}
+                        recyclingKey={item.perfil.id}
+                    />
                     <View style={styles.rowText}>
                         <Text style={styles.name} numberOfLines={1}>{item.perfil.nombre}</Text>
                         <View style={styles.hintPill}>
@@ -342,24 +429,16 @@ export default function FriendsScreen() {
                 </TouchableOpacity>
                 <View style={styles.rowActions}>
                     <TouchableOpacity
-                        style={[styles.actionBtn, styles.actionSuccess, busy && styles.btnDisabled]}
+                        style={[styles.actionBtn, styles.actionSuccess]}
                         onPress={() => handleAccept(item.id)}
-                        disabled={busy}
                         activeOpacity={0.85}
                     >
-                        {busy ? (
-                            <ActivityIndicator color="#FFF" size="small" />
-                        ) : (
-                            <>
-                                <Ionicons name="checkmark" size={18} color="#FFF" />
-                                <Text style={styles.actionSuccessText}>{t('friends.accept')}</Text>
-                            </>
-                        )}
+                        <Ionicons name="checkmark" size={18} color="#FFF" />
+                        <Text style={styles.actionSuccessText}>{t('friends.accept')}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[styles.iconCircle, styles.iconMuted, busy && styles.btnDisabled]}
+                        style={[styles.iconCircle, styles.iconMuted]}
                         onPress={() => handleReject(item.id)}
-                        disabled={busy}
                     >
                         <Ionicons name="close" size={22} color="#64748B" />
                     </TouchableOpacity>
@@ -369,45 +448,62 @@ export default function FriendsScreen() {
     };
 
     const renderOutgoing = (item: FriendRequest) => {
-        const busy = actionId === item.id;
         return (
             <View key={item.id} style={styles.outgoingRow}>
-                <Image source={{ uri: getAvatarUri(item.perfil) }} style={styles.avatarSm} />
-                <View style={styles.rowText}>
-                    <Text style={styles.name} numberOfLines={1}>{item.perfil.nombre}</Text>
-                    <Text style={styles.outgoingHint}>{t('friends.sent')}</Text>
-                </View>
                 <TouchableOpacity
-                    style={[styles.cancelChip, busy && styles.btnDisabled]}
-                    onPress={() => handleCancel(item.id)}
-                    disabled={busy}
+                    style={styles.outgoingProfileTap}
+                    onPress={() => router.push(`/user-profile/${item.perfil.id}`)}
+                    activeOpacity={0.85}
                 >
-                    {busy ? (
-                        <ActivityIndicator color="#64748B" size="small" />
-                    ) : (
-                        <Text style={styles.cancelChipText}>{t('friends.cancel')}</Text>
-                    )}
+                    <ProfileAvatar
+                        uri={item.perfil.avatar_url}
+                        name={item.perfil.nombre}
+                        size={42}
+                        recyclingKey={item.perfil.id}
+                    />
+                    <View style={styles.rowText}>
+                        <Text style={styles.name} numberOfLines={1}>{item.perfil.nombre}</Text>
+                        <Text style={styles.outgoingHint}>{t('friends.sent')}</Text>
+                    </View>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={styles.cancelChip}
+                    onPress={() => handleCancel(item.id)}
+                >
+                    <Text style={styles.cancelChipText}>{t('friends.cancel')}</Text>
                 </TouchableOpacity>
             </View>
         );
     };
 
     const renderPlanInvite = (invite: PlanInvite) => {
-        const busy = actionId === 'pinv_' + invite.id;
+        const busy = inviteAcceptId === invite.id;
         const title = invite.plan?.titulo || '—';
         const inviterName = invite.invitador?.nombre || t('chats.user');
         const isGroup = invite.tipo === 'grupo';
 
+        const openPlanInvite = () => {
+            router.push({
+                pathname: '/plan/[id]',
+                params: {
+                    id: invite.plan_id,
+                    inviteId: invite.id,
+                    inviterId: invite.invitador_id,
+                    inviterName,
+                    inviterAvatar: invite.invitador?.avatar_url ?? '',
+                    inviteTipo: invite.tipo,
+                },
+            });
+        };
+
         return (
             <View key={invite.id} style={styles.inviteCard}>
-                <View style={styles.inviteTop}>
-                    <Image
-                        source={{
-                            uri: getAvatarUri(
-                                invite.invitador ?? { avatar_url: null, nombre: inviterName }
-                            ),
-                        }}
-                        style={styles.avatarMd}
+                <TouchableOpacity style={styles.inviteTop} onPress={openPlanInvite} activeOpacity={0.85}>
+                    <ProfileAvatar
+                        uri={invite.invitador?.avatar_url}
+                        name={inviterName}
+                        size={48}
+                        recyclingKey={invite.invitador_id || invite.id}
                     />
                     <View style={styles.inviteBody}>
                         <View style={styles.inviteTypeRow}>
@@ -425,7 +521,8 @@ export default function FriendsScreen() {
                         <Text style={styles.inviteTitle} numberOfLines={2}>{title}</Text>
                         <Text style={styles.inviteFrom}>{t('friends.inviteFrom', { name: inviterName })}</Text>
                     </View>
-                </View>
+                    <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+                </TouchableOpacity>
                 <View style={styles.inviteActions}>
                     <TouchableOpacity
                         style={[styles.actionBtn, styles.actionSuccess, busy && styles.btnDisabled]}
@@ -454,6 +551,98 @@ export default function FriendsScreen() {
         );
     };
 
+    const handleSuggestAdd = (person: FriendSuggestion) => {
+        const uid = userIdRef.current;
+        if (!uid || suggestSentIds.has(person.id)) return;
+        setSuggestBusyId(person.id);
+        void sendFriendRequest(uid, person.id).then(({ error }) => {
+            setSuggestBusyId(null);
+            if (error) {
+                hapticError();
+                Alert.alert(t('profile.error'), error);
+                return;
+            }
+            hapticSuccess();
+            setSuggestSentIds((prev) => new Set(prev).add(person.id));
+            setSuggestions((prev) => prev.filter((s) => s.id !== person.id));
+            cacheInvalidate(`friendSuggestions:${uid}`);
+        });
+    };
+
+    const handleSuggestDismiss = (person: FriendSuggestion) => {
+        const uid = userIdRef.current;
+        if (!uid) return;
+        hapticLight();
+        setSuggestions((prev) => prev.filter((s) => s.id !== person.id));
+        void dismissFriendSuggestion(uid, person.id);
+    };
+
+    const suggestionsHeader =
+        suggestions.length === 0 ? null : (
+            <View style={styles.suggestBlock}>
+                <Text style={styles.suggestTitle}>{t('friends.suggested')}</Text>
+                <Text style={styles.suggestSub}>{t('friends.suggestedSub')}</Text>
+                {suggestions.map((person, index) => {
+                    const sent = suggestSentIds.has(person.id);
+                    const busy = suggestBusyId === person.id;
+                    return (
+                        <View
+                            key={person.id}
+                            style={[styles.suggestRow, index === 0 && { borderTopWidth: 0 }]}
+                        >
+                            <TouchableOpacity
+                                style={styles.suggestProfile}
+                                activeOpacity={0.85}
+                                onPress={() =>
+                                    router.push({ pathname: '/user-profile/[id]', params: { id: person.id } })
+                                }
+                            >
+                                <ProfileAvatar
+                                    uri={person.avatar_url}
+                                    name={person.nombre}
+                                    size={48}
+                                    recyclingKey={person.id}
+                                />
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.name} numberOfLines={1}>
+                                        {person.nombre}
+                                    </Text>
+                                    <Text style={styles.suggestHint} numberOfLines={1}>
+                                        {person.nombre_usuario
+                                            ? `@${person.nombre_usuario}`
+                                            : t('friends.suggestedReason')}
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.suggestDismissBtn}
+                                onPress={() => handleSuggestDismiss(person)}
+                                hitSlop={8}
+                                accessibilityLabel={t('friends.dismissSuggested')}
+                                activeOpacity={0.75}
+                            >
+                                <Ionicons name="close" size={18} color="#94A3B8" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.suggestAddBtn, sent && styles.suggestAddBtnSent]}
+                                onPress={() => handleSuggestAdd(person)}
+                                disabled={sent || busy}
+                                activeOpacity={0.85}
+                            >
+                                {busy ? (
+                                    <ActivityIndicator size="small" color="#FFF" />
+                                ) : (
+                                    <Text style={styles.suggestAddText}>
+                                        {sent ? t('friends.sent') : t('friends.addSuggested')}
+                                    </Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    );
+                })}
+            </View>
+        );
+
     const EmptyFriends = () => (
         <View style={styles.emptyWrap}>
             <LinearGradient colors={['#EFF6FF', '#FFF']} style={styles.emptyIcon}>
@@ -461,6 +650,7 @@ export default function FriendsScreen() {
             </LinearGradient>
             <Text style={styles.emptyTitle}>{t('friends.noFriends')}</Text>
             <Text style={styles.emptySub}>{t('friends.noFriendsSub')}</Text>
+            {suggestionsHeader}
         </View>
     );
 
@@ -526,7 +716,10 @@ export default function FriendsScreen() {
             <View style={styles.tabWrap}>
                 <TouchableOpacity
                     style={[styles.tab, activeTab === 'friends' && styles.tabActive]}
-                    onPress={() => setActiveTab('friends')}
+                    onPress={() => {
+                        hapticSelection();
+                        setActiveTab('friends');
+                    }}
                     activeOpacity={0.85}
                 >
                     <Ionicons
@@ -540,7 +733,10 @@ export default function FriendsScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                     style={[styles.tab, activeTab === 'requests' && styles.tabActive]}
-                    onPress={() => setActiveTab('requests')}
+                    onPress={() => {
+                        hapticSelection();
+                        setActiveTab('requests');
+                    }}
                     activeOpacity={0.85}
                 >
                     <Ionicons
@@ -568,18 +764,20 @@ export default function FriendsScreen() {
                     <ActivityIndicator size="large" color={PRIMARY_DARK} />
                 </View>
             ) : activeTab === 'friends' ? (
-                <FlatList
+                <FlashList
                     ref={listRef}
+                    style={{ flex: 1 }}
                     data={friends}
                     keyExtractor={(item) => item.friendshipId}
                     renderItem={renderFriend}
                     contentContainerStyle={styles.listFriends}
                     onScroll={onScroll}
                     scrollEventThrottle={scrollEventThrottle}
-                    {...OPTIMIZED_LIST_PROPS}
+                    drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />
                     }
+                    ListHeaderComponent={friends.length > 0 ? suggestionsHeader : null}
                     ListEmptyComponent={<EmptyFriends />}
                     showsVerticalScrollIndicator={false}
                 />
@@ -637,7 +835,6 @@ export default function FriendsScreen() {
                             count={outgoing.length}
                             accent="#94A3B8"
                         />
-                        <View style={styles.outgoingTitleGap} />
                         {outgoing.length === 0 ? (
                             <View style={styles.sectionEmpty}>
                                 <Ionicons name="paper-plane-outline" size={26} color="#CBD5E1" />
@@ -676,7 +873,7 @@ const styles = StyleSheet.create({
     topTitle: { fontSize: 18, fontWeight: '900', color: INK, letterSpacing: -0.3 },
     headerSpacer: { height: 20 },
     tabsSpacer: { height: 22 },
-    contentSpacer: { height: 18 },
+    contentSpacer: { height: 8 },
     statsStrip: {
         flexDirection: 'row',
         marginHorizontal: 20,
@@ -740,7 +937,7 @@ const styles = StyleSheet.create({
     },
     tabBadgeText: { color: '#FFF', fontSize: 10, fontWeight: '900' },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    listFriends: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 36 },
+    listFriends: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 36 },
     listRequests: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 36 },
     premiumCardOuter: {
         marginBottom: 18,
@@ -771,21 +968,18 @@ const styles = StyleSheet.create({
         width: 58,
         height: 58,
         borderRadius: 29,
-        position: 'relative',
+        overflow: 'hidden',
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        borderWidth: 2,
+        borderColor: 'rgba(255,255,255,0.9)',
     },
     avatarPremium: {
-        width: 58,
-        height: 58,
-        borderRadius: 29,
+        width: 54,
+        height: 54,
+        borderRadius: 27,
         backgroundColor: '#E3ECFB',
-        borderWidth: 3,
-        borderColor: 'rgba(255,255,255,0.95)',
-    },
-    avatarRingBorder: {
-        ...StyleSheet.absoluteFillObject,
-        borderRadius: 29,
-        borderWidth: 2,
-        borderColor: 'rgba(255,255,255,0.35)',
     },
     premiumHeaderText: { flex: 1 },
     premiumNameLight: {
@@ -810,29 +1004,14 @@ const styles = StyleSheet.create({
     },
     premiumBody: {
         paddingHorizontal: 16,
-        paddingTop: 12,
+        paddingTop: 14,
         paddingBottom: 14,
         backgroundColor: '#FAFCFF',
-    },
-    friendStatusRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        marginBottom: 12,
-    },
-    friendStatusText: {
-        fontSize: 12,
-        fontWeight: '800',
-        color: PRIMARY_DARK,
-        textTransform: 'uppercase',
-        letterSpacing: 0.4,
     },
     premiumActions: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
-        padding: 14,
-        paddingLeft: 18,
     },
     premiumChatWrap: { flex: 1 },
     premiumChatBtn: {
@@ -972,7 +1151,7 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#EEF3FB',
     },
-    inviteTop: { flexDirection: 'row', gap: 12, marginBottom: 12 },
+    inviteTop: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
     inviteBody: { flex: 1 },
     inviteTypeRow: { marginBottom: 6 },
     typePill: {
@@ -1025,11 +1204,7 @@ const styles = StyleSheet.create({
     },
     sectionEmptyText: { color: '#94A3B8', fontSize: 14, fontWeight: '500' },
     outgoingBlock: {
-        marginTop: 36,
-        paddingTop: 8,
-    },
-    outgoingTitleGap: {
-        height: 22,
+        marginTop: 22,
     },
     outgoingCard: {
         backgroundColor: '#FFF',
@@ -1045,6 +1220,13 @@ const styles = StyleSheet.create({
         padding: 10,
         gap: 10,
     },
+    outgoingProfileTap: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        minWidth: 0,
+    },
     outgoingHint: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
     cancelChip: {
         paddingHorizontal: 12,
@@ -1053,7 +1235,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#F1F5F9',
     },
     cancelChipText: { color: '#64748B', fontWeight: '700', fontSize: 12 },
-    emptyWrap: { alignItems: 'center', paddingTop: 48, paddingHorizontal: 28 },
+    emptyWrap: { alignItems: 'center', paddingTop: 40, paddingHorizontal: 16, width: '100%' },
     emptyIcon: {
         width: 96,
         height: 96,
@@ -1065,5 +1247,45 @@ const styles = StyleSheet.create({
         borderColor: '#BFDBFE',
     },
     emptyTitle: { fontSize: 19, fontWeight: '900', color: INK, marginBottom: 8 },
-    emptySub: { fontSize: 14, color: '#64748B', textAlign: 'center', lineHeight: 21 },
+    emptySub: { fontSize: 14, color: '#64748B', textAlign: 'center', lineHeight: 21, paddingHorizontal: 16 },
+    suggestBlock: {
+        width: '100%',
+        marginTop: 4,
+        marginBottom: 8,
+        backgroundColor: '#FFF',
+        borderRadius: 20,
+        padding: 14,
+        borderWidth: 1,
+        borderColor: '#E0EFFF',
+    },
+    suggestTitle: { fontSize: 16, fontWeight: '900', color: INK },
+    suggestSub: { fontSize: 12, color: '#64748B', fontWeight: '600', marginTop: 3, marginBottom: 12 },
+    suggestRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingVertical: 10,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: '#EEF3FB',
+    },
+    suggestProfile: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0 },
+    suggestHint: { fontSize: 12, color: '#94A3B8', fontWeight: '600', marginTop: 2 },
+    suggestDismissBtn: {
+        width: 34,
+        height: 34,
+        borderRadius: 11,
+        backgroundColor: '#F1F5F9',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    suggestAddBtn: {
+        backgroundColor: PRIMARY_DARK,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderRadius: 12,
+        minWidth: 78,
+        alignItems: 'center',
+    },
+    suggestAddBtnSent: { backgroundColor: '#BBF7D0' },
+    suggestAddText: { color: '#FFF', fontWeight: '800', fontSize: 13 },
 });

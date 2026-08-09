@@ -1,10 +1,11 @@
 import { useFocusEffect } from '@react-navigation/native';
+import type { FlashListRef } from '@shopify/flash-list';
 import { useCallback, useRef } from 'react';
-import { InteractionManager, type FlatList } from 'react-native';
+import { InteractionManager } from 'react-native';
 import { getScreenScrollOffset, setScreenScrollOffset, type ScreenKey } from '../lib/screenState';
 
 export function useListScrollRestore<T = unknown>(screenKey: ScreenKey) {
-    const listRef = useRef<FlatList<T>>(null);
+    const listRef = useRef<FlashListRef<T>>(null);
     const focusedRef = useRef(false);
 
     const onScroll = useCallback(

@@ -82,9 +82,16 @@ export function formatCountdown(msRemaining: number): string {
     return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/** Plan aún guardable / visible en guardados: fecha futura (o sin fecha). */
+export function isPlanActiveForSaved(plan: { fecha_evento?: string | null }): boolean {
+    const end = getPlanEndMs(plan.fecha_evento);
+    if (end == null) return true;
+    return end > Date.now();
+}
+
 let lastPurgeAt = 0;
 
-/** Purga chats caducados + archiva historial (máx. 1 vez / 60s en cliente). */
+/** Purga chats caducados, archiva historial y limpia guardados pasados (máx. 1 vez / 60s). */
 export async function runPlanLifecycleMaintenance(): Promise<void> {
     const now = Date.now();
     if (now - lastPurgeAt < 60_000) return;
@@ -93,8 +100,36 @@ export async function runPlanLifecycleMaintenance(): Promise<void> {
         await Promise.all([
             supabase.rpc('archive_all_ended_plans'),
             supabase.rpc('purge_expired_plan_chats'),
+            supabase.rpc('purge_past_saved_plans'),
         ]);
     } catch {
         // RPC puede no existir hasta ejecutar plan-lifecycle.sql
     }
+}
+
+/** Quita de planes_guardados los que ya han llegado a su fecha (best effort). */
+export async function purgePastSavedPlansForUser(userId: string): Promise<string[]> {
+    const { data } = await supabase
+        .from('planes_guardados')
+        .select('plan_id, planes:plan_id(id, fecha_evento)')
+        .eq('usuario_id', userId);
+
+    const pastIds = (data ?? [])
+        .map((row: any) => {
+            const plan = Array.isArray(row.planes) ? row.planes[0] : row.planes;
+            if (!plan?.fecha_evento) return null;
+            if (new Date(plan.fecha_evento).getTime() > Date.now()) return null;
+            return (row.plan_id as string) || (plan.id as string) || null;
+        })
+        .filter(Boolean) as string[];
+
+    if (pastIds.length === 0) return [];
+
+    await supabase
+        .from('planes_guardados')
+        .delete()
+        .eq('usuario_id', userId)
+        .in('plan_id', pastIds);
+
+    return pastIds;
 }

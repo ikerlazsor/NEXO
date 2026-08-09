@@ -6,6 +6,7 @@ import { supabase } from './supabase';
 import { cacheGetOrFetch, cacheGetStale, cacheInvalidate } from './ttlCache';
 
 const NOTIF_TTL_MS = 40_000;
+const listeners = new Set<() => void>();
 
 function notifKey(userId: string) {
     return `notifCount:${userId}`;
@@ -51,8 +52,20 @@ export function peekProfileNotificationCount(userId: string): ProfileNotificatio
     return cacheGetStale<ProfileNotificationCount>(notifKey(userId));
 }
 
+export function subscribeProfileNotifications(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => {
+        listeners.delete(listener);
+    };
+}
+
+function emitProfileNotificationsChanged() {
+    listeners.forEach((l) => l());
+}
+
 export function invalidateProfileNotificationCount(userId: string): void {
     cacheInvalidate(notifKey(userId));
+    emitProfileNotificationsChanged();
 }
 
 export async function getProfileNotificationCount(

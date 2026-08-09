@@ -1,0 +1,364 @@
+/**
+ * Envía notificaciones push vía Expo Push API.
+ * Secretos: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (inyectados por defecto).
+ *
+ * Body (JSON):
+ * {
+ *   type: 'friend_request' | 'friend_accepted' | 'plan_join_request' | 'plan_joined'
+ *       | 'plan_join_accepted' | 'plan_join_rejected' | 'plan_invite'
+ *       | 'plan_message' | 'direct_message' | 'rated',
+ *   ...campos según tipo
+ * }
+ */
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+
+const cors = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+type NotifCategory = 'messages' | 'social';
+
+type PushPayload = {
+  to: string;
+  title: string;
+  body: string;
+  data?: Record<string, string>;
+  sound?: 'default' | null;
+  channelId?: string;
+  priority?: 'default' | 'normal' | 'high';
+  collapseId?: string;
+};
+
+async function sendExpo(
+  messages: PushPayload[],
+): Promise<{ deadTokens: string[] }> {
+  const deadTokens: string[] = [];
+  if (!messages.length) return { deadTokens };
+  const chunks: PushPayload[][] = [];
+  for (let i = 0; i < messages.length; i += 100) {
+    chunks.push(messages.slice(i, i + 100));
+  }
+  for (const chunk of chunks) {
+    const res = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(chunk),
+    });
+    try {
+      const json = await res.json() as {
+        data?: Array<{ status?: string; details?: { error?: string }; message?: string }>;
+      };
+      (json.data ?? []).forEach((ticket, idx) => {
+        const err = ticket?.details?.error || ticket?.message || '';
+        if (
+          ticket?.status === 'error' &&
+          (String(err).includes('DeviceNotRegistered') || String(err).includes('InvalidCredentials'))
+        ) {
+          const token = chunk[idx]?.to;
+          if (token) deadTokens.push(token);
+        }
+      });
+    } catch {
+      /* ignore parse */
+    }
+  }
+  return { deadTokens };
+}
+
+function channelFor(category: NotifCategory): string {
+  return category === 'messages' ? 'messages' : 'social';
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: cors });
+  }
+
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    if (!supabaseUrl || !serviceKey) {
+      return new Response(JSON.stringify({ error: 'missing_env' }), {
+        status: 500,
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const userClient = createClient(supabaseUrl, anonKey || serviceKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const {
+      data: { user },
+      error: userErr,
+    } = await userClient.auth.getUser();
+    if (userErr || !user) {
+      return new Response(JSON.stringify({ error: 'unauthorized' }), {
+        status: 401,
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const admin = createClient(supabaseUrl, serviceKey);
+    const body = await req.json();
+    const type = String(body?.type ?? '');
+
+    const { data: senderProfile } = await admin
+      .from('perfiles')
+      .select('nombre')
+      .eq('id', user.id)
+      .maybeSingle();
+    const senderName = (senderProfile?.nombre as string)?.trim() || 'Alguien';
+
+    let targetIds: string[] = [];
+    let title = 'Nexo';
+    let notifBody = '';
+    let data: Record<string, string> = { type };
+    let category: NotifCategory = 'social';
+    let collapseId: string | undefined;
+
+    if (type === 'friend_request') {
+      const toUserId = String(body.toUserId ?? '');
+      if (!toUserId) throw new Error('toUserId');
+      const { data: row } = await admin
+        .from('amistades')
+        .select('id')
+        .eq('usuario_origen_id', user.id)
+        .eq('usuario_destino_id', toUserId)
+        .eq('estado', 'pendiente')
+        .maybeSingle();
+      if (!row) throw new Error('not_allowed');
+      targetIds = [toUserId];
+      title = 'Solicitud de amistad';
+      notifBody = `${senderName} te ha enviado una solicitud de amistad`;
+      data = { type, screen: 'friends' };
+      category = 'social';
+    } else if (type === 'friend_accepted') {
+      const toUserId = String(body.toUserId ?? '');
+      if (!toUserId) throw new Error('toUserId');
+      const { data: row } = await admin
+        .from('amistades')
+        .select('id')
+        .eq('usuario_origen_id', toUserId)
+        .eq('usuario_destino_id', user.id)
+        .eq('estado', 'aceptado')
+        .maybeSingle();
+      if (!row) throw new Error('not_allowed');
+      targetIds = [toUserId];
+      title = 'Amistad aceptada';
+      notifBody = `${senderName} ha aceptado tu solicitud de amistad`;
+      data = { type, screen: 'friends' };
+      category = 'social';
+    } else if (type === 'plan_join_request' || type === 'plan_joined') {
+      const planId = String(body.planId ?? '');
+      if (!planId) throw new Error('planId');
+      const { data: plan } = await admin
+        .from('planes')
+        .select('id, titulo, creador_id')
+        .eq('id', planId)
+        .maybeSingle();
+      if (!plan?.creador_id || plan.creador_id === user.id) throw new Error('not_allowed');
+      const { data: part } = await admin
+        .from('participantes')
+        .select('estado')
+        .eq('plan_id', planId)
+        .eq('usuario_id', user.id)
+        .maybeSingle();
+      if (!part) throw new Error('not_allowed');
+      targetIds = [plan.creador_id as string];
+      const planTitle = (plan.titulo as string) || 'tu plan';
+      if (type === 'plan_join_request') {
+        title = 'Solicitud para unirse';
+        notifBody = `${senderName} quiere unirse a «${planTitle}»`;
+      } else {
+        title = 'Nuevo participante';
+        notifBody = `${senderName} se ha unido a «${planTitle}»`;
+      }
+      data = { type, screen: 'plan', planId };
+      category = 'social';
+      collapseId = `plan-social:${planId}`;
+    } else if (type === 'plan_join_accepted' || type === 'plan_join_rejected') {
+      const planId = String(body.planId ?? '');
+      const toUserId = String(body.toUserId ?? '');
+      if (!planId || !toUserId) throw new Error('params');
+      const { data: plan } = await admin
+        .from('planes')
+        .select('id, titulo, creador_id')
+        .eq('id', planId)
+        .maybeSingle();
+      if (!plan || plan.creador_id !== user.id) throw new Error('not_allowed');
+      targetIds = [toUserId];
+      const planTitle = (plan.titulo as string) || 'el plan';
+      if (type === 'plan_join_accepted') {
+        title = 'Solicitud aceptada';
+        notifBody = `Te han aceptado en «${planTitle}»`;
+        data = { type, screen: 'plan', planId };
+      } else {
+        title = 'Solicitud rechazada';
+        notifBody = `No te han aceptado en «${planTitle}»`;
+        data = { type, screen: 'feed' };
+      }
+      category = 'social';
+    } else if (type === 'plan_invite') {
+      const planId = String(body.planId ?? '');
+      const toUserId = String(body.toUserId ?? '');
+      if (!planId || !toUserId) throw new Error('params');
+      const { data: inv } = await admin
+        .from('invitaciones_planes')
+        .select('id, plan_id')
+        .eq('plan_id', planId)
+        .eq('invitador_id', user.id)
+        .eq('invitado_id', toUserId)
+        .eq('estado', 'pendiente')
+        .maybeSingle();
+      if (!inv) throw new Error('not_allowed');
+      const { data: plan } = await admin.from('planes').select('titulo').eq('id', planId).maybeSingle();
+      targetIds = [toUserId];
+      title = 'Invitación a un plan';
+      notifBody = `${senderName} te ha invitado a «${(plan?.titulo as string) || 'un plan'}»`;
+      data = { type, screen: 'plan', planId };
+      category = 'social';
+    } else if (type === 'plan_message') {
+      const planId = String(body.planId ?? '');
+      const preview = String(body.preview ?? '').slice(0, 120);
+      if (!planId) throw new Error('planId');
+      const { data: part } = await admin
+        .from('participantes')
+        .select('id')
+        .eq('plan_id', planId)
+        .eq('usuario_id', user.id)
+        .eq('estado', 'aceptado')
+        .maybeSingle();
+      const { data: plan } = await admin
+        .from('planes')
+        .select('titulo, creador_id')
+        .eq('id', planId)
+        .maybeSingle();
+      if (!part && plan?.creador_id !== user.id) throw new Error('not_allowed');
+      const { data: members } = await admin
+        .from('participantes')
+        .select('usuario_id')
+        .eq('plan_id', planId)
+        .eq('estado', 'aceptado');
+      const ids = new Set<string>((members ?? []).map((m) => m.usuario_id as string));
+      if (plan?.creador_id) ids.add(plan.creador_id as string);
+      ids.delete(user.id);
+      targetIds = [...ids];
+
+      // Respetar silenciar chat (app cerrada)
+      if (targetIds.length) {
+        const { data: mutes } = await admin
+          .from('push_chat_mutes')
+          .select('user_id')
+          .eq('plan_id', planId)
+          .in('user_id', targetIds);
+        const muted = new Set((mutes ?? []).map((m) => m.user_id as string));
+        targetIds = targetIds.filter((id) => !muted.has(id));
+      }
+
+      title = (plan?.titulo as string) || 'Chat del plan';
+      notifBody = preview ? `${senderName}: ${preview}` : `${senderName} ha enviado un mensaje`;
+      data = { type, screen: 'chat', planId };
+      category = 'messages';
+      collapseId = `plan-msg:${planId}`;
+    } else if (type === 'direct_message') {
+      const toUserId = String(body.toUserId ?? '');
+      const preview = String(body.preview ?? '').slice(0, 120);
+      if (!toUserId) throw new Error('toUserId');
+      targetIds = [toUserId];
+      title = senderName;
+      notifBody = preview || 'Te ha enviado un mensaje';
+      data = { type, screen: 'direct-chat', otherUserId: user.id };
+      category = 'messages';
+      collapseId = `dm:${[user.id, toUserId].sort().join(':')}`;
+    } else if (type === 'rated') {
+      const toUserId = String(body.toUserId ?? '');
+      const planId = String(body.planId ?? '');
+      if (!toUserId || !planId) throw new Error('params');
+      const { data: row } = await admin
+        .from('valoraciones')
+        .select('id')
+        .eq('plan_id', planId)
+        .eq('evaluador_id', user.id)
+        .eq('evaluado_id', toUserId)
+        .maybeSingle();
+      if (!row) throw new Error('not_allowed');
+      targetIds = [toUserId];
+      title = 'Nueva valoración';
+      notifBody = `${senderName} te ha valorado en Nexo`;
+      data = { type, screen: 'profile', planId };
+      category = 'social';
+    } else {
+      return new Response(JSON.stringify({ error: 'unknown_type' }), {
+        status: 400,
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      });
+    }
+
+    targetIds = [...new Set(targetIds.filter(Boolean))];
+    if (!targetIds.length) {
+      return new Response(JSON.stringify({ sent: 0 }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const { data: prefs } = await admin
+      .from('perfiles')
+      .select('id, notificaciones_push, notif_messages, notif_social')
+      .in('id', targetIds);
+
+    const allowed = (prefs ?? [])
+      .filter((p) => {
+        if (p.notificaciones_push === false) return false;
+        if (category === 'messages' && p.notif_messages === false) return false;
+        if (category === 'social' && p.notif_social === false) return false;
+        return true;
+      })
+      .map((p) => p.id as string);
+
+    if (!allowed.length) {
+      return new Response(JSON.stringify({ sent: 0 }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const { data: tokens } = await admin
+      .from('push_tokens')
+      .select('token')
+      .in('user_id', allowed);
+
+    const channelId = channelFor(category);
+    const messages: PushPayload[] = (tokens ?? []).map((row) => ({
+      to: row.token as string,
+      title,
+      body: notifBody,
+      data,
+      sound: 'default',
+      channelId,
+      priority: category === 'messages' ? 'high' : 'default',
+      ...(collapseId ? { collapseId } : {}),
+    }));
+
+    const { deadTokens } = await sendExpo(messages);
+    if (deadTokens.length) {
+      await admin.from('push_tokens').delete().in('token', deadTokens);
+    }
+
+    return new Response(JSON.stringify({ sent: messages.length, pruned: deadTokens.length }), {
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'error';
+    return new Response(JSON.stringify({ error: msg }), {
+      status: 400,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    });
+  }
+});

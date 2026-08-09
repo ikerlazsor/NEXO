@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getAvatarUri } from './friends';
 import { supabase } from './supabase';
 
@@ -14,11 +15,84 @@ export interface DirectConversation {
     avatar_url: string | null;
     avatarUri: string;
     lastMessage: DirectMessagePreview | null;
+    /** Para ordenar hilos abiertos sin mensajes. */
+    openedAt?: string;
+}
+
+const OPEN_PREFIX = '@nexo_direct_open:';
+
+type OpenedEntry = { id: string; at: string };
+
+function openThreadsKey(userId: string) {
+    return `${OPEN_PREFIX}${userId}`;
+}
+
+async function readOpenedEntries(userId: string): Promise<OpenedEntry[]> {
+    try {
+        const raw = await AsyncStorage.getItem(openThreadsKey(userId));
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+            .map((item) => {
+                if (typeof item === 'string' && item) {
+                    return { id: item, at: new Date(0).toISOString() };
+                }
+                if (item && typeof item === 'object' && typeof (item as OpenedEntry).id === 'string') {
+                    const row = item as OpenedEntry;
+                    return {
+                        id: row.id,
+                        at: typeof row.at === 'string' ? row.at : new Date(0).toISOString(),
+                    };
+                }
+                return null;
+            })
+            .filter((x): x is OpenedEntry => !!x?.id);
+    } catch {
+        return [];
+    }
+}
+
+async function writeOpenedEntries(userId: string, entries: OpenedEntry[]): Promise<void> {
+    const byId = new Map<string, OpenedEntry>();
+    for (const e of entries) {
+        if (!e?.id) continue;
+        byId.set(e.id, e);
+    }
+    await AsyncStorage.setItem(openThreadsKey(userId), JSON.stringify([...byId.values()]));
+}
+
+/**
+ * Marca un chat 1:1 como abierto aunque aún no haya mensajes,
+ * para que aparezca en Mis chats al volver atrás.
+ */
+export async function ensureDirectConversation(userId: string, peerId: string): Promise<void> {
+    if (!userId || !peerId || userId === peerId) return;
+    const opened = await readOpenedEntries(userId);
+    const now = new Date().toISOString();
+    const rest = opened.filter((e) => e.id !== peerId);
+    await writeOpenedEntries(userId, [{ id: peerId, at: now }, ...rest]);
+    // Si lo habías ocultado, al “crearlo” de nuevo debe reaparecer.
+    await supabase
+        .from('chats_directos_ocultos')
+        .delete()
+        .eq('usuario_id', userId)
+        .eq('peer_id', peerId);
+}
+
+async function removeOpenedPeer(userId: string, peerId: string): Promise<void> {
+    const opened = await readOpenedEntries(userId);
+    if (!opened.some((e) => e.id === peerId)) return;
+    await writeOpenedEntries(
+        userId,
+        opened.filter((e) => e.id !== peerId),
+    );
 }
 
 /**
  * Conversaciones 1:1 del usuario, derivadas de los mensajes directos
  * (mensajes con receptor_id y sin plan_id), ordenadas por actividad reciente.
+ * Incluye hilos abiertos sin mensajes (creados desde «Crear chat»).
  * Respeta chats ocultos: reaparecen si hay un mensaje nuevo después de ocultar.
  */
 export async function getDirectConversations(userId: string): Promise<DirectConversation[]> {
@@ -35,9 +109,12 @@ export async function getDirectConversations(userId: string): Promise<DirectConv
         .select('peer_id, oculto_en')
         .eq('usuario_id', userId);
 
-    const [{ data: messages, error }, hiddenResult] = await Promise.all([
+    const openedPromise = readOpenedEntries(userId);
+
+    const [{ data: messages, error }, hiddenResult, openedEntries] = await Promise.all([
         messagesPromise,
         hiddenPromise,
+        openedPromise,
     ]);
 
     if (error) throw error;
@@ -60,13 +137,25 @@ export async function getDirectConversations(userId: string): Promise<DirectConv
         });
     });
 
-    if (lastByPeer.size === 0) return [];
-
     for (const [peerId, last] of [...lastByPeer.entries()]) {
         const hidden = hiddenAt.get(peerId);
         if (hidden && new Date(last.creado_en).getTime() <= new Date(hidden).getTime()) {
             lastByPeer.delete(peerId);
         }
+    }
+
+    const openedAtByPeer = new Map(openedEntries.map((e) => [e.id, e.at]));
+
+    // Hilos abiertos sin mensajes (y no ocultos).
+    for (const entry of openedEntries) {
+        if (lastByPeer.has(entry.id)) continue;
+        if (hiddenAt.has(entry.id)) continue;
+        lastByPeer.set(entry.id, {
+            contenido: '',
+            tipo: 'texto',
+            creado_en: '',
+            emisor_id: userId,
+        });
     }
 
     if (lastByPeer.size === 0) return [];
@@ -83,12 +172,15 @@ export async function getDirectConversations(userId: string): Promise<DirectConv
         const profile = profileById.get(peerId);
         const nombre = profile?.nombre || 'Usuario';
         const avatar_url = profile?.avatar_url ?? null;
+        const last = lastByPeer.get(peerId) ?? null;
+        const lastMessage = last && last.creado_en ? last : null;
         return {
             peerId,
             nombre,
             avatar_url,
             avatarUri: getAvatarUri({ nombre, avatar_url }),
-            lastMessage: lastByPeer.get(peerId) ?? null,
+            lastMessage,
+            openedAt: openedAtByPeer.get(peerId),
         };
     });
 }
@@ -99,6 +191,8 @@ export async function hideDirectChat(
     peerId: string,
 ): Promise<{ error: string | null }> {
     if (!userId || !peerId || userId === peerId) return { error: 'invalid_target' };
+
+    await removeOpenedPeer(userId, peerId);
 
     const { error } = await supabase.from('chats_directos_ocultos').upsert(
         {

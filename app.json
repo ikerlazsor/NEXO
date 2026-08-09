@@ -8,22 +8,82 @@
     "scheme": "nexo",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/nexo-splash-full.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#E2EBF2"
+    },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.ikerlazsor.nexo",
+      "associatedDomains": [
+        "applinks:nexo.app",
+        "applinks:www.nexo.app"
+      ],
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Nexo usa tu ubicación para calcular la distancia a los planes y mostrarte cómo llegar."
+        "NSLocationWhenInUseUsageDescription": "Nexo usa tu ubicación para calcular la distancia a los planes y mostrarte cómo llegar.",
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
+      },
+      "splash": {
+        "image": "./assets/images/nexo-splash-full.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#E2EBF2"
       }
     },
     "android": {
+      "package": "com.ikerlazsor.nexo",
       "adaptiveIcon": {
-        "backgroundColor": "#4DA6FF",
+        "backgroundColor": "#E2EBF2",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
+      "splash": {
+        "image": "./assets/images/nexo-splash-full.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#E2EBF2"
+      },
       "permissions": [
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "nexo.app",
+              "pathPrefix": "/plan"
+            },
+            {
+              "scheme": "https",
+              "host": "www.nexo.app",
+              "pathPrefix": "/plan"
+            },
+            {
+              "scheme": "https",
+              "host": "nexo.app",
+              "pathPrefix": "/user"
+            },
+            {
+              "scheme": "https",
+              "host": "nexo.app",
+              "pathPrefix": "/chat"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -38,13 +98,13 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/nexo-logo.png",
-          "imageWidth": 220,
+          "image": "./assets/images/nexo-splash-full.png",
+          "imageWidth": 300,
           "resizeMode": "contain",
-          "backgroundColor": "#E1EBF4",
+          "backgroundColor": "#E2EBF2",
           "dark": {
-            "backgroundColor": "#E1EBF4",
-            "image": "./assets/images/nexo-logo.png"
+            "backgroundColor": "#E2EBF2",
+            "image": "./assets/images/nexo-splash-full.png"
           }
         }
       ],
@@ -56,11 +116,34 @@
           "photosPermission": "Nexo necesita acceso a tus fotos para tu perfil.",
           "cameraPermission": "Nexo necesita acceso a la cámara para tu foto de perfil."
         }
-      ]
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/nexo-logo-ui.png",
+          "color": "#4DA6FF",
+          "defaultChannel": "default",
+          "sounds": []
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Nexo usa tu ubicación para mostrarte planes cerca de ti."
+        }
+      ],
+      "@sentry/react-native"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e"
+      }
+    },
+    "owner": "ikerlazsor"
   }
 }

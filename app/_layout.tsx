@@ -7,18 +7,25 @@ Sesión + onboarding hecho → (tabs)
 
 import 'react-native-gesture-handler';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import * as Sentry from '@sentry/react-native';
 import { Session } from '@supabase/supabase-js';
+import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Dimensions, StyleSheet } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Asset } from 'expo-asset';
 import { AndroidSwipeBack } from '../components/AndroidSwipeBack';
 import { NexoAlertHost } from '../components/NexoAlertHost';
+import { OfflineBanner } from '../components/OfflineBanner';
+import { PushBootstrap } from '../components/PushBootstrap';
+import { scheduleCoverPrefetch } from '../lib/prefetchCovers';
+import { hydrateFeedFromDisk, hydrateChatsFromDisk, hydrateMyPlansFromDisk } from '../lib/prefetchHome';
 import {
   getPendingVerifyEmail,
   isEmailVerified,
@@ -30,10 +37,29 @@ import { isPasswordRecoveryPending, setPasswordRecoveryPending } from '../lib/pa
 import { fetchAccountAccess } from '../lib/roles';
 import { supabase } from '../lib/supabase';
 
-void SplashScreen.preventAutoHideAsync().catch(() => {});
+const sentryDsn =
+  process.env.EXPO_PUBLIC_SENTRY_DSN ||
+  (Constants.expoConfig?.extra as { sentryDsn?: string } | undefined)?.sentryDsn;
 
-/** En RNS: `end` = límite derecho de la zona (desde x=0). ~42% ancho: fácil volver sin pelear el scroll. */
-const BACK_GESTURE_END = Math.round(Dimensions.get('window').width * 0.48);
+if (sentryDsn) {
+  Sentry.init({
+    dsn: sentryDsn,
+    enabled: !__DEV__,
+    tracesSampleRate: 0.15,
+  });
+}
+
+void SplashScreen.preventAutoHideAsync().catch(() => {});
+// Precarga logo UI para login/registro (aparece al instante)
+void Asset.fromModule(require('../assets/images/nexo-logo-ui.png')).downloadAsync().catch(() => {});
+// Arranque: portadas + feed en disco (si hay) mientras AuthGate decide.
+scheduleCoverPrefetch();
+void hydrateFeedFromDisk();
+void hydrateChatsFromDisk();
+void hydrateMyPlansFromDisk();
+
+/** iOS only: thin left-edge native pop. Android uses system back (no overlay / no RN gesture). */
+const BACK_GESTURE_END = 20;
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -242,10 +268,15 @@ function AuthGate({ children }: { children: ReactNode }) {
   // Mantener splash nativo hasta ready; sin segunda pantalla azul
   if (!ready) return null;
 
-  return children;
+  return (
+    <>
+      <PushBootstrap userId={session?.user?.id ?? null} />
+      {children}
+    </>
+  );
 }
 
-export default function RootLayout() {
+function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
@@ -259,23 +290,69 @@ export default function RootLayout() {
                   headerShown: false,
                   freezeOnBlur: true,
                   animation: 'slide_from_right',
-                  gestureEnabled: true,
-                  fullScreenGestureEnabled: true,
-                  animationMatchesGesture: true,
-                  // start/end/top/bottom = bounds. end = ancho de la zona desde la izquierda.
-                  gestureResponseDistance: { end: BACK_GESTURE_END },
+                  animationDuration: 280,
+                  gestureEnabled: Platform.OS === 'ios',
+                  fullScreenGestureEnabled: false,
+                  animationMatchesGesture: Platform.OS === 'ios',
+                  contentStyle: { backgroundColor: '#F2F7FF' },
+                  ...(Platform.OS === 'ios'
+                    ? { gestureResponseDistance: { end: BACK_GESTURE_END } }
+                    : {}),
                 }}
               >
-                <Stack.Screen name="(tabs)" options={{ animation: 'none', gestureEnabled: false }} />
+                <Stack.Screen
+                  name="(tabs)"
+                  options={{ animation: 'none', gestureEnabled: false, freezeOnBlur: false }}
+                />
                 <Stack.Screen name="onboarding" options={{ gestureEnabled: false, animation: 'none' }} />
                 <Stack.Screen name="verify-email" options={{ gestureEnabled: false, animation: 'fade' }} />
                 <Stack.Screen name="reset-password" options={{ gestureEnabled: false, animation: 'fade' }} />
+                <Stack.Screen name="login" options={{ animation: 'fade', gestureEnabled: false }} />
+                <Stack.Screen
+                  name="create-plan"
+                  options={{
+                    presentation: 'modal',
+                    animation: 'slide_from_bottom',
+                    animationDuration: 320,
+                    gestureEnabled: Platform.OS === 'ios',
+                    fullScreenGestureEnabled: false,
+                    freezeOnBlur: false,
+                    contentStyle: { backgroundColor: '#FFF' },
+                  }}
+                />
+                <Stack.Screen
+                  name="rate-plan"
+                  options={{
+                    presentation: 'modal',
+                    animation: 'slide_from_bottom',
+                    animationDuration: 300,
+                    gestureEnabled: Platform.OS === 'ios',
+                    fullScreenGestureEnabled: false,
+                  }}
+                />
+                <Stack.Screen
+                  name="profile"
+                  options={{ animation: 'fade_from_bottom', animationDuration: 260 }}
+                />
+                <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="analytics" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="community-norms" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="friends" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="saved-plans" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="plan-history" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="user-profile/[id]" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="plan/[id]" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen
+                  name="direct-chat/[id]"
+                  options={{ animation: 'slide_from_right', animationDuration: 260 }}
+                />
                 <Stack.Screen
                   name="modal"
                   options={{ presentation: 'modal', animation: 'fade_from_bottom' }}
                 />
               </Stack>
               <AndroidSwipeBack />
+              <OfflineBanner />
             </AuthGate>
             <StatusBar style="dark" />
           </ThemeProvider>
@@ -284,6 +361,8 @@ export default function RootLayout() {
     </I18nProvider>
   );
 }
+
+export default Sentry.wrap(RootLayout);
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

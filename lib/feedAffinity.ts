@@ -14,6 +14,9 @@ const BASE = {
     personalityCategory: 58,
     personalityTime: 18,
     soon: 10,
+    /** Más gente unida → más atractivo (capado para no aplastar afinidad). */
+    popularity: 28,
+    popularityCap: 28,
 } as const;
 
 /** A partir de cuántos planes / amigos la señal se considera “madura”. */
@@ -49,6 +52,8 @@ export type AffinityPlan = {
     tipo_deporte?: string | null;
     fecha_evento?: string | null;
     creador_id?: string | null;
+    joinedCount?: number | null;
+    maximo_participantes?: number | null;
     participantsList?: Array<{ id?: string; isCreator?: boolean }>;
 };
 
@@ -207,6 +212,16 @@ function friendBoost(plan: AffinityPlan, friendIds: Set<string>, mul: number): n
     return score * mul;
 }
 
+function popularityBoost(plan: AffinityPlan): number {
+    const joined = Math.max(0, Number(plan.joinedCount) || 0);
+    if (joined <= 0) return 0;
+    const max = Math.max(1, Number(plan.maximo_participantes) || 8);
+    // Log suave: 1 persona ayuda poco; 4–5 ya se nota; llenos casi al tope.
+    const ratio = Math.min(1, joined / Math.min(max, 10));
+    const curved = Math.log2(1 + joined) / Math.log2(1 + 10);
+    return Math.min(BASE.popularityCap, BASE.popularity * (0.45 * ratio + 0.55 * curved));
+}
+
 /** Puntuación de afinidad (mayor = más arriba). No incluye “mis planes”. */
 export function scoreFeedPlan(plan: AffinityPlan, taste: FeedTaste, friendIds: Set<string>): number {
     const blend = getAffinityBlend(taste, friendIds.size);
@@ -219,6 +234,7 @@ export function scoreFeedPlan(plan: AffinityPlan, taste: FeedTaste, friendIds: S
         + personalityCategoryBoost(taste.personalityTags, category, blend.personality)
         + timeOfDayBoost(taste, plan.fecha_evento, blend.personality)
         + soonBoost(plan.fecha_evento, blend.soon)
+        + popularityBoost(plan)
     );
 }
 
@@ -231,6 +247,9 @@ export function compareFeedAffinity(
     const sb = scoreFeedPlan(b, taste, friendIds);
     const sa = scoreFeedPlan(a, taste, friendIds);
     if (sb !== sa) return sb - sa;
+    const jb = Number(b.joinedCount) || 0;
+    const ja = Number(a.joinedCount) || 0;
+    if (jb !== ja) return jb - ja;
     const ad = a.fecha_evento ? new Date(a.fecha_evento).getTime() : Infinity;
     const bd = b.fecha_evento ? new Date(b.fecha_evento).getTime() : Infinity;
     return ad - bd;

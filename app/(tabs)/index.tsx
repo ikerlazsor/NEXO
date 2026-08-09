@@ -3,15 +3,17 @@ pantalla principal / home feed de planes
 */
 import {
     Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useCallback,
     useEffect,
     useMemo,
     useRef,
     useState } from 'react';
+import { FlashList } from '@shopify/flash-list';
 import {
-    ActivityIndicator,
-    FlatList,
+    AppState,
+    type AppStateStatus,
     InteractionManager,
     Keyboard,
     Modal,
@@ -26,20 +28,39 @@ import {
     TouchableOpacity,
     TouchableWithoutFeedback,
     View,
+    type ViewToken,
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
 import MapView, { Marker } from 'react-native-maps';
+import { NexoMapView } from '../../components/NexoMapView';
 import { useListScrollRestore } from '../../hooks/useListScrollRestore';
-import { MainChrome } from '../../components/MainChrome';
 import { PlanCard, type Membership } from '../../components/PlanCard';
+import { PlanImage } from '../../components/PlanImage';
+import { FeedSkeletonList } from '../../components/SkeletonShimmer';
+import {
+    consumeFeedNeedsRefresh,
+    subscribeFeedHomeRetap,
+} from '../../lib/feedReload';
+import {
+    invalidatePlanDetailCache,
+    prefetchPlanDetail,
+    seedPlanDetailFromFeed,
+} from '../../lib/planDetailCache';
+import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
 import { getCoincidedUserIds } from '../../lib/coincidences';
 import { getFriends } from '../../lib/friends';
 import { isFeedPlan } from '../../lib/feedPlans';
-import { subscribeFeedHomeRetap } from '../../lib/feedReload';
+import { diskSet } from '../../lib/diskCache';
+import { distanceKm, formatDistanceKm, isLocationInEurope } from '../../lib/geo';
+import { consumeFirstRunPending } from '../../lib/firstRun';
+import { hapticError, hapticLight, hapticSelection, hapticSuccess } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
-import { isLocationInSpain } from '../../lib/geo';
+import { deletePlanAdmin } from '../../lib/moderation';
+import { fetchAccountAccess } from '../../lib/roles';
+import { getUserCoords, peekUserCoords, type UserCoords } from '../../lib/location';
+import { withRetry } from '../../lib/retry';
 import { getProfileNotificationCount } from '../../lib/notifications';
 import { canSeePlanInFeed } from '../../lib/planVisibility';
 import {
@@ -48,8 +69,14 @@ import {
     resolvePlanCategories,
     type MainCategoryId,
 } from '../../lib/categories';
-import { getScreenFilters, ScreenKeys, setScreenFilters } from '../../lib/screenState';
-import { OPTIMIZED_LIST_PROPS } from '../../lib/listConfig';
+import {
+    getScreenFilters,
+    getScreenScrollOffset,
+    ScreenKeys,
+    setScreenFilters,
+    setScreenScrollOffset,
+} from '../../lib/screenState';
+import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { supabase } from '../../lib/supabase';
 import { planMatchesProvince, SPAIN_PROVINCES } from '../../lib/provinces';
 import {
@@ -59,10 +86,10 @@ import {
     promoteWaitlist,
     resolveJoinEstado,
 } from '../../lib/participants';
+import type { Genero } from '../../lib/profileFields';
 import { canJoinPlanByGender, isSoloChicasPlan } from '../../lib/soloChicas';
 import { canJoinMorePlans } from '../../lib/planLimits';
 import { isPlanActiveForFeed, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
-import type { Genero } from '../../lib/profileFields';
 import {
     buildFeedTaste,
     compareFeedAffinity,
@@ -77,7 +104,7 @@ import {
     type FeedSnapshot,
 } from '../../lib/feedCache';
 import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
-
+import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
@@ -99,8 +126,31 @@ function toggleInList(list: string[], item: string): string[] {
     return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
 }
 
-const EmptySearch = ({ onClear }: { onClear: () => void }) => {
+const EmptySearch = ({
+    onClear,
+    onCreate,
+    loadError,
+    onRetry,
+}: {
+    onClear: () => void;
+    onCreate: () => void;
+    loadError?: boolean;
+    onRetry?: () => void;
+}) => {
     const { t } = useT();
+    if (loadError) {
+        return (
+            <View style={styles.emptyContainer}>
+                <View style={styles.emptyIconWrap}>
+                    <Ionicons name="cloud-offline-outline" size={56} color={PRIMARY} />
+                </View>
+                <Text style={styles.emptyTitle}>{t('feed.loadError')}</Text>
+                <TouchableOpacity style={styles.createBtnEmpty} onPress={onRetry}>
+                    <Text style={styles.createBtnEmptyText}>{t('feed.retry')}</Text>
+                </TouchableOpacity>
+            </View>
+        );
+    }
     return (
         <View style={styles.emptyContainer}>
             <View style={styles.emptyIconWrap}>
@@ -108,16 +158,52 @@ const EmptySearch = ({ onClear }: { onClear: () => void }) => {
             </View>
             <Text style={styles.emptyTitle}>{t('feed.empty')}</Text>
             <Text style={styles.emptySubtitle}>{t('feed.emptySub')}</Text>
-            <TouchableOpacity style={styles.createBtnEmpty} onPress={onClear}>
-                <Text style={styles.createBtnEmptyText}>{t('cat.Todos')}</Text>
+            <TouchableOpacity style={styles.createBtnEmpty} onPress={onCreate}>
+                <Text style={styles.createBtnEmptyText}>{t('feed.emptyCreate')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onClear} style={{ marginTop: 14 }}>
+                <Text style={{ color: PRIMARY_DARK, fontWeight: '800' }}>{t('feed.emptySeeAll')}</Text>
             </TouchableOpacity>
         </View>
     );
 };
 
+let feedScrollTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Subida al tope del feed: una sola animación nativa.
+ * (El RAF frame-a-frame congelaba FlashList, peor en Expo Go.)
+ */
+function smoothScrollListToTop(
+    scrollToOffset: ((opts: { offset: number; animated?: boolean }) => void) | undefined,
+    fromOffset: number,
+    onDone?: () => void,
+) {
+    if (feedScrollTimer) {
+        clearTimeout(feedScrollTimer);
+        feedScrollTimer = null;
+    }
+
+    setScreenScrollOffset(ScreenKeys.FEED, 0);
+
+    if (!scrollToOffset || fromOffset <= 16) {
+        scrollToOffset?.({ offset: 0, animated: false });
+        onDone?.();
+        return;
+    }
+
+    scrollToOffset({ offset: 0, animated: true });
+    const waitMs = Math.min(650, Math.max(280, 220 + Math.sqrt(fromOffset) * 10));
+    feedScrollTimer = setTimeout(() => {
+        feedScrollTimer = null;
+        setScreenScrollOffset(ScreenKeys.FEED, 0);
+        onDone?.();
+    }, waitMs);
+}
+
 export default function HomeScreen() {
     const router = useRouter();
-    const { t } = useT();
+    const { t, lang } = useT();
     const savedFilters = getScreenFilters<{
         search: string;
         selectedFilter: string;
@@ -152,8 +238,13 @@ export default function HomeScreen() {
         return asStringArray(savedFilters.provinceFilter);
     });
     const [showZoneModal, setShowZoneModal] = useState(false);
+    const [mapSelectedId, setMapSelectedId] = useState<string | null>(null);
+    const zoneMapRef = useRef<MapView | null>(null);
     const [showFiltersModal, setShowFiltersModal] = useState(false);
     const [showProvincePicker, setShowProvincePicker] = useState(false);
+    const [nearbyKm, setNearbyKm] = useState<number | null>(null);
+    const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
+    const [showFirstRun, setShowFirstRun] = useState(false);
 
     const [plans, setPlans] = useState<any[]>(() => cachedFeed?.plans ?? []);
     const [membershipMap, setMembershipMap] = useState<Record<string, Membership>>(
@@ -164,8 +255,12 @@ export default function HomeScreen() {
     const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(
         () => cachedFeed?.currentUserGenero ?? null,
     );
+    const [isOwner, setIsOwner] = useState(false);
     const [loading, setLoading] = useState(() => cachedFeed == null);
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState(false);
+    const [joiningPlanId, setJoiningPlanId] = useState<string | null>(null);
+    const joiningRef = useRef(false);
     const hasDataRef = useRef(cachedFeed != null);
     const [notifBreakdown, setNotifBreakdown] = useState(() => cachedFeed?.notifBreakdown ?? {
         friendRequests: 0,
@@ -187,7 +282,29 @@ export default function HomeScreen() {
     const [searchExpanded, setSearchExpanded] = useState<string[]>([]);
     const plansRef = useRef<any[]>([]);
     const currentUserIdRef = useRef<string | null>(null);
-    const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.FEED);
+    const { listRef, onScroll, restoreScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.FEED);
+
+    useEffect(() => {
+        void consumeFirstRunPending().then((pending) => {
+            if (pending) setShowFirstRun(true);
+        });
+        // Solo coords para mapa/distancias; no activar “Cerca” al abrir en frío.
+        void getUserCoords({ requestPermission: false }).then((c) => {
+            if (c) setUserCoords(c);
+        });
+    }, []);
+
+    const enableNearby = useCallback(async (radius = 25) => {
+        const coords = await getUserCoords({ requestPermission: true, force: true });
+        if (!coords) {
+            Alert.alert(t('feed.error'), t('feed.enableLocation'));
+            return;
+        }
+        setUserCoords(coords);
+        setNearbyKm(radius);
+        setShowFirstRun(false);
+        hapticSelection();
+    }, [t]);
 
     useEffect(() => {
         setScreenFilters(ScreenKeys.FEED, {
@@ -220,7 +337,7 @@ export default function HomeScreen() {
     plansRef.current = plans;
     currentUserIdRef.current = currentUserId;
 
-    const fetchData = useCallback(async (opts?: { refresh?: boolean }) => {
+    const fetchData = useCallback(async (opts?: { refresh?: boolean; skipScrollJump?: boolean }) => {
         let finished = false;
         const isRefresh = !!opts?.refresh;
         const safetyTimer = setTimeout(() => {
@@ -236,23 +353,29 @@ export default function HomeScreen() {
             } else if (!hasDataRef.current) {
                 setLoading(true);
             }
+            setLoadError(false);
 
             const nowIso = new Date().toISOString();
             void runPlanLifecycleMaintenance();
 
             const userPromise = getAuthUser();
-            const plansPromise = supabase
-                .from('planes')
-                .select(FEED_PLAN_COLUMNS)
-                .or(`fecha_evento.is.null,fecha_evento.gte.${nowIso}`)
-                .order('fecha_evento', { ascending: true })
-                .limit(100);
+            const plansPromise = withRetry(async () => {
+                const res = await supabase
+                    .from('planes')
+                    .select(FEED_PLAN_COLUMNS)
+                    .or(`fecha_evento.is.null,fecha_evento.gte.${nowIso}`)
+                    .order('fecha_evento', { ascending: true })
+                    .limit(100);
+                if (res.error) throw res.error;
+                return res;
+            });
 
             const [user, plansRes] = await Promise.all([userPromise, plansPromise]);
             setCurrentUserId(user?.id || null);
-
-            if (plansRes.error) {
-                console.error('Error cargando planes:', plansRes.error);
+            if (user?.id) {
+                void fetchAccountAccess(user.id).then((access) => setIsOwner(access.isOwner));
+            } else {
+                setIsOwner(false);
             }
 
             const safePlans = (plansRes.data || []).filter(isFeedPlan);
@@ -261,14 +384,17 @@ export default function HomeScreen() {
             const partsPromise = planIds.length > 0
                 ? supabase
                     .from('participantes')
-                    .select('plan_id, usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url)')
+                    .select('plan_id, usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)')
                     .in('plan_id', planIds)
                     .eq('estado', 'aceptado')
                 : Promise.resolve({ data: [], error: null });
 
             const creatorIds = Array.from(new Set(safePlans.map((p) => p.creador_id).filter(Boolean)));
             const creatorsPromise = creatorIds.length > 0
-                ? supabase.from('perfiles').select('id, nombre, avatar_url').in('id', creatorIds)
+                ? supabase
+                    .from('perfiles')
+                    .select('id, nombre, avatar_url, genero, ambientes_preferidos, etiquetas')
+                    .in('id', creatorIds)
                 : Promise.resolve({ data: [], error: null });
 
             const [partsRes, creatorsRes] = await Promise.all([partsPromise, creatorsPromise]);
@@ -402,7 +528,7 @@ export default function HomeScreen() {
                 setFeedTaste(nextTaste);
             }
 
-            cacheSet(FEED_CACHE_KEY, {
+            const snap: FeedSnapshot = {
                 plans: formattedPlans,
                 membershipMap: nextMembership,
                 savedPlans: nextSaved,
@@ -413,50 +539,159 @@ export default function HomeScreen() {
                 invitedPlanIds: [...nextInvited],
                 feedTaste: nextTaste,
                 notifBreakdown: nextNotifs,
-            } satisfies FeedSnapshot, FEED_CACHE_TTL_MS);
+            };
+            cacheSet(FEED_CACHE_KEY, snap, FEED_CACHE_TTL_MS);
+            void diskSet(FEED_CACHE_KEY, snap);
         } catch (error) {
-            console.log(error);
+            if (__DEV__) console.log(error);
+            // Sin datos en memoria: mostrar error (no fingir “vacío”).
+            if (!hasDataRef.current) setLoadError(true);
         } finally {
             finished = true;
             clearTimeout(safetyTimer);
             hasDataRef.current = true;
             setLoading(false);
             setRefreshing(false);
+            // Tras recargar, ya se pueden reordenar los planes a los que te uniste.
+            if (deferMineSortIdsRef.current.size > 0) {
+                deferMineSortIdsRef.current.clear();
+                setMineSortEpoch((n) => n + 1);
+            }
+            if (isRefresh && !opts?.skipScrollJump) {
+                setScreenScrollOffset(ScreenKeys.FEED, 0);
+                requestAnimationFrame(() => {
+                    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+                });
+            }
         }
     }, []);
 
     const fetchDataRef = useRef(fetchData);
     fetchDataRef.current = fetchData;
+    const fetchInFlightRef = useRef(false);
+    const pendingFeedRefreshRef = useRef(false);
+    const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+    const feedFocusedRef = useRef(false);
+    const didSessionFeedLoadRef = useRef(false);
+    /** Planes a los que te unes: UI “unido” ya, pero sin subir al tope hasta recargar el feed. */
+    const deferMineSortIdsRef = useRef<Set<string>>(new Set());
+    const [mineSortEpoch, setMineSortEpoch] = useState(0);
 
-    // Carga inicial si no hay caché. Sin realtime: el feed solo se recarga a mano.
-    useEffect(() => {
-        if (!hasDataRef.current) {
-            void fetchData();
+    const requestFeedLoad = useCallback((opts?: { refresh?: boolean; skipScrollJump?: boolean }) => {
+        if (fetchInFlightRef.current) {
+            // Casita / pull-to-refresh mientras ya carga: encolar una recarga al terminar.
+            if (opts?.refresh) pendingFeedRefreshRef.current = true;
+            return;
         }
-    }, [fetchData]);
+        fetchInFlightRef.current = true;
+        void fetchDataRef.current(opts).finally(() => {
+            fetchInFlightRef.current = false;
+            if (pendingFeedRefreshRef.current) {
+                pendingFeedRefreshRef.current = false;
+                requestFeedLoad({ refresh: true, skipScrollJump: true });
+                return;
+            }
+            // Tras actualizar datos, recuperar scroll (si saliste a otra pantalla o volviste a la app).
+            // En retap a casita ya vamos al tope con animación; no restaurar offset viejo.
+            if (feedFocusedRef.current && !opts?.skipScrollJump) {
+                restoreScroll();
+            }
+        });
+    }, [restoreScroll]);
+
+    // Tras crear un plan: recarga diferida (evita freeze al cerrar el modal).
+    useFocusEffect(
+        useCallback(() => {
+            feedFocusedRef.current = true;
+            let cancelled = false;
+            let task: { cancel: () => void } | null = null;
+            let timer: ReturnType<typeof setTimeout> | null = null;
+
+            if (consumeFeedNeedsRefresh()) {
+                didSessionFeedLoadRef.current = true;
+                task = InteractionManager.runAfterInteractions(() => {
+                    timer = setTimeout(() => {
+                        if (!cancelled) {
+                            requestFeedLoad({ refresh: true, skipScrollJump: true });
+                        }
+                    }, 280);
+                });
+            } else if (!hasDataRef.current || !didSessionFeedLoadRef.current) {
+                didSessionFeedLoadRef.current = true;
+                requestFeedLoad();
+            }
+
+            return () => {
+                cancelled = true;
+                task?.cancel?.();
+                if (timer) clearTimeout(timer);
+                feedFocusedRef.current = false;
+            };
+        }, [requestFeedLoad]),
+    );
+
+    // Fuera de la app → volver: una recarga (y luego restoreScroll).
+    useEffect(() => {
+        const sub = AppState.addEventListener('change', (next) => {
+            const prev = appStateRef.current;
+            appStateRef.current = next;
+            const fromBackground = prev === 'background' || prev === 'inactive';
+            if (fromBackground && next === 'active' && feedFocusedRef.current) {
+                requestFeedLoad();
+            }
+        });
+        return () => sub.remove();
+    }, [requestFeedLoad]);
+
+    const homeRetapBusyRef = useRef(false);
 
     useEffect(() => {
         return subscribeFeedHomeRetap(() => {
-            listRef.current?.scrollToOffset({ offset: 0, animated: true });
-            void fetchDataRef.current({ refresh: true });
+            if (homeRetapBusyRef.current) return;
+            homeRetapBusyRef.current = true;
+            const release = () => {
+                homeRetapBusyRef.current = false;
+            };
+
+            const from = getScreenScrollOffset(ScreenKeys.FEED);
+            // Ya arriba: solo recarga (sin pelear con el scroll).
+            if (from <= 16) {
+                requestFeedLoad({ refresh: true, skipScrollJump: true });
+                setTimeout(release, 700);
+                return;
+            }
+            // Primero sube; al terminar, recarga.
+            smoothScrollListToTop(
+                (opts) => listRef.current?.scrollToOffset(opts),
+                from,
+                () => {
+                    requestFeedLoad({ refresh: true, skipScrollJump: true });
+                    setTimeout(release, 400);
+                },
+            );
         });
-    }, []);
+    }, [requestFeedLoad]);
 
     const handleJoin = async (planId: string) => {
-        if (!currentUserId) return;
+        if (!currentUserId || joiningRef.current) return;
         const plan = plans.find(p => p.id === planId);
         if (!plan) return;
 
         if (!canJoinPlanByGender(plan, currentUserGenero)) {
+            hapticError();
             Alert.alert(t('feed.error'), t('card.soloChicasOnly'));
             return;
         }
 
         const limitCheck = await canJoinMorePlans(currentUserId, planId);
         if (!limitCheck.allowed) {
+            hapticError();
             Alert.alert(t('feed.error'), t('feed.planLimitReached', { max: limitCheck.max }));
             return;
         }
+
+        joiningRef.current = true;
+        setJoiningPlanId(planId);
 
         const estado = resolveJoinEstado({
             requiere_aprobacion: plan.requiere_aprobacion,
@@ -467,15 +702,42 @@ export default function HomeScreen() {
 
         const prevMap = membershipMap;
         const prevPlans = plans;
+        // Mantener posición en el feed hasta la próxima recarga.
+        deferMineSortIdsRef.current.add(planId);
         setMembershipMap(prev => ({ ...prev, [planId]: nextMembership }));
         if (estado === 'aceptado') {
             setPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: p.joinedCount + 1 } : p));
         }
-        const { error } = await supabase.from('participantes').insert({ plan_id: planId, usuario_id: currentUserId, estado });
-        if (error) {
-            setMembershipMap(prevMap);
-            setPlans(prevPlans);
-            Alert.alert(t('feed.error'), t('feed.joinError'));
+        try {
+            const { error } = await supabase.from('participantes').insert({ plan_id: planId, usuario_id: currentUserId, estado });
+            if (error) {
+                deferMineSortIdsRef.current.delete(planId);
+                setMembershipMap(prevMap);
+                setPlans(prevPlans);
+                hapticError();
+                Alert.alert(t('feed.error'), t('feed.joinError'));
+            } else {
+                hapticSuccess();
+                invalidatePlanMembershipCaches(currentUserId);
+                invalidatePlanDetailCache(planId);
+                const { notifyPlanJoin, schedulePlanLifecycleReminders } = await import('../../lib/push');
+                notifyPlanJoin(planId, estado);
+                if (estado === 'aceptado') {
+                    void schedulePlanLifecycleReminders({
+                        planId,
+                        planTitle: plan.titulo,
+                        fechaEvento: plan.fecha_evento,
+                        categoria: plan.categoria,
+                        locationName: plan.nombre_ubicacion,
+                    });
+                    void import('../../lib/analytics').then(({ trackFunnel }) =>
+                        trackFunnel('plan_join', { userId: currentUserId, props: { planId, estado } }),
+                    );
+                }
+            }
+        } finally {
+            joiningRef.current = false;
+            setJoiningPlanId(null);
         }
     };
 
@@ -517,6 +779,8 @@ export default function HomeScreen() {
                         Alert.alert(t('feed.error'), t('feed.leaveError'));
                         return;
                     }
+                    invalidatePlanMembershipCaches(currentUserId);
+                    invalidatePlanDetailCache(planId);
                     if (wasJoined) {
                         await promoteWaitlist(planId);
                         fetchData();
@@ -530,11 +794,13 @@ export default function HomeScreen() {
         if (!currentUserId) return;
         const isAlreadySaved = savedPlans.includes(planId);
         const prevSaved = savedPlans;
+        hapticLight();
         if (isAlreadySaved) {
             setSavedPlans(prev => prev.filter(id => id !== planId));
             const { error } = await supabase.from('planes_guardados').delete().eq('plan_id', planId).eq('usuario_id', currentUserId);
             if (error) {
                 setSavedPlans(prevSaved);
+                hapticError();
                 Alert.alert(t('feed.error'), t('feed.saveError'));
             }
         } else {
@@ -542,21 +808,20 @@ export default function HomeScreen() {
             const { error } = await supabase.from('planes_guardados').insert({ plan_id: planId, usuario_id: currentUserId });
             if (error) {
                 setSavedPlans(prevSaved);
+                hapticError();
                 Alert.alert(t('feed.error'), t('feed.saveError'));
             }
         }
     };
 
-    const handleReportPlan = (planId: string) => {
-        if (!currentUserId) return;
-        router.push({ pathname: '/report-plan', params: { planId } });
-    };
-
     const handleDeletePlan = async (planId: string) => {
-        Alert.alert(t('feed.deletePlan'), t('feed.deleteConfirm'), [
+        Alert.alert(
+            isOwner ? t('admin.deletePlanTitle') : t('feed.deletePlan'),
+            isOwner ? t('admin.deletePlanMsg') : t('feed.deleteConfirm'),
+            [
             { text: t('common.cancel'), style: 'cancel' },
             {
-                text: t('feed.deletePlan'),
+                text: isOwner ? t('admin.deletePlanConfirm') : t('feed.deletePlan'),
                 style: 'destructive',
                 // No async aquí: en Android el Alert espera el Promise y se queda abierto.
                 onPress: () => {
@@ -568,12 +833,22 @@ export default function HomeScreen() {
                     setSavedPlans(prev => prev.filter(id => id !== planId));
                     setTimeout(() => {
                         void (async () => {
-                            const { error } = await deletePlanCompletely(planId);
+                            const { error } = isOwner
+                                ? await deletePlanAdmin(planId)
+                                : await deletePlanCompletely(planId);
                             if (error) {
                                 setPlans(prevPlans);
                                 setMembershipMap(prevMap);
                                 setSavedPlans(prevSaved);
-                                Alert.alert(t('feed.error'), t('feed.deleteError'));
+                                const msg =
+                                    error === 'not_authorized'
+                                        ? t('admin.err.not_authorized')
+                                        : error === 'plan_not_found'
+                                          ? t('admin.err.plan_not_found')
+                                          : t('feed.deleteError');
+                                Alert.alert(t('feed.error'), msg);
+                            } else {
+                                invalidatePlanMembershipCaches(currentUserId);
                             }
                         })();
                     }, 0);
@@ -586,6 +861,17 @@ export default function HomeScreen() {
         router.push({ pathname: '/create-plan', params: { editId: planId } });
     };
 
+    const planDistanceLabel = useCallback(
+        (plan: any): string | undefined => {
+            if (!userCoords) return undefined;
+            const lat = Number(plan.latitud);
+            const lng = Number(plan.longitud);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
+            return formatDistanceKm(distanceKm(userCoords.latitude, userCoords.longitude, lat, lng), lang);
+        },
+        [userCoords, lang],
+    );
+
     const renderPlanItem = useCallback(
         ({ item, index }: { item: any; index: number }) => (
             <PlanCard
@@ -597,18 +883,30 @@ export default function HomeScreen() {
                 isSaved={savedPlans.includes(item.id)}
                 friendIds={friendIds}
                 coincidedIds={coincidedIds}
+                isOwner={isOwner}
+                distanceLabel={planDistanceLabel(item)}
                 onJoin={handleJoin}
+                joining={joiningPlanId === item.id}
                 onLeave={handleLeave}
                 onDelete={handleDeletePlan}
                 onEdit={handleEditPlan}
                 onToggleSave={handleSave}
-                onReport={currentUserId ? handleReportPlan : undefined}
-                onOpenDetail={(planId) => router.push({ pathname: '/plan/[id]', params: { id: planId } })}
+                onOpenDetail={(planId) => {
+                    const plan = plans.find((p) => String(p.id) === String(planId));
+                    const mid = String(planId);
+                    if (plan) {
+                        seedPlanDetailFromFeed(plan, {
+                            membership: membershipMap[mid] || 'none',
+                        });
+                    }
+                    prefetchPlanDetail(mid);
+                    router.push({ pathname: '/plan/[id]', params: { id: planId } });
+                }}
                 onParticipantsChanged={() => void fetchDataRef.current()}
                 router={router}
             />
         ),
-        [currentUserId, currentUserGenero, membershipMap, savedPlans, friendIds, coincidedIds, router],
+        [currentUserId, currentUserGenero, membershipMap, savedPlans, friendIds, coincidedIds, isOwner, router, planDistanceLabel, plans, joiningPlanId],
     );
 
     const matchesDate = (plan: any) => {
@@ -627,10 +925,15 @@ export default function HomeScreen() {
     };
 
     const filteredPlans = useMemo(() => {
-        const isMinePlan = (p: any) =>
-            String(p.creador_id) === String(currentUserId)
-            || membershipMap[p.id] === 'joined'
-            || membershipMap[p.id] === 'requested';
+        const isMinePlan = (p: any) => {
+            // Tras unirte, el botón ya dice “unido”, pero no sube al tope hasta recargar.
+            if (deferMineSortIdsRef.current.has(p.id)) return false;
+            return (
+                String(p.creador_id) === String(currentUserId)
+                || membershipMap[p.id] === 'joined'
+                || membershipMap[p.id] === 'requested'
+            );
+        };
 
         const membershipPlanIds = new Set(Object.keys(membershipMap));
 
@@ -648,17 +951,30 @@ export default function HomeScreen() {
                     selectedProvinces.length === 0
                     || selectedProvinces.some((prov) => planMatchesProvince(p, prov));
 
+                let distanceOk = true;
+                if (nearbyKm != null && userCoords) {
+                    const lat = Number(p.latitud);
+                    const lng = Number(p.longitud);
+                    if (!Number.isFinite(lat) || !Number.isFinite(lng)) distanceOk = false;
+                    else {
+                        const d = distanceKm(userCoords.latitude, userCoords.longitude, lat, lng);
+                        distanceOk = d <= nearbyKm;
+                    }
+                }
+
                 return isPlanActiveForFeed(p)
                     && canSeePlanInFeed(p, {
                         userId: currentUserId,
                         friendIds,
                         membershipPlanIds,
                         invitedPlanIds,
+                        isOwner,
                     })
-                    && (!isSoloChicasPlan(p) || currentUserGenero === 'femenino')
+                    && (isOwner || !isSoloChicasPlan(p) || currentUserGenero === 'femenino')
                     && categoryOk
                     && subcategoryOk
                     && provinceOk
+                    && distanceOk
                     && planMatchesSearch(p, search, searchExpanded)
                     && matchesDate(p);
             })
@@ -666,6 +982,17 @@ export default function HomeScreen() {
                 const am = isMinePlan(a) ? 0 : 1;
                 const bm = isMinePlan(b) ? 0 : 1;
                 if (am !== bm) return am - bm;
+                if (userCoords) {
+                    const da = Number.isFinite(Number(a.latitud))
+                        ? distanceKm(userCoords.latitude, userCoords.longitude, Number(a.latitud), Number(a.longitud))
+                        : Number.POSITIVE_INFINITY;
+                    const db = Number.isFinite(Number(b.latitud))
+                        ? distanceKm(userCoords.latitude, userCoords.longitude, Number(b.latitud), Number(b.longitud))
+                        : Number.POSITIVE_INFINITY;
+                    if (nearbyKm != null || Math.abs(da - db) > 0.05) {
+                        if (da !== db) return da - db;
+                    }
+                }
                 return compareFeedAffinity(a, b, feedTaste, friendIds);
             });
     }, [
@@ -675,6 +1002,7 @@ export default function HomeScreen() {
         membershipMap,
         friendIds,
         invitedPlanIds,
+        isOwner,
         selectedCategories,
         selectedSubcategories,
         selectedProvinces,
@@ -682,20 +1010,88 @@ export default function HomeScreen() {
         searchExpanded,
         dateFilter,
         feedTaste,
+        nearbyKm,
+        userCoords,
+        mineSortEpoch,
     ]);
 
-    /** Planes con coordenadas en España para el mapa de zona (se abre centrado en Madrid). */
+    /** Planes con coordenadas válidas en Europa para el mapa de zona. */
     const zoneMapPlans = useMemo(() => {
-        return filteredPlans.filter((p) => {
+        const out: typeof filteredPlans = [];
+        for (const p of filteredPlans) {
             const lat = Number(p.latitud);
             const lng = Number(p.longitud);
-            return isLocationInSpain(lat, lng);
-        });
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+            if (Math.abs(lat) < 0.01 && Math.abs(lng) < 0.01) continue;
+            if (!isLocationInEurope(lat, lng)) continue;
+            out.push(p);
+            // Demasiados Marker nativos en Expo Go suelen crashear al tocar.
+            if (out.length >= 80) break;
+        }
+        return out;
     }, [filteredPlans]);
+
+    const filteredPlansRef = useRef(filteredPlans);
+    filteredPlansRef.current = filteredPlans;
+    const membershipMapRef = useRef(membershipMap);
+    membershipMapRef.current = membershipMap;
+
+    const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+        const indices = viewableItems
+            .map((v) => v.index)
+            .filter((i): i is number => typeof i === 'number' && i >= 0);
+        if (indices.length === 0) return;
+        const maxIdx = Math.max(...indices);
+        const next = filteredPlansRef.current[maxIdx + 1];
+        if (!next?.id) return;
+        const mid = String(next.id);
+        seedPlanDetailFromFeed(next, {
+            membership: membershipMapRef.current[mid] || 'none',
+        });
+        prefetchPlanDetail(mid);
+    }).current;
+
+    const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 35, minimumViewTime: 120 }).current;
+
+    const mapSelectedPlan = useMemo(
+        () => zoneMapPlans.find((p) => String(p.id) === String(mapSelectedId)) ?? null,
+        [zoneMapPlans, mapSelectedId],
+    );
+
+    const selectMapPlan = useCallback((planId: string) => {
+        // Diferir el setState fuera del callback nativo del Marker (evita crash en Expo Go).
+        requestAnimationFrame(() => {
+            setMapSelectedId(planId);
+        });
+    }, []);
+
+    const openPlanFromMap = useCallback((plan: (typeof zoneMapPlans)[number]) => {
+        const planId = String(plan.id);
+        try {
+            seedPlanDetailFromFeed(plan, {
+                membership: membershipMapRef.current[planId] || 'none',
+            });
+            prefetchPlanDetail(planId);
+        } catch {
+            /* ignore seed errors */
+        }
+        // Cerrar el mapa ANTES de navegar: MapView + Modal + push crashea a menudo en Expo Go.
+        setShowZoneModal(false);
+        setMapSelectedId(null);
+        InteractionManager.runAfterInteractions(() => {
+            setTimeout(() => {
+                router.push({
+                    pathname: '/plan/[id]',
+                    params: { id: planId },
+                });
+            }, 80);
+        });
+    }, [router]);
 
     const scrollToPlanInFeed = (planId: string) => {
         const index = filteredPlans.findIndex((p) => String(p.id) === String(planId));
         setShowZoneModal(false);
+        setMapSelectedId(null);
         if (index < 0) return;
 
         InteractionManager.runAfterInteractions(() => {
@@ -716,11 +1112,12 @@ export default function HomeScreen() {
         });
     };
 
-    const hasActiveFilters =
+    const hasSheetFilters =
         selectedCategories.length > 0
         || selectedSubcategories.length > 0
         || dateFilter !== 'all'
-        || selectedProvinces.length > 0;
+        || selectedProvinces.length > 0
+        || nearbyKm != null;
 
     const subcategoryOptions = useMemo(() => {
         if (selectedCategories.length === 0) return [] as string[];
@@ -758,11 +1155,12 @@ export default function HomeScreen() {
         setSelectedSubcategories([]);
         setDateFilter('all');
         setSelectedProvinces([]);
+        setNearbyKm(null);
     };
 
     return (
         <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-        <MainChrome active="feed">
+            <View style={{ flex: 1 }}>
             <StatusBar barStyle="dark-content" />
             <View style={styles.container}>
             <View style={styles.searchWrapper}>
@@ -784,47 +1182,76 @@ export default function HomeScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                    style={[styles.quickFilterPill, styles.quickFilterBox, hasActiveFilters ? styles.quickFilterActive : null]}
+                    style={[styles.quickFilterPill, styles.quickFilterBox, hasSheetFilters ? styles.quickFilterActive : null]}
                     onPress={() => setShowFiltersModal(true)}
                 >
-                    <Ionicons name="options" size={15} color={hasActiveFilters ? '#FFF' : PRIMARY_DARK} />
-                    <Text style={[styles.quickFilterText, hasActiveFilters ? { color: '#FFF' } : null]} numberOfLines={1}>
+                    <Ionicons name="options" size={15} color={hasSheetFilters ? '#FFF' : PRIMARY_DARK} />
+                    <Text style={[styles.quickFilterText, hasSheetFilters ? { color: '#FFF' } : null]} numberOfLines={1}>
                         {t('feed.filters')}
                     </Text>
                 </TouchableOpacity>
             </View>
 
+            {showFirstRun ? (
+                <View style={styles.firstRunBanner}>
+                    <Text style={styles.firstRunTitle}>{t('feed.firstRunTitle')}</Text>
+                    <Text style={styles.firstRunBody}>{t('feed.firstRunBody')}</Text>
+                    <View style={styles.firstRunActions}>
+                        <TouchableOpacity
+                            style={styles.firstRunPrimary}
+                            onPress={() => void enableNearby(25)}
+                            activeOpacity={0.9}
+                        >
+                            <Text style={styles.firstRunPrimaryText}>{t('feed.firstRunNearby')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.firstRunSecondary}
+                            onPress={() => {
+                                setShowFirstRun(false);
+                                router.push('/create-plan');
+                            }}
+                            activeOpacity={0.9}
+                        >
+                            <Text style={styles.firstRunSecondaryText}>{t('feed.firstRunCreate')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => {
+                                setShowFirstRun(false);
+                                router.push('/community-norms');
+                            }}
+                        >
+                            <Text style={styles.firstRunLink}>{t('feed.firstRunNorms')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                    <TouchableOpacity style={styles.firstRunClose} onPress={() => setShowFirstRun(false)} hitSlop={10}>
+                        <Ionicons name="close" size={18} color="#64748B" />
+                    </TouchableOpacity>
+                </View>
+            ) : null}
+
             <View style={styles.listWrap}>
-                <FlatList
+                <FlashList
                     ref={listRef}
+                    style={{ flex: 1 }}
                     data={filteredPlans}
                     keyExtractor={(item) => item.id}
-                    extraData={{ membershipMap, savedPlans, friendIds, coincidedIds }}
+                    extraData={{ membershipMap, savedPlans, friendIds, coincidedIds, nearbyKm, userCoords }}
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
                     onScroll={onScroll}
                     scrollEventThrottle={scrollEventThrottle}
-                    onScrollToIndexFailed={(info) => {
-                        listRef.current?.scrollToOffset({
-                            offset: Math.max(0, info.averageItemLength * info.index),
-                            animated: true,
-                        });
-                        setTimeout(() => {
-                            listRef.current?.scrollToIndex({
-                                index: info.index,
-                                animated: true,
-                                viewPosition: 0.12,
-                            });
-                        }, 120);
-                    }}
-                    {...OPTIMIZED_LIST_PROPS}
+                    drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     ListEmptyComponent={
                         !loading ? (
                             <EmptySearch
+                                loadError={loadError}
+                                onRetry={() => void fetchData({ refresh: true })}
                                 onClear={() => {
                                     setSearch('');
                                     clearAllFilters();
+                                    setLoadError(false);
                                 }}
+                                onCreate={() => router.push('/create-plan')}
                             />
                         ) : null
                     }
@@ -836,10 +1263,12 @@ export default function HomeScreen() {
                         />
                     }
                     renderItem={renderPlanItem}
+                    onViewableItemsChanged={onViewableItemsChanged}
+                    viewabilityConfig={viewabilityConfig}
                 />
                 {loading && !refreshing && plans.length === 0 ? (
-                    <View style={styles.listLoadingOverlay}>
-                        <ActivityIndicator size="large" color={PRIMARY_DARK} />
+                    <View style={styles.listLoadingOverlay} pointerEvents="none">
+                        <FeedSkeletonList count={3} />
                     </View>
                 ) : null}
             </View>
@@ -864,8 +1293,17 @@ export default function HomeScreen() {
                     <View style={styles.filtersSheet}>
                         <View style={styles.filtersHeader}>
                             <Text style={styles.modalTitle}>{t('feed.filters')}</Text>
-                            {hasActiveFilters ? (
-                                <TouchableOpacity onPress={clearAllFilters} hitSlop={8}>
+                            {hasSheetFilters ? (
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        setSelectedCategories([]);
+                                        setSelectedSubcategories([]);
+                                        setDateFilter('all');
+                                        setSelectedProvinces([]);
+                                        setNearbyKm(null);
+                                    }}
+                                    hitSlop={8}
+                                >
                                     <Text style={styles.clearFiltersText}>{t('feed.clearFilters')}</Text>
                                 </TouchableOpacity>
                             ) : null}
@@ -1014,6 +1452,33 @@ export default function HomeScreen() {
                                     </View>
                                 </View>
                             )}
+
+                            <Text style={styles.filterSectionLabel}>{t('feed.nearby')}</Text>
+                            <Text style={styles.filterHint}>{t('feed.nearbyPickRadius')}</Text>
+                            <View style={styles.chipWrap}>
+                                <TouchableOpacity
+                                    style={[styles.filterChip, nearbyKm == null && styles.filterChipActive]}
+                                    onPress={() => setNearbyKm(null)}
+                                >
+                                    <Text style={[styles.filterChipText, nearbyKm == null && styles.filterChipTextActive]}>
+                                        {t('feed.nearbyAny')}
+                                    </Text>
+                                </TouchableOpacity>
+                                {([5, 10, 25] as const).map((n) => {
+                                    const active = nearbyKm === n;
+                                    return (
+                                        <TouchableOpacity
+                                            key={n}
+                                            style={[styles.filterChip, active && styles.filterChipActive]}
+                                            onPress={() => void enableNearby(n)}
+                                        >
+                                            <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+                                                {t('feed.nearbyKm', { n })}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
                         </ScrollView>
 
                         <TouchableOpacity
@@ -1029,50 +1494,137 @@ export default function HomeScreen() {
                 </View>
             </Modal>
 
-            <Modal visible={showZoneModal} animationType="slide" onRequestClose={() => setShowZoneModal(false)}>
+            <Modal
+                visible={showZoneModal}
+                animationType="slide"
+                onRequestClose={() => {
+                    setShowZoneModal(false);
+                    setMapSelectedId(null);
+                }}
+            >
                 <View style={styles.mapModalContainer}>
-                    <MapView
+                    {showZoneModal ? (
+                    <NexoMapView
+                        ref={zoneMapRef}
                         style={StyleSheet.absoluteFill}
+                        loadingEnabled
+                        showsUserLocation={!!userCoords}
+                        moveOnMarkerPress={false}
+                        toolbarEnabled={false}
+                        pitchEnabled={false}
+                        rotateEnabled={false}
                         initialRegion={{
-                            latitude: 40.4168,
-                            longitude: -3.7038,
-                            latitudeDelta: 0.22,
-                            longitudeDelta: 0.22,
+                            latitude: Number(
+                                userCoords?.latitude
+                                    ?? zoneMapPlans[0]?.latitud
+                                    ?? 40.4168,
+                            ),
+                            longitude: Number(
+                                userCoords?.longitude
+                                    ?? zoneMapPlans[0]?.longitud
+                                    ?? -3.7038,
+                            ),
+                            latitudeDelta: nearbyKm != null ? 0.35 : 0.22,
+                            longitudeDelta: nearbyKm != null ? 0.35 : 0.22,
                         }}
-                    >
-                        {zoneMapPlans.map((p) => (
-                            <Marker
-                                key={p.id}
-                                coordinate={{
+                        onMapReady={() => {
+                            if (zoneMapPlans.length === 0) return;
+                            const coords = zoneMapPlans
+                                .map((p) => ({
                                     latitude: Number(p.latitud),
                                     longitude: Number(p.longitud),
-                                }}
-                                title={p.titulo}
-                                description={p.nombre_ubicacion || undefined}
-                                pinColor="#2563EB"
-                                onPress={() => scrollToPlanInFeed(p.id)}
-                            />
-                        ))}
-                    </MapView>
+                                }))
+                                .filter(
+                                    (c) => Number.isFinite(c.latitude) && Number.isFinite(c.longitude),
+                                );
+                            if (coords.length === 0) return;
+                            try {
+                                zoneMapRef.current?.fitToCoordinates(coords, {
+                                    edgePadding: { top: 90, right: 48, bottom: 160, left: 48 },
+                                    animated: false,
+                                });
+                            } catch {
+                                /* fitToCoordinates a veces falla en Expo Go */
+                            }
+                        }}
+                    >
+                        {zoneMapPlans.map((p) => {
+                            const lat = Number(p.latitud);
+                            const lng = Number(p.longitud);
+                            return (
+                                <Marker
+                                    key={String(p.id)}
+                                    identifier={String(p.id)}
+                                    coordinate={{ latitude: lat, longitude: lng }}
+                                    // Color fijo: mutar pinColor al tocar remonta el Marker nativo y crashea en Expo Go.
+                                    pinColor="#2563EB"
+                                    tracksViewChanges={false}
+                                    stopPropagation
+                                    onPress={(e) => {
+                                        // @ts-expect-error stopPropagation en el evento nativo de maps
+                                        e?.stopPropagation?.();
+                                        selectMapPlan(String(p.id));
+                                    }}
+                                />
+                            );
+                        })}
+                    </NexoMapView>
+                    ) : null}
 
                     <View style={styles.mapModalHeader}>
-                        <TouchableOpacity style={styles.mapCloseBtn} onPress={() => setShowZoneModal(false)}>
+                        <TouchableOpacity
+                            style={styles.mapCloseBtn}
+                            onPress={() => {
+                                setShowZoneModal(false);
+                                setMapSelectedId(null);
+                            }}
+                        >
                             <Ionicons name="chevron-back" size={24} color={INK} />
                         </TouchableOpacity>
-                        <View style={styles.mapHeaderTitleWrap}>
-                            <Text style={styles.mapHeaderTitle}>{t('feed.filterZoneTitle')}</Text>
-                        </View>
                     </View>
 
                     {zoneMapPlans.length === 0 ? (
                         <View style={styles.mapModalFooter}>
                             <Text style={styles.mapFooterHint}>{t('feed.filterZoneEmpty')}</Text>
                         </View>
+                    ) : mapSelectedPlan ? (
+                        <View style={styles.mapPreviewCard} pointerEvents="box-none">
+                            <PlanImage
+                                source={resolvePlanImageSource(mapSelectedPlan.imagen_url)}
+                                style={styles.mapPreviewImage}
+                                recyclingKey={String(mapSelectedPlan.id)}
+                            />
+                            <View style={styles.mapPreviewBody}>
+                                <Text style={styles.mapPreviewTitle} numberOfLines={2}>
+                                    {mapSelectedPlan.titulo}
+                                </Text>
+                                <Text style={styles.mapPreviewMeta} numberOfLines={1}>
+                                    {mapSelectedPlan.nombre_ubicacion || t('card.location')}
+                                    {planDistanceLabel(mapSelectedPlan)
+                                        ? ` · ${planDistanceLabel(mapSelectedPlan)}`
+                                        : ''}
+                                </Text>
+                                <View style={styles.mapPreviewActions}>
+                                    <TouchableOpacity
+                                        style={styles.mapPreviewSecondary}
+                                        onPress={() => scrollToPlanInFeed(mapSelectedPlan.id)}
+                                    >
+                                        <Text style={styles.mapPreviewSecondaryText}>{t('feed.mapShowInList')}</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={styles.mapPreviewPrimary}
+                                        onPress={() => openPlanFromMap(mapSelectedPlan)}
+                                    >
+                                        <Text style={styles.mapPreviewPrimaryText}>{t('feed.mapOpenPlan')}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        </View>
                     ) : null}
                 </View>
             </Modal>
             </View>
-        </MainChrome>
+            </View>
         </TouchableWithoutFeedback>
     );
 }
@@ -1091,14 +1643,34 @@ const styles = StyleSheet.create({
 
     listContent: { paddingHorizontal: 20, paddingBottom: 130, paddingTop: 6 },
     listWrap: { flex: 1 },
-    listLoadingOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', paddingTop: 40 },
+    listLoadingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: BG_BOTTOM },
 
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: 60, paddingHorizontal: 20 },
     emptyIconWrap: { width: 110, height: 110, borderRadius: 55, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center', elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
     emptyTitle: { fontSize: 18, fontWeight: '800', color: INK, textAlign: 'center', marginTop: 22 },
     emptySubtitle: { fontSize: 14, color: '#64748B', textAlign: 'center', marginTop: 8 },
     createBtnEmpty: { marginTop: 22, backgroundColor: PRIMARY_DARK, paddingHorizontal: 22, paddingVertical: 13, borderRadius: 16 },
+    createBtnEmptySecondary: { marginTop: 10, backgroundColor: '#EEF3FB' },
     createBtnEmptyText: { color: '#FFF', fontWeight: '700' },
+    firstRunBanner: {
+        marginHorizontal: 16,
+        marginBottom: 10,
+        backgroundColor: '#FFF',
+        borderRadius: 18,
+        padding: 14,
+        borderWidth: 1,
+        borderColor: '#DBEAFE',
+        position: 'relative',
+    },
+    firstRunTitle: { fontSize: 16, fontWeight: '800', color: INK, paddingRight: 24 },
+    firstRunBody: { fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 18 },
+    firstRunActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, alignItems: 'center' },
+    firstRunPrimary: { backgroundColor: PRIMARY_DARK, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12 },
+    firstRunPrimaryText: { color: '#FFF', fontWeight: '800', fontSize: 13 },
+    firstRunSecondary: { backgroundColor: '#EEF3FB', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12 },
+    firstRunSecondaryText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 13 },
+    firstRunLink: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 13, paddingHorizontal: 4 },
+    firstRunClose: { position: 'absolute', top: 10, right: 10 },
 
     categoryOptionRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 
@@ -1184,13 +1756,45 @@ const styles = StyleSheet.create({
     mapModalContainer: { flex: 1, backgroundColor: '#E3ECFB' },
     mapModalHeader: { position: 'absolute', top: Platform.OS === 'ios' ? 56 : 44, left: 16, right: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
     mapCloseBtn: { width: 46, height: 46, borderRadius: 16, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center', elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
-    mapHeaderTitleWrap: { backgroundColor: '#FFF', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 10, elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
-    mapHeaderTitle: { fontSize: 16, fontWeight: '900', color: INK },
-    mapHeaderSub: { fontSize: 12, color: '#64748B', fontWeight: '600' },
     mapModalFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFF', paddingHorizontal: 24, paddingTop: 18, paddingBottom: Platform.OS === 'ios' ? 34 : 22, borderTopLeftRadius: 24, borderTopRightRadius: 24, elevation: 12 },
     mapFooterHint: { textAlign: 'center', color: '#64748B', fontWeight: '600', fontSize: 14 },
-    mapSelectedRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    mapSelectedText: { flex: 1, fontSize: 16, fontWeight: '800', color: INK },
-    mapClearBtn: { backgroundColor: '#F1F5F9', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
-    mapClearText: { color: '#64748B', fontWeight: '700' },
+    mapPreviewCard: {
+        position: 'absolute',
+        left: 14,
+        right: 14,
+        bottom: Platform.OS === 'ios' ? 28 : 18,
+        backgroundColor: '#FFF',
+        borderRadius: 22,
+        padding: 12,
+        flexDirection: 'row',
+        gap: 12,
+        elevation: 14,
+        shadowColor: '#0F2A4A',
+        shadowOpacity: 0.18,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 8 },
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    mapPreviewImage: { width: 86, height: 86, borderRadius: 16, backgroundColor: '#E3ECFB' },
+    mapPreviewBody: { flex: 1, justifyContent: 'center' },
+    mapPreviewTitle: { fontSize: 16, fontWeight: '900', color: INK },
+    mapPreviewMeta: { fontSize: 12, fontWeight: '600', color: '#64748B', marginTop: 4 },
+    mapPreviewActions: { flexDirection: 'row', gap: 8, marginTop: 10 },
+    mapPreviewSecondary: {
+        flex: 1,
+        backgroundColor: '#EEF3FB',
+        borderRadius: 12,
+        paddingVertical: 10,
+        alignItems: 'center',
+    },
+    mapPreviewSecondaryText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 12 },
+    mapPreviewPrimary: {
+        flex: 1,
+        backgroundColor: PRIMARY_DARK,
+        borderRadius: 12,
+        paddingVertical: 10,
+        alignItems: 'center',
+    },
+    mapPreviewPrimaryText: { color: '#FFF', fontWeight: '800', fontSize: 12 },
 });

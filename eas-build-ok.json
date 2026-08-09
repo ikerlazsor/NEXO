@@ -1,0 +1,47 @@
+﻿{
+  "id": "74a59733-1da3-4179-9b94-ea75f8e39049",
+  "status": "FINISHED",
+  "platform": "ANDROID",
+  "artifacts": {
+    "buildUrl": "https://expo.dev/artifacts/eas/Xk9IMIIjP59LJQcdaynLfpCqeKQXrJ7116u0a4E2EOM.apk",
+    "applicationArchiveUrl": "https://expo.dev/artifacts/eas/Xk9IMIIjP59LJQcdaynLfpCqeKQXrJ7116u0a4E2EOM.apk"
+  },
+  "fingerprint": {
+    "id": "019f9dd6-5fae-713d-9da7-9a31e623855d",
+    "hash": "a3f09d46fd8f0d57e9390157df6819fe107759e8"
+  },
+  "initiatingActor": {
+    "id": "c16d1dc2-3ef5-41a9-a305-6f4287a306d6",
+    "displayName": "ikerlazsor"
+  },
+  "logFiles": [
+    "https://storage.googleapis.com/eas-workflows-production/logs/edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e/74a59733-1da3-4179-9b94-ea75f8e39049/2026-07-26T09%3A51%3A45Z-a5014db3-f04f-4c1e-9d72-f7e935028f9b.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260726%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260726T125816Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=880162dec89d6666ffa821b51f1d1ef6df4d50af182c4bcb82a122b7af5b7eded0be3034afdae6c9c0d6580043e9607aa04d69f6bd1748552e55cde6bc5bbef72bb406081f592e8a6501db72ef7523a70d767dc10e26ead2ad9d90951588ee749c5b901d4473a2794416d049e739ad97eaf386c015e3ed05022ef1a0f77f4d2b861447f8b476321766e33a3fbf9ec093d6470daff0618a5451c4db763524cf0e503702130a33b22ea6b7ea6c44cac74f95e1e35d70a24dcd6a6c0960069354fe9372cb54e29de98ea1e47ff4d1b1bf8210acf4011e236c365b668ee65c47d7ee2566e947181d0746a78d9e553f68895879216eaa18e3543f873d947cf053a78c"
+  ],
+  "project": {
+    "id": "edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e",
+    "name": "nexo",
+    "slug": "nexo",
+    "ownerAccount": {
+      "id": "6f061dba-13c1-4f88-9df6-b9be1443838f",
+      "name": "ikerlazsor"
+    }
+  },
+  "distribution": "INTERNAL",
+  "buildProfile": "preview",
+  "sdkVersion": "54.0.0",
+  "appVersion": "1.0.0",
+  "appBuildVersion": "1",
+  "gitCommitHash": "31932e087aa0ad9f1f409b899a8703fcc9bff912",
+  "gitCommitMessage": ".",
+  "priority": "NORMAL_PLUS",
+  "createdAt": "2026-07-26T09:51:39.916Z",
+  "updatedAt": "2026-07-26T10:11:44.155Z",
+  "completedAt": "2026-07-26T10:11:43.983Z",
+  "expirationDate": "2026-08-09T09:51:39.942Z",
+  "isForIosSimulator": false,
+  "metrics": {
+    "buildWaitTime": 4132,
+    "buildQueueTime": 5980,
+    "buildDuration": 1193955
+  }
+}

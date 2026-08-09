@@ -5,6 +5,7 @@ import { useFocusEffect,
     useLocalSearchParams,
     useRouter } from 'expo-router';
 import { useCallback,
+    useEffect,
     useMemo,
     useRef,
     useState } from 'react';
@@ -22,7 +23,8 @@ import {
     View,
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
-import MapView, { Marker } from 'react-native-maps';
+import { Marker } from 'react-native-maps';
+import { NexoMapView } from '../../components/NexoMapView';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { PlanImage } from '../../components/PlanImage';
@@ -30,8 +32,9 @@ import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { SportIcon } from '../../components/SportIcon';
 import { InvitePeopleSheet, type InviteProfile } from '../../components/InvitePeopleSheet';
 import { getAuthUser } from '../../lib/auth';
+import { getCoincidedUserIds } from '../../lib/coincidences';
 import { getFriends } from '../../lib/friends';
-import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../../lib/planInvites';
+import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite, acceptPlanInvite, rejectPlanInvite, type PlanInvite } from '../../lib/planInvites';
 import {
     canJoinWaitlist,
     isAcceptedParticipant,
@@ -46,15 +49,20 @@ import { canJoinMorePlans } from '../../lib/planLimits';
 import { kickParticipant } from '../../lib/kickParticipant';
 import { getPersonalityLabel, type Genero } from '../../lib/profileFields';
 import { distanceKm, formatDistanceKm, openDirectionsTo } from '../../lib/geo';
+import { hapticError, hapticLight, hapticMedium, hapticSuccess } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { hidePlanFromMyList } from '../../lib/myPlansHide';
-import { isPlanChatAlive } from '../../lib/planLifecycle';
+import { buildPlanShareMessage } from '../../lib/shareLinks';
+import { isPlanActiveForSaved, isPlanChatAlive } from '../../lib/planLifecycle';
 import { renderRatingStars } from '../../lib/profileRating';
 import { getOpenRatingForPlan, type PendingRatingPlan } from '../../lib/ratings';
 import { EMPTY_STATS, formatRatingScore, getUserStats, type UserStats } from '../../lib/stats';
 import { resolvePlanImageSource, resolvePlanSport, getPlanCategoryDisplay } from '../../lib/sports';
 import { ScreenKeys } from '../../lib/screenState';
-import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
+import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
+import { invalidatePlanDetailCache } from '../../lib/planDetailCache';
+import { cacheGetStale, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
+import { getWaitlistPosition } from '../../lib/waitlistPosition';
 import { supabase } from '../../lib/supabase';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -73,6 +81,9 @@ const DANGER = '#EF4444';
 const FRIEND = '#10B981';
 const FRIEND_BG = '#ECFDF5';
 const FRIEND_BORDER = '#6EE7B7';
+const ACQUAINTANCE = '#7C3AED';
+const ACQUAINTANCE_BG = '#F5F3FF';
+const ACQUAINTANCE_BORDER = '#C4B5FD';
 const GOLD = '#F59E0B';
 const WAITLIST = '#7C3AED';
 
@@ -113,26 +124,32 @@ type PlanDetailSnapshot = {
     creatorStats: UserStats;
     membership: Membership;
     friendIds: string[];
+    coincidedIds: string[];
     isSaved: boolean;
     currentUserGenero: Genero | null;
     openRating: PendingRatingPlan | null;
     currentUserId: string | null;
+    /** Semilla incompleta del feed: no salta el fetch real. */
+    partial?: boolean;
 };
 
 function PersonBubble({
     person,
     isFriend,
+    isAcquaintance,
     subtitle,
     onPress,
     size = 64,
 }: {
     person: Participant;
     isFriend: boolean;
+    isAcquaintance?: boolean;
     subtitle?: string;
     onPress: () => void;
     size?: number;
 }) {
-    const { t } = useT();
+    const { t, lang } = useT();
+    const showAcquaintance = !!isAcquaintance && !isFriend;
     return (
         <TouchableOpacity style={styles.personBubble} activeOpacity={0.85} onPress={onPress}>
             <View
@@ -140,6 +157,7 @@ function PersonBubble({
                     styles.personAvatarRing,
                     { width: size + 8, height: size + 8, borderRadius: (size + 8) / 2 },
                     isFriend && styles.personAvatarRingFriend,
+                    showAcquaintance && styles.personAvatarRingAcquaintance,
                 ]}
             >
                 <ProfileAvatar
@@ -155,22 +173,46 @@ function PersonBubble({
                 )}
             </View>
             <Text
-                style={[styles.personName, isFriend && styles.personNameFriend]}
+                style={[
+                    styles.personName,
+                    isFriend && styles.personNameFriend,
+                    showAcquaintance && styles.personNameAcquaintance,
+                ]}
                 numberOfLines={1}
             >
                 {person.nombre || t('planDetail.anonymous')}
             </Text>
             {subtitle ? (
-                <Text style={[styles.personSubtitle, isFriend && styles.personSubtitleFriend]} numberOfLines={1}>
+                <Text
+                    style={[
+                        styles.personSubtitle,
+                        isFriend && styles.personSubtitleFriend,
+                        showAcquaintance && styles.personSubtitleAcquaintance,
+                    ]}
+                    numberOfLines={1}
+                >
                     {subtitle}
                 </Text>
             ) : null}
-            {isFriend && (
+            {isFriend ? (
                 <View style={styles.friendPill}>
                     <Ionicons name="heart" size={10} color={FRIEND} />
-                    <Text style={styles.friendPillText}>{t('planDetail.friend')}</Text>
+                    <Text style={styles.friendPillText}>
+                        {t(person.genero === 'femenino' ? 'planDetail.friendF' : 'planDetail.friend')}
+                    </Text>
                 </View>
-            )}
+            ) : showAcquaintance ? (
+                <View style={styles.acquaintancePill}>
+                    <Ionicons name="people" size={10} color={ACQUAINTANCE} />
+                    <Text style={styles.acquaintancePillText}>
+                        {t(
+                            person.genero === 'femenino'
+                                ? 'planDetail.acquaintanceF'
+                                : 'planDetail.acquaintance',
+                        )}
+                    </Text>
+                </View>
+            ) : null}
         </TouchableOpacity>
     );
 }
@@ -180,8 +222,24 @@ export default function PlanDetailScreen() {
     const insets = useSafeAreaInsets();
     const { t, lang } = useT();
     const dateLocale = lang === 'en' ? 'en-GB' : 'es-ES';
-    const { id } = useLocalSearchParams<{ id: string | string[] }>();
+    const { id, inviteId, inviterId, inviterName, inviterAvatar, inviteTipo } = useLocalSearchParams<{
+        id: string | string[];
+        inviteId?: string | string[];
+        inviterId?: string | string[];
+        inviterName?: string | string[];
+        inviterAvatar?: string | string[];
+        inviteTipo?: string | string[];
+    }>();
     const planId = Array.isArray(id) ? id[0] : id;
+    const pendingInviteId = Array.isArray(inviteId) ? inviteId[0] : inviteId;
+    const pendingInviterId = Array.isArray(inviterId) ? inviterId[0] : inviterId;
+    const pendingInviterName = Array.isArray(inviterName) ? inviterName[0] : inviterName;
+    const pendingInviterAvatar = Array.isArray(inviterAvatar) ? inviterAvatar[0] : inviterAvatar;
+    const pendingInviteTipo = (Array.isArray(inviteTipo) ? inviteTipo[0] : inviteTipo) as
+        | 'plan'
+        | 'grupo'
+        | undefined;
+    const fromInvite = !!pendingInviteId && !inviteHandled;
     const scrollKey = planId ? `${ScreenKeys.PLAN_DETAIL}:${planId}` : ScreenKeys.PLAN_DETAIL;
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(scrollKey);
 
@@ -201,6 +259,9 @@ export default function PlanDetailScreen() {
     const [friendIds, setFriendIds] = useState<Set<string>>(
         () => new Set(cachedDetail?.friendIds ?? []),
     );
+    const [coincidedIds, setCoincidedIds] = useState<Set<string>>(
+        () => new Set(cachedDetail?.coincidedIds ?? []),
+    );
     const [isSaved, setIsSaved] = useState(() => cachedDetail?.isSaved ?? false);
     const [actionBusy, setActionBusy] = useState(false);
     const [mapExpanded, setMapExpanded] = useState(false);
@@ -210,7 +271,10 @@ export default function PlanDetailScreen() {
     const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
     const [showInviteSheet, setShowInviteSheet] = useState(false);
     const [invitees, setInvitees] = useState<InviteProfile[]>([]);
+    const [inviteHandled, setInviteHandled] = useState(false);
+    const [waitlistPosition, setWaitlistPosition] = useState<number | null>(null);
     const hasLoadedRef = useRef(!!cachedDetail);
+    const loadGenRef = useRef(0);
 
     const applyDetailSnapshot = useCallback((snap: PlanDetailSnapshot) => {
         setPlan(snap.plan);
@@ -220,6 +284,7 @@ export default function PlanDetailScreen() {
         setCreatorStats(snap.creatorStats);
         setMembership(snap.membership);
         setFriendIds(new Set(snap.friendIds));
+        setCoincidedIds(new Set(snap.coincidedIds ?? []));
         setIsSaved(snap.isSaved);
         setCurrentUserGenero(snap.currentUserGenero);
         setOpenRating(snap.openRating);
@@ -227,18 +292,24 @@ export default function PlanDetailScreen() {
         hasLoadedRef.current = true;
     }, []);
 
-    const loadPlan = useCallback(async () => {
+    const loadPlan = useCallback(async (opts?: { force?: boolean }) => {
         if (!planId) return;
+        const gen = ++loadGenRef.current;
+        const detailKey = planDetailKey(planId);
         try {
-            const stale = cacheGetStale<PlanDetailSnapshot>(planDetailKey(planId));
+            const stale = cacheGetStale<PlanDetailSnapshot>(detailKey);
             if (stale) {
                 applyDetailSnapshot(stale);
                 setLoading(false);
+                // Semillas del feed vienen sin user/amigos/guardados → hay que completar.
+                const cacheComplete = !stale.partial && !!stale.currentUserId;
+                if (!opts?.force && cacheIsFresh(detailKey) && cacheComplete) return;
             } else if (!hasLoadedRef.current) {
                 setLoading(true);
             }
 
             const user = await getAuthUser();
+            if (gen !== loadGenRef.current) return;
             setCurrentUserId(user?.id ?? null);
 
             const { data: planRow, error } = await supabase
@@ -249,6 +320,7 @@ export default function PlanDetailScreen() {
                 .eq('id', planId)
                 .maybeSingle();
 
+            if (gen !== loadGenRef.current) return;
             if (error || !planRow) {
                 if (!stale) setPlan(null);
                 return;
@@ -256,10 +328,10 @@ export default function PlanDetailScreen() {
 
             setPlan(planRow as PlanRow);
 
-            const [partsRes, creatorRes, myPartRes, savedRes, friendsData, stats, myProfileRes] = await Promise.all([
+            const [partsRes, creatorRes, myPartRes, savedRes, friendsData, coincidedSet, stats, myProfileRes] = await Promise.all([
                 supabase
                     .from('participantes')
-                    .select('usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url)')
+                    .select('usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)')
                     .eq('plan_id', planId)
                     .eq('estado', 'aceptado'),
                 supabase
@@ -284,11 +356,13 @@ export default function PlanDetailScreen() {
                           .maybeSingle()
                     : Promise.resolve({ data: null, error: null }),
                 user ? getFriends(user.id) : Promise.resolve([]),
+                user ? getCoincidedUserIds(user.id) : Promise.resolve(new Set<string>()),
                 getUserStats(planRow.creador_id),
                 user
                     ? supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle()
                     : Promise.resolve({ data: null, error: null }),
             ]);
+            if (gen !== loadGenRef.current) return;
 
             const accepted = (partsRes.data || []).filter((p: { estado: string }) =>
                 isAcceptedParticipant(p.estado),
@@ -311,8 +385,10 @@ export default function PlanDetailScreen() {
                 ? (mapEstadoToMembership(myPartRes.data.estado) ?? 'none')
                 : 'none';
             const nextFriends = friendsData.map((f) => f.id);
+            const nextCoincided = [...coincidedSet];
             const nextGenero = (myProfileRes.data?.genero as Genero) ?? null;
             const nextOpenRating = user ? await getOpenRatingForPlan(user.id, planId) : null;
+            if (gen !== loadGenRef.current) return;
             const nextSaved = !!savedRes.data;
 
             const snap: PlanDetailSnapshot = {
@@ -323,23 +399,83 @@ export default function PlanDetailScreen() {
                 creatorStats: stats,
                 membership: nextMembership,
                 friendIds: nextFriends,
+                coincidedIds: nextCoincided,
                 isSaved: nextSaved,
                 currentUserGenero: nextGenero,
                 openRating: nextOpenRating,
                 currentUserId: user?.id ?? null,
+                partial: false,
             };
             applyDetailSnapshot(snap);
-            cacheSet(planDetailKey(planId), snap, PLAN_DETAIL_TTL_MS);
+            cacheSet(detailKey, snap, PLAN_DETAIL_TTL_MS);
         } finally {
-            setLoading(false);
+            if (gen === loadGenRef.current) setLoading(false);
         }
     }, [planId, applyDetailSnapshot]);
 
     useFocusEffect(
         useCallback(() => {
-            loadPlan();
+            void loadPlan();
         }, [loadPlan]),
     );
+
+    useEffect(() => {
+        if (!planId || !currentUserId || membership !== 'waitlist') {
+            setWaitlistPosition(null);
+            return;
+        }
+        let alive = true;
+        void getWaitlistPosition(planId, currentUserId).then((pos) => {
+            if (alive) setWaitlistPosition(pos);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [planId, currentUserId, membership, joinedCount]);
+
+    useEffect(() => {
+        if (!planId) return;
+        const channel = supabase
+            .channel(`plan-spots:${planId}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'participantes',
+                    filter: `plan_id=eq.${planId}`,
+                },
+                () => {
+                    void (async () => {
+                        const { data } = await supabase
+                            .from('participantes')
+                            .select('usuario_id, estado')
+                            .eq('plan_id', planId);
+                        if (!data) return;
+                        const accepted = data.filter((p) => isAcceptedParticipant(p.estado));
+                        setJoinedCount(accepted.length);
+
+                        if (currentUserId) {
+                            const mine = data.find((p) => p.usuario_id === currentUserId);
+                            const nextMembership = mine?.estado
+                                ? (mapEstadoToMembership(mine.estado) ?? 'none')
+                                : 'none';
+                            setMembership(nextMembership);
+                            if (nextMembership === 'waitlist') {
+                                const pos = await getWaitlistPosition(planId, currentUserId);
+                                setWaitlistPosition(pos);
+                            } else {
+                                setWaitlistPosition(null);
+                            }
+                        }
+                    })();
+                },
+            )
+            .subscribe();
+        return () => {
+            void supabase.removeChannel(channel);
+        };
+    }, [planId, currentUserId]);
 
     const isCreator = currentUserId && plan && String(plan.creador_id) === String(currentUserId);
     const isFull = plan ? joinedCount >= plan.maximo_participantes : false;
@@ -377,9 +513,10 @@ export default function PlanDetailScreen() {
     const handleInviteAdd = useCallback(
         async (profile: InviteProfile) => {
             if (!planId || !currentUserId) return { error: 'no_user' };
+            setInvitees((prev) => (prev.some((p) => p.id === profile.id) ? prev : [...prev, profile]));
             const { error } = await sendPlanInvite(planId, currentUserId, profile.id, 'plan');
-            if (!error) {
-                setInvitees((prev) => (prev.some((p) => p.id === profile.id) ? prev : [...prev, profile]));
+            if (error) {
+                setInvitees((prev) => prev.filter((p) => p.id !== profile.id));
             }
             return { error };
         },
@@ -389,9 +526,14 @@ export default function PlanDetailScreen() {
     const handleInviteRemove = useCallback(
         async (profileId: string) => {
             if (!planId) return { error: 'no_plan' };
+            let removed: InviteProfile | undefined;
+            setInvitees((prev) => {
+                removed = prev.find((p) => p.id === profileId);
+                return prev.filter((p) => p.id !== profileId);
+            });
             const { error } = await cancelPlanInvite(planId, profileId);
-            if (!error) {
-                setInvitees((prev) => prev.filter((p) => p.id !== profileId));
+            if (error && removed) {
+                setInvitees((prev) => (prev.some((p) => p.id === removed!.id) ? prev : [...prev, removed!]));
             }
             return { error };
         },
@@ -421,13 +563,15 @@ export default function PlanDetailScreen() {
             {
                 text: t('planDetail.kickConfirm'),
                 style: 'destructive',
-                onPress: async () => {
-                    const { error } = await kickParticipant(planId, targetUserId, currentUserId);
-                    if (error) {
-                        Alert.alert(t('feed.error'), error);
-                        return;
-                    }
-                    await loadPlan();
+                onPress: () => {
+                    void (async () => {
+                        const { error } = await kickParticipant(planId, targetUserId, currentUserId);
+                        if (error) {
+                            Alert.alert(t('feed.error'), error);
+                            return;
+                        }
+                        await loadPlan({ force: true });
+                    })();
                 },
             },
         ]);
@@ -443,8 +587,14 @@ export default function PlanDetailScreen() {
     const handleShare = async () => {
         if (!plan) return;
         const when = eventDate ? `${dateString}${timeString ? ` · ${timeString}` : ''}` : '';
-        const where = plan.nombre_ubicacion ? `\n📍 ${plan.nombre_ubicacion}` : '';
-        const message = `"${plan.titulo}"${where}${when ? `\n🗓️ ${when}` : ''}\n\n${t('planDetail.shareHint')}`;
+        const message = buildPlanShareMessage({
+            title: plan.titulo,
+            location: plan.nombre_ubicacion,
+            when: when || null,
+            planId: plan.id,
+            hint: t('planDetail.shareHint'),
+            lang,
+        });
         try {
             await Share.share({ message });
         } catch {
@@ -453,9 +603,21 @@ export default function PlanDetailScreen() {
     };
 
     const handleToggleSave = async () => {
-        if (!currentUserId || !planId) return;
+        if (!currentUserId || !planId) {
+            // Caché parcial a veces deja user a null: forzar carga completa.
+            void loadPlan({ force: true });
+            return;
+        }
         const prev = isSaved;
+        hapticLight();
         setIsSaved(!prev);
+        const patchCache = (saved: boolean) => {
+            const key = planDetailKey(planId);
+            const stale = cacheGetStale<PlanDetailSnapshot>(key);
+            if (stale) {
+                cacheSet(key, { ...stale, isSaved: saved }, PLAN_DETAIL_TTL_MS);
+            }
+        };
         if (prev) {
             const { error } = await supabase
                 .from('planes_guardados')
@@ -464,15 +626,25 @@ export default function PlanDetailScreen() {
                 .eq('usuario_id', currentUserId);
             if (error) {
                 setIsSaved(prev);
+                hapticError();
                 Alert.alert(t('feed.error'), t('feed.saveError'));
+            } else {
+                patchCache(false);
             }
         } else {
+            if (plan && !isPlanActiveForSaved(plan)) {
+                setIsSaved(prev);
+                return;
+            }
             const { error } = await supabase
                 .from('planes_guardados')
                 .insert({ plan_id: planId, usuario_id: currentUserId });
             if (error) {
                 setIsSaved(prev);
+                hapticError();
                 Alert.alert(t('feed.error'), t('feed.saveError'));
+            } else {
+                patchCache(true);
             }
         }
     };
@@ -480,15 +652,20 @@ export default function PlanDetailScreen() {
     const handleJoin = async () => {
         if (!currentUserId || !plan || actionBusy) return;
         if (!canJoinPlanByGender(plan, currentUserGenero)) {
+            hapticError();
             Alert.alert(t('feed.error'), t('card.soloChicasOnly'));
             return;
         }
+        hapticMedium();
+        // Spinner solo mientras se valida el límite; luego el botón cambia al instante.
+        setActionBusy(true);
         const limitCheck = await canJoinMorePlans(currentUserId, plan.id);
         if (!limitCheck.allowed) {
+            setActionBusy(false);
+            hapticError();
             Alert.alert(t('feed.error'), t('feed.planLimitReached', { max: limitCheck.max }));
             return;
         }
-        setActionBusy(true);
         const estado = resolveJoinEstado({
             requiere_aprobacion: plan.requiere_aprobacion,
             maximo_participantes: plan.maximo_participantes,
@@ -499,6 +676,7 @@ export default function PlanDetailScreen() {
         const prevCount = joinedCount;
         setMembership(nextMembership);
         if (estado === 'aceptado') setJoinedCount((c) => c + 1);
+        setActionBusy(false);
 
         const { error } = await supabase.from('participantes').insert({
             plan_id: plan.id,
@@ -508,11 +686,24 @@ export default function PlanDetailScreen() {
         if (error) {
             setMembership(prevMembership);
             setJoinedCount(prevCount);
+            hapticError();
             Alert.alert(t('feed.error'), t('feed.joinError'));
         } else {
-            await loadPlan();
+            hapticSuccess();
+            invalidatePlanMembershipCaches(currentUserId);
+            invalidatePlanDetailCache(plan.id);
+            const { notifyPlanJoin, schedulePlanLifecycleReminders } = await import('../../lib/push');
+            notifyPlanJoin(plan.id, estado);
+            if (estado === 'aceptado') {
+                void schedulePlanLifecycleReminders({
+                    planId: plan.id,
+                    planTitle: plan.titulo,
+                    fechaEvento: plan.fecha_evento,
+                    categoria: plan.categoria,
+                });
+            }
+            await loadPlan({ force: true });
         }
-        setActionBusy(false);
     };
 
     const handleLeave = () => {
@@ -535,28 +726,32 @@ export default function PlanDetailScreen() {
             {
                 text: t('common.yes'),
                 style: 'destructive',
-                onPress: async () => {
-                    setActionBusy(true);
+                onPress: () => {
                     const prevMembership = membership;
                     const prevCount = joinedCount;
                     setMembership('none');
                     if (wasJoined) setJoinedCount((c) => Math.max(0, c - 1));
 
-                    const { error } = await supabase
-                        .from('participantes')
-                        .delete()
-                        .eq('plan_id', plan.id)
-                        .eq('usuario_id', currentUserId);
+                    void (async () => {
+                        const { error } = await supabase
+                            .from('participantes')
+                            .delete()
+                            .eq('plan_id', plan.id)
+                            .eq('usuario_id', currentUserId);
 
-                    if (error) {
-                        setMembership(prevMembership);
-                        setJoinedCount(prevCount);
-                        Alert.alert(t('feed.error'), t('feed.leaveError'));
-                    } else if (wasJoined) {
-                        await promoteWaitlist(plan.id);
-                        await loadPlan();
-                    }
-                    setActionBusy(false);
+                        if (error) {
+                            setMembership(prevMembership);
+                            setJoinedCount(prevCount);
+                            Alert.alert(t('feed.error'), t('feed.leaveError'));
+                        } else {
+                            invalidatePlanMembershipCaches(currentUserId);
+                            invalidatePlanDetailCache(plan.id);
+                            if (wasJoined) {
+                                await promoteWaitlist(plan.id);
+                                await loadPlan({ force: true });
+                            }
+                        }
+                    })();
                 },
             },
         ]);
@@ -579,7 +774,124 @@ export default function PlanDetailScreen() {
         ]);
     };
 
+    const handleAcceptIncomingInvite = async () => {
+        if (!currentUserId || !plan || !pendingInviteId || actionBusy) return;
+        setActionBusy(true);
+        try {
+            const invite: PlanInvite = {
+                id: pendingInviteId,
+                plan_id: plan.id,
+                invitador_id: pendingInviterId || '',
+                invitado_id: currentUserId,
+                tipo: pendingInviteTipo === 'grupo' ? 'grupo' : 'plan',
+                estado: 'pendiente',
+                creado_en: '',
+                plan: {
+                    id: plan.id,
+                    titulo: plan.titulo,
+                    imagen_url: plan.imagen_url,
+                    maximo_participantes: plan.maximo_participantes,
+                    requiere_aprobacion: plan.requiere_aprobacion,
+                    categoria: plan.categoria,
+                },
+                invitador: pendingInviterId
+                    ? {
+                          id: pendingInviterId,
+                          nombre: pendingInviterName?.trim() || t('planDetail.anonymous'),
+                          avatar_url: pendingInviterAvatar || null,
+                      }
+                    : undefined,
+            };
+            const { error, estado, max } = await acceptPlanInvite(invite, currentUserId);
+            if (error === 'full') {
+                Alert.alert(t('feed.error'), t('friends.inviteFull'));
+                return;
+            }
+            if (error === 'limit') {
+                Alert.alert(t('feed.error'), t('feed.planLimitReached', { max: max ?? 3 }));
+                return;
+            }
+            if (error) {
+                Alert.alert(t('feed.error'), error);
+                return;
+            }
+            setInviteHandled(true);
+            setMembership(estado === 'pendiente' ? 'requested' : 'joined');
+            invalidatePlanMembershipCaches(currentUserId);
+            await loadPlan({ force: true });
+        } finally {
+            setActionBusy(false);
+        }
+    };
+
+    const handleRejectIncomingInvite = () => {
+        if (!pendingInviteId || actionBusy) return;
+        setInviteHandled(true);
+        void rejectPlanInvite(pendingInviteId).then(({ error }) => {
+            if (error) {
+                setInviteHandled(false);
+                Alert.alert(t('feed.error'), error);
+                return;
+            }
+            router.back();
+        });
+    };
+
     const renderPrimaryAction = () => {
+        if (
+            fromInvite &&
+            pendingInviteId &&
+            !isCreator &&
+            membership === 'none' &&
+            !isPastPlan
+        ) {
+            const name = pendingInviterName?.trim() || t('planDetail.anonymous');
+            return (
+                <View style={styles.inviteDecisionWrap}>
+                    <TouchableOpacity
+                        style={styles.inviteDecisionHeader}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                            if (!pendingInviterId) return;
+                            router.push({ pathname: '/user-profile/[id]', params: { id: pendingInviterId } });
+                        }}
+                    >
+                        <ProfileAvatar
+                            uri={pendingInviterAvatar || null}
+                            name={name}
+                            size={40}
+                            recyclingKey={pendingInviterId ?? name}
+                        />
+                        <Text style={styles.inviteDecisionLabel} numberOfLines={2}>
+                            {t('planDetail.inviteFrom', { name })}
+                        </Text>
+                    </TouchableOpacity>
+                    <View style={styles.inviteDecisionActions}>
+                        <TouchableOpacity
+                            style={[styles.inviteDecisionJoin, actionBusy && { opacity: 0.7 }]}
+                            onPress={handleAcceptIncomingInvite}
+                            activeOpacity={0.9}
+                            disabled={actionBusy}
+                        >
+                            {actionBusy ? (
+                                <ActivityIndicator color="#FFF" />
+                            ) : (
+                                <Text style={styles.inviteDecisionJoinText}>{t('planDetail.inviteJoin')}</Text>
+                            )}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.inviteDecisionReject, actionBusy && { opacity: 0.7 }]}
+                            onPress={handleRejectIncomingInvite}
+                            activeOpacity={0.85}
+                            disabled={actionBusy}
+                        >
+                            <Text style={styles.inviteDecisionRejectText}>{t('planDetail.inviteReject')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            );
+        }
+
         if (isPastPlan && (isCreator || membership === 'joined' || membership === 'requested' || membership === 'waitlist')) {
             return (
                 <View style={styles.joinedActions}>
@@ -618,9 +930,23 @@ export default function PlanDetailScreen() {
                             </LinearGradient>
                         </TouchableOpacity>
                     ) : null}
-                    <TouchableOpacity style={styles.iconRoundBtn} onPress={() => router.push({ pathname: '/create-plan', params: { editId: plan!.id } })}>
-                        <Ionicons name="create-outline" size={22} color={PRIMARY_DARK} />
-                    </TouchableOpacity>
+                    {isPastPlan ? (
+                        <TouchableOpacity
+                            style={styles.iconRoundBtn}
+                            onPress={() =>
+                                router.push({ pathname: '/create-plan', params: { duplicateId: plan!.id } })
+                            }
+                        >
+                            <Ionicons name="copy-outline" size={22} color={PRIMARY_DARK} />
+                        </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity
+                            style={styles.iconRoundBtn}
+                            onPress={() => router.push({ pathname: '/create-plan', params: { editId: plan!.id } })}
+                        >
+                            <Ionicons name="create-outline" size={22} color={PRIMARY_DARK} />
+                        </TouchableOpacity>
+                    )}
                 </View>
             );
         }
@@ -628,22 +954,24 @@ export default function PlanDetailScreen() {
         if (membership === 'joined') {
             return (
                 <View style={styles.joinedActions}>
+                    <TouchableOpacity style={styles.joinedOutlineBtn} onPress={handleLeave} activeOpacity={0.85}>
+                        <Ionicons name="checkmark-circle" size={20} color={SUCCESS} />
+                        <Text style={styles.joinedOutlineText}>
+                            {t(currentUserGenero === 'femenino' ? 'card.joinedF' : 'card.joined')}
+                        </Text>
+                    </TouchableOpacity>
                     {chatAlive ? (
                         <TouchableOpacity
-                            style={styles.chatBtn}
+                            style={styles.chatIconBtn}
                             activeOpacity={0.9}
                             onPress={() => router.push(`/chat/${plan!.id}`)}
+                            accessibilityLabel={t('planDetail.openChat')}
                         >
-                            <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
+                            <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatIconBtnGradient}>
                                 <Ionicons name="chatbubbles" size={22} color="#FFF" />
-                                <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
                             </LinearGradient>
                         </TouchableOpacity>
                     ) : null}
-                    <TouchableOpacity style={styles.joinedOutlineBtn} onPress={handleLeave} activeOpacity={0.85}>
-                        <Ionicons name="checkmark-circle" size={20} color={SUCCESS} />
-                        <Text style={styles.joinedOutlineText}>{t('card.joined')}</Text>
-                    </TouchableOpacity>
                 </View>
             );
         }
@@ -661,7 +989,11 @@ export default function PlanDetailScreen() {
             return (
                 <TouchableOpacity style={styles.waitlistBtn} onPress={handleLeave} activeOpacity={0.85}>
                     <Ionicons name="hourglass" size={20} color={WAITLIST} />
-                    <Text style={styles.waitlistBtnText}>{t('card.waitlist')}</Text>
+                    <Text style={styles.waitlistBtnText}>
+                        {waitlistPosition != null
+                            ? t('card.waitlistPosition', { n: waitlistPosition })
+                            : t('card.waitlist')}
+                    </Text>
                 </TouchableOpacity>
             );
         }
@@ -745,7 +1077,7 @@ export default function PlanDetailScreen() {
                 onScroll={onScroll}
                 scrollEventThrottle={scrollEventThrottle}
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: insets.bottom + 85 }}
+                contentContainerStyle={{ paddingBottom: insets.bottom + (fromInvite ? 150 : 85) }}
             >
                 <View style={styles.heroWrap}>
                     <PlanImage
@@ -759,14 +1091,27 @@ export default function PlanDetailScreen() {
                             <Ionicons name="chevron-back" size={24} color="#FFF" />
                         </TouchableOpacity>
                         <View style={styles.heroTopRight}>
-                            <TouchableOpacity style={styles.glassBtn} onPress={handleShare} activeOpacity={0.85}>
-                                <Ionicons name="share-outline" size={20} color="#FFF" />
-                            </TouchableOpacity>
-                            {!isCreator && (
-                                <TouchableOpacity style={styles.glassBtn} onPress={handleToggleSave} activeOpacity={0.85}>
-                                    <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={22} color={isSaved ? '#FCA5A5' : '#FFF'} />
+                            {!isPastPlan ? (
+                                <TouchableOpacity style={styles.glassBtn} onPress={handleShare} activeOpacity={0.85}>
+                                    <Ionicons name="arrow-redo" size={18} color="#FFF" />
                                 </TouchableOpacity>
-                            )}
+                            ) : null}
+                            {!isPastPlan && !isCreator ? (
+                                <TouchableOpacity style={styles.glassBtn} onPress={handleToggleSave} activeOpacity={0.85}>
+                                    <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={20} color={isSaved ? DANGER : '#FFF'} />
+                                </TouchableOpacity>
+                            ) : null}
+                            {!isCreator && currentUserId ? (
+                                <TouchableOpacity
+                                    style={styles.glassBtn}
+                                    onPress={() =>
+                                        router.push({ pathname: '/report-plan', params: { planId: plan.id } })
+                                    }
+                                    activeOpacity={0.85}
+                                >
+                                    <Ionicons name="flag-outline" size={18} color="#FECACA" />
+                                </TouchableOpacity>
+                            ) : null}
                         </View>
                     </View>
                 </View>
@@ -889,7 +1234,12 @@ export default function PlanDetailScreen() {
                         {canInvitePeople ? (
                             <TouchableOpacity style={styles.inviteParticipantsBtn} onPress={openInviteSheet} activeOpacity={0.85}>
                                 <Ionicons name="person-add-outline" size={18} color={PRIMARY_DARK} />
-                                <Text style={styles.inviteParticipantsBtnText}>{t('invite.openBtn')}</Text>
+                                <Text style={styles.inviteParticipantsBtnText} numberOfLines={1}>
+                                    {t('invite.openBtn')}
+                                    {invitees.length > 0
+                                        ? ` ${t('invite.pendingCountParen', { n: invitees.length })}`
+                                        : ''}
+                                </Text>
                                 <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
                             </TouchableOpacity>
                         ) : null}
@@ -909,6 +1259,11 @@ export default function PlanDetailScreen() {
                                         <PersonBubble
                                             person={p}
                                             isFriend={friendIds.has(p.id)}
+                                            isAcquaintance={
+                                                !isPastPlan &&
+                                                coincidedIds.has(p.id) &&
+                                                !friendIds.has(p.id)
+                                            }
                                             subtitle={
                                                 p.isCreator
                                                     ? p.genero === 'femenino'
@@ -949,12 +1304,16 @@ export default function PlanDetailScreen() {
                             activeOpacity={0.92}
                             onPress={() => setMapExpanded(true)}
                         >
-                            <MapView
+                            <NexoMapView
+                                key={`detail-${plan.id}-${lat}-${lng}`}
                                 style={styles.map}
                                 scrollEnabled={false}
                                 zoomEnabled={false}
                                 pitchEnabled={false}
                                 rotateEnabled={false}
+                                liteMode={Platform.OS === 'android'}
+                                loadingEnabled
+                                moveOnMarkerPress={false}
                                 initialRegion={{
                                     latitude: lat,
                                     longitude: lng,
@@ -963,7 +1322,7 @@ export default function PlanDetailScreen() {
                                 }}
                             >
                                 <Marker coordinate={{ latitude: lat, longitude: lng }} />
-                            </MapView>
+                            </NexoMapView>
                             <View style={styles.mapTapOverlay} pointerEvents="none">
                                 <View style={styles.mapExpandPill}>
                                     <Ionicons name="expand" size={16} color="#FFF" />
@@ -983,12 +1342,14 @@ export default function PlanDetailScreen() {
             <Modal visible={mapExpanded} animationType="slide" onRequestClose={() => setMapExpanded(false)}>
                 <View style={styles.fullMapRoot}>
                     <StatusBar barStyle="dark-content" />
-                    <MapView
+                    <NexoMapView
+                        key={`full-${plan.id}-${lat}-${lng}`}
                         style={styles.fullMap}
                         scrollEnabled
                         zoomEnabled
                         pitchEnabled
                         rotateEnabled
+                        loadingEnabled
                         showsUserLocation
                         showsMyLocationButton={Platform.OS === 'android'}
                         onUserLocationChange={(e) => {
@@ -1018,7 +1379,7 @@ export default function PlanDetailScreen() {
                             description={plan.nombre_ubicacion ?? undefined}
                             onPress={() => void openDirectionsTo(lat, lng, plan.nombre_ubicacion)}
                         />
-                    </MapView>
+                    </NexoMapView>
                     <View style={[styles.fullMapTopBar, { paddingTop: insets.top + 8 }]}>
                         <TouchableOpacity style={styles.fullMapCloseBtn} onPress={() => setMapExpanded(false)} activeOpacity={0.85}>
                             <Ionicons name="close" size={26} color={INK} />
@@ -1087,11 +1448,11 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         zIndex: 2,
     },
-    heroTopRight: { flexDirection: 'row', gap: 10 },
+    heroTopRight: { flexDirection: 'row', gap: 8 },
     glassBtn: {
-        width: 42,
-        height: 42,
-        borderRadius: 21,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
         backgroundColor: 'rgba(15,42,74,0.45)',
         alignItems: 'center',
         justifyContent: 'center',
@@ -1307,6 +1668,7 @@ const styles = StyleSheet.create({
         backgroundColor: SURFACE,
     },
     personAvatarRingFriend: { borderColor: FRIEND, backgroundColor: FRIEND_BG },
+    personAvatarRingAcquaintance: { borderColor: ACQUAINTANCE, backgroundColor: ACQUAINTANCE_BG },
     creatorStar: {
         position: 'absolute',
         bottom: 0,
@@ -1322,8 +1684,10 @@ const styles = StyleSheet.create({
     },
     personName: { fontSize: 12, fontWeight: '700', color: INK, marginTop: 8, textAlign: 'center', maxWidth: 76 },
     personNameFriend: { color: '#047857' },
+    personNameAcquaintance: { color: '#6D28D9' },
     personSubtitle: { fontSize: 10, color: MUTED, marginTop: 2 },
     personSubtitleFriend: { color: FRIEND },
+    personSubtitleAcquaintance: { color: ACQUAINTANCE },
     friendPill: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1337,6 +1701,19 @@ const styles = StyleSheet.create({
         borderColor: FRIEND_BORDER,
     },
     friendPillText: { fontSize: 9, fontWeight: '700', color: FRIEND },
+    acquaintancePill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+        marginTop: 4,
+        backgroundColor: ACQUAINTANCE_BG,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: ACQUAINTANCE_BORDER,
+    },
+    acquaintancePillText: { fontSize: 9, fontWeight: '700', color: ACQUAINTANCE },
 
     emptyParticipants: {
         alignItems: 'center',
@@ -1399,6 +1776,45 @@ const styles = StyleSheet.create({
         paddingHorizontal: 24,
     },
     joinBtnText: { color: '#FFF', fontSize: 17, fontWeight: '800' },
+    inviteDecisionWrap: { gap: 12 },
+    inviteDecisionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingHorizontal: 4,
+    },
+    inviteDecisionLabel: {
+        flex: 1,
+        fontSize: 15,
+        fontWeight: '700',
+        color: INK,
+    },
+    inviteDecisionActions: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    inviteDecisionJoin: {
+        flex: 1,
+        minHeight: 50,
+        borderRadius: 14,
+        backgroundColor: PRIMARY_DARK,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 12,
+    },
+    inviteDecisionJoinText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+    inviteDecisionReject: {
+        flex: 1,
+        minHeight: 50,
+        borderRadius: 14,
+        backgroundColor: '#FEF2F2',
+        borderWidth: 1.5,
+        borderColor: '#FECACA',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 12,
+    },
+    inviteDecisionRejectText: { color: DANGER, fontSize: 16, fontWeight: '800' },
     waitlistJoinBtn: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1460,7 +1876,7 @@ const styles = StyleSheet.create({
         borderColor: '#DDD6FE',
     },
     waitlistBtnText: { color: WAITLIST, fontSize: 16, fontWeight: '800' },
-    joinedActions: { gap: 12 },
+    joinedActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     chatBtn: { borderRadius: 16, overflow: 'hidden' },
     chatBtnGradient: {
         flexDirection: 'row',
@@ -1471,13 +1887,22 @@ const styles = StyleSheet.create({
         paddingHorizontal: 28,
     },
     chatBtnText: { color: '#FFF', fontSize: 17, fontWeight: '800', letterSpacing: 0.2 },
+    chatIconBtn: { borderRadius: 16, overflow: 'hidden' },
+    chatIconBtnGradient: {
+        width: 56,
+        height: 56,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     joinedOutlineBtn: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        paddingVertical: 12,
-        borderRadius: 14,
+        minHeight: 56,
+        paddingVertical: 14,
+        borderRadius: 16,
         borderWidth: 1.5,
         borderColor: '#BBF7D0',
         backgroundColor: '#F0FDF4',
@@ -1487,14 +1912,16 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 14,
+        gap: 10,
+        minHeight: 52,
+        paddingVertical: 16,
+        paddingHorizontal: 22,
         borderRadius: 16,
         backgroundColor: '#FEF2F2',
         borderWidth: 1.5,
         borderColor: '#FECACA',
     },
-    hideFromListText: { color: DANGER, fontSize: 15, fontWeight: '800' },
+    hideFromListText: { color: DANGER, fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
     creatorActions: { flexDirection: 'row', gap: 10, alignItems: 'center' },
     iconRoundBtn: {
         width: 52,

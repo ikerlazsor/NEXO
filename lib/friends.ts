@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { isBlockedEitherWay } from './blocks';
+import { invalidateProfileNotificationCount } from './notifications';
 
 export type FriendStatus = 'self' | 'none' | 'friends' | 'pending_sent' | 'pending_received';
 
@@ -7,6 +8,7 @@ export interface FriendProfile {
     id: string;
     nombre: string;
     avatar_url: string | null;
+    nombre_usuario?: string | null;
 }
 
 export interface FriendshipRow {
@@ -30,6 +32,7 @@ function mapProfile(raw: unknown): FriendProfile | null {
         id: profile.id as string,
         nombre: (profile.nombre as string) || 'Usuario',
         avatar_url: (profile.avatar_url as string | null) ?? null,
+        nombre_usuario: (profile.nombre_usuario as string | null | undefined) ?? null,
     };
 }
 
@@ -77,17 +80,19 @@ export async function getFriendStatus(
 export async function sendFriendRequest(
     fromUserId: string,
     toUserId: string
-): Promise<{ error: string | null }> {
+): Promise<{ error: string | null; requestId?: string | null }> {
     if (await isBlockedEitherWay(fromUserId, toUserId)) {
         return { error: 'No puedes enviar solicitudes a este usuario' };
     }
 
     const existing = await getFriendStatus(fromUserId, toUserId);
     if (existing.status === 'friends') return { error: 'Ya sois amigos' };
-    if (existing.status === 'pending_sent') return { error: 'Ya enviaste una solicitud' };
+    if (existing.status === 'pending_sent') {
+        return { error: 'Ya enviaste una solicitud', requestId: existing.requestId };
+    }
     if (existing.status === 'pending_received' && existing.requestId) {
         const { error } = await acceptFriendRequest(existing.requestId);
-        return { error: error?.message ?? null };
+        return { error: error?.message ?? null, requestId: existing.requestId };
     }
 
     const { data: rejectedRow } = await supabase
@@ -110,14 +115,21 @@ export async function sendFriendRequest(
             }
             return { error: error.message };
         }
-        return { error: null };
+        const { notifyFriendRequest } = await import('./push');
+        notifyFriendRequest(toUserId);
+        invalidateProfileNotificationCount(toUserId);
+        return { error: null, requestId: rejectedRow.id as string };
     }
 
-    const { error } = await supabase.from('amistades').insert({
-        usuario_origen_id: fromUserId,
-        usuario_destino_id: toUserId,
-        estado: 'pendiente',
-    });
+    const { data: inserted, error } = await supabase
+        .from('amistades')
+        .insert({
+            usuario_origen_id: fromUserId,
+            usuario_destino_id: toUserId,
+            estado: 'pendiente',
+        })
+        .select('id')
+        .maybeSingle();
 
     if (error) {
         if (error.code === '23505') return { error: 'Ya existe una solicitud entre vosotros' };
@@ -127,7 +139,10 @@ export async function sendFriendRequest(
         return { error: error.message };
     }
 
-    return { error: null };
+    const { notifyFriendRequest } = await import('./push');
+    notifyFriendRequest(toUserId);
+    invalidateProfileNotificationCount(toUserId);
+    return { error: null, requestId: (inserted?.id as string | undefined) ?? null };
 }
 
 export async function acceptFriendRequest(requestId: string) {
@@ -141,19 +156,38 @@ export async function acceptFriendRequest(requestId: string) {
         return { data: null, error: { message: 'No puedes aceptar esta solicitud' } as any };
     }
 
-    return supabase
+    const result = await supabase
         .from('amistades')
         .update({ estado: 'aceptado', actualizado_en: new Date().toISOString() })
         .eq('id', requestId)
         .eq('estado', 'pendiente');
+
+    if (!result.error && row?.usuario_origen_id) {
+        const { notifyFriendAccepted } = await import('./push');
+        notifyFriendAccepted(row.usuario_origen_id);
+        if (row.usuario_destino_id) {
+            invalidateProfileNotificationCount(row.usuario_destino_id);
+        }
+    }
+
+    return result;
 }
 
 export async function rejectFriendRequest(requestId: string) {
-    return supabase
+    const { data: row } = await supabase
+        .from('amistades')
+        .select('usuario_destino_id')
+        .eq('id', requestId)
+        .maybeSingle();
+    const result = await supabase
         .from('amistades')
         .update({ estado: 'rechazado', actualizado_en: new Date().toISOString() })
         .eq('id', requestId)
         .eq('estado', 'pendiente');
+    if (!result.error && row?.usuario_destino_id) {
+        invalidateProfileNotificationCount(row.usuario_destino_id);
+    }
+    return result;
 }
 
 export async function cancelFriendRequest(requestId: string) {
@@ -193,8 +227,8 @@ export async function getFriends(userId: string): Promise<(FriendProfile & { fri
             id,
             usuario_origen_id,
             usuario_destino_id,
-            solicitante:perfiles!amistades_origen_fkey ( id, nombre, avatar_url ),
-            receptor:perfiles!amistades_destino_fkey ( id, nombre, avatar_url )
+            solicitante:perfiles!amistades_origen_fkey ( id, nombre, nombre_usuario, avatar_url ),
+            receptor:perfiles!amistades_destino_fkey ( id, nombre, nombre_usuario, avatar_url )
         `)
         .eq('estado', 'aceptado')
         .or(`usuario_origen_id.eq.${userId},usuario_destino_id.eq.${userId}`)

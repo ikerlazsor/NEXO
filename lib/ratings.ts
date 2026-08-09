@@ -21,6 +21,7 @@ export function invalidatePendingRatingsCache(userId?: string): void {
 
 const RATING_SKIP_PREFIX = '@nexo_rating_skip:';
 const RATING_STARTED_PREFIX = '@nexo_rating_started:';
+const RATING_DONE_PREFIX = '@nexo_rating_done:';
 
 function ratingSkipKey(userId: string, planId: string) {
     return `${RATING_SKIP_PREFIX}${userId}:${planId}`;
@@ -30,11 +31,16 @@ function ratingStartedKey(userId: string, planId: string) {
     return `${RATING_STARTED_PREFIX}${userId}:${planId}`;
 }
 
+function ratingDoneKey(userId: string, planId: string) {
+    return `${RATING_DONE_PREFIX}${userId}:${planId}`;
+}
+
 /** Marca que el usuario no asistió: sin historial ni “planes hechos”. */
 export async function dismissRatingWithoutHistory(userId: string, planId: string): Promise<void> {
     await AsyncStorage.multiSet([
         [ratingSkipKey(userId, planId), new Date().toISOString()],
         [ratingStartedKey(userId, planId), ''],
+        [ratingDoneKey(userId, planId), '1'],
     ]);
     await supabase.from('historial_planes').delete().eq('usuario_id', userId).eq('plan_id', planId);
     invalidatePendingRatingsCache(userId);
@@ -42,6 +48,17 @@ export async function dismissRatingWithoutHistory(userId: string, planId: string
 
 export async function isPlanAttendanceDismissed(userId: string, planId: string): Promise<boolean> {
     return isRatingDismissed(userId, planId);
+}
+
+/** Lote: evita N getItem al filtrar planes pasados en Mis planes. */
+export async function getDismissedPlanIdSet(userId: string, planIds: string[]): Promise<Set<string>> {
+    if (planIds.length === 0) return new Set();
+    const pairs = await AsyncStorage.multiGet(planIds.map((id) => ratingSkipKey(userId, id)));
+    const dismissed = new Set<string>();
+    for (let i = 0; i < planIds.length; i++) {
+        if (pairs[i]?.[1]) dismissed.add(planIds[i]);
+    }
+    return dismissed;
 }
 
 export async function markRatingSessionStarted(userId: string, planId: string): Promise<void> {
@@ -58,6 +75,11 @@ export async function clearRatingSessionFlags(userId: string, planId: string): P
 async function isRatingDismissed(userId: string, planId: string): Promise<boolean> {
     const v = await AsyncStorage.getItem(ratingSkipKey(userId, planId));
     return !!v;
+}
+
+async function isRatingFlowDone(userId: string, planId: string): Promise<boolean> {
+    const v = await AsyncStorage.getItem(ratingDoneKey(userId, planId));
+    return v === '1';
 }
 
 export async function hasRatingSessionStarted(userId: string, planId: string): Promise<boolean> {
@@ -187,6 +209,7 @@ export async function ensurePlanInHistory(userId: string, planId: string): Promi
 export async function addPlanToHistory(userId: string, planId: string): Promise<{ error: string | null }> {
     const result = await ensurePlanInHistory(userId, planId);
     if (!result.error) {
+        await AsyncStorage.setItem(ratingDoneKey(userId, planId), '1');
         await clearRatingSessionFlags(userId, planId);
         invalidatePendingRatingsCache(userId);
     }
@@ -221,16 +244,11 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
 
     const planIds = candidates.map((c) => c.planId);
 
-    const [{ data: done }, { data: history }, { data: allParts }, peerLists, dismissedFlags] = await Promise.all([
+    const [{ data: done }, { data: allParts }, peerLists, dismissedFlags, doneFlags] = await Promise.all([
         supabase
             .from('valoraciones')
             .select('plan_id, evaluado_id')
             .eq('evaluador_id', userId)
-            .in('plan_id', planIds),
-        supabase
-            .from('historial_planes')
-            .select('plan_id')
-            .eq('usuario_id', userId)
             .in('plan_id', planIds),
         supabase
             .from('participantes')
@@ -239,10 +257,11 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
             .eq('estado', 'aceptado'),
         Promise.all(candidates.map((c) => getAcceptedPeers(c.planId, userId))),
         Promise.all(planIds.map(async (id) => [id, await isRatingDismissed(userId, id)] as const)),
+        Promise.all(planIds.map(async (id) => [id, await isRatingFlowDone(userId, id)] as const)),
     ]);
 
     const dismissed = new Set(dismissedFlags.filter(([, d]) => d).map(([id]) => id));
-    const inHistory = new Set((history ?? []).map((h) => h.plan_id as string));
+    const flowDone = new Set(doneFlags.filter(([, d]) => d).map(([id]) => id));
     const rated = new Set((done ?? []).map((r) => `${r.plan_id}:${r.evaluado_id}`));
 
     const countByPlan = new Map<string, number>();
@@ -253,7 +272,9 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
     const result: PendingRatingPlan[] = [];
 
     candidates.forEach((c, i) => {
-        if (inHistory.has(c.planId) || dismissed.has(c.planId)) return;
+        // No ocultar solo por estar en historial: al confirmar asistencia ya se añade,
+        // y la valoración debe seguir visible hasta terminar/omitir.
+        if (dismissed.has(c.planId) || flowDone.has(c.planId)) return;
         if ((countByPlan.get(c.planId) ?? 0) < 2) return;
 
         const peers = peerLists[i];
@@ -261,6 +282,8 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
 
         const ratedIds = peers.filter((p) => rated.has(`${c.planId}:${p.id}`)).map((p) => p.id);
         const pendingCount = peers.length - ratedIds.length;
+        if (pendingCount <= 0) return;
+
         const phase = getRatingPhase(c.fecha_evento) as 'waiting' | 'open';
 
         result.push({
@@ -379,9 +402,13 @@ export async function submitValoracion(params: {
     if (!rpcError) {
         const result = rpcData as { ok?: boolean; error?: string } | null;
         if (result && typeof result === 'object' && 'ok' in result) {
-            if (result.ok) return { error: null };
-            console.warn('[submitValoracion] rpc rejected', result.error);
-            return { error: result.error || 'rpc_rejected' };
+            if (!result.ok) {
+                console.warn('[submitValoracion] rpc rejected', result.error);
+                return { error: result.error || 'rpc_rejected' };
+            }
+        }
+        if (asistencia) {
+            void import('./push').then(({ notifyRated }) => notifyRated(evaluadoId, planId));
         }
         return { error: null };
     }
@@ -421,6 +448,9 @@ export async function submitValoracion(params: {
             .eq('id', existing.id);
         if (!updateError) {
             invalidatePendingRatingsCache(evaluadorId);
+            if (asistencia) {
+                void import('./push').then(({ notifyRated }) => notifyRated(evaluadoId, planId));
+            }
             return { error: null };
         }
         console.warn('[submitValoracion]', { rpcError: rpcError.message, updateError });
@@ -430,6 +460,9 @@ export async function submitValoracion(params: {
     const { error: insertError } = await supabase.from('valoraciones').insert(payload);
     if (!insertError) {
         invalidatePendingRatingsCache(evaluadorId);
+        if (asistencia) {
+            void import('./push').then(({ notifyRated }) => notifyRated(evaluadoId, planId));
+        }
         return { error: null };
     }
 

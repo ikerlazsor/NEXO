@@ -6,12 +6,13 @@ import { useCallback,
     useEffect,
     useRef,
     useState } from 'react';
+import { FlashList } from '@shopify/flash-list';
 import {
     ActivityIndicator,
-    FlatList,
-    Image,
     Keyboard,
+    KeyboardAvoidingView,
     Modal,
+    Platform,
     Pressable,
     RefreshControl,
     ScrollView,
@@ -21,25 +22,29 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Alert } from '../../lib/nexoAlert';
-import { MainChrome } from '../../components/MainChrome';
 import { PlanImage } from '../../components/PlanImage';
+import { ProfileAvatar } from '../../components/ProfileAvatar';
+import { ChatSkeletonList } from '../../components/SkeletonShimmer';
 import { useListScrollRestore } from '../../hooks/useListScrollRestore';
-import { getDirectConversations, hideDirectChat } from '../../lib/directChat';
+import { getDirectConversations, hideDirectChat, ensureDirectConversation } from '../../lib/directChat';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { isGroupChatPlan } from '../../lib/feedPlans';
-import { getAvatarUri, getFriends, type FriendProfile } from '../../lib/friends';
-import { sendPlanInvite } from '../../lib/planInvites';
+import { getFriends, type FriendProfile } from '../../lib/friends';
 import { useT } from '../../lib/i18n';
-import { OPTIMIZED_LIST_PROPS } from '../../lib/listConfig';
+import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { ScreenKeys } from '../../lib/screenState';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
 import { getChatUnreadMap, markDirectChatRead, markPlanChatRead, subscribeChatUnread } from '../../lib/chatUnread';
+import { hapticSelection } from '../../lib/haptics';
 import { isPlanChatAlive, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
-import { screenCacheKey, ScreenCacheTTL } from '../../lib/screenCaches';
-import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
+import { filterHiddenPlanChats, hidePlanChat } from '../../lib/planChatHide';
+import { diskSet } from '../../lib/diskCache';
+import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from '../../lib/screenCaches';
+import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -53,6 +58,7 @@ type ChatRow = {
     kind: 'plan' | 'group' | 'direct';
     peerId?: string;
     creadorId?: string;
+    fechaEvento?: string | null;
     ultimoTexto: string;
     lastAt: string;
     unread: number;
@@ -61,9 +67,11 @@ type ChatRow = {
 export default function MyChatsScreen() {
     const router = useRouter();
     const { t } = useT();
+    const insets = useSafeAreaInsets();
     const [chats, setChats] = useState<ChatRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState(false);
     const [showCreateGroup, setShowCreateGroup] = useState(false);
     const [groupName, setGroupName] = useState('');
     const [friends, setFriends] = useState<(FriendProfile & { friendshipId: string })[]>([]);
@@ -72,15 +80,19 @@ export default function MyChatsScreen() {
     const [creatingGroup, setCreatingGroup] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const hasDataRef = useRef(false);
+    const didSessionLoadRef = useRef(false);
     const fetchInFlightRef = useRef(false);
     const openSwipeRef = useRef<Swipeable | null>(null);
+    const silentRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const fetchMyChatsRef = useRef<(opts?: { silent?: boolean; force?: boolean }) => Promise<void>>(async () => {});
     const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore<ChatRow>(ScreenKeys.CHATS);
 
-    useFocusEffect(
-        useCallback(() => {
-            void fetchMyChats();
-        }, [])
-    );
+    const scheduleSilentRefresh = useCallback(() => {
+        if (silentRefreshTimer.current) clearTimeout(silentRefreshTimer.current);
+        silentRefreshTimer.current = setTimeout(() => {
+            void fetchMyChatsRef.current({ silent: true });
+        }, 450);
+    }, []);
 
     useEffect(() => {
         void getAuthUser().then((user) => {
@@ -97,20 +109,23 @@ export default function MyChatsScreen() {
 
     useEffect(() => {
         const unsub = subscribeChatUnread(() => {
-            void fetchMyChats({ silent: true });
+            scheduleSilentRefresh();
         });
         return unsub;
-    }, []);
+    }, [scheduleSilentRefresh]);
 
     useEffect(() => {
         const channel = supabase
             .channel(`chats-unread-${Math.random().toString(36).slice(2, 9)}`)
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensajes' }, () => {
-                void fetchMyChats({ silent: true });
+                scheduleSilentRefresh();
             })
             .subscribe();
-        return () => { supabase.removeChannel(channel); };
-    }, []);
+        return () => {
+            if (silentRefreshTimer.current) clearTimeout(silentRefreshTimer.current);
+            supabase.removeChannel(channel);
+        };
+    }, [scheduleSilentRefresh]);
 
     const formatPreview = (msg: { tipo: string; contenido: string; emisor_id: string }, names: Record<string, string>) => {
         const nombre = names[msg.emisor_id] || t('chats.user');
@@ -126,7 +141,7 @@ export default function MyChatsScreen() {
         return `${nombre}: ${msg.contenido}`;
     };
 
-    const fetchMyChats = async (opts?: { silent?: boolean }) => {
+    const fetchMyChats = async (opts?: { silent?: boolean; force?: boolean }) => {
         if (fetchInFlightRef.current && opts?.silent) return;
         try {
             fetchInFlightRef.current = true;
@@ -135,11 +150,18 @@ export default function MyChatsScreen() {
             if (!user) return;
             setCurrentUserId(user.id);
 
-            const cached = cacheGetStale<ChatRow[]>(screenCacheKey.chatsList(user.id));
+            const cacheKey = screenCacheKey.chatsList(user.id);
+            const cached = cacheGetStale<ChatRow[]>(cacheKey);
             if (Array.isArray(cached) && !hasDataRef.current) {
                 setChats(cached);
                 hasDataRef.current = true;
                 setLoading(false);
+            }
+
+            if (!opts?.force && !opts?.silent && cacheIsFresh(cacheKey) && hasDataRef.current) {
+                setLoading(false);
+                setRefreshing(false);
+                return;
             }
 
             void runPlanLifecycleMaintenance();
@@ -199,11 +221,13 @@ export default function MyChatsScreen() {
                         image_url: p.imagen_url,
                         kind: isGroupChatPlan(p) ? 'group' as const : 'plan' as const,
                         creadorId: p.creador_id ? String(p.creador_id) : undefined,
+                        fechaEvento: p.fecha_evento ?? null,
                         ultimoTexto: ult ? formatPreview(ult, names) : t('chats.noMessages'),
                         lastAt: ult?.creado_en ?? p.creado_en ?? '',
                         unread: unreadMap.plans[p.id] ?? 0,
                     };
                 });
+                planRows = await filterHiddenPlanChats(user.id, planRows);
             }
 
             const directRows: ChatRow[] = directConversations.map((c) => ({
@@ -218,7 +242,7 @@ export default function MyChatsScreen() {
                           { [c.peerId]: c.nombre, [user.id]: t('chats.you') }
                       )
                     : t('chats.noMessages'),
-                lastAt: c.lastMessage?.creado_en ?? '',
+                lastAt: c.lastMessage?.creado_en ?? c.openedAt ?? '',
                 unread: unreadMap.directs[c.peerId] ?? 0,
             }));
 
@@ -228,15 +252,35 @@ export default function MyChatsScreen() {
 
             setChats(rows);
             hasDataRef.current = true;
-            cacheSet(screenCacheKey.chatsList(user.id), rows, ScreenCacheTTL.chatsList);
+            setLoadError(false);
+            cacheSet(cacheKey, rows, ScreenCacheTTL.chatsList);
+            void diskSet(cacheKey, rows);
         } catch (error) {
-            console.error('Error cargando mis chats:', error);
+            if (__DEV__) console.error('Error cargando mis chats:', error);
+            if (!hasDataRef.current) setLoadError(true);
         } finally {
             fetchInFlightRef.current = false;
             setLoading(false);
             setRefreshing(false);
         }
     };
+    fetchMyChatsRef.current = fetchMyChats;
+
+    useFocusEffect(
+        useCallback(() => {
+            if (!didSessionLoadRef.current) {
+                didSessionLoadRef.current = true;
+                void fetchMyChatsRef.current();
+                return;
+            }
+            // Al volver: refrescar si la caché se invalidó (p. ej. chat 1:1 recién abierto).
+            void getAuthUser().then((user) => {
+                if (!user) return;
+                if (cacheIsFresh(screenCacheKey.chatsList(user.id))) return;
+                void fetchMyChatsRef.current({ silent: true, force: true });
+            });
+        }, []),
+    );
 
     const confirmDeleteChat = (item: ChatRow) => {
         if (!currentUserId) return;
@@ -267,42 +311,66 @@ export default function MyChatsScreen() {
         }
 
         const isHost = !!item.creadorId && item.creadorId === currentUserId;
-        Alert.alert(
-            isHost ? t('chat.deletePlanHost') : t('chat.deleteChat'),
-            isHost ? t('chat.deletePlanHostConfirm') : t('chat.deleteChatConfirm'),
-            [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: isHost ? t('chat.deletePlanHost') : t('chat.deleteChat'),
-                    style: 'destructive',
-                    // No async aquí: en Android el Alert espera el Promise y se queda abierto.
-                    onPress: () => {
-                        setTimeout(() => {
-                            void (async () => {
-                                if (isHost) {
-                                    const { error } = await deletePlanCompletely(item.id);
-                                    if (error) {
-                                        Alert.alert(t('profile.error'), t('chat.deletePlanError') + ': ' + error);
-                                        return;
-                                    }
-                                } else {
-                                    const { error } = await supabase
-                                        .from('participantes')
-                                        .delete()
-                                        .eq('plan_id', item.id)
-                                        .eq('usuario_id', currentUserId);
-                                    if (error) {
-                                        Alert.alert(t('profile.error'), error.message);
-                                        return;
-                                    }
+        const planStarted =
+            !!item.fechaEvento &&
+            Number.isFinite(new Date(item.fechaEvento).getTime()) &&
+            Date.now() >= new Date(item.fechaEvento).getTime();
+        const leavePlan = !isHost && !planStarted;
+
+        const title = isHost
+            ? t('chat.deletePlanHost')
+            : leavePlan
+              ? t('chat.deleteChatAndLeave')
+              : t('chat.deleteChat');
+        const message = isHost
+            ? t('chat.deletePlanHostConfirm')
+            : leavePlan
+              ? t('chat.deleteChatConfirm')
+              : t('chat.deleteChatOnlyConfirm');
+        const actionLabel = isHost
+            ? t('chat.deletePlanHost')
+            : leavePlan
+              ? t('chat.deleteChatAndLeave')
+              : t('chat.deleteChat');
+
+        Alert.alert(title, message, [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: actionLabel,
+                style: 'destructive',
+                // No async aquí: en Android el Alert espera el Promise y se queda abierto.
+                onPress: () => {
+                    setTimeout(() => {
+                        void (async () => {
+                            if (isHost) {
+                                const { error } = await deletePlanCompletely(item.id);
+                                if (error) {
+                                    Alert.alert(t('profile.error'), t('chat.deletePlanError') + ': ' + error);
+                                    return;
                                 }
-                                setChats((prev) => prev.filter((c) => c.id !== item.id));
-                            })();
-                        }, 0);
-                    },
+                            } else if (leavePlan) {
+                                const { error } = await supabase
+                                    .from('participantes')
+                                    .delete()
+                                    .eq('plan_id', item.id)
+                                    .eq('usuario_id', currentUserId);
+                                if (error) {
+                                    Alert.alert(t('profile.error'), error.message);
+                                    return;
+                                }
+                                void import('../../lib/push').then(({ cancelPlanLifecycleReminders }) => {
+                                    void cancelPlanLifecycleReminders(item.id);
+                                });
+                            } else {
+                                await hidePlanChat(currentUserId, item.id);
+                            }
+                            invalidatePlanMembershipCaches(currentUserId);
+                            setChats((prev) => prev.filter((c) => c.id !== item.id));
+                        })();
+                    }, 0);
                 },
-            ],
-        );
+            },
+        ]);
     };
 
     const openCreateGroup = async () => {
@@ -335,31 +403,77 @@ export default function MyChatsScreen() {
         const farFuture = new Date();
         farFuture.setFullYear(farFuture.getFullYear() + 10);
 
+        const payload: Record<string, unknown> = {
+            titulo: name,
+            categoria: 'Grupo',
+            creador_id: userId,
+            maximo_participantes: 50,
+            fecha_evento: farFuture.toISOString(),
+            requiere_aprobacion: false,
+            is_group_chat: true,
+        };
+
         const { data, error } = await supabase
             .from('planes')
-            .insert({
-                titulo: name,
-                categoria: 'Grupo',
-                creador_id: userId,
-                maximo_participantes: 50,
-                fecha_evento: farFuture.toISOString(),
-                requiere_aprobacion: false,
-            })
+            .insert(payload)
             .select()
             .single();
 
-        if (error) throw error;
+        if (error) {
+            // Columna is_group_chat puede no existir aún en algunos entornos.
+            if (/is_group_chat/i.test(error.message)) {
+                delete payload.is_group_chat;
+                const retry = await supabase.from('planes').insert(payload).select().single();
+                if (retry.error) throw retry.error;
+                return retry.data;
+            }
+            throw error;
+        }
         return data;
     };
 
     const handleCreateGroup = async () => {
+        if (selectedFriends.size === 0) {
+            Alert.alert(t('login.notice'), t('chats.selectOneFriend'));
+            return;
+        }
+
+        // 1 persona = chat directo (título = nombre de la persona), sin pedir nombre de grupo.
+        if (selectedFriends.size === 1) {
+            const peerId = [...selectedFriends][0];
+            const friend = friends.find((f) => f.id === peerId);
+            setShowCreateGroup(false);
+            setGroupName('');
+            setSelectedFriends(new Set());
+            setCreatingGroup(true);
+            try {
+                const user = await getAuthUser();
+                if (!user) return;
+                await ensureDirectConversation(user.id, peerId);
+                cacheInvalidate(screenCacheKey.chatsList(user.id));
+                const now = new Date().toISOString();
+                const row: ChatRow = {
+                    id: `direct-${peerId}`,
+                    peerId,
+                    title: friend?.nombre || t('chats.user'),
+                    image_url: friend?.avatar_url ?? null,
+                    kind: 'direct',
+                    ultimoTexto: t('chats.noMessages'),
+                    lastAt: now,
+                    unread: 0,
+                };
+                setChats((prev) => [row, ...prev.filter((c) => c.id !== row.id)]);
+                hasDataRef.current = true;
+                router.push(`/direct-chat/${peerId}`);
+            } finally {
+                setCreatingGroup(false);
+            }
+            return;
+        }
+
         const name = groupName.trim();
         if (!name) {
             Alert.alert(t('login.notice'), t('chats.groupName'));
-            return;
-        }
-        if (selectedFriends.size === 0) {
-            Alert.alert(t('login.notice'), t('chats.selectOneFriend'));
             return;
         }
 
@@ -369,42 +483,35 @@ export default function MyChatsScreen() {
             if (!user) return;
 
             const newPlan = await insertGroupPlan(user.id, name);
-
-            const { error: meError } = await supabase
-                .from('participantes')
-                .insert({ plan_id: newPlan.id, usuario_id: user.id, estado: 'aceptado' });
+            // Primero el creador; luego el resto (anfitrión puede insertar miembros).
+            const { error: meError } = await supabase.from('participantes').insert({
+                plan_id: newPlan.id,
+                usuario_id: user.id,
+                estado: 'aceptado',
+            });
             if (meError) throw meError;
 
-            let invited = 0;
-            let failed = 0;
-            for (const friendId of selectedFriends) {
-                const { error: invErr } = await sendPlanInvite(newPlan.id, user.id, friendId, 'grupo');
-                if (!invErr) invited++;
-                else failed++;
+            const friendIds = [...selectedFriends];
+            if (friendIds.length > 0) {
+                const { error: partsError } = await supabase.from('participantes').insert(
+                    friendIds.map((usuario_id) => ({
+                        plan_id: newPlan.id,
+                        usuario_id,
+                        estado: 'aceptado',
+                    })),
+                );
+                if (partsError) throw partsError;
             }
 
             setShowCreateGroup(false);
+            setGroupName('');
+            setSelectedFriends(new Set());
+            invalidatePlanMembershipCaches(user.id);
             router.push(`/chat/${newPlan.id}`);
-            fetchMyChats();
-
-            if (invited > 0) {
-                Alert.alert(t('login.notice'), t('friends.inviteSent'));
-            }
-            if (failed > 0) {
-                Alert.alert(
-                    t('profile.error'),
-                    invited === 0 ? t('friends.invitesSqlHint') : t('chats.invitePartialFail', { ok: invited, fail: failed })
-                );
-            }
+            void fetchMyChats({ force: true });
         } catch (e: any) {
-            console.error(e);
-            const msg = e?.message ?? '';
-            Alert.alert(
-                t('profile.error'),
-                msg.includes('plan_invitaciones')
-                    ? t('friends.invitesSqlHint')
-                    : msg || t('friends.chatError')
-            );
+            if (__DEV__) console.error(e);
+            Alert.alert(t('profile.error'), e?.message || t('friends.chatError'));
         } finally {
             setCreatingGroup(false);
         }
@@ -412,28 +519,44 @@ export default function MyChatsScreen() {
 
     const onRefresh = () => {
         setRefreshing(true);
-        fetchMyChats();
+        void fetchMyChats({ force: true });
     };
 
     const renderEmpty = () => (
         <View style={styles.emptyContainer}>
             <View style={styles.emptyIconBg}>
-                <Ionicons name="chatbubbles-outline" size={60} color={PRIMARY} />
+                <Ionicons name={loadError ? 'cloud-offline-outline' : 'chatbubbles-outline'} size={60} color={PRIMARY} />
             </View>
-            <Text style={styles.emptyTitle}>{t('chats.empty')}</Text>
-            <Text style={styles.emptySubtitle}>{t('chats.emptySub')}</Text>
-            <TouchableOpacity style={styles.exploreBtn} onPress={() => router.replace('/(tabs)')}>
-                <Text style={styles.exploreBtnText}>{t('chats.explore')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.createGroupBtnEmpty} onPress={openCreateGroup}>
-                <Ionicons name="people" size={18} color="#FFF" />
-                <Text style={styles.createGroupBtnText}>{t('chats.createGroup')}</Text>
-            </TouchableOpacity>
+            <Text style={styles.emptyTitle}>{loadError ? t('chats.loadError') : t('chats.empty')}</Text>
+            {!loadError ? <Text style={styles.emptySubtitle}>{t('chats.emptySub')}</Text> : null}
+            {loadError ? (
+                <TouchableOpacity
+                    style={styles.exploreBtn}
+                    onPress={() => {
+                        setLoadError(false);
+                        void fetchMyChats({ force: true });
+                    }}
+                >
+                    <Text style={styles.exploreBtnText}>{t('chats.retry')}</Text>
+                </TouchableOpacity>
+            ) : (
+                <>
+                    <TouchableOpacity
+                        style={styles.exploreBtn}
+                        onPress={() => router.navigate('/')}
+                    >
+                        <Text style={styles.exploreBtnText}>{t('chats.explore')}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.createGroupBtnEmpty} onPress={openCreateGroup}>
+                        <Ionicons name="people" size={18} color="#FFF" />
+                        <Text style={styles.createGroupBtnText}>{t('chats.createGroup')}</Text>
+                    </TouchableOpacity>
+                </>
+            )}
         </View>
     );
 
     return (
-        <MainChrome active="chats">
             <View style={styles.container}>
                 <View style={styles.pageHeader}>
                     <Text style={styles.pageTitle}>{t('chats.title')}</Text>
@@ -443,19 +566,19 @@ export default function MyChatsScreen() {
                 </View>
 
                 {loading && !refreshing && chats.length === 0 ? (
-                    <View style={styles.loading}>
-                        <ActivityIndicator size="large" color={PRIMARY_DARK} />
-                    </View>
-                ) : null}
-                <FlatList
+                    <ChatSkeletonList count={8} />
+                ) : (
+                <FlashList
                     ref={listRef}
+                    style={{ flex: 1 }}
                     data={chats}
                     keyExtractor={(item) => item.id.toString()}
+                    getItemType={(item) => item.kind}
                     ListEmptyComponent={!loading ? renderEmpty : null}
                     contentContainerStyle={styles.listContent}
                     onScroll={onScroll}
                     scrollEventThrottle={scrollEventThrottle}
-                    {...OPTIMIZED_LIST_PROPS}
+                    drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />
                     }
@@ -496,6 +619,7 @@ export default function MyChatsScreen() {
                                     activeOpacity={0.85}
                                     onLongPress={() => confirmDeleteChat(item)}
                                     onPress={() => {
+                                        hapticSelection();
                                         openSwipeRef.current?.close();
                                         if (currentUserId && item.unread > 0) {
                                             if (item.kind === 'direct' && item.peerId) {
@@ -517,13 +641,11 @@ export default function MyChatsScreen() {
                                     }}
                                 >
                                     {item.kind === 'direct' ? (
-                                        <Image
-                                            source={{
-                                                uri:
-                                                    item.image_url ||
-                                                    getAvatarUri({ nombre: item.title, avatar_url: null }),
-                                            }}
-                                            style={styles.chatImage}
+                                        <ProfileAvatar
+                                            uri={item.image_url}
+                                            name={item.title}
+                                            size={52}
+                                            recyclingKey={item.peerId ?? item.id}
                                         />
                                     ) : item.kind === 'group' && item.image_url ? (
                                         <PlanImage
@@ -562,77 +684,113 @@ export default function MyChatsScreen() {
                         </View>
                     )}
                 />
+                )}
 
                 <Modal visible={showCreateGroup} animationType="slide" transparent>
-                    <Pressable style={styles.modalOverlay} onPress={Keyboard.dismiss}>
-                        <Pressable style={styles.modalSheet} onPress={() => {}}>
-                            <View style={styles.modalHeader}>
-                                <Text style={styles.modalTitle}>{t('chats.createGroup')}</Text>
-                                <TouchableOpacity onPress={() => setShowCreateGroup(false)}>
-                                    <Ionicons name="close" size={26} color={INK} />
-                                </TouchableOpacity>
-                            </View>
-
-                            <Text style={styles.modalLabel}>{t('chats.groupName')}</Text>
-                            <TextInput
-                                style={styles.modalInput}
-                                placeholder={t('chats.groupNamePlaceholder')}
-                                placeholderTextColor="#94A3B8"
-                                value={groupName}
-                                onChangeText={setGroupName}
-                                returnKeyType="done"
-                                onSubmitEditing={Keyboard.dismiss}
-                            />
-
-                            <Text style={[styles.modalLabel, { marginTop: 16 }]}>{t('chats.inviteFriends')}</Text>
-                            {loadingFriends ? (
-                                <ActivityIndicator color={PRIMARY} style={{ marginVertical: 20 }} />
-                            ) : friends.length === 0 ? (
-                                <Text style={styles.noFriendsHint}>{t('friends.noFriends')}</Text>
-                            ) : (
-                                <ScrollView
-                                    style={styles.friendsScroll}
-                                    nestedScrollEnabled
-                                    keyboardShouldPersistTaps="handled"
-                                    keyboardDismissMode="on-drag"
-                                >
-                                    {friends.map((f) => {
-                                        const selected = selectedFriends.has(f.id);
-                                        return (
-                                            <TouchableOpacity
-                                                key={f.id}
-                                                style={[styles.friendPickRow, selected && styles.friendPickSelected]}
-                                                onPress={() => toggleFriend(f.id)}
-                                            >
-                                                <Image source={{ uri: getAvatarUri(f) }} style={styles.friendPickAvatar} />
-                                                <Text style={styles.friendPickName}>{f.nombre}</Text>
-                                                <Ionicons
-                                                    name={selected ? 'checkmark-circle' : 'ellipse-outline'}
-                                                    size={24}
-                                                    color={selected ? PRIMARY_DARK : '#CBD5E1'}
-                                                />
-                                            </TouchableOpacity>
-                                        );
-                                    })}
-                                </ScrollView>
-                            )}
-
-                            <TouchableOpacity
-                                style={[styles.createGroupConfirm, creatingGroup && { opacity: 0.7 }]}
-                                onPress={handleCreateGroup}
-                                disabled={creatingGroup}
+                    <KeyboardAvoidingView
+                        style={{ flex: 1 }}
+                        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+                    >
+                        <Pressable style={styles.modalOverlay} onPress={Keyboard.dismiss}>
+                            <Pressable
+                                style={[
+                                    styles.modalSheet,
+                                    { paddingBottom: Math.max(insets.bottom, 16) + 12 },
+                                ]}
+                                onPress={() => {}}
                             >
-                                {creatingGroup ? (
-                                    <ActivityIndicator color="#FFF" />
+                                <View style={styles.modalHeader}>
+                                    <Text style={styles.modalTitle}>
+                                        {selectedFriends.size <= 1
+                                            ? t('chats.createGroup')
+                                            : t('chats.createGroupTitle')}
+                                    </Text>
+                                    <TouchableOpacity onPress={() => setShowCreateGroup(false)}>
+                                        <Ionicons name="close" size={26} color={INK} />
+                                    </TouchableOpacity>
+                                </View>
+
+                                {selectedFriends.size >= 2 ? (
+                                    <>
+                                        <Text style={styles.modalLabel}>{t('chats.groupName')}</Text>
+                                        <TextInput
+                                            style={styles.modalInput}
+                                            placeholder={t('chats.groupNamePlaceholder')}
+                                            placeholderTextColor="#94A3B8"
+                                            value={groupName}
+                                            onChangeText={setGroupName}
+                                            returnKeyType="done"
+                                            onSubmitEditing={Keyboard.dismiss}
+                                        />
+                                    </>
+                                ) : null}
+
+                                <Text
+                                    style={[
+                                        styles.modalLabel,
+                                        { marginTop: selectedFriends.size >= 2 ? 16 : 0 },
+                                    ]}
+                                >
+                                    {t('chats.inviteFriends')}
+                                </Text>
+                                {loadingFriends ? (
+                                    <ActivityIndicator color={PRIMARY} style={{ marginVertical: 20 }} />
+                                ) : friends.length === 0 ? (
+                                    <Text style={styles.noFriendsHint}>{t('friends.noFriends')}</Text>
                                 ) : (
-                                    <Text style={styles.createGroupConfirmText}>{t('chats.createGroup')}</Text>
+                                    <ScrollView
+                                        style={styles.friendsScroll}
+                                        nestedScrollEnabled
+                                        keyboardShouldPersistTaps="handled"
+                                        keyboardDismissMode="on-drag"
+                                    >
+                                        {friends.map((f) => {
+                                            const selected = selectedFriends.has(f.id);
+                                            return (
+                                                <TouchableOpacity
+                                                    key={f.id}
+                                                    style={[styles.friendPickRow, selected && styles.friendPickSelected]}
+                                                    onPress={() => toggleFriend(f.id)}
+                                                >
+                                                    <ProfileAvatar
+                                                        uri={f.avatar_url}
+                                                        name={f.nombre}
+                                                        size={40}
+                                                        recyclingKey={f.id}
+                                                    />
+                                                    <Text style={styles.friendPickName}>{f.nombre}</Text>
+                                                    <Ionicons
+                                                        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                                                        size={24}
+                                                        color={selected ? PRIMARY_DARK : '#CBD5E1'}
+                                                    />
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </ScrollView>
                                 )}
-                            </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.createGroupConfirm, creatingGroup && { opacity: 0.7 }]}
+                                    onPress={handleCreateGroup}
+                                    disabled={creatingGroup}
+                                >
+                                    {creatingGroup ? (
+                                        <ActivityIndicator color="#FFF" />
+                                    ) : (
+                                        <Text style={styles.createGroupConfirmText}>
+                                            {selectedFriends.size <= 1
+                                                ? t('chats.openDirectChat')
+                                                : t('chats.createGroupConfirm')}
+                                        </Text>
+                                    )}
+                                </TouchableOpacity>
+                            </Pressable>
                         </Pressable>
-                    </Pressable>
+                    </KeyboardAvoidingView>
                 </Modal>
             </View>
-        </MainChrome>
     );
 }
 
@@ -707,7 +865,7 @@ const styles = StyleSheet.create({
     modalLabel: { fontSize: 13, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 8 },
     modalInput: { backgroundColor: '#F1F5F9', borderRadius: 14, padding: 14, fontSize: 16, color: INK, borderWidth: 1, borderColor: '#E2E8F0' },
     friendsScroll: { maxHeight: 220, marginBottom: 16 },
-    friendPickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 8, borderRadius: 14, marginBottom: 6 },
+    friendPickRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 8, borderRadius: 14, marginBottom: 6 },
     friendPickSelected: { backgroundColor: '#EFF6FF' },
     friendPickAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: '#E3ECFB' },
     friendPickName: { flex: 1, fontSize: 16, fontWeight: '700', color: INK },

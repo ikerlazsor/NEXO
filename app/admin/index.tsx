@@ -140,7 +140,11 @@ export default function AdminInboxScreen() {
             <ScreenHeader
                 title={t('admin.title')}
                 onBack={() => router.back()}
-                subtitle={counts ? t('admin.openCount', { n: counts.total }) : undefined}
+                subtitle={
+                    counts
+                        ? `${t('admin.subtitle')} · ${t('admin.openCount', { n: counts.total })}`
+                        : t('admin.subtitle')
+                }
             />
 
             <View style={styles.toolbar}>

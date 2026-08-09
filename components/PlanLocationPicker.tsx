@@ -11,8 +11,11 @@ import {
     TextInput,
     View,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import type MapView from 'react-native-maps';
+import { Marker } from 'react-native-maps';
+import { NexoMapView } from './NexoMapView';
 import { reverseGeocodePlace, searchPlaces, type GeocodeResult } from '../lib/geocoding';
+import { isNativeMapsAvailable } from '../lib/mapsConfig';
 import { useT } from '../lib/i18n';
 
 const PRIMARY = '#4DA6FF';
@@ -45,6 +48,8 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const requestIdRef = useRef(0);
     const searchInputRef = useRef<TextInput>(null);
+    /** Evita que al rellenar el input tras elegir un resultado se vuelva a abrir el desplegable. */
+    const suppressSearchRef = useRef(false);
 
     const hasAddress =
         !!location.address?.trim() &&
@@ -67,9 +72,19 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         const q = searchText.trim();
         if (debounceRef.current) clearTimeout(debounceRef.current);
 
+        if (suppressSearchRef.current) {
+            suppressSearchRef.current = false;
+            requestIdRef.current += 1;
+            setResults([]);
+            setSearching(false);
+            setShowSuggestions(false);
+            return;
+        }
+
         if (q.length < 2) {
             setResults([]);
             setSearching(false);
+            setShowSuggestions(false);
             return;
         }
 
@@ -79,10 +94,12 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         debounceRef.current = setTimeout(async () => {
             const requestId = ++requestIdRef.current;
             try {
-                const items = await searchPlaces(q, {
-                    lat: location.latitude,
-                    lon: location.longitude,
-                });
+                const items = await searchPlaces(
+                    q,
+                    hasAddress
+                        ? { lat: location.latitude, lon: location.longitude }
+                        : null,
+                );
                 if (requestId !== requestIdRef.current) return;
                 setResults(items);
             } catch {
@@ -96,11 +113,13 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         return () => {
             if (debounceRef.current) clearTimeout(debounceRef.current);
         };
-    }, [searchText, location.latitude, location.longitude]);
+    }, [searchText, location.latitude, location.longitude, hasAddress]);
 
     const onMapPress = async (lat: number, lon: number) => {
+        requestIdRef.current += 1;
         setResolvingPin(true);
         setShowSuggestions(false);
+        setResults([]);
         mapRef.current?.animateToRegion(
             { latitude: lat, longitude: lon, latitudeDelta: 0.006, longitudeDelta: 0.006 },
             400
@@ -116,10 +135,14 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
     };
 
     const pickResult = (item: SearchResult) => {
-        applyLocation(item.latitude, item.longitude, item.subtitle || item.label);
-        setSearchText(item.label);
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        requestIdRef.current += 1;
+        suppressSearchRef.current = true;
         setShowSuggestions(false);
         setResults([]);
+        setSearching(false);
+        applyLocation(item.latitude, item.longitude, item.subtitle || item.label);
+        setSearchText(item.label);
         Keyboard.dismiss();
         searchInputRef.current?.blur();
     };
@@ -140,7 +163,6 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={styles.title}>{t('createplan.where')}</Text>
-                    <Text style={styles.subtitle}>{t('createplan.locationSub')}</Text>
                 </View>
             </View>
 
@@ -237,9 +259,10 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
 
             <View style={styles.mapShadow}>
                 <View style={styles.mapCard}>
-                    <MapView
+                    <NexoMapView
                         ref={mapRef}
                         style={styles.map}
+                        fallbackHint={t('createplan.locationSearchOnly')}
                         initialRegion={{
                             latitude: location.latitude,
                             longitude: location.longitude,
@@ -253,29 +276,35 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
                             )
                         }
                     >
-                        <Marker
-                            coordinate={{
-                                latitude: location.latitude,
-                                longitude: location.longitude,
-                            }}
-                            pinColor={PRIMARY_DARK}
-                        />
-                    </MapView>
+                        {isNativeMapsAvailable() ? (
+                            <Marker
+                                coordinate={{
+                                    latitude: location.latitude,
+                                    longitude: location.longitude,
+                                }}
+                                pinColor={PRIMARY_DARK}
+                            />
+                        ) : null}
+                    </NexoMapView>
 
-                    <LinearGradient
-                        colors={['transparent', 'rgba(15, 42, 74, 0.55)']}
-                        style={styles.mapGradient}
-                        pointerEvents="none"
-                    />
+                    {isNativeMapsAvailable() ? (
+                        <>
+                            <LinearGradient
+                                colors={['transparent', 'rgba(15, 42, 74, 0.55)']}
+                                style={styles.mapGradient}
+                                pointerEvents="none"
+                            />
 
-                    <View style={styles.mapHint} pointerEvents="none">
-                        {resolvingPin ? (
-                            <ActivityIndicator size="small" color="#FFF" />
-                        ) : (
-                            <Ionicons name="hand-left-outline" size={14} color="#FFF" />
-                        )}
-                        <Text style={styles.mapHintText}>{t('createplan.locationTapMap')}</Text>
-                    </View>
+                            <View style={styles.mapHint} pointerEvents="none">
+                                {resolvingPin ? (
+                                    <ActivityIndicator size="small" color="#FFF" />
+                                ) : (
+                                    <Ionicons name="hand-left-outline" size={14} color="#FFF" />
+                                )}
+                                <Text style={styles.mapHintText}>{t('createplan.locationTapMap')}</Text>
+                            </View>
+                        </>
+                    ) : null}
                 </View>
             </View>
         </View>

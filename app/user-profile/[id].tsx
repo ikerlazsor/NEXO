@@ -36,14 +36,19 @@ import {
 } from '../../lib/friends';
 import { blockUser, isBlockedEitherWay, isUserBlocked, unblockUser } from '../../lib/blocks';
 import { countSharedAttendedPlans } from '../../lib/coincidences';
+import { hapticError, hapticLight, hapticSuccess } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { renderRatingStars } from '../../lib/profileRating';
 import { EMPTY_STATS, formatRatingScore, getUserStats, type UserStats } from '../../lib/stats';
-import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
+import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
+import { screenCacheKey } from '../../lib/screenCaches';
+import { ensureDirectConversation } from '../../lib/directChat';
 import { supabase } from '../../lib/supabase';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../../lib/screenState';
-import { calcAge, getPersonalityLabel, parseHabitos, parsePrivacy, type ProfilePrivacy } from '../../lib/profileFields';
+import { bothFemaleGenero, calcAge, getPersonalityLabel, parseHabitos, parsePrivacy, type ProfilePrivacy } from '../../lib/profileFields';
+import { deleteUserAdmin } from '../../lib/moderation';
+import { fetchAccountAccess } from '../../lib/roles';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -82,6 +87,7 @@ type UserProfileSnapshot = {
     blocked: boolean;
     blockedEitherWay: boolean;
     currentUserId: string | null;
+    currentUserGenero: string | null;
     sharedPlans: number;
 };
 
@@ -98,7 +104,6 @@ export default function UserProfileScreen() {
     const cached = profileId ? cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId)) : null;
 
     const [loading, setLoading] = useState(() => !cached?.userProfile);
-    const [actionLoading, setActionLoading] = useState(false);
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(() => cached?.userProfile ?? null);
     const [currentUserId, setCurrentUserId] = useState<string | null>(() => cached?.currentUserId ?? null);
     const [friendStatus, setFriendStatus] = useState<FriendStatus | null>(
@@ -115,7 +120,16 @@ export default function UserProfileScreen() {
     const [badgesLoading, setBadgesLoading] = useState(() => !cached?.badges?.length);
     const [avatarOpen, setAvatarOpen] = useState(false);
     const [sharedPlans, setSharedPlans] = useState(() => cached?.sharedPlans ?? 0);
+    const [currentUserGenero, setCurrentUserGenero] = useState<string | null>(
+        () => cached?.currentUserGenero ?? null,
+    );
+    const [isOwner, setIsOwner] = useState(false);
+    const [targetIsStaff, setTargetIsStaff] = useState(false);
+    const [deletingUser, setDeletingUser] = useState(false);
     const hasDataRef = useRef(!!cached?.userProfile);
+    /** Promesa del envío en curso (para poder cancelar antes de tener requestId). */
+    const pendingSendRef = useRef<Promise<string | null> | null>(null);
+    const cancelDesiredRef = useRef(false);
 
     const applySnapshot = useCallback((snap: UserProfileSnapshot) => {
         setUserProfile(snap.userProfile);
@@ -128,22 +142,25 @@ export default function UserProfileScreen() {
         setBlocked(snap.blocked);
         setBlockedEitherWay(snap.blockedEitherWay);
         setCurrentUserId(snap.currentUserId);
+        setCurrentUserGenero(snap.currentUserGenero);
         setSharedPlans(snap.sharedPlans);
         setBadgesLoading(false);
         hasDataRef.current = true;
     }, []);
 
-    const loadProfile = useCallback(async () => {
+    const loadProfile = useCallback(async (opts?: { force?: boolean }) => {
         if (!profileId) return;
+        const profileKey = userProfileKey(profileId);
 
         try {
-            const stale = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId));
+            const stale = cacheGetStale<UserProfileSnapshot>(profileKey);
             if (stale?.userProfile) {
                 // Solo hidratar si aún no hay UI: evita un segundo layout al refrescar.
                 if (!hasDataRef.current) {
                     applySnapshot(stale);
                 }
                 setLoading(false);
+                if (!opts?.force && cacheIsFresh(profileKey)) return;
             } else if (!hasDataRef.current) {
                 setLoading(true);
                 setBadgesLoading(true);
@@ -158,22 +175,28 @@ export default function UserProfileScreen() {
                           isUserBlocked(user.id, profileId),
                           isBlockedEitherWay(user.id, profileId),
                           countSharedAttendedPlans(user.id, profileId),
+                          supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle(),
                       ])
                     : Promise.resolve(null);
 
-            const [{ data: profile, error }, count, userStats, badgeStats, friendData] = await Promise.all([
+            const [{ data: profile, error }, count, userStats, badgeStats, friendData, access] = await Promise.all([
                 supabase
                     .from('perfiles')
-                    .select('id, nombre, nombre_usuario, avatar_url, descripcion, etiquetas, fecha_nacimiento, genero, habitos_consumo, ambientes_preferidos, perfil_gustos')
+                    .select('id, nombre, nombre_usuario, avatar_url, descripcion, etiquetas, fecha_nacimiento, genero, habitos_consumo, ambientes_preferidos, perfil_gustos, rol')
                     .eq('id', profileId)
                     .single(),
                 getFriendsCount(profileId),
                 getUserStats(profileId),
                 getBadgeStats(profileId),
                 friendPromise,
+                user ? fetchAccountAccess(user.id) : Promise.resolve(null),
             ]);
 
             if (error || !profile) throw error ?? new Error('profile_missing');
+
+            setIsOwner(!!access?.isOwner);
+            const targetRol = (profile as { rol?: string | null }).rol;
+            setTargetIsStaff(targetRol === 'owner' || targetRol === 'admin');
 
             const nextProfile: PublicProfile = {
                 id: profile.id,
@@ -194,14 +217,16 @@ export default function UserProfileScreen() {
             let nextBlocked = false;
             let nextBlockedEitherWay = false;
             let nextSharedPlans = 0;
+            let nextMyGenero: string | null = null;
 
             if (friendData) {
-                const [status, isBlocked, eitherWay, shared] = friendData;
+                const [status, isBlocked, eitherWay, shared, myProfileRes] = friendData;
                 nextFriendStatus = status.status;
                 nextRequestId = status.requestId;
                 nextBlocked = isBlocked;
                 nextBlockedEitherWay = eitherWay;
                 nextSharedPlans = shared;
+                nextMyGenero = (myProfileRes.data?.genero as string | null) ?? null;
             } else if (user?.id === profileId) {
                 nextFriendStatus = 'self';
             }
@@ -218,10 +243,11 @@ export default function UserProfileScreen() {
                 blocked: nextBlocked,
                 blockedEitherWay: nextBlockedEitherWay,
                 currentUserId: user?.id ?? null,
+                currentUserGenero: nextMyGenero,
                 sharedPlans: nextSharedPlans,
             };
 
-            cacheSet(userProfileKey(profileId), snap, USER_PROFILE_TTL_MS);
+            cacheSet(profileKey, snap, USER_PROFILE_TTL_MS);
             if (hasDataRef.current) {
                 // Refresco en background: no forzar un segundo layout brusco al entrar.
                 startTransition(() => applySnapshot(snap));
@@ -229,7 +255,7 @@ export default function UserProfileScreen() {
                 applySnapshot(snap);
             }
         } catch (error) {
-            console.error('Error fetching user profile:', error);
+            if (__DEV__) console.error('Error fetching user profile:', error);
             if (!hasDataRef.current) setUserProfile(null);
         } finally {
             setLoading(false);
@@ -238,112 +264,251 @@ export default function UserProfileScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            loadProfile();
-        }, [loadProfile])
+            void loadProfile();
+            // La amistad puede cambiar en otro dispositivo mientras la caché sigue "fresca".
+            let cancelled = false;
+            void (async () => {
+                if (!profileId) return;
+                const user = await getAuthUser();
+                if (!user || user.id === profileId) return;
+                try {
+                    const status = await getFriendStatus(user.id, profileId);
+                    if (cancelled) return;
+                    setFriendStatus(status.status);
+                    setRequestId(status.requestId);
+                    const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId));
+                    if (prev) {
+                        cacheSet(
+                            userProfileKey(profileId),
+                            {
+                                ...prev,
+                                friendStatus: status.status,
+                                requestId: status.requestId,
+                            },
+                            USER_PROFILE_TTL_MS,
+                        );
+                    }
+                } catch {
+                    /* ignore */
+                }
+            })();
+            return () => {
+                cancelled = true;
+            };
+        }, [loadProfile, profileId])
     );
 
-    const handleSendRequest = async () => {
-        if (!currentUserId || !profileId) return;
+    const handleSendRequest = () => {
+        if (!currentUserId || !profileId || friendStatus !== 'none') return;
 
-        setActionLoading(true);
-        const { error } = await sendFriendRequest(currentUserId, profileId);
-        setActionLoading(false);
-
-        if (error) {
-            Alert.alert(
-                t('userprofile.sendFail'),
-                error === 'friend_request_daily_limit' ? t('friends.requestDailyLimit') : error,
-            );
-            return;
-        }
-
+        const prevStatus = friendStatus;
+        const prevRequestId = requestId;
+        cancelDesiredRef.current = false;
+        hapticLight();
         setFriendStatus('pending_sent');
-        const { data: pending } = await supabase
-            .from('amistades')
-            .select('id')
-            .eq('usuario_origen_id', currentUserId)
-            .eq('usuario_destino_id', profileId)
-            .eq('estado', 'pendiente')
-            .maybeSingle();
-        const nextRequestId = pending?.id ?? null;
-        setRequestId(nextRequestId);
-        const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId));
-        if (prev) {
-            cacheSet(userProfileKey(profileId), {
-                ...prev,
-                friendStatus: 'pending_sent',
-                requestId: nextRequestId,
-            }, USER_PROFILE_TTL_MS);
-        }
+        setRequestId(null);
+
+        const sendPromise = (async () => {
+            const { error, requestId: nextId } = await sendFriendRequest(currentUserId, profileId);
+            if (error) {
+                if (!cancelDesiredRef.current) {
+                    setFriendStatus(prevStatus);
+                    setRequestId(prevRequestId);
+                    hapticError();
+                    Alert.alert(
+                        t('userprofile.sendFail'),
+                        error === 'friend_request_daily_limit' ? t('friends.requestDailyLimit') : error,
+                    );
+                }
+                return null;
+            }
+            const resolvedId = nextId ?? null;
+            if (cancelDesiredRef.current) {
+                if (resolvedId) await cancelFriendRequest(resolvedId);
+                return null;
+            }
+            setRequestId(resolvedId);
+            const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId));
+            if (prev) {
+                cacheSet(userProfileKey(profileId), {
+                    ...prev,
+                    friendStatus: 'pending_sent',
+                    requestId: resolvedId,
+                }, USER_PROFILE_TTL_MS);
+            }
+            return resolvedId;
+        })();
+
+        pendingSendRef.current = sendPromise;
+        void sendPromise.finally(() => {
+            if (pendingSendRef.current === sendPromise) pendingSendRef.current = null;
+        });
     };
 
     const handleAccept = async () => {
         if (!requestId) return;
 
-        setActionLoading(true);
-        const { error } = await acceptFriendRequest(requestId);
-        setActionLoading(false);
+        const prevStatus = friendStatus;
+        const prevRequestId = requestId;
+        hapticSuccess();
+        setFriendStatus('friends');
 
+        const { error } = await acceptFriendRequest(requestId);
         if (error) {
+            setFriendStatus(prevStatus);
+            setRequestId(prevRequestId);
+            hapticError();
             Alert.alert(t('profile.error'), error.message);
             return;
         }
 
         Alert.alert(t('userprofile.nowFriends'), t('userprofile.nowFriendsMsg'));
-        await loadProfile();
+        const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId!));
+        if (prev) {
+            cacheSet(userProfileKey(profileId!), {
+                ...prev,
+                friendStatus: 'friends',
+                requestId: prevRequestId,
+            }, USER_PROFILE_TTL_MS);
+        }
     };
 
     const handleReject = async () => {
         if (!requestId) return;
 
-        setActionLoading(true);
-        const { error } = await rejectFriendRequest(requestId);
-        setActionLoading(false);
+        const prevStatus = friendStatus;
+        const prevRequestId = requestId;
+        hapticLight();
+        setFriendStatus('none');
+        setRequestId(null);
 
+        const { error } = await rejectFriendRequest(requestId);
         if (error) {
+            setFriendStatus(prevStatus);
+            setRequestId(prevRequestId);
+            hapticError();
             Alert.alert(t('profile.error'), error.message);
             return;
         }
 
-        await loadProfile();
+        const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId!));
+        if (prev) {
+            cacheSet(userProfileKey(profileId!), {
+                ...prev,
+                friendStatus: 'none',
+                requestId: null,
+            }, USER_PROFILE_TTL_MS);
+        }
     };
 
-    const handleCancelRequest = async () => {
-        if (!requestId) return;
+    const handleOwnerDeleteUser = () => {
+        if (!isOwner || !profileId || friendStatus === 'self' || targetIsStaff || deletingUser) return;
+        Alert.alert(t('admin.deleteUserTitle'), t('admin.deleteUserMsg'), [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: t('admin.deleteUserConfirm'),
+                style: 'destructive',
+                onPress: () => {
+                    setDeletingUser(true);
+                    void (async () => {
+                        const { error } = await deleteUserAdmin(profileId);
+                        setDeletingUser(false);
+                        if (error) {
+                            const key = `admin.err.${error}` as const;
+                            const msg =
+                                error === 'cannot_moderate_staff'
+                                    ? t('admin.err.cannot_moderate_staff')
+                                    : error === 'not_authorized'
+                                      ? t('admin.err.not_authorized')
+                                      : error === 'user_not_found'
+                                        ? t('admin.err.user_not_found')
+                                        : error === 'invalid_target'
+                                          ? t('admin.err.invalid_target')
+                                          : error;
+                            Alert.alert(t('admin.error'), typeof msg === 'string' ? msg : t(key));
+                            return;
+                        }
+                        Alert.alert(t('admin.userDeleted'));
+                        router.back();
+                    })();
+                },
+            },
+        ]);
+    };
 
-        setActionLoading(true);
-        const { error } = await cancelFriendRequest(requestId);
-        setActionLoading(false);
+    const handleCancelRequest = () => {
+        if (friendStatus !== 'pending_sent') return;
 
-        if (error) {
-            Alert.alert(t('profile.error'), error.message);
-            return;
-        }
-        await loadProfile();
+        const prevStatus = friendStatus;
+        const prevRequestId = requestId;
+        const pendingSend = pendingSendRef.current;
+        cancelDesiredRef.current = true;
+        hapticLight();
+        setFriendStatus('none');
+        setRequestId(null);
+
+        void (async () => {
+            let id = prevRequestId;
+            if (!id && pendingSend) {
+                id = await pendingSend;
+            }
+            if (!id) return;
+
+            const { error } = await cancelFriendRequest(id);
+            if (error) {
+                cancelDesiredRef.current = false;
+                setFriendStatus(prevStatus);
+                setRequestId(id);
+                Alert.alert(t('profile.error'), error.message);
+                return;
+            }
+
+            const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId!));
+            if (prev) {
+                cacheSet(userProfileKey(profileId!), {
+                    ...prev,
+                    friendStatus: 'none',
+                    requestId: null,
+                }, USER_PROFILE_TTL_MS);
+            }
+        })();
     };
 
     const handleRemoveFriend = () => {
         if (!requestId || !userProfile) return;
+        const fem = bothFemaleGenero(currentUserGenero, userProfile.genero);
 
         Alert.alert(
-            t('userprofile.unfriendTitle'),
-            t('userprofile.unfriendConfirmName', { name: userProfile.nombre || t('chats.user') }),
+            t(fem ? 'userprofile.unfriendTitleF' : 'userprofile.unfriendTitle'),
+            t(fem ? 'userprofile.unfriendConfirmNameF' : 'userprofile.unfriendConfirmName', {
+                name: userProfile.nombre || t('chats.user'),
+            }),
             [
                 { text: t('common.cancel'), style: 'cancel' },
                 {
                     text: t('friends.removeBtn'),
                     style: 'destructive',
-                    onPress: async () => {
-                        setActionLoading(true);
-                        const { error } = await removeFriend(requestId);
-                        setActionLoading(false);
-
-                        if (error) {
-                            Alert.alert(t('profile.error'), error.message);
-                            return;
-                        }
-
-                        await loadProfile();
+                    onPress: () => {
+                        const prevStatus = friendStatus;
+                        const prevRequestId = requestId;
+                        setFriendStatus('none');
+                        setRequestId(null);
+                        void removeFriend(prevRequestId!).then(({ error }) => {
+                            if (error) {
+                                setFriendStatus(prevStatus);
+                                setRequestId(prevRequestId);
+                                Alert.alert(t('profile.error'), error.message);
+                                return;
+                            }
+                            const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId!));
+                            if (prev) {
+                                cacheSet(userProfileKey(profileId!), {
+                                    ...prev,
+                                    friendStatus: 'none',
+                                    requestId: null,
+                                }, USER_PROFILE_TTL_MS);
+                            }
+                        });
                     },
                 },
             ]
@@ -358,16 +523,18 @@ export default function UserProfileScreen() {
                 { text: t('common.cancel'), style: 'cancel' },
                 {
                     text: t('userprofile.unblock'),
-                    onPress: async () => {
-                        setActionLoading(true);
-                        const { error } = await unblockUser(currentUserId, profileId);
-                        setActionLoading(false);
-                        if (error) {
-                            Alert.alert(t('profile.error'), error);
-                            return;
-                        }
+                    onPress: () => {
+                        const prevBlocked = blocked;
+                        const prevEither = blockedEitherWay;
                         setBlocked(false);
-                        await loadProfile();
+                        setBlockedEitherWay(false);
+                        void unblockUser(currentUserId, profileId).then(({ error }) => {
+                            if (error) {
+                                setBlocked(prevBlocked);
+                                setBlockedEitherWay(prevEither);
+                                Alert.alert(t('profile.error'), error);
+                            }
+                        });
                     },
                 },
             ]);
@@ -382,48 +549,67 @@ export default function UserProfileScreen() {
                 {
                     text: t('userprofile.block'),
                     style: 'destructive',
-                    onPress: async () => {
-                        setActionLoading(true);
-                        const { error } = await blockUser(currentUserId, profileId);
-                        setActionLoading(false);
-                        if (error) {
-                            Alert.alert(
-                                t('profile.error'),
-                                error === 'block_daily_limit' ? t('blocks.dailyLimit') : error,
-                            );
-                            return;
-                        }
+                    onPress: () => {
+                        const prevBlocked = blocked;
+                        const prevEither = blockedEitherWay;
+                        const prevStatus = friendStatus;
+                        const prevRequestId = requestId;
                         setBlocked(true);
                         setBlockedEitherWay(true);
                         setFriendStatus('none');
                         setRequestId(null);
+                        void blockUser(currentUserId, profileId).then(({ error }) => {
+                            if (error) {
+                                setBlocked(prevBlocked);
+                                setBlockedEitherWay(prevEither);
+                                setFriendStatus(prevStatus);
+                                setRequestId(prevRequestId);
+                                Alert.alert(
+                                    t('profile.error'),
+                                    error === 'block_daily_limit' ? t('blocks.dailyLimit') : error,
+                                );
+                            }
+                        });
                     },
                 },
             ]
         );
     };
 
+    const femalePair = bothFemaleGenero(currentUserGenero, userProfile?.genero);
+
     const renderFriendAction = () => {
         if (friendStatus === 'self' || blockedEitherWay) return null;
-
-        if (actionLoading) {
-            return (
-                <View style={[styles.actionSlot, styles.actionLoading]}>
-                    <ActivityIndicator color={PRIMARY_DARK} />
-                </View>
-            );
-        }
 
         if (friendStatus === 'friends') {
             return (
                 <View style={[styles.actionSlot, styles.friendsActions]}>
+                    <TouchableOpacity
+                        style={styles.chatBtn}
+                        onPress={() => {
+                            if (!userProfile?.id || !currentUserId) return;
+                            void ensureDirectConversation(currentUserId, userProfile.id).then(() => {
+                                cacheInvalidate(screenCacheKey.chatsList(currentUserId));
+                            });
+                            router.push(`/direct-chat/${userProfile.id}`);
+                        }}
+                        activeOpacity={0.88}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('chat.directSubtitle')}
+                    >
+                        <Ionicons name="chatbubble" size={22} color="#FFF" />
+                    </TouchableOpacity>
                     <View style={styles.friendsBadge}>
                         <Ionicons name="checkmark-circle" size={18} color={SUCCESS} />
-                        <Text style={styles.friendsBadgeText}>{t('userprofile.areFriends')}</Text>
+                        <Text style={styles.friendsBadgeText}>
+                            {t(femalePair ? 'userprofile.areFriendsF' : 'userprofile.areFriends')}
+                        </Text>
                     </View>
                     <TouchableOpacity style={styles.removeFriendBtn} onPress={handleRemoveFriend} activeOpacity={0.85}>
-                        <Ionicons name="person-remove-outline" size={17} color={DANGER} />
-                        <Text style={styles.removeFriendText}>{t('userprofile.unfriend')}</Text>
+                        <Ionicons name="heart-dislike-outline" size={17} color={DANGER} />
+                        <Text style={styles.removeFriendText}>
+                            {t(femalePair ? 'userprofile.unfriendF' : 'userprofile.unfriend')}
+                        </Text>
                     </TouchableOpacity>
                 </View>
             );
@@ -543,6 +729,11 @@ export default function UserProfileScreen() {
                             onPress={() => setAvatarOpen(true)}
                             activeOpacity={0.9}
                             accessibilityRole="imagebutton"
+                            style={
+                                friendStatus === 'friends'
+                                    ? [styles.avatarRingFriend, { width: 108, height: 108, borderRadius: 54 }]
+                                    : undefined
+                            }
                         >
                             <ProfileAvatar
                                 uri={userProfile.avatar_url}
@@ -595,8 +786,12 @@ export default function UserProfileScreen() {
                                 <Text style={styles.sharedPlansText}>
                                     {t(
                                         sharedPlans === 1
-                                            ? 'userprofile.sharedPlansOne'
-                                            : 'userprofile.sharedPlansMany',
+                                            ? femalePair
+                                                ? 'userprofile.sharedPlansOneF'
+                                                : 'userprofile.sharedPlansOne'
+                                            : femalePair
+                                              ? 'userprofile.sharedPlansManyF'
+                                              : 'userprofile.sharedPlansMany',
                                         { name: displayName, n: sharedPlans },
                                     )}
                                 </Text>
@@ -692,7 +887,12 @@ export default function UserProfileScreen() {
                                 {badges.filter((b) => b.unlocked).length}/{badges.length}
                             </Text>
                         </View>
-                        <View style={styles.badgeGrid}>
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            nestedScrollEnabled
+                            contentContainerStyle={styles.badgeRow}
+                        >
                             {badges.map((badge) => (
                                 <BadgeTile
                                     key={badge.family.id}
@@ -700,7 +900,7 @@ export default function UserProfileScreen() {
                                     onPress={() => setSelectedBadge(badge)}
                                 />
                             ))}
-                        </View>
+                        </ScrollView>
                     </View>
 
                     {friendStatus !== 'self' ? (
@@ -722,6 +922,22 @@ export default function UserProfileScreen() {
                                     {blocked ? t('userprofile.unblock') : t('userprofile.block')}
                                 </Text>
                             </TouchableOpacity>
+                            {isOwner && !targetIsStaff ? (
+                                <TouchableOpacity
+                                    style={styles.ownerDeleteUserBtn}
+                                    onPress={handleOwnerDeleteUser}
+                                    activeOpacity={0.85}
+                                    disabled={deletingUser}
+                                >
+                                    {deletingUser ? (
+                                        <ActivityIndicator color="#FFF" />
+                                    ) : (
+                                        <Text style={styles.ownerDeleteUserBtnText}>
+                                            {t('admin.deleteUserConfirm')}
+                                        </Text>
+                                    )}
+                                </TouchableOpacity>
+                            ) : null}
                         </View>
                     ) : null}
                 </ScrollView>
@@ -776,6 +992,13 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: BORDER,
         alignItems: 'center',
+    },
+    avatarRingFriend: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 3,
+        borderColor: '#10B981',
+        backgroundColor: '#ECFDF5',
     },
     displayName: {
         fontSize: 22,
@@ -847,12 +1070,10 @@ const styles = StyleSheet.create({
         paddingHorizontal: 4,
         marginTop: 16,
         width: '100%',
-        minHeight: 108,
         justifyContent: 'flex-start',
     },
     actionSlot: {
         width: '100%',
-        minHeight: 52,
         justifyContent: 'center',
     },
     addFriendBtn: {
@@ -863,8 +1084,9 @@ const styles = StyleSheet.create({
         backgroundColor: PRIMARY_DARK,
         paddingVertical: 14,
         borderRadius: 12,
+        minHeight: 52,
     },
-    addFriendText: { color: '#FFF', fontWeight: '700', fontSize: 15 },
+    addFriendText: { color: '#FFF', fontWeight: '700', fontSize: 14, textAlign: 'center', flexShrink: 1 },
     pendingBtn: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -873,9 +1095,18 @@ const styles = StyleSheet.create({
         backgroundColor: '#F1F5F9',
         paddingVertical: 13,
         borderRadius: 16,
+        minHeight: 52,
     },
     pendingBtnText: { color: '#64748B', fontWeight: '700', fontSize: 14 },
     friendsActions: { gap: 10 },
+    chatBtn: {
+        width: '100%',
+        minHeight: 48,
+        borderRadius: 14,
+        backgroundColor: PRIMARY,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     friendsBadge: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -913,7 +1144,6 @@ const styles = StyleSheet.create({
     acceptBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
     rejectBtn: { alignItems: 'center', paddingVertical: 8 },
     rejectBtnText: { color: DANGER, fontWeight: '700', fontSize: 14 },
-    actionLoading: { paddingVertical: 14, alignItems: 'center' },
     card: {
         backgroundColor: SURFACE,
         borderRadius: 16,
@@ -931,11 +1161,12 @@ const styles = StyleSheet.create({
         marginBottom: 12,
     },
     cardMeta: { fontSize: 13, fontWeight: '700', color: MUTED },
-    badgeGrid: {
+    badgeRow: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
+        alignItems: 'flex-start',
         gap: 10,
-        justifyContent: 'center',
+        paddingVertical: 4,
+        paddingRight: 4,
     },
     aboutText: { fontSize: 15, color: '#334155', lineHeight: 22 },
     aboutEmptyText: { fontSize: 14, color: MUTED, lineHeight: 21 },
@@ -1002,4 +1233,15 @@ const styles = StyleSheet.create({
         borderColor: '#FECACA',
     },
     blockBtnText: { color: DANGER, fontWeight: '700', fontSize: 14 },
+    ownerDeleteUserBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 14,
+        borderRadius: 16,
+        backgroundColor: DANGER,
+        marginTop: 4,
+    },
+    ownerDeleteUserBtnText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
 });

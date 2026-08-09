@@ -5,9 +5,11 @@ import { cacheGetOrFetch, cacheGetStale, cacheInvalidate } from './ttlCache';
 
 const PREFIX = '@nexo_chat_read:';
 const UNREAD_TTL_MS = 25_000;
+const EPOCH = '1970-01-01T00:00:00.000Z';
 
-const optimisticClearedPlans = new Set<string>();
-const optimisticClearedDirects = new Set<string>();
+/** Marca de lectura optimista (ISO). No es un “clear permanente”. */
+const optimisticReadAtPlans = new Map<string, string>();
+const optimisticReadAtDirects = new Map<string, string>();
 const listeners = new Set<() => void>();
 
 function planKey(userId: string, planId: string) {
@@ -31,6 +33,12 @@ function unreadMapKey(userId: string) {
     return `chatUnread:${userId}`;
 }
 
+function laterIso(a: string | null | undefined, b: string | null | undefined): string {
+    const left = a && a.length > 0 ? a : EPOCH;
+    const right = b && b.length > 0 ? b : EPOCH;
+    return left > right ? left : right;
+}
+
 export function subscribeChatUnread(listener: () => void): () => void {
     listeners.add(listener);
     return () => {
@@ -43,27 +51,55 @@ function notifyChatUnreadChanged() {
 }
 
 export async function markPlanChatRead(userId: string, planId: string): Promise<void> {
-    optimisticClearedPlans.add(planReadKey(userId, planId));
+    const now = new Date().toISOString();
+    const key = planReadKey(userId, planId);
+    optimisticReadAtPlans.set(key, now);
     cacheInvalidate(unreadMapKey(userId));
     notifyChatUnreadChanged();
-    await AsyncStorage.setItem(planKey(userId, planId), new Date().toISOString());
+    try {
+        await AsyncStorage.setItem(planKey(userId, planId), now);
+    } finally {
+        // Tras persistir, la fuente de verdad es AsyncStorage; limpiamos el mapa.
+        optimisticReadAtPlans.delete(key);
+        cacheInvalidate(unreadMapKey(userId));
+        notifyChatUnreadChanged();
+    }
 }
 
 export async function markDirectChatRead(userId: string, peerId: string): Promise<void> {
-    optimisticClearedDirects.add(directReadKey(userId, peerId));
+    const now = new Date().toISOString();
+    const key = directReadKey(userId, peerId);
+    optimisticReadAtDirects.set(key, now);
     cacheInvalidate(unreadMapKey(userId));
     notifyChatUnreadChanged();
-    await AsyncStorage.setItem(directKey(userId, peerId), new Date().toISOString());
+    try {
+        await AsyncStorage.setItem(directKey(userId, peerId), now);
+    } finally {
+        optimisticReadAtDirects.delete(key);
+        cacheInvalidate(unreadMapKey(userId));
+        notifyChatUnreadChanged();
+    }
 }
 
-async function getLastRead(key: string): Promise<string | null> {
-    return AsyncStorage.getItem(key);
+async function multiGetMap(keys: string[]): Promise<Map<string, string | null>> {
+    const map = new Map<string, string | null>();
+    if (keys.length === 0) return map;
+    const pairs = await AsyncStorage.multiGet(keys);
+    for (const [k, v] of pairs) map.set(k, v);
+    return map;
+}
+
+function lastReadPlan(userId: string, planId: string, stored: string | null | undefined): string {
+    return laterIso(stored, optimisticReadAtPlans.get(planReadKey(userId, planId)));
+}
+
+function lastReadDirect(userId: string, peerId: string, stored: string | null | undefined): string {
+    return laterIso(stored, optimisticReadAtDirects.get(directReadKey(userId, peerId)));
 }
 
 async function countPlanUnread(userId: string, planId: string): Promise<number> {
-    if (optimisticClearedPlans.has(planReadKey(userId, planId))) return 0;
-
-    const lastRead = (await getLastRead(planKey(userId, planId))) ?? '1970-01-01T00:00:00Z';
+    const stored = await AsyncStorage.getItem(planKey(userId, planId));
+    const lastRead = lastReadPlan(userId, planId, stored);
     const { count } = await supabase
         .from('mensajes')
         .select('id', { count: 'exact', head: true })
@@ -74,9 +110,8 @@ async function countPlanUnread(userId: string, planId: string): Promise<number> 
 }
 
 async function countDirectUnread(userId: string, peerId: string): Promise<number> {
-    if (optimisticClearedDirects.has(directReadKey(userId, peerId))) return 0;
-
-    const lastRead = (await getLastRead(directKey(userId, peerId))) ?? '1970-01-01T00:00:00Z';
+    const stored = await AsyncStorage.getItem(directKey(userId, peerId));
+    const lastRead = lastReadDirect(userId, peerId, stored);
     const { count } = await supabase
         .from('mensajes')
         .select('id', { count: 'exact', head: true })
@@ -112,42 +147,84 @@ async function getAccessiblePlanIds(userId: string): Promise<string[]> {
     return [...planIds];
 }
 
+/**
+ * Cuenta no leídos en lote: un multiGet + pocas queries de mensajes,
+ * en lugar de un COUNT HEAD por cada chat.
+ */
 async function fetchChatUnreadMap(userId: string): Promise<ChatUnreadMap> {
     try {
         const planIds = await getAccessiblePlanIds(userId);
         const plans: Record<string, number> = {};
         let total = 0;
 
-        const planCounts = await Promise.all(
-            planIds.map(async (planId) => [planId, await countPlanUnread(userId, planId)] as const),
-        );
-        for (const [planId, n] of planCounts) {
-            if (n > 0) plans[planId] = n;
-            total += n;
+        const planStorageKeys = planIds.map((id) => planKey(userId, id));
+        const lastReadByKey = await multiGetMap(planStorageKeys);
+
+        if (planIds.length > 0) {
+            const msgLimit = Math.min(Math.max(planIds.length * 8, 80), 400);
+            const { data: planMsgs } = await supabase
+                .from('mensajes')
+                .select('plan_id, emisor_id, creado_en')
+                .in('plan_id', planIds)
+                .neq('emisor_id', userId)
+                .order('creado_en', { ascending: false })
+                .limit(msgLimit);
+
+            const counts: Record<string, number> = {};
+            for (const m of planMsgs ?? []) {
+                const pid = m.plan_id as string;
+                if (!pid) continue;
+                const lastRead = lastReadPlan(
+                    userId,
+                    pid,
+                    lastReadByKey.get(planKey(userId, pid)),
+                );
+                if (m.creado_en && m.creado_en > lastRead) {
+                    counts[pid] = (counts[pid] ?? 0) + 1;
+                }
+            }
+            for (const [planId, n] of Object.entries(counts)) {
+                if (n > 0) {
+                    plans[planId] = n;
+                    total += n;
+                }
+            }
         }
 
         const { data: directMsgs } = await supabase
             .from('mensajes')
-            .select('emisor_id, receptor_id')
+            .select('emisor_id, receptor_id, creado_en')
             .is('plan_id', null)
             .or(`receptor_id.eq.${userId},emisor_id.eq.${userId}`)
             .order('creado_en', { ascending: false })
-            .limit(200);
+            .limit(250);
 
         const peers = new Set<string>();
         (directMsgs ?? []).forEach((m) => {
             const peer = m.emisor_id === userId ? m.receptor_id : m.emisor_id;
-            if (peer) peers.add(peer);
+            if (peer) peers.add(peer as string);
         });
 
+        const peerList = [...peers];
+        const directStorageKeys = peerList.map((peerId) => directKey(userId, peerId));
+        const directLastRead = await multiGetMap(directStorageKeys);
+
         const directs: Record<string, number> = {};
-        const directCounts = await Promise.all(
-            [...peers].map(async (peerId) => [peerId, await countDirectUnread(userId, peerId)] as const),
-        );
-        for (const [peerId, n] of directCounts) {
-            if (n > 0) directs[peerId] = n;
-            total += n;
+        for (const m of directMsgs ?? []) {
+            if (m.emisor_id !== userId && m.receptor_id === userId) {
+                const peerId = m.emisor_id as string;
+                if (!peerId) continue;
+                const lastRead = lastReadDirect(
+                    userId,
+                    peerId,
+                    directLastRead.get(directKey(userId, peerId)),
+                );
+                if (m.creado_en && m.creado_en > lastRead) {
+                    directs[peerId] = (directs[peerId] ?? 0) + 1;
+                }
+            }
         }
+        for (const n of Object.values(directs)) total += n;
 
         return { plans, directs, total };
     } catch {

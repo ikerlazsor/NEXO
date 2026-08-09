@@ -3,17 +3,19 @@ inicio de sesión / registro
 */
 import {
     Ionicons } from '@expo/vector-icons';
+import { Asset } from 'expo-asset';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
-import * as WebBrowser from 'expo-web-browser';
 import React,
     { useEffect,
     useRef,
     useState } from 'react';
 import {
     ActivityIndicator,
-    Image,
+    Dimensions,
+    Keyboard,
     KeyboardAvoidingView,
     Platform,
     ScrollView,
@@ -23,14 +25,17 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Alert } from '../lib/nexoAlert';
 import { LangPicker } from '../components/LangPicker';
 import { setPendingVerifyEmail, isEmailVerified } from '../lib/emailVerification';
 import { useT } from '../lib/i18n';
-import { clearPendingSignup } from '../lib/pendingSignup';
+import { isPasswordPolicyError, isStrongPassword } from '../lib/passwordRules';
+import { setPendingSignup } from '../lib/pendingSignup';
 import { scheduleOnboardingPrefetch } from '../lib/prefetchHome';
 import {
     DISPLAY_NAME_MAX_LENGTH,
+    deleteAccount,
     ensureProfile,
     isValidDisplayName,
     isEmailTaken,
@@ -44,12 +49,16 @@ import {
     UsernameCheckError,
     USERNAME_MAX_LENGTH,
 } from '../lib/profile';
+import { resolveOnboardingDone } from '../lib/onboarding';
 import { supabase } from '../lib/supabase';
 
-WebBrowser.maybeCompleteAuthSession();
+const LOGO = require('../assets/images/nexo-logo-ui.png');
+void Asset.fromModule(LOGO).downloadAsync().catch(() => {});
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
+/** Mismo color que el splash / alrededor de la figura del logo */
+const BRAND_SURFACE = '#E2EBF2';
 const INK = '#0F2A4A';
 const MUTED = '#64748B';
 const PLACEHOLDER = '#94A3B8';
@@ -60,25 +69,34 @@ const DANGER = '#DC2626';
 type FieldName = 'nombre' | 'username' | 'email' | 'password' | null;
 type UsernameStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
-const parseAuthParams = (url: string): Record<string, string> => {
-    const out: Record<string, string> = {};
-    const collect = (str?: string) => {
-        if (!str) return;
-        str.split('&').forEach(pair => {
-            const [k, v] = pair.split('=');
-            if (k) out[decodeURIComponent(k)] = decodeURIComponent(v || '');
-        });
-    };
-    const qIndex = url.indexOf('?');
-    const hIndex = url.indexOf('#');
-    if (qIndex !== -1) collect(url.substring(qIndex + 1, hIndex !== -1 ? hIndex : undefined));
-    if (hIndex !== -1) collect(url.substring(hIndex + 1));
-    return out;
-};
+/** Borra un auth user incompleto si la contraseña coincide (libera el email). */
+async function tryReclaimIncompleteEmail(email: string, password: string): Promise<boolean> {
+    const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+    });
+    if (error || !data.user) return false;
+
+    const done = await resolveOnboardingDone(
+        data.user.id,
+        (data.user.user_metadata ?? null) as Record<string, unknown> | null,
+    );
+    if (done) {
+        await supabase.auth.signOut({ scope: 'local' });
+        return false;
+    }
+
+    const { error: delError } = await deleteAccount();
+    return !delError;
+}
 
 export default function LoginScreen() {
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
+    const insets = useSafeAreaInsets();
+    // Credenciales separadas: login y registro no se mezclan.
+    const [loginEmail, setLoginEmail] = useState('');
+    const [loginPassword, setLoginPassword] = useState('');
+    const [registerEmail, setRegisterEmail] = useState('');
+    const [registerPassword, setRegisterPassword] = useState('');
     const [nombre, setNombre] = useState('');
     const [username, setUsername] = useState('');
     const [loading, setLoading] = useState(false);
@@ -86,9 +104,88 @@ export default function LoginScreen() {
     const [showPassword, setShowPassword] = useState(false);
     const [focusedField, setFocusedField] = useState<FieldName>(null);
     const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>('idle');
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
     const usernameCheckGen = useRef(0);
+    const scrollRef = useRef<ScrollView>(null);
+    const scrollYRef = useRef(0);
+    const fieldRefs = useRef<Partial<Record<Exclude<FieldName, null>, View | null>>>({});
+    const inputRefs = useRef<Partial<Record<Exclude<FieldName, null>, TextInput | null>>>({});
     const router = useRouter();
     const { t, lang, setLang } = useT();
+
+    const email = isRegistering ? registerEmail : loginEmail;
+    const password = isRegistering ? registerPassword : loginPassword;
+    const setEmail = isRegistering ? setRegisterEmail : setLoginEmail;
+    const setPassword = isRegistering ? setRegisterPassword : setLoginPassword;
+
+    const fieldOrder: Exclude<FieldName, null>[] = isRegistering
+        ? ['nombre', 'username', 'email', 'password']
+        : ['email', 'password'];
+
+    useEffect(() => {
+        const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+        const onShow = Keyboard.addListener(showEvt, (e) => {
+            setKeyboardHeight(e.endCoordinates.height);
+        });
+        const onHide = Keyboard.addListener(hideEvt, () => {
+            setKeyboardHeight(0);
+        });
+        return () => {
+            onShow.remove();
+            onHide.remove();
+        };
+    }, []);
+
+    /** Deja visible el campo actual y el siguiente, para poder picarlo con el teclado abierto. */
+    const ensureFieldVisible = (name: Exclude<FieldName, null>, kbH: number) => {
+        const idx = fieldOrder.indexOf(name);
+        const nextName = idx >= 0 && idx < fieldOrder.length - 1 ? fieldOrder[idx + 1] : null;
+        const current = fieldRefs.current[name];
+        const next = nextName ? fieldRefs.current[nextName] : null;
+        const target = next ?? current;
+        if (!target) return;
+
+        target.measureInWindow((_x, y, _w, h) => {
+            const winH = Dimensions.get('window').height;
+            const visibleBottom = winH - Math.max(kbH, 0) - 14;
+            // Si hay siguiente campo, su borde inferior debe quedar por encima del teclado.
+            // Si no, solo el actual + un poco de aire.
+            const bottom = y + h + (next ? 10 : 8);
+            const overflow = bottom - visibleBottom;
+            if (overflow <= 6) return;
+            scrollRef.current?.scrollTo({
+                y: Math.max(0, scrollYRef.current + overflow + 10),
+                animated: true,
+            });
+        });
+    };
+
+    const focusNextField = (name: Exclude<FieldName, null>) => {
+        const idx = fieldOrder.indexOf(name);
+        const nextName = idx >= 0 && idx < fieldOrder.length - 1 ? fieldOrder[idx + 1] : null;
+        if (!nextName) {
+            Keyboard.dismiss();
+            return;
+        }
+        inputRefs.current[nextName]?.focus();
+    };
+
+    const onFieldFocus = (name: Exclude<FieldName, null>) => {
+        setFocusedField(name);
+        setTimeout(() => {
+            ensureFieldVisible(name, keyboardHeight > 0 ? keyboardHeight : 260);
+        }, Platform.OS === 'ios' ? 50 : 80);
+        setTimeout(() => {
+            ensureFieldVisible(name, keyboardHeight > 0 ? keyboardHeight : 280);
+        }, Platform.OS === 'ios' ? 280 : 340);
+    };
+
+    useEffect(() => {
+        if (!focusedField || keyboardHeight <= 0) return;
+        const timer = setTimeout(() => ensureFieldVisible(focusedField, keyboardHeight), 40);
+        return () => clearTimeout(timer);
+    }, [keyboardHeight, focusedField, isRegistering]);
 
     useEffect(() => {
         if (!isRegistering) {
@@ -123,63 +220,11 @@ export default function LoginScreen() {
         return () => clearTimeout(timer);
     }, [username, isRegistering]);
 
-    const validatePassword = (pass: string) => {
-        const hasNumber = /\d/.test(pass);
-        const isLongEnough = pass.length >= 6;
-        return hasNumber && isLongEnough;
-    };
+    const validatePassword = (pass: string) => isStrongPassword(pass);
 
     const validateEmail = (mail: string) => {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         return emailRegex.test(mail.trim());
-    };
-
-    const createSessionFromUrl = async (url: string) => {
-        const params = parseAuthParams(url);
-        if (params.error_description) throw new Error(params.error_description);
-        if (params.access_token && params.refresh_token) {
-            const { error } = await supabase.auth.setSession({
-                access_token: params.access_token,
-                refresh_token: params.refresh_token,
-            });
-            if (error) throw error;
-            return true;
-        }
-        if (params.code) {
-            const { error } = await supabase.auth.exchangeCodeForSession(params.code);
-            if (error) throw error;
-            return true;
-        }
-        return false;
-    };
-
-    const handleOAuth = async (provider: 'google' | 'apple') => {
-        try {
-            setLoading(true);
-            const redirectTo = Linking.createURL('auth-callback');
-            const { data, error } = await supabase.auth.signInWithOAuth({
-                provider,
-                options: { redirectTo, skipBrowserRedirect: true },
-            });
-            if (error) throw error;
-            if (!data?.url) throw new Error('No se pudo abrir el proveedor de acceso.');
-
-            const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-            if (result.type === 'success' && result.url) {
-                const ok = await createSessionFromUrl(result.url);
-                if (ok) {
-                    const { data: { session } } = await supabase.auth.getSession();
-                    if (session?.user) await ensureProfile(session.user);
-                }
-            }
-        } catch (e: any) {
-            Alert.alert(
-                t('login.oauthUnavailable'),
-                e?.message || t('login.oauthHint')
-            );
-        } finally {
-            setLoading(false);
-        }
     };
 
     const handleForgotPassword = async () => {
@@ -262,7 +307,10 @@ export default function LoginScreen() {
                 try {
                     const emailTaken = await isEmailTaken(email);
                     if (emailTaken) {
-                        return Alert.alert(t('login.notice'), t('login.emailTaken'));
+                        const reclaimed = await tryReclaimIncompleteEmail(email, password);
+                        if (!reclaimed) {
+                            return Alert.alert(t('login.notice'), t('login.emailTaken'));
+                        }
                     }
                 } catch (e) {
                     if (e instanceof EmailCheckError) {
@@ -273,27 +321,47 @@ export default function LoginScreen() {
 
                 const registerEmail = email.trim().toLowerCase();
                 const redirectTo = Linking.createURL('verify-email');
-                const { data, error } = await supabase.auth.signUp({
+                const signUpOptions = {
+                    emailRedirectTo: redirectTo,
+                    data: {
+                        nombre: displayName,
+                        nombre_usuario: handle,
+                        registro_completado: false,
+                    },
+                };
+                let { data, error } = await supabase.auth.signUp({
                     email: registerEmail,
                     password,
-                    options: {
-                        emailRedirectTo: redirectTo,
-                        data: {
-                            nombre: displayName,
-                            nombre_usuario: handle,
-                            registro_completado: false,
-                        },
-                    },
+                    options: signUpOptions,
                 });
                 if (error) throw error;
 
                 // Supabase a veces no errora: user sin identities = email ya registrado
                 if ((data.user?.identities?.length ?? 0) === 0) {
-                    Alert.alert(t('login.notice'), t('login.emailTaken'));
-                    return;
+                    const reclaimed = await tryReclaimIncompleteEmail(registerEmail, password);
+                    if (!reclaimed) {
+                        Alert.alert(t('login.notice'), t('login.emailTaken'));
+                        return;
+                    }
+                    const retry = await supabase.auth.signUp({
+                        email: registerEmail,
+                        password,
+                        options: signUpOptions,
+                    });
+                    if (retry.error) throw retry.error;
+                    data = retry.data;
+                    if ((data.user?.identities?.length ?? 0) === 0) {
+                        Alert.alert(t('login.notice'), t('login.emailTaken'));
+                        return;
+                    }
                 }
 
-                await clearPendingSignup();
+                await setPendingSignup({
+                    email: registerEmail,
+                    password,
+                    nombre: displayName,
+                    nombreUsuario: handle,
+                });
                 await setPendingVerifyEmail(registerEmail);
 
                 if (data.session?.user && isEmailVerified(data.session.user)) {
@@ -376,8 +444,10 @@ export default function LoginScreen() {
             if (msg === 'User already registered'
                 || /already\s*(been\s*)?registered|already\s*exists|email.*exist/i.test(msg)) {
                 errorMessage = t('login.emailTaken');
+            } else if (isPasswordPolicyError(msg)) {
+                errorMessage = t('login.weakPasswordMsg');
             } else if (msg === 'Invalid login credentials') {
-                errorMessage = 'El correo o la contraseña son incorrectos.';
+                errorMessage = t('login.invalidCredentials');
             } else if (msg.toLowerCase().includes('database error saving new user')) {
                 errorMessage = t('login.dbSignupError');
             }
@@ -391,9 +461,10 @@ export default function LoginScreen() {
     const switchMode = (registering: boolean) => {
         if (registering === isRegistering) return;
         setIsRegistering(registering);
-        setPassword('');
         setShowPassword(false);
+        setFocusedField(null);
         setUsernameStatus('idle');
+        Keyboard.dismiss();
     };
 
     const fieldStyle = (name: FieldName) => [
@@ -406,39 +477,44 @@ export default function LoginScreen() {
 
     return (
         <View style={styles.container}>
-            <LinearGradient
-                colors={[PRIMARY_DARK, '#3B82F6', PRIMARY]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.heroGradient}
-            />
-            <View style={[styles.decorCircle, styles.decorCircleA]} />
-            <View style={[styles.decorCircle, styles.decorCircleB]} />
+            <View style={styles.heroGradient} />
 
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 style={styles.flex}
             >
                 <ScrollView
-                    contentContainerStyle={styles.scrollContainer}
+                    ref={scrollRef}
+                    contentContainerStyle={[
+                        styles.scrollContainer,
+                        // Margen bajo para poder subir y dejar visible el siguiente campo.
+                        { paddingBottom: Math.max(insets.bottom, 16) + 160 },
+                    ]}
                     keyboardShouldPersistTaps="handled"
                     keyboardDismissMode="on-drag"
                     showsVerticalScrollIndicator={false}
                     bounces
+                    onScroll={(e) => {
+                        scrollYRef.current = e.nativeEvent.contentOffset.y;
+                    }}
+                    scrollEventThrottle={16}
                 >
                     {/* ---------- Hero ---------- */}
                     <View style={styles.hero}>
                         <Image
-                            source={require('../assets/images/nexo-logo.png')}
+                            source={LOGO}
                             style={styles.logoImage}
                             accessibilityLabel="Nexo"
-                            fadeDuration={0}
+                            contentFit="contain"
+                            cachePolicy="memory-disk"
+                            priority="high"
+                            transition={0}
                         />
                         <Text style={styles.brandTitle}>NEXO</Text>
                     </View>
 
                     {/* ---------- Tarjeta ---------- */}
-                    <View style={styles.card}>
+                    <View style={styles.card} importantForAutofill="noExcludeDescendants">
                         <View style={styles.segmented}>
                             <TouchableOpacity
                                 style={[styles.segmentBtn, !isRegistering && styles.segmentBtnActive]}
@@ -462,12 +538,19 @@ export default function LoginScreen() {
 
                         <View style={styles.langBlock}>
                             <Text style={styles.langLabel}>{t('login.language')}</Text>
-                            <LangPicker lang={lang} onChange={setLang} compact />
+                            <View style={styles.langPickerWrap}>
+                                <LangPicker lang={lang} onChange={setLang} compact />
+                            </View>
                         </View>
 
                         {isRegistering && (
                             <>
-                                <View style={styles.fieldBlock}>
+                                <View
+                                    style={styles.fieldBlock}
+                                    ref={(r) => {
+                                        fieldRefs.current.nombre = r;
+                                    }}
+                                >
                                     <Text style={styles.label}>{t('login.displayName')}</Text>
                                     <View style={fieldStyle('nombre')}>
                                         <Ionicons name="person-outline" size={20} color={focusedField === 'nombre' ? PRIMARY_DARK : PLACEHOLDER} />
@@ -477,15 +560,28 @@ export default function LoginScreen() {
                                             style={styles.fieldInput}
                                             value={nombre}
                                             onChangeText={(text) => setNombre(text.slice(0, DISPLAY_NAME_MAX_LENGTH))}
-                                            onFocus={() => setFocusedField('nombre')}
+                                            onFocus={() => onFieldFocus('nombre')}
                                             onBlur={() => setFocusedField(null)}
                                             autoCapitalize="words"
                                             maxLength={DISPLAY_NAME_MAX_LENGTH}
                                             returnKeyType="next"
+                                            blurOnSubmit={false}
+                                            onSubmitEditing={() => focusNextField('nombre')}
+                                            autoComplete="off"
+                                            textContentType="none"
+                                            importantForAutofill="no"
+                                            ref={(r) => {
+                                                inputRefs.current.nombre = r;
+                                            }}
                                         />
                                     </View>
                                 </View>
-                                <View style={styles.fieldBlock}>
+                                <View
+                                    style={styles.fieldBlock}
+                                    ref={(r) => {
+                                        fieldRefs.current.username = r;
+                                    }}
+                                >
                                     <Text style={styles.label}>{t('login.username')}</Text>
                                     <View style={fieldStyle('username')}>
                                         <Text
@@ -509,13 +605,22 @@ export default function LoginScreen() {
                                             ]}
                                             value={username}
                                             onChangeText={(text) => setUsername(formatUsernameInput(text))}
-                                            onFocus={() => setFocusedField('username')}
+                                            onFocus={() => onFieldFocus('username')}
                                             onBlur={() => setFocusedField(null)}
                                             autoCapitalize="none"
                                             autoCorrect={false}
                                             spellCheck={false}
                                             maxLength={USERNAME_MAX_LENGTH}
                                             returnKeyType="next"
+                                            blurOnSubmit={false}
+                                            onSubmitEditing={() => focusNextField('username')}
+                                            autoComplete="off"
+                                            textContentType="none"
+                                            importantForAutofill="no"
+                                            key="reg-username"
+                                            ref={(r) => {
+                                                inputRefs.current.username = r;
+                                            }}
                                         />
                                         {usernameStatus === 'checking' ? (
                                             <ActivityIndicator size="small" color={PRIMARY_DARK} />
@@ -533,13 +638,21 @@ export default function LoginScreen() {
                             </>
                         )}
 
-                        <View style={styles.fieldBlock}>
+                        <View
+                            style={styles.fieldBlock}
+                            ref={(r) => {
+                                fieldRefs.current.email = r;
+                            }}
+                        >
                             <Text style={styles.label}>
                                 {isRegistering ? t('login.email') : t('login.emailOrUsername')}
                             </Text>
                             <View style={fieldStyle('email')}>
-                                <Ionicons name="mail-outline" size={20} color={focusedField === 'email' ? PRIMARY_DARK : PLACEHOLDER} />
+                                {isRegistering ? (
+                                    <Ionicons name="mail-outline" size={20} color={focusedField === 'email' ? PRIMARY_DARK : PLACEHOLDER} />
+                                ) : null}
                                 <TextInput
+                                    key={isRegistering ? 'reg-email' : 'login-email'}
                                     placeholder={
                                         isRegistering
                                             ? t('login.emailPlaceholder')
@@ -549,39 +662,53 @@ export default function LoginScreen() {
                                     style={styles.fieldInput}
                                     value={email}
                                     onChangeText={setEmail}
-                                    onFocus={() => setFocusedField('email')}
+                                    onFocus={() => onFieldFocus('email')}
                                     onBlur={() => setFocusedField(null)}
                                     autoCapitalize="none"
                                     autoCorrect={false}
                                     keyboardType={isRegistering ? 'email-address' : 'default'}
                                     returnKeyType="next"
+                                    blurOnSubmit={false}
+                                    onSubmitEditing={() => focusNextField('email')}
                                     autoComplete="off"
-                                    textContentType={Platform.OS === 'ios' ? 'none' : 'emailAddress'}
+                                    textContentType="oneTimeCode"
                                     importantForAutofill="no"
+                                    ref={(r) => {
+                                        inputRefs.current.email = r;
+                                    }}
                                 />
                             </View>
                         </View>
 
-                        <View style={styles.fieldBlock}>
+                        <View
+                            style={styles.fieldBlock}
+                            ref={(r) => {
+                                fieldRefs.current.password = r;
+                            }}
+                        >
                             <Text style={styles.label}>{t('login.password')}</Text>
                             <View style={fieldStyle('password')}>
                                 <Ionicons name="lock-closed-outline" size={20} color={focusedField === 'password' ? PRIMARY_DARK : PLACEHOLDER} />
                                 <TextInput
+                                    key={isRegistering ? 'reg-password' : 'login-password'}
                                     placeholder="••••••••"
                                     placeholderTextColor={PLACEHOLDER}
                                     style={styles.fieldInput}
                                     value={password}
                                     onChangeText={setPassword}
-                                    onFocus={() => setFocusedField('password')}
+                                    onFocus={() => onFieldFocus('password')}
                                     onBlur={() => setFocusedField(null)}
                                     secureTextEntry={!showPassword}
                                     autoCapitalize="none"
                                     autoCorrect={false}
                                     autoComplete="off"
-                                    textContentType={Platform.OS === 'ios' ? 'oneTimeCode' : 'password'}
+                                    textContentType="oneTimeCode"
                                     importantForAutofill="no"
                                     returnKeyType="done"
                                     onSubmitEditing={handleAuth}
+                                    ref={(r) => {
+                                        inputRefs.current.password = r;
+                                    }}
                                 />
                                 <TouchableOpacity
                                     style={styles.eyeButton}
@@ -634,33 +761,6 @@ export default function LoginScreen() {
                                 )}
                             </LinearGradient>
                         </TouchableOpacity>
-
-                        <View style={styles.dividerRow}>
-                            <View style={styles.dividerLine} />
-                            <Text style={styles.dividerText}>{t('login.orContinueWith')}</Text>
-                            <View style={styles.dividerLine} />
-                        </View>
-
-                        <View style={styles.socialRow}>
-                            <TouchableOpacity
-                                style={styles.socialBtn}
-                                onPress={() => handleOAuth('google')}
-                                disabled={loading}
-                                activeOpacity={0.85}
-                            >
-                                <Ionicons name="logo-google" size={20} color="#EA4335" />
-                                <Text style={styles.socialText}>{t('login.google')}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.socialBtn}
-                                onPress={() => handleOAuth('apple')}
-                                disabled={loading}
-                                activeOpacity={0.85}
-                            >
-                                <Ionicons name="logo-apple" size={22} color={INK} />
-                                <Text style={styles.socialText}>{t('login.apple')}</Text>
-                            </TouchableOpacity>
-                        </View>
                     </View>
 
                     <TouchableOpacity
@@ -679,7 +779,7 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F2F7FF' },
+    container: { flex: 1, backgroundColor: BRAND_SURFACE },
     flex: { flex: 1 },
     heroGradient: {
         position: 'absolute',
@@ -687,20 +787,13 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         height: 380,
+        backgroundColor: BRAND_SURFACE,
         borderBottomLeftRadius: 42,
         borderBottomRightRadius: 42,
     },
-    decorCircle: {
-        position: 'absolute',
-        borderRadius: 999,
-        backgroundColor: 'rgba(255,255,255,0.08)',
-    },
-    decorCircleA: { width: 220, height: 220, top: -70, right: -60 },
-    decorCircleB: { width: 150, height: 150, top: 180, left: -50 },
     scrollContainer: {
         flexGrow: 1,
         paddingHorizontal: 22,
-        paddingBottom: 36,
     },
     hero: {
         alignItems: 'center',
@@ -708,15 +801,14 @@ const styles = StyleSheet.create({
         paddingBottom: 36,
     },
     logoImage: {
-        width: 76,
-        height: 76,
-        borderRadius: 20,
-        marginBottom: 12,
+        width: 104,
+        height: 104,
+        marginBottom: 10,
     },
     brandTitle: {
         fontSize: 40,
         fontWeight: '900',
-        color: '#FFF',
+        color: INK,
         letterSpacing: 12,
         marginLeft: 12,
     },
@@ -755,16 +847,23 @@ const styles = StyleSheet.create({
     },
     segmentText: { fontSize: 14, fontWeight: '700', color: MUTED },
     segmentTextActive: { color: PRIMARY_DARK },
-    langBlock: { marginBottom: 18 },
+    langBlock: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 10,
+        marginBottom: 10,
+        marginTop: -4,
+    },
     langLabel: {
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: '700',
         color: MUTED,
-        marginBottom: 8,
-        marginLeft: 4,
         textTransform: 'uppercase',
-        letterSpacing: 0.4,
+        letterSpacing: 0.3,
+        flexShrink: 0,
     },
+    langPickerWrap: { flex: 1, alignItems: 'flex-end' },
     fieldBlock: { marginBottom: 16 },
     label: {
         fontSize: 13,
@@ -843,32 +942,6 @@ const styles = StyleSheet.create({
         borderRadius: 16,
     },
     btnText: { color: '#FFF', fontWeight: '800', fontSize: 16 },
-    dividerRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginVertical: 18,
-    },
-    dividerLine: { flex: 1, height: 1, backgroundColor: FIELD_BORDER },
-    dividerText: {
-        marginHorizontal: 12,
-        fontSize: 12.5,
-        color: PLACEHOLDER,
-        fontWeight: '600',
-    },
-    socialRow: { flexDirection: 'row', gap: 12 },
-    socialBtn: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: '#FFF',
-        borderWidth: 1.5,
-        borderColor: FIELD_BORDER,
-        borderRadius: 15,
-        paddingVertical: 13,
-    },
-    socialText: { fontSize: 15, fontWeight: '700', color: INK },
     switchLink: { marginTop: 22, alignItems: 'center', paddingVertical: 6 },
     switchLinkText: { color: MUTED, fontWeight: '600', fontSize: 14 },
 });

@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     FlatList,
@@ -16,8 +17,14 @@ import {
     View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getFriends } from '../lib/friends';
+import { hapticLight, hapticSelection, hapticSuccess } from '../lib/haptics';
 import { useT } from '../lib/i18n';
 import { searchProfilesByUsername } from '../lib/profileFields';
+import { cacheGetStale, cacheSet } from '../lib/ttlCache';
+
+const INVITE_FRIENDS_TTL_MS = 60_000;
+const inviteFriendsKey = (userId: string) => `inviteFriends:${userId}`;
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -64,30 +71,41 @@ export function InvitePeopleSheet({
     title,
 }: Props) {
     const { t } = useT();
+    const router = useRouter();
     const insets = useSafeAreaInsets();
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<InviteProfile[]>([]);
+    const [friendSuggestions, setFriendSuggestions] = useState<InviteProfile[]>([]);
     const [searching, setSearching] = useState(false);
-    const [busyId, setBusyId] = useState<string | null>(null);
     const [keyboardH, setKeyboardH] = useState(0);
     const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+    const inFlightRef = useRef<Set<string>>(new Set());
+    const rawResultsRef = useRef<InviteProfile[]>([]);
+    const searchGenRef = useRef(0);
 
-    const selectedKey = useMemo(
-        () => selected.map((s) => s.id).sort().join(','),
-        [selected],
-    );
-    const excludeKey = useMemo(() => {
-        if (!excludeIds || excludeIds.size === 0) return '';
-        return Array.from(excludeIds).sort().join(',');
-    }, [excludeIds]);
+    const selectedIds = useMemo(() => new Set(selected.map((s) => s.id)), [selected]);
+    const excludedIds = useMemo(() => {
+        const set = new Set(excludeIds ?? []);
+        for (const id of selectedIds) set.add(id);
+        return set;
+    }, [excludeIds, selectedIds]);
+    const excludedIdsRef = useRef(excludedIds);
+    excludedIdsRef.current = excludedIds;
+
+    const filterOutExcluded = useCallback((list: InviteProfile[]) => {
+        const excluded = excludedIdsRef.current;
+        return list.filter((p) => !excluded.has(p.id));
+    }, []);
 
     useEffect(() => {
         if (!visible) {
             setQuery('');
             setResults([]);
-            setBusyId(null);
+            rawResultsRef.current = [];
+            inFlightRef.current.clear();
             setKeyboardH(0);
             setFeedback(null);
+            setSearching(false);
             return;
         }
         const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -102,59 +120,101 @@ export function InvitePeopleSheet({
         };
     }, [visible]);
 
+    // Amigos al abrir: sugerencias instantáneas sin esperar a escribir.
+    useEffect(() => {
+        if (!visible || !currentUserId) {
+            setFriendSuggestions([]);
+            return;
+        }
+        let cancelled = false;
+        const cached = cacheGetStale<InviteProfile[]>(inviteFriendsKey(currentUserId));
+        if (cached?.length) setFriendSuggestions(cached);
+        void getFriends(currentUserId)
+            .then((friends) => {
+                if (cancelled) return;
+                const mapped = friends.map((f) => ({
+                    id: f.id,
+                    nombre: f.nombre,
+                    nombre_usuario: f.nombre_usuario ?? null,
+                    avatar_url: f.avatar_url,
+                }));
+                setFriendSuggestions(mapped);
+                cacheSet(inviteFriendsKey(currentUserId), mapped, INVITE_FRIENDS_TTL_MS);
+            })
+            .catch(() => {
+                if (!cancelled && !cached?.length) setFriendSuggestions([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [visible, currentUserId]);
+
+    // Al invitar/quitar alguien, filtrar en cliente sin volver a pedir a la red.
+    useEffect(() => {
+        if (!visible) return;
+        if (query.trim().length >= 2) {
+            setResults(filterOutExcluded(rawResultsRef.current));
+        }
+    }, [visible, query, filterOutExcluded, excludedIds]);
+
     useEffect(() => {
         if (!visible) return;
         const q = query.trim();
         if (q.length < 2) {
             setResults([]);
+            rawResultsRef.current = [];
             setSearching(false);
             return;
         }
-        let cancelled = false;
+        const gen = ++searchGenRef.current;
         setSearching(true);
-        const timer = setTimeout(async () => {
-            try {
-                const data = await searchProfilesByUsername(q, currentUserId ?? undefined);
-                if (cancelled) return;
-                const selectedIds = new Set(selectedKey ? selectedKey.split(',') : []);
-                const excluded = new Set(excludeKey ? excludeKey.split(',') : []);
-                setResults(
-                    data
-                        .filter((p) => !selectedIds.has(p.id) && !excluded.has(p.id))
-                        .map((p) => ({
-                            id: p.id,
-                            nombre: p.nombre,
-                            nombre_usuario: p.nombre_usuario,
-                            avatar_url: p.avatar_url,
-                        })),
-                );
-            } catch {
-                if (!cancelled) setResults([]);
-            } finally {
-                if (!cancelled) setSearching(false);
-            }
-        }, 280);
+        const timer = setTimeout(() => {
+            void (async () => {
+                try {
+                    const data = await searchProfilesByUsername(q, currentUserId ?? undefined);
+                    if (gen !== searchGenRef.current) return;
+                    const mapped = data.map((p) => ({
+                        id: p.id,
+                        nombre: p.nombre || t('profile.user'),
+                        nombre_usuario: p.nombre_usuario,
+                        avatar_url: p.avatar_url,
+                    }));
+                    rawResultsRef.current = mapped;
+                    setResults(filterOutExcluded(mapped));
+                } catch {
+                    if (gen !== searchGenRef.current) return;
+                    rawResultsRef.current = [];
+                    setResults([]);
+                } finally {
+                    if (gen === searchGenRef.current) setSearching(false);
+                }
+            })();
+        }, 120);
         return () => {
-            cancelled = true;
             clearTimeout(timer);
         };
-    }, [query, visible, currentUserId, selectedKey, excludeKey]);
+        // No depende de invitados/excluidos: eso se filtra en cliente arriba.
+    }, [query, visible, currentUserId, t, filterOutExcluded]);
 
     const handleAdd = useCallback(
         async (profile: InviteProfile) => {
-            if (busyId) return;
-            setBusyId(profile.id);
+            if (inFlightRef.current.has(profile.id)) return;
+            inFlightRef.current.add(profile.id);
+            hapticSelection();
             setFeedback(null);
             Keyboard.dismiss();
+            setResults((prev) => prev.filter((p) => p.id !== profile.id));
             try {
                 const result = await onAdd(profile);
                 const error = result && typeof result === 'object' ? result.error : null;
                 const silent = !!(result && typeof result === 'object' && result.silent);
                 if (error === 'already_member' || error === 'already_invited') {
+                    setResults((prev) => (prev.some((p) => p.id === profile.id) ? prev : [profile, ...prev]));
                     setFeedback({ ok: false, text: t('friends.inviteAlready') });
                     return;
                 }
                 if (error) {
+                    setResults((prev) => (prev.some((p) => p.id === profile.id) ? prev : [profile, ...prev]));
                     setFeedback({
                         ok: false,
                         text: error.includes('invitacion') || error.includes('plan_invitaciones')
@@ -163,21 +223,25 @@ export function InvitePeopleSheet({
                     });
                     return;
                 }
-                if (!silent) setFeedback({ ok: true, text: t('invite.sentOk') });
-                setResults((prev) => prev.filter((p) => p.id !== profile.id));
+                if (!silent) {
+                    hapticSuccess();
+                    setFeedback({ ok: true, text: t('invite.sentOk') });
+                }
             } catch {
+                setResults((prev) => (prev.some((p) => p.id === profile.id) ? prev : [profile, ...prev]));
                 setFeedback({ ok: false, text: t('chat.inviteError') });
             } finally {
-                setBusyId(null);
+                inFlightRef.current.delete(profile.id);
             }
         },
-        [busyId, onAdd, t],
+        [onAdd, t],
     );
 
     const handleRemove = useCallback(
         async (profileId: string) => {
-            if (!onRemove || busyId) return;
-            setBusyId(profileId);
+            if (!onRemove || inFlightRef.current.has(profileId)) return;
+            inFlightRef.current.add(profileId);
+            hapticLight();
             setFeedback(null);
             try {
                 const result = await onRemove(profileId);
@@ -190,13 +254,29 @@ export function InvitePeopleSheet({
             } catch {
                 setFeedback({ ok: false, text: t('invite.removeError') });
             } finally {
-                setBusyId(null);
+                inFlightRef.current.delete(profileId);
             }
         },
-        [busyId, onRemove, t],
+        [onRemove, t],
+    );
+
+    const openProfile = useCallback(
+        (profileId: string) => {
+            onClose();
+            requestAnimationFrame(() => {
+                router.push(`/user-profile/${profileId}`);
+            });
+        },
+        [onClose, router],
     );
 
     const bottomPad = Math.max(insets.bottom, 16) + (Platform.OS === 'android' ? keyboardH : 0);
+    const showFriendSuggestions = query.trim().length < 2;
+    const suggestionList = useMemo(
+        () => (showFriendSuggestions ? filterOutExcluded(friendSuggestions) : []),
+        [showFriendSuggestions, filterOutExcluded, friendSuggestions],
+    );
+    const listData = showFriendSuggestions ? suggestionList : results;
 
     return (
         <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -241,31 +321,32 @@ export function InvitePeopleSheet({
                                     keyboardShouldPersistTaps="handled"
                                     renderItem={({ item }) => (
                                         <View style={styles.selectedChip}>
-                                            <Image
-                                                source={{ uri: item.avatar_url || avatarFallback(item.nombre) }}
-                                                style={styles.selectedAvatar}
-                                            />
-                                            <View style={styles.selectedTextCol}>
-                                                <Text style={styles.selectedName} numberOfLines={1}>
-                                                    {item.nombre_usuario ? `@${item.nombre_usuario}` : item.nombre}
-                                                </Text>
-                                                {item.invitedByName ? (
-                                                    <Text style={styles.selectedBy} numberOfLines={1}>
-                                                        {t('invite.invitedBy', { name: item.invitedByName })}
+                                            <TouchableOpacity
+                                                style={styles.selectedChipTap}
+                                                onPress={() => openProfile(item.id)}
+                                                activeOpacity={0.85}
+                                            >
+                                                <Image
+                                                    source={{ uri: item.avatar_url || avatarFallback(item.nombre) }}
+                                                    style={styles.selectedAvatar}
+                                                />
+                                                <View style={styles.selectedTextCol}>
+                                                    <Text style={styles.selectedName} numberOfLines={1}>
+                                                        {item.nombre_usuario ? `@${item.nombre_usuario}` : item.nombre}
                                                     </Text>
-                                                ) : null}
-                                            </View>
+                                                    {item.invitedByName ? (
+                                                        <Text style={styles.selectedBy} numberOfLines={1}>
+                                                            {t('invite.invitedBy', { name: item.invitedByName })}
+                                                        </Text>
+                                                    ) : null}
+                                                </View>
+                                            </TouchableOpacity>
                                             {onRemove ? (
                                                 <TouchableOpacity
                                                     onPress={() => void handleRemove(item.id)}
                                                     hitSlop={8}
-                                                    disabled={!!busyId}
                                                 >
-                                                    {busyId === item.id ? (
-                                                        <ActivityIndicator size="small" color="#94A3B8" />
-                                                    ) : (
-                                                        <Ionicons name="close-circle" size={18} color="#94A3B8" />
-                                                    )}
+                                                    <Ionicons name="close-circle" size={18} color="#94A3B8" />
                                                 </TouchableOpacity>
                                             ) : null}
                                         </View>
@@ -292,22 +373,32 @@ export function InvitePeopleSheet({
                         </View>
 
                         <FlatList
-                            data={results}
+                            data={listData}
                             keyExtractor={(item) => item.id}
                             keyboardShouldPersistTaps="handled"
                             keyboardDismissMode="on-drag"
                             style={styles.results}
                             ListEmptyComponent={
-                                query.trim().length >= 2 && !searching ? (
+                                showFriendSuggestions ? (
+                                    <Text style={styles.hint}>{t('invite.searchHint')}</Text>
+                                ) : query.trim().length >= 2 && !searching ? (
                                     <Text style={styles.emptyResults}>{t('invite.noResults')}</Text>
                                 ) : (
                                     <Text style={styles.hint}>{t('invite.searchHint')}</Text>
                                 )
                             }
-                            renderItem={({ item }) => {
-                                const busy = busyId === item.id;
-                                return (
-                                    <View style={styles.resultRow}>
+                            ListHeaderComponent={
+                                showFriendSuggestions && suggestionList.length > 0 ? (
+                                    <Text style={styles.sectionLabel}>{t('friends.tabFriends')}</Text>
+                                ) : null
+                            }
+                            renderItem={({ item }) => (
+                                <View style={styles.resultRow}>
+                                    <TouchableOpacity
+                                        style={styles.resultTap}
+                                        onPress={() => openProfile(item.id)}
+                                        activeOpacity={0.85}
+                                    >
                                         <Image
                                             source={{ uri: item.avatar_url || avatarFallback(item.nombre) }}
                                             style={styles.resultAvatar}
@@ -320,20 +411,15 @@ export function InvitePeopleSheet({
                                                 <Text style={styles.resultUser}>@{item.nombre_usuario}</Text>
                                             ) : null}
                                         </View>
-                                        <TouchableOpacity
-                                            style={[styles.inviteBtn, busy && { opacity: 0.6 }]}
-                                            disabled={!!busyId}
-                                            onPress={() => void handleAdd(item)}
-                                        >
-                                            {busy ? (
-                                                <ActivityIndicator size="small" color="#FFF" />
-                                            ) : (
-                                                <Text style={styles.inviteBtnText}>{t('invite.action')}</Text>
-                                            )}
-                                        </TouchableOpacity>
-                                    </View>
-                                );
-                            }}
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={styles.inviteBtn}
+                                        onPress={() => void handleAdd(item)}
+                                    >
+                                        <Text style={styles.inviteBtnText}>{t('invite.action')}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
                         />
                     </View>
                 </View>
@@ -400,6 +486,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 10,
         maxWidth: 220,
     },
+    selectedChipTap: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1, minWidth: 0 },
     selectedAvatar: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#DBEAFE' },
     selectedTextCol: { flexShrink: 1, minWidth: 0 },
     selectedName: { fontSize: 12, fontWeight: '700', color: PRIMARY_DARK },
@@ -429,8 +516,9 @@ const styles = StyleSheet.create({
         borderBottomColor: '#F1F5F9',
         gap: 10,
     },
+    resultTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0 },
     resultAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#E3ECFB' },
-    resultInfo: { flex: 1 },
+    resultInfo: { flex: 1, minWidth: 0 },
     resultName: { fontSize: 15, fontWeight: '800', color: INK },
     resultUser: { fontSize: 12, fontWeight: '600', color: '#64748B', marginTop: 2 },
     inviteBtn: {

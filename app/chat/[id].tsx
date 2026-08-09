@@ -14,13 +14,16 @@ import { useCallback,
     useMemo,
     useRef,
     useState } from 'react';
+import { FlashList } from '@shopify/flash-list';
 import {
     ActivityIndicator,
     FlatList,
     Image,
     KeyboardAvoidingView,
+    Linking,
     Modal,
     Platform,
+    Share,
     StyleSheet,
     Text,
     TextInput,
@@ -29,28 +32,51 @@ import {
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
+import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
 import { PlanImage } from '../../components/PlanImage';
+import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { uploadChatFile } from '../../lib/chatUpload';
 import { markPlanChatRead } from '../../lib/chatUnread';
+import { getCoincidedUserIds } from '../../lib/coincidences';
 import { getAvatarUri, getFriends, type FriendProfile } from '../../lib/friends';
 import { kickParticipant } from '../../lib/kickParticipant';
 import { isUserCreatedGroupChat, updateGroupChatPhoto, uploadGroupChatPhoto } from '../../lib/groupChat';
+import {
+    enqueueChatOutbox,
+    flushChatOutbox,
+    subscribeOutboxFlush,
+} from '../../lib/chatOutbox';
+import { encodeReplyContent, previewForReply, type ReplyQuote } from '../../lib/chatReply';
+import { isPlanChatMuted, setPlanChatMuted } from '../../lib/chatMute';
+import { hapticLight, hapticMedium, hapticToggle } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
+import { getIsOnline } from '../../lib/network';
+import { hidePlanChat } from '../../lib/planChatHide';
+import { setActiveConversation } from '../../lib/activeConversation';
+import { cancelPlanLifecycleReminders } from '../../lib/push';
+import { trackFunnel } from '../../lib/analytics';
 import { sendPlanInvite } from '../../lib/planInvites';
 import {
     formatCountdown,
     getChatExpiryMs,
     isGroupOrChatPlan,
+    isPlanActiveForSaved,
     isPlanChatAlive,
     runPlanLifecycleMaintenance,
 } from '../../lib/planLifecycle';
+import { buildPlanShareMessage } from '../../lib/shareLinks';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
+import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
 import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
+const FRIEND = '#10B981';
+const ACQUAINTANCE = '#7C3AED';
+const DANGER = '#EF4444';
 const PAGE_SIZE = 50;
 const PLAN_CHAT_TTL_MS = 15 * 60 * 1000;
 const planChatKey = (planId: string) => `planChat:${planId}`;
@@ -68,6 +94,7 @@ interface Message {
     tipo: 'texto' | 'imagen' | 'video' | 'audio';
     archivo_url: string | null;
     perfiles: MessageProfile | MessageProfile[] | null;
+    pending?: boolean;
 }
 
 function normalizeProfile(
@@ -119,7 +146,7 @@ type PlanChatSnapshot = {
     isGroupChat: boolean;
     planCategory: string | null;
     planOwnerId: string | null;
-    members: { id: string; nombre: string; avatar_url: string | null; isCreator: boolean }[];
+    members: { id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }[];
     creatorId: string | null;
     planFechaEvento: string | null;
     modoPrivado: boolean;
@@ -131,7 +158,7 @@ export default function ChatScreen() {
     const { id } = useLocalSearchParams<{ id: string | string[] }>();
     const planId = Array.isArray(id) ? id[0] : id;
     const router = useRouter();
-    const { t } = useT();
+    const { t, lang } = useT();
     const headerHeight = useHeaderHeight();
     const insets = useSafeAreaInsets();
 
@@ -144,7 +171,7 @@ export default function ChatScreen() {
     const [planCategory, setPlanCategory] = useState<string | null>(() => cachedChat?.planCategory ?? null);
     const [planOwnerId, setPlanOwnerId] = useState<string | null>(() => cachedChat?.planOwnerId ?? null);
     const [uploadingGroupPhoto, setUploadingGroupPhoto] = useState(false);
-    const [members, setMembers] = useState<{ id: string; nombre: string; avatar_url: string | null; isCreator: boolean }[]>(
+    const [members, setMembers] = useState<{ id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }[]>(
         () => cachedChat?.members ?? [],
     );
     const [showInviteFriends, setShowInviteFriends] = useState(false);
@@ -155,6 +182,10 @@ export default function ChatScreen() {
     const [modoPrivado, setModoPrivado] = useState(() => cachedChat?.modoPrivado ?? false);
     const [showMembers, setShowMembers] = useState(false);
     const [messageText, setMessageText] = useState('');
+    const [replyTo, setReplyTo] = useState<ReplyQuote | null>(null);
+    const [chatMuted, setChatMuted] = useState(false);
+    const [typingNames, setTypingNames] = useState<string[]>([]);
+    const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [messages, setMessages] = useState<Message[]>(() => cachedChat?.messages ?? []);
     const [loading, setLoading] = useState(() => !(cachedChat?.messages?.length));
     const [loadingMore, setLoadingMore] = useState(false);
@@ -162,7 +193,11 @@ export default function ChatScreen() {
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [accessDenied, setAccessDenied] = useState(() => cachedChat?.accessDenied ?? false);
     const [planFechaEvento, setPlanFechaEvento] = useState<string | null>(() => cachedChat?.planFechaEvento ?? null);
+    const [planLocationName, setPlanLocationName] = useState<string | null>(null);
     const [chatExpiryLabel, setChatExpiryLabel] = useState<string | null>(null);
+    const [friendIds, setFriendIds] = useState<Set<string>>(() => new Set());
+    const [coincidedIds, setCoincidedIds] = useState<Set<string>>(() => new Set());
+    const [isSaved, setIsSaved] = useState(false);
 
     const [recording, setRecording] = useState<Audio.Recording | null>(null);
     const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -172,10 +207,24 @@ export default function ChatScreen() {
     const [isSending, setIsSending] = useState(false);
     const [audioDurations, setAudioDurations] = useState<Record<string, number>>({});
     const [recordingDuration, setRecordingDuration] = useState(0);
+    const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
 
     const soundRef = useRef<Audio.Sound | null>(null);
     const isMountedRef = useRef(true);
     const loadingDurationsRef = useRef<Set<string>>(new Set());
+    const messagesRef = useRef(messages);
+    messagesRef.current = messages;
+
+    const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
+    const { reactions, setReactions } = useMessageReactions(messageIds);
+
+    const myProfile = useMemo(() => {
+        const me = members.find((m) => m.id === currentUserId);
+        return {
+            nombre: me?.nombre || t('chats.you'),
+            avatar_url: me?.avatar_url ?? null,
+        };
+    }, [members, currentUserId, t]);
 
     const stopAudio = useCallback(async () => {
         if (soundRef.current) {
@@ -188,27 +237,32 @@ export default function ChatScreen() {
     const fetchParticipants = useCallback(async (pid: string) => {
         const { data: planData } = await supabase
             .from('planes')
-            .select('creador_id, perfiles:creador_id(nombre, avatar_url)')
+            .select('creador_id, perfiles:creador_id(nombre, avatar_url, genero)')
             .eq('id', pid)
             .single();
 
         const { data: parts } = await supabase
             .from('participantes')
-            .select('usuario_id, estado, perfiles:usuario_id(nombre, avatar_url)')
+            .select('usuario_id, estado, perfiles:usuario_id(nombre, avatar_url, genero)')
             .eq('plan_id', pid);
 
         const ownerId = (planData?.creador_id as string) ?? null;
         setCreatorId(ownerId);
 
-        const byId = new Map<string, { id: string; nombre: string; avatar_url: string | null; isCreator: boolean }>();
+        const byId = new Map<string, { id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }>();
 
         const creator = normalizeProfile(planData?.perfiles as Message['perfiles']);
+        const creatorGenero =
+            (Array.isArray(planData?.perfiles)
+                ? (planData?.perfiles as any[])[0]?.genero
+                : (planData?.perfiles as any)?.genero) as string | null | undefined;
         if (ownerId) {
             byId.set(ownerId, {
                 id: ownerId,
                 nombre: creator?.nombre || t('chat.host'),
                 avatar_url: creator?.avatar_url ?? null,
                 isCreator: true,
+                genero: creatorGenero ?? null,
             });
         }
 
@@ -217,11 +271,13 @@ export default function ChatScreen() {
             const uid = p.usuario_id as string;
             if (!uid || byId.has(uid)) return;
             const profile = normalizeProfile(p.perfiles as Message['perfiles']);
+            const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
             byId.set(uid, {
                 id: uid,
                 nombre: profile?.nombre || t('profile.user'),
                 avatar_url: profile?.avatar_url ?? null,
                 isCreator: uid === ownerId,
+                genero: (prof?.genero as string | null | undefined) ?? null,
             });
         });
 
@@ -362,19 +418,38 @@ export default function ChatScreen() {
     const handleDeleteChat = useCallback(() => {
         if (!planId || !currentUserId) return;
         const isHost = creatorId === currentUserId;
-        const title = isHost ? t('chat.deletePlanHost') : t('chat.deleteChat');
-        const message = isHost ? t('chat.deletePlanHostConfirm') : t('chat.deleteChatConfirm');
-        const actionLabel = isHost ? t('chat.deletePlanHost') : t('chat.deleteChat');
+        const planStarted =
+            !!planFechaEvento &&
+            Number.isFinite(new Date(planFechaEvento).getTime()) &&
+            Date.now() >= new Date(planFechaEvento).getTime();
+        // Tras el evento: solo ocultar chat (no salir del plan). Antes: salir del plan.
+        const leavePlan = !isHost && !planStarted;
 
-        Alert.alert(title, message, [
-            { text: t('common.cancel'), style: 'cancel' },
-            {
-                text: actionLabel,
-                style: 'destructive',
-                // No async aquí: en Android el Alert espera el Promise y se queda abierto.
-                onPress: () => {
-                    setShowMembers(false);
-                    setTimeout(() => {
+        const title = isHost
+            ? t('chat.deletePlanHost')
+            : leavePlan
+              ? t('chat.deleteChatAndLeave')
+              : t('chat.deleteChat');
+        const message = isHost
+            ? t('chat.deletePlanHostConfirm')
+            : leavePlan
+              ? t('chat.deleteChatConfirm')
+              : t('chat.deleteChatOnlyConfirm');
+        const actionLabel = isHost
+            ? t('chat.deletePlanHost')
+            : leavePlan
+              ? t('chat.deleteChatAndLeave')
+              : t('chat.deleteChat');
+
+        setShowMembers(false);
+        setTimeout(() => {
+            Alert.alert(title, message, [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: actionLabel,
+                    style: 'destructive',
+                    // No async aquí: en Android el Alert espera el Promise y se queda abierto.
+                    onPress: () => {
                         void (async () => {
                             if (isHost) {
                                 const { error } = await deletePlanCompletely(planId);
@@ -382,7 +457,8 @@ export default function ChatScreen() {
                                     Alert.alert(t('profile.error'), t('chat.deletePlanError') + ': ' + error);
                                     return;
                                 }
-                            } else {
+                                void cancelPlanLifecycleReminders(planId);
+                            } else if (leavePlan) {
                                 const { error } = await supabase
                                     .from('participantes')
                                     .delete()
@@ -392,14 +468,18 @@ export default function ChatScreen() {
                                     Alert.alert(t('profile.error'), error.message);
                                     return;
                                 }
+                                void cancelPlanLifecycleReminders(planId);
+                            } else {
+                                await hidePlanChat(currentUserId, planId);
                             }
+                            invalidatePlanMembershipCaches(currentUserId);
                             router.back();
                         })();
-                    }, 0);
+                    },
                 },
-            },
-        ]);
-    }, [planId, currentUserId, creatorId, t, router]);
+            ]);
+        }, 250);
+    }, [planId, currentUserId, creatorId, planFechaEvento, t, router]);
 
     const fetchMessages = useCallback(
         async (pid: string, before?: string) => {
@@ -435,11 +515,12 @@ export default function ChatScreen() {
     );
 
     const loadMoreMessages = useCallback(async () => {
-        if (!planId || loadingMore || !hasMore || messages.length === 0) return;
+        const current = messagesRef.current;
+        if (!planId || loadingMore || !hasMore || current.length === 0) return;
 
         setLoadingMore(true);
         try {
-            const oldest = messages[messages.length - 1];
+            const oldest = current[current.length - 1];
             const older = await fetchMessages(planId, oldest.creado_en);
 
             const nextHasMore = older.length >= PAGE_SIZE;
@@ -453,11 +534,11 @@ export default function ChatScreen() {
                 return next;
             });
         } catch (error) {
-            console.error('Error cargando más mensajes:', error);
+            if (__DEV__) console.error('Error cargando más mensajes:', error);
         } finally {
             setLoadingMore(false);
         }
-    }, [planId, loadingMore, hasMore, messages, fetchMessages, persistPlanChatCache]);
+    }, [planId, loadingMore, hasMore, fetchMessages, persistPlanChatCache]);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -473,6 +554,10 @@ export default function ChatScreen() {
         loadingDurationsRef.current.add(messageId);
 
         try {
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+            });
             const { sound } = await Audio.Sound.createAsync({ uri: audioUrl }, { shouldPlay: false });
             const status = await sound.getStatusAsync();
             await sound.unloadAsync();
@@ -481,8 +566,8 @@ export default function ChatScreen() {
                 const seconds = Math.max(1, Math.round(status.durationMillis / 1000));
                 setAudioDurations((prev) => ({ ...prev, [messageId]: seconds }));
             }
-        } catch (error) {
-            console.error('Error obteniendo duración de audio:', error);
+        } catch {
+            /* duración opcional */
         } finally {
             loadingDurationsRef.current.delete(messageId);
         }
@@ -558,9 +643,25 @@ export default function ChatScreen() {
 
                 void runPlanLifecycleMaintenance();
 
+                void Promise.all([
+                    getFriends(user.id),
+                    getCoincidedUserIds(user.id),
+                    supabase
+                        .from('planes_guardados')
+                        .select('plan_id')
+                        .eq('plan_id', planId)
+                        .eq('usuario_id', user.id)
+                        .maybeSingle(),
+                ]).then(([friends, coincided, savedRes]) => {
+                    if (!isMountedRef.current) return;
+                    setFriendIds(new Set(friends.map((f) => f.id)));
+                    setCoincidedIds(coincided);
+                    setIsSaved(!!savedRes.data);
+                });
+
                 const { data: planData, error: planError } = await supabase
                     .from('planes')
-                    .select('titulo, imagen_url, creador_id, categoria, fecha_evento, chat_eliminado_en, modo_privado')
+                    .select('titulo, imagen_url, creador_id, categoria, fecha_evento, chat_eliminado_en, modo_privado, nombre_ubicacion')
                     .eq('id', planId)
                     .single();
 
@@ -577,6 +678,7 @@ export default function ChatScreen() {
                 }
 
                 setPlanFechaEvento(planData.fecha_evento ?? null);
+                setPlanLocationName(planData.nombre_ubicacion ?? null);
 
                 const { data: membership } = await supabase
                     .from('participantes')
@@ -674,7 +776,17 @@ export default function ChatScreen() {
                             if (isMountedRef.current) {
                                 setMessages((prev) => {
                                     if (prev.some((m) => m.id === newMessage.id)) return prev;
-                                    const next = [newMessage, ...prev];
+                                    const withoutOptimistic = prev.filter(
+                                        (m) =>
+                                            !(
+                                                m.id.startsWith('local-') &&
+                                                m.emisor_id === newMessage.emisor_id &&
+                                                m.tipo === newMessage.tipo &&
+                                                m.contenido === newMessage.contenido &&
+                                                m.archivo_url === newMessage.archivo_url
+                                            ),
+                                    );
+                                    const next = [newMessage, ...withoutOptimistic];
                                     persistPlanChatCache(planId, { messages: next });
                                     return next;
                                 });
@@ -743,13 +855,104 @@ export default function ChatScreen() {
         return () => clearInterval(id);
     }, [planFechaEvento, planCategory, router, t]);
 
+    useEffect(() => {
+        if (!planId) return;
+        const unsub = subscribeOutboxFlush((ev) => {
+            if (ev.kind !== 'plan' || ev.planId !== planId) return;
+            setMessages((prev) => {
+                const next = prev.map((m) =>
+                    m.id === ev.tempId
+                        ? { ...m, id: ev.serverId, creado_en: ev.creadoEn, pending: false }
+                        : m,
+                );
+                persistPlanChatCache(planId, { messages: next });
+                return next;
+            });
+        });
+        if (getIsOnline()) void flushChatOutbox();
+        return unsub;
+    }, [planId]);
+
+    useEffect(() => {
+        if (!planId || !currentUserId) return;
+        void isPlanChatMuted(planId).then(setChatMuted);
+        trackFunnel('chat_open', { userId: currentUserId, props: { planId } });
+    }, [planId, currentUserId]);
+
+    const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+    useEffect(() => {
+        if (!planId || !currentUserId || accessDenied) return;
+        const channel = supabase.channel(`typing:plan:${planId}`);
+        typingChannelRef.current = channel;
+        const typingMap = new Map<string, { name: string; at: number }>();
+
+        const refreshTyping = () => {
+            const now = Date.now();
+            const names: string[] = [];
+            typingMap.forEach((v, id) => {
+                if (id === currentUserId) return;
+                if (now - v.at > 3500) typingMap.delete(id);
+                else if (v.name) names.push(v.name);
+            });
+            setTypingNames(names.slice(0, 3));
+        };
+
+        channel
+            .on('broadcast', { event: 'typing' }, ({ payload }) => {
+                const uid = String(payload?.userId ?? '');
+                const name = String(payload?.name ?? '');
+                if (!uid || uid === currentUserId) return;
+                typingMap.set(uid, { name: name || 'Alguien', at: Date.now() });
+                refreshTyping();
+            })
+            .subscribe();
+
+        const tick = setInterval(refreshTyping, 1000);
+        return () => {
+            clearInterval(tick);
+            typingChannelRef.current = null;
+            void supabase.removeChannel(channel);
+        };
+    }, [planId, currentUserId, accessDenied]);
+
+    const emitTyping = useCallback(() => {
+        if (!currentUserId || accessDenied) return;
+        const name = myProfile?.nombre || 'Alguien';
+        void typingChannelRef.current?.send({
+            type: 'broadcast',
+            event: 'typing',
+            payload: { userId: currentUserId, name },
+        });
+    }, [currentUserId, accessDenied, myProfile?.nombre]);
+
+    const onMessageTextChange = useCallback(
+        (text: string) => {
+            setMessageText(text);
+            if (!text.trim()) return;
+            if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+            typingTimerRef.current = setTimeout(() => emitTyping(), 350);
+        },
+        [emitTyping],
+    );
+
+    const toggleMuteChat = useCallback(async () => {
+        if (!planId) return;
+        const next = !chatMuted;
+        hapticToggle(!next);
+        setChatMuted(next);
+        await setPlanChatMuted(planId, next);
+    }, [planId, chatMuted]);
+
     useFocusEffect(
         useCallback(() => {
             refreshChatHeader();
+            if (planId) setActiveConversation({ kind: 'plan', id: planId });
             if (currentUserId && planId && !accessDenied) {
                 void markPlanChatRead(currentUserId, planId);
             }
             return () => {
+                setActiveConversation(null);
                 if (currentUserId && planId) {
                     void markPlanChatRead(currentUserId, planId);
                 }
@@ -762,35 +965,131 @@ export default function ChatScreen() {
         archivoUrl: string | null = null,
         audioDurationSec?: number
     ) => {
-        if (!currentUserId || !planId || accessDenied) return;
+        if (!currentUserId || !planId || accessDenied || isSending) return;
 
         const tempText = messageText.trim();
         if (tipo === 'texto' && !tempText) return;
 
-        if (tipo === 'texto') setMessageText('');
         setIsSending(true);
+        hapticMedium();
+        const replySnapshot = tipo === 'texto' ? replyTo : null;
+        if (tipo === 'texto') {
+            setMessageText('');
+            setReplyTo(null);
+        }
 
         const contenidoPayload =
             tipo === 'texto'
-                ? tempText
+                ? (replySnapshot ? encodeReplyContent(tempText, replySnapshot) : tempText)
                 : tipo === 'audio' && audioDurationSec
                   ? String(audioDurationSec)
                   : '';
 
-        const { error } = await supabase.from('mensajes').insert({
-            plan_id: planId,
+        const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const optimistic: Message = {
+            id: tempId,
             contenido: contenidoPayload,
             emisor_id: currentUserId,
+            creado_en: new Date().toISOString(),
             tipo,
             archivo_url: archivoUrl,
+            perfiles: myProfile,
+            pending: !getIsOnline() && tipo === 'texto',
+        };
+        setMessages((prev) => {
+            const next = [optimistic, ...prev];
+            persistPlanChatCache(planId, { messages: next });
+            return next;
         });
+
+        if (!getIsOnline()) {
+            if (tipo !== 'texto') {
+                setMessages((prev) => prev.filter((m) => m.id !== tempId));
+                setIsSending(false);
+                Alert.alert(t('chat.errorTitle'), t('chat.sendError'));
+                return;
+            }
+            await enqueueChatOutbox({
+                tempId,
+                kind: 'plan',
+                planId,
+                emisorId: currentUserId,
+                contenido: contenidoPayload,
+                tipo,
+                archivoUrl,
+                createdAt: optimistic.creado_en,
+            });
+            setIsSending(false);
+            return;
+        }
+
+        const { data, error } = await supabase
+            .from('mensajes')
+            .insert({
+                plan_id: planId,
+                contenido: contenidoPayload,
+                emisor_id: currentUserId,
+                tipo,
+                archivo_url: archivoUrl,
+            })
+            .select('id, creado_en')
+            .maybeSingle();
 
         setIsSending(false);
 
         if (error) {
+            if (tipo === 'texto') {
+                await enqueueChatOutbox({
+                    tempId,
+                    kind: 'plan',
+                    planId,
+                    emisorId: currentUserId,
+                    contenido: contenidoPayload,
+                    tipo,
+                    archivoUrl,
+                    createdAt: optimistic.creado_en,
+                });
+                setMessages((prev) => {
+                    const next = prev.map((m) => (m.id === tempId ? { ...m, pending: true } : m));
+                    persistPlanChatCache(planId, { messages: next });
+                    return next;
+                });
+                return;
+            }
+            setMessages((prev) => prev.filter((m) => m.id !== tempId));
             Alert.alert(t('chat.errorTitle'), t('chat.sendError'));
             if (tipo === 'texto') setMessageText(tempText);
+            return;
         }
+
+        if (data?.id) {
+            setMessages((prev) => {
+                const next = prev.map((m) =>
+                    m.id === tempId
+                        ? {
+                              ...m,
+                              id: data.id as string,
+                              creado_en: (data.creado_en as string) || m.creado_en,
+                              pending: false,
+                          }
+                        : m,
+                );
+                persistPlanChatCache(planId, { messages: next });
+                return next;
+            });
+        }
+
+        const preview =
+            tipo === 'texto'
+                ? tempText
+                : tipo === 'imagen'
+                  ? t('chats.previewImage')
+                  : tipo === 'video'
+                    ? t('chats.previewVideo')
+                    : t('chats.previewVoice');
+        const { notifyPlanMessage } = await import('../../lib/push');
+        notifyPlanMessage(planId, preview);
+        trackFunnel('chat_send', { userId: currentUserId, props: { planId, tipo } });
     };
 
     const pickMedia = async () => {
@@ -867,7 +1166,10 @@ export default function ChatScreen() {
 
             const uri = activeRecording.getURI();
             await activeRecording.stopAndUnloadAsync();
-            await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+            });
 
             if (!uri) return;
 
@@ -898,7 +1200,7 @@ export default function ChatScreen() {
         }
     };
 
-    const playAudio = async (messageId: string, audioUrl: string) => {
+    const playAudio = useCallback(async (messageId: string, audioUrl: string) => {
         try {
             if (playingMessageId === messageId) {
                 await stopAudio();
@@ -906,6 +1208,10 @@ export default function ChatScreen() {
             }
 
             await stopAudio();
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+            });
 
             const { sound: newSound } = await Audio.Sound.createAsync(
                 { uri: audioUrl },
@@ -922,11 +1228,10 @@ export default function ChatScreen() {
                 }
             });
         } catch (error) {
-            console.error('Error reproduciendo audio:', error);
-            Alert.alert(t('chat.errorTitle'), t('chat.audioError'));
+            if (__DEV__) console.error('Error reproduciendo audio:', error);
             setPlayingMessageId(null);
         }
-    };
+    }, [playingMessageId, stopAudio]);
 
     const inputDisabled = isUploading || isSending || accessDenied || loading;
     const actionIcon = useMemo(() => {
@@ -936,109 +1241,166 @@ export default function ChatScreen() {
         return 'mic';
     }, [isUploading, isSending, messageText, recording]);
 
-    const renderItem = ({ item }: { item: Message }) => {
-        const isMe = item.emisor_id === currentUserId;
-        const profile = normalizeProfile(item.perfiles);
-        const nombreMostrar = profile?.nombre || 'Usuario';
-        const avatarUri = profile?.avatar_url
-            ? profile.avatar_url
-            : `https://ui-avatars.com/api/?name=${encodeURIComponent(nombreMostrar)}&background=4DA6FF&color=fff`;
-        const isThisPlaying = playingMessageId === item.id;
+    const openMessageProfile = useCallback(
+        (userId: string) => {
+            router.push({
+                pathname: '/user-profile/[id]',
+                params: {
+                    id: userId,
+                    isFriend: friendIds.has(userId) ? '1' : '0',
+                },
+            });
+        },
+        [router, friendIds],
+    );
 
-        const renderContent = () => {
-            if (item.tipo === 'imagen' && item.archivo_url) {
-                return (
-                    <TouchableOpacity onPress={() => setModalImage(item.archivo_url)}>
-                        <Image
-                            source={{ uri: item.archivo_url }}
-                            style={styles.mediaImage}
-                            resizeMode="cover"
-                        />
-                    </TouchableOpacity>
-                );
+    const toggleSavePlan = useCallback(async () => {
+        if (!currentUserId || !planId || creatorId === currentUserId) return;
+        const prev = isSaved;
+        hapticLight();
+        setIsSaved(!prev);
+        if (prev) {
+            const { error } = await supabase
+                .from('planes_guardados')
+                .delete()
+                .eq('plan_id', planId)
+                .eq('usuario_id', currentUserId);
+            if (error) {
+                setIsSaved(prev);
+                Alert.alert(t('feed.error'), t('feed.saveError'));
             }
-
-            if (item.tipo === 'video' && item.archivo_url) {
-                return (
-                    <TouchableOpacity
-                        style={styles.videoContainer}
-                        onPress={() => setModalVideo(item.archivo_url)}
-                    >
-                        <View style={styles.videoPlaceholder}>
-                            <Ionicons name="play-circle" size={48} color="#FFF" />
-                            <Text style={styles.videoLabel}>{t('chat.videoLabel')}</Text>
-                        </View>
-                    </TouchableOpacity>
-                );
+        } else {
+            if (planFechaEvento && !isPlanActiveForSaved({ fecha_evento: planFechaEvento })) {
+                setIsSaved(prev);
+                return;
             }
-
-            if (item.tipo === 'audio' && item.archivo_url) {
-                const storedDuration = parseStoredDuration(item.contenido);
-                const durationSec = storedDuration ?? audioDurations[item.id];
-                const durationLabel = durationSec ? formatDuration(durationSec) : '--:--';
-
-                return (
-                    <TouchableOpacity
-                        style={styles.audioContainer}
-                        onPress={() => playAudio(item.id, item.archivo_url!)}
-                    >
-                        <Ionicons
-                            name={isThisPlaying ? 'pause' : 'play'}
-                            size={20}
-                            color={isMe ? '#FFF' : PRIMARY}
-                        />
-                        <View style={styles.audioInfo}>
-                            <Text style={[styles.audioText, isMe ? styles.myMsgText : styles.otherMsgText]}>
-                                {isThisPlaying ? 'Reproduciendo' : 'Nota de voz'}
-                            </Text>
-                            <Text style={[styles.audioDuration, isMe ? styles.myTime : styles.otherTime]}>
-                                {durationLabel}
-                            </Text>
-                        </View>
-                    </TouchableOpacity>
-                );
+            const { error } = await supabase
+                .from('planes_guardados')
+                .insert({ plan_id: planId, usuario_id: currentUserId });
+            if (error) {
+                setIsSaved(prev);
+                Alert.alert(t('feed.error'), t('feed.saveError'));
             }
+        }
+    }, [currentUserId, planId, creatorId, isSaved, planFechaEvento, t]);
 
-            return (
-                <Text style={[styles.msgText, isMe ? styles.myMsgText : styles.otherMsgText]}>
-                    {item.contenido}
-                </Text>
-            );
+    const handleSharePlan = useCallback(() => {
+        if (!planId) return;
+        const title = planName.trim() || 'Plan';
+        let when: string | null = null;
+        if (planFechaEvento) {
+            const d = new Date(planFechaEvento);
+            if (Number.isFinite(d.getTime())) {
+                when = d.toLocaleString(undefined, {
+                    weekday: 'short',
+                    day: 'numeric',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                });
+            }
+        }
+        const message = buildPlanShareMessage({
+            title,
+            location: planLocationName,
+            when,
+            planId,
+            hint: t('planDetail.shareHint'),
+            lang,
+        });
+        const shareViaWhatsApp = async () => {
+            const url = `whatsapp://send?text=${encodeURIComponent(message)}`;
+            try {
+                await Linking.openURL(url);
+            } catch {
+                try {
+                    await Share.share({ message });
+                } catch {
+                    // cancelado
+                }
+            }
         };
+        const openNativeShare = async () => {
+            try {
+                await Share.share({ message });
+            } catch {
+                // cancelado
+            }
+        };
+        Alert.alert(t('card.share'), `"${title}"`, [
+            { text: t('card.shareWhats'), onPress: () => void shareViaWhatsApp() },
+            { text: t('card.shareOther'), onPress: () => void openNativeShare() },
+            { text: t('common.cancel'), style: 'cancel' },
+        ]);
+    }, [planId, planName, planFechaEvento, planLocationName, t, lang]);
 
-        return (
-            <View style={[styles.msgContainer, isMe ? styles.myMsgContainer : styles.otherMsgContainer]}>
-                {!isMe && (
-                    <TouchableOpacity
-                        style={styles.avatarWrap}
-                        onPress={() =>
-                            router.push({
-                                pathname: '/user-profile/[id]',
-                                params: { id: item.emisor_id },
-                            })
-                        }
-                    >
-                        <Image source={{ uri: avatarUri }} style={styles.miniAvatar} />
-                    </TouchableOpacity>
-                )}
-                <View style={[styles.bubble, isMe ? styles.myBubble : styles.otherBubble]}>
-                    {!isMe && <Text style={styles.senderName}>{nombreMostrar}</Text>}
-                    {renderContent()}
-                    <Text style={[styles.timeText, isMe ? styles.myTime : styles.otherTime]}>
-                        {new Date(item.creado_en).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                        })}
-                    </Text>
-                </View>
-                {isMe && (
-                    <View style={styles.avatarWrapMe}>
-                        <Image source={{ uri: avatarUri }} style={styles.miniAvatar} />
-                    </View>
-                )}
-            </View>
-        );
-    };
+    const relationFor = useCallback(
+        (userId: string): 'friend' | 'acquaintance' | null => {
+            if (!userId || userId === currentUserId) return null;
+            if (friendIds.has(userId)) return 'friend';
+            if (coincidedIds.has(userId)) return 'acquaintance';
+            return null;
+        },
+        [currentUserId, friendIds, coincidedIds],
+    );
+
+    const onPickMessageReaction = useCallback(
+        (messageId: string, emoji: string) => {
+            if (!currentUserId) return;
+            if (messageId.startsWith('local-')) return;
+            void applyMessageReaction({
+                messageId,
+                userId: currentUserId,
+                emoji,
+                reactions,
+                setReactions,
+            });
+        },
+        [currentUserId, reactions, setReactions],
+    );
+
+    const renderItem = useCallback(
+        ({ item }: { item: Message }) => (
+            <ChatMessageRow
+                item={item}
+                currentUserId={currentUserId}
+                isPlaying={playingMessageId === item.id}
+                audioDurationSec={audioDurations[item.id]}
+                reactions={reactions}
+                videoLabel={t('chat.videoLabel')}
+                relation={relationFor(item.emisor_id)}
+                onOpenProfile={openMessageProfile}
+                onOpenImage={setModalImage}
+                onOpenVideo={setModalVideo}
+                onPlayAudio={playAudio}
+                onLongPressMessage={setReactionPickerId}
+                onReplyMessage={(messageId) => {
+                    const msg = messagesRef.current.find((m) => m.id === messageId);
+                    if (!msg) return;
+                    const name = Array.isArray(msg.perfiles)
+                        ? msg.perfiles[0]?.nombre
+                        : msg.perfiles?.nombre;
+                    setReplyTo({
+                        id: msg.id,
+                        name: name || 'Usuario',
+                        preview: previewForReply(msg.contenido, msg.tipo),
+                    });
+                }}
+                onPickReaction={onPickMessageReaction}
+            />
+        ),
+        [
+            currentUserId,
+            playingMessageId,
+            audioDurations,
+            reactions,
+            t,
+            relationFor,
+            openMessageProfile,
+            playAudio,
+            onPickMessageReaction,
+        ],
+    );
 
     const renderListFooter = () => {
         if (!loadingMore) return null;
@@ -1057,7 +1419,14 @@ export default function ChatScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                    onPress={canEditGroupPhoto ? showGroupPhotoMenu : () => setShowMembers(true)}
+                    onPress={
+                        canEditGroupPhoto
+                            ? showGroupPhotoMenu
+                            : () => {
+                                  if (!planId) return;
+                                  router.push(`/plan/${planId}`);
+                              }
+                    }
                     activeOpacity={0.7}
                     disabled={uploadingGroupPhoto}
                     style={styles.planHeaderImageWrap}
@@ -1090,7 +1459,10 @@ export default function ChatScreen() {
                 <TouchableOpacity
                     style={styles.headerTitleContainer}
                     activeOpacity={0.7}
-                    onPress={() => setShowMembers(true)}
+                    onPress={() => {
+                        if (!planId) return;
+                        router.push(`/plan/${planId}`);
+                    }}
                 >
                     <Text style={styles.headerTitle} numberOfLines={1}>
                         {planName || (loading ? t('chat.loading') : '')}
@@ -1102,6 +1474,27 @@ export default function ChatScreen() {
                     ) : null}
                 </TouchableOpacity>
 
+                {!isGroupChat ? (
+                    <TouchableOpacity onPress={handleSharePlan} style={styles.membersBtn} hitSlop={6}>
+                        <Ionicons name="arrow-redo" size={20} color={PRIMARY} />
+                    </TouchableOpacity>
+                ) : null}
+                {creatorId && currentUserId && creatorId !== currentUserId && !isGroupChat ? (
+                    <TouchableOpacity onPress={() => void toggleSavePlan()} style={styles.membersBtn} hitSlop={6}>
+                        <Ionicons
+                            name={isSaved ? 'heart' : 'heart-outline'}
+                            size={20}
+                            color={isSaved ? DANGER : PRIMARY}
+                        />
+                    </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity onPress={() => void toggleMuteChat()} style={styles.membersBtn} hitSlop={6}>
+                    <Ionicons
+                        name={chatMuted ? 'notifications-off' : 'notifications-outline'}
+                        size={20}
+                        color={chatMuted ? '#94A3B8' : PRIMARY}
+                    />
+                </TouchableOpacity>
                 <TouchableOpacity onPress={() => setShowMembers(true)} style={styles.membersBtn}>
                     <Ionicons name="people" size={22} color={PRIMARY} />
                 </TouchableOpacity>
@@ -1118,8 +1511,8 @@ export default function ChatScreen() {
 
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                keyboardVerticalOffset={headerHeight}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
             >
                 {loading ? (
                     <View style={styles.loading}>
@@ -1134,34 +1527,54 @@ export default function ChatScreen() {
                         </Text>
                     </View>
                 ) : (
-                    <FlatList
-                        data={messages}
-                        keyExtractor={(item) => item.id}
-                        renderItem={renderItem}
-                        inverted
-                        contentContainerStyle={styles.listContent}
-                        keyboardShouldPersistTaps="handled"
-                        onEndReached={loadMoreMessages}
-                        onEndReachedThreshold={0.3}
-                        ListFooterComponent={renderListFooter}
-                        ListEmptyComponent={
-                            <View style={styles.emptyChat}>
-                                <Text style={styles.emptyChatText}>
-                                    No hay mensajes aún. ¡Sé el primero en escribir!
-                                </Text>
+                    <View style={{ flex: 1 }}>
+                        <FlashList
+                            style={{ flex: 1 }}
+                            data={messages}
+                            keyExtractor={(item) => item.id}
+                            renderItem={renderItem}
+                            getItemType={chatMessageItemType}
+                            inverted
+                            drawDistance={FLASH_LIST_DRAW_DISTANCE}
+                            contentContainerStyle={styles.listContent}
+                            keyboardShouldPersistTaps="handled"
+                            onEndReached={loadMoreMessages}
+                            onEndReachedThreshold={0.3}
+                            ListFooterComponent={renderListFooter}
+                        />
+                        {messages.length === 0 ? (
+                            <View style={styles.emptyChatOverlay} pointerEvents="none">
+                                <Text style={styles.emptyChatText}>{t('chat.emptyThread')}</Text>
                             </View>
-                        }
-                    />
-                )}
-
-                {isUploading && (
-                    <View style={styles.uploadBanner}>
-                        <ActivityIndicator color={PRIMARY} size="small" />
-                        <Text style={styles.uploadBannerText}>{t('chat.uploading')}</Text>
+                        ) : null}
                     </View>
                 )}
 
-                <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+                {!accessDenied && typingNames.length > 0 ? (
+                    <Text style={styles.typingHint}>
+                        {typingNames.length === 1
+                            ? t('chat.typingOne', { name: typingNames[0] })
+                            : t('chat.typingMany', { names: typingNames.join(', ') })}
+                    </Text>
+                ) : null}
+
+                {replyTo ? (
+                    <View style={styles.replyChip}>
+                        <View style={styles.replyChipBody}>
+                            <Text style={styles.replyChipName} numberOfLines={1}>
+                                {t('chat.replyingTo', { name: replyTo.name })}
+                            </Text>
+                            <Text style={styles.replyChipPreview} numberOfLines={1}>
+                                {replyTo.preview}
+                            </Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={8}>
+                            <Ionicons name="close" size={20} color="#64748B" />
+                        </TouchableOpacity>
+                    </View>
+                ) : null}
+
+                <View style={[styles.inputBar, { paddingBottom: Platform.OS === 'android' ? 8 : Math.max(insets.bottom, 8) }]}>
                     <TouchableOpacity
                         onPress={pickMedia}
                         style={styles.attachBtn}
@@ -1186,7 +1599,7 @@ export default function ChatScreen() {
                             placeholderTextColor="#64748B"
                             style={styles.textInput}
                             value={messageText}
-                            onChangeText={setMessageText}
+                            onChangeText={onMessageTextChange}
                             multiline
                             editable={!recording && !inputDisabled}
                         />
@@ -1205,6 +1618,23 @@ export default function ChatScreen() {
                     </TouchableOpacity>
                 </View>
             </KeyboardAvoidingView>
+
+            <ReactionEmojiPicker
+                visible={!!reactionPickerId}
+                onClose={() => setReactionPickerId(null)}
+                onPick={(emoji) => {
+                    const mid = reactionPickerId;
+                    setReactionPickerId(null);
+                    if (!mid || !currentUserId || mid.startsWith('local-')) return;
+                    void applyMessageReaction({
+                        messageId: mid,
+                        userId: currentUserId,
+                        emoji,
+                        reactions,
+                        setReactions,
+                    });
+                }}
+            />
 
             <Modal
                 visible={modalImage !== null}
@@ -1278,22 +1708,62 @@ export default function ChatScreen() {
                             data={members}
                             keyExtractor={(m) => m.id}
                             style={{ maxHeight: 360 }}
-                            renderItem={({ item: m }) => (
+                            renderItem={({ item: m }) => {
+                                const relation = relationFor(m.id);
+                                return (
                                 <View style={styles.memberRowWrap}>
                                     <TouchableOpacity
                                         style={[styles.memberRow, { flex: 1 }]}
                                         onPress={() => {
                                             setShowMembers(false);
-                                            router.push({ pathname: '/user-profile/[id]', params: { id: m.id } });
+                                            router.push({
+                                                pathname: '/user-profile/[id]',
+                                                params: {
+                                                    id: m.id,
+                                                    isFriend: relation === 'friend' ? '1' : '0',
+                                                },
+                                            });
                                         }}
                                     >
-                                        <Image
-                                            source={{ uri: m.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.nombre)}&background=4DA6FF&color=fff` }}
-                                            style={styles.memberAvatar}
-                                        />
+                                        <View
+                                            style={[
+                                                styles.memberAvatarRing,
+                                                relation === 'friend' && styles.memberAvatarRingFriend,
+                                                relation === 'acquaintance' && styles.memberAvatarRingAcquaintance,
+                                            ]}
+                                        >
+                                            <Image
+                                                source={{ uri: m.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.nombre)}&background=4DA6FF&color=fff` }}
+                                                style={styles.memberAvatar}
+                                            />
+                                        </View>
                                         <View style={{ flex: 1 }}>
-                                            <Text style={styles.memberName}>{m.nombre}</Text>
-                                            {m.isCreator && <Text style={styles.memberCreator}>{t('chat.host')}</Text>}
+                                            <Text
+                                                style={[
+                                                    styles.memberName,
+                                                    relation === 'friend' && styles.memberNameFriend,
+                                                    relation === 'acquaintance' && styles.memberNameAcquaintance,
+                                                ]}
+                                            >
+                                                {m.nombre}
+                                            </Text>
+                                            {m.isCreator ? (
+                                                <Text style={styles.memberCreator}>
+                                                    {t(m.genero === 'femenino' ? 'chat.hostF' : 'chat.host')}
+                                                </Text>
+                                            ) : relation === 'friend' ? (
+                                                <Text style={styles.memberRelationFriend}>
+                                                    {t(m.genero === 'femenino' ? 'planDetail.friendF' : 'planDetail.friend')}
+                                                </Text>
+                                            ) : relation === 'acquaintance' ? (
+                                                <Text style={styles.memberRelationAcquaintance}>
+                                                    {t(
+                                                        m.genero === 'femenino'
+                                                            ? 'planDetail.acquaintanceF'
+                                                            : 'planDetail.acquaintance',
+                                                    )}
+                                                </Text>
+                                            ) : null}
                                         </View>
                                         <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
                                     </TouchableOpacity>
@@ -1301,29 +1771,46 @@ export default function ChatScreen() {
                                         <TouchableOpacity
                                             style={styles.memberKickBtn}
                                             onPress={() => {
-                                                Alert.alert(
-                                                    t('planDetail.kickTitle'),
-                                                    t('planDetail.kickMsg', { name: m.nombre }),
-                                                    [
-                                                        { text: t('common.cancel'), style: 'cancel' },
-                                                        {
-                                                            text: t('planDetail.kickConfirm'),
-                                                            style: 'destructive',
-                                                            onPress: async () => {
-                                                                const { error } = await kickParticipant(planId, m.id, currentUserId);
-                                                                if (error) Alert.alert(t('chat.errorTitle'), error);
-                                                                else await fetchParticipants(planId);
+                                                const targetId = m.id;
+                                                const targetName = m.nombre;
+                                                setShowMembers(false);
+                                                // Cerrar el sheet antes del Alert: si no, en Android se queda trabado
+                                                // (modal anidado + onPress async).
+                                                setTimeout(() => {
+                                                    Alert.alert(
+                                                        t('planDetail.kickTitle'),
+                                                        t('planDetail.kickMsg', { name: targetName }),
+                                                        [
+                                                            { text: t('common.cancel'), style: 'cancel' },
+                                                            {
+                                                                text: t('planDetail.kickConfirm'),
+                                                                style: 'destructive',
+                                                                onPress: () => {
+                                                                    void (async () => {
+                                                                        const { error } = await kickParticipant(
+                                                                            planId,
+                                                                            targetId,
+                                                                            currentUserId,
+                                                                        );
+                                                                        if (error) {
+                                                                            Alert.alert(t('chat.errorTitle'), error);
+                                                                            return;
+                                                                        }
+                                                                        await fetchParticipants(planId);
+                                                                    })();
+                                                                },
                                                             },
-                                                        },
-                                                    ],
-                                                );
+                                                        ],
+                                                    );
+                                                }, 250);
                                             }}
                                         >
-                                            <Ionicons name="person-remove" size={20} color="#EF4444" />
+                                            <Ionicons name="ban-outline" size={20} color="#EF4444" />
                                         </TouchableOpacity>
                                     )}
                                 </View>
-                            )}
+                                );
+                            }}
                         />
 
                         {canInvitePeople ? (
@@ -1339,12 +1826,27 @@ export default function ChatScreen() {
                             </TouchableOpacity>
                         ) : null}
 
+                        <TouchableOpacity style={styles.muteBtn} onPress={() => void toggleMuteChat()}>
+                            <Ionicons
+                                name={chatMuted ? 'notifications-off' : 'notifications-outline'}
+                                size={20}
+                                color={PRIMARY}
+                            />
+                            <Text style={styles.muteBtnText}>
+                                {chatMuted ? t('chat.unmute') : t('chat.mute')}
+                            </Text>
+                        </TouchableOpacity>
+
                         <TouchableOpacity style={styles.leaveBtn} onPress={handleDeleteChat}>
                             <Ionicons name="trash-outline" size={20} color="#EF4444" />
                             <Text style={styles.leaveBtnText}>
                                 {creatorId === currentUserId
                                     ? t('chat.deletePlanHost')
-                                    : t('chat.deleteChat')}
+                                    : planFechaEvento &&
+                                        Number.isFinite(new Date(planFechaEvento).getTime()) &&
+                                        Date.now() >= new Date(planFechaEvento).getTime()
+                                      ? t('chat.deleteChat')
+                                      : t('chat.deleteChatAndLeave')}
                             </Text>
                         </TouchableOpacity>
                     </TouchableOpacity>
@@ -1463,19 +1965,61 @@ const styles = StyleSheet.create({
     membersSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 34 },
     membersHandle: { alignSelf: 'center', width: 44, height: 5, borderRadius: 3, backgroundColor: '#E2E8F0', marginBottom: 14 },
     membersTitle: { fontSize: 18, fontWeight: '900', color: '#0F2A4A', marginBottom: 12 },
-    memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
+    memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 0 },
+    memberAvatarRing: {
+        width: 52,
+        height: 52,
+        borderRadius: 26,
+        marginRight: 12,
+        borderWidth: 2,
+        borderColor: '#E2E8F0',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#FFF',
+    },
+    memberAvatarRingFriend: { borderColor: FRIEND, backgroundColor: '#ECFDF5' },
+    memberAvatarRingAcquaintance: { borderColor: ACQUAINTANCE, backgroundColor: '#F5F3FF' },
+    memberNameFriend: { color: '#047857' },
+    memberNameAcquaintance: { color: '#6D28D9' },
+    memberRelationFriend: { fontSize: 12, fontWeight: '700', color: FRIEND, marginTop: 2 },
+    memberRelationAcquaintance: { fontSize: 12, fontWeight: '700', color: ACQUAINTANCE, marginTop: 2 },
     memberRowWrap: { flexDirection: 'row', alignItems: 'center' },
     memberKickBtn: { padding: 10 },
-    memberAvatar: { width: 46, height: 46, borderRadius: 23, marginRight: 12, backgroundColor: '#E3ECFB' },
+    memberAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#E3ECFB' },
     memberName: { fontSize: 16, fontWeight: '700', color: '#0F2A4A' },
     memberCreator: { fontSize: 12, color: PRIMARY, fontWeight: '700', marginTop: 1 },
     inviteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#EFF6FF' },
     inviteBtnText: { color: PRIMARY, fontWeight: '800', fontSize: 15 },
+    muteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#F1F5F9' },
+    muteBtnText: { color: PRIMARY, fontWeight: '800', fontSize: 15 },
     inviteEmpty: { textAlign: 'center', color: '#94A3B8', fontWeight: '600', marginVertical: 20 },
     inviteCloseBtn: { marginTop: 12, paddingVertical: 12, alignItems: 'center' },
     inviteCloseText: { color: '#64748B', fontWeight: '700', fontSize: 15 },
     leaveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, paddingVertical: 14, borderRadius: 16, backgroundColor: '#FEE2E2' },
     leaveBtnText: { color: '#EF4444', fontWeight: '800', fontSize: 15 },
+    typingHint: {
+        paddingHorizontal: 16,
+        paddingBottom: 4,
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#64748B',
+    },
+    replyChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginHorizontal: 12,
+        marginBottom: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 12,
+        backgroundColor: '#EFF6FF',
+        borderLeftWidth: 3,
+        borderLeftColor: PRIMARY,
+        gap: 8,
+    },
+    replyChipBody: { flex: 1 },
+    replyChipName: { fontSize: 12, fontWeight: '800', color: PRIMARY },
+    replyChipPreview: { fontSize: 13, color: '#64748B', marginTop: 1 },
     loading: { flex: 1, justifyContent: 'center' },
     accessDenied: {
         flex: 1,
@@ -1486,8 +2030,13 @@ const styles = StyleSheet.create({
     },
     accessDeniedTitle: { fontSize: 18, fontWeight: '700', color: '#1E293B' },
     accessDeniedText: { fontSize: 14, color: '#64748B', textAlign: 'center' },
-    emptyChat: { padding: 40, alignItems: 'center', transform: [{ scaleY: -1 }] },
-    emptyChatText: { color: '#94A3B8', fontSize: 14, textAlign: 'center' },
+    emptyChatOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 40,
+    },
+    emptyChatText: { color: '#94A3B8', fontSize: 14, textAlign: 'center', lineHeight: 20 },
     loadMore: { paddingVertical: 16, alignItems: 'center' },
     listContent: { paddingHorizontal: 10, paddingVertical: 20, flexGrow: 1 },
     msgContainer: {
@@ -1501,6 +2050,7 @@ const styles = StyleSheet.create({
     avatarWrap: { marginRight: 8 },
     avatarWrapMe: { marginLeft: 8 },
     miniAvatar: { width: 32, height: 32, borderRadius: 16 },
+    bubbleCol: { maxWidth: '78%', flexShrink: 1 },
     bubble: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, elevation: 1, flexShrink: 1 },
     myBubble: { backgroundColor: '#70B7FF', borderTopRightRadius: 4 },
     otherBubble: { backgroundColor: '#FFF', borderTopLeftRadius: 4 },

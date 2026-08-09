@@ -32,6 +32,7 @@ type HistoryItem = {
     tipo_deporte: string | null;
     fecha_evento: string | null;
     completedAt: string | null;
+    isCreator: boolean;
 };
 
 export default function PlanHistoryScreen() {
@@ -61,7 +62,8 @@ export default function PlanHistoryScreen() {
                         imagen_url,
                         categoria,
                         tipo_deporte,
-                        fecha_evento
+                        fecha_evento,
+                        creador_id
                     )
                 `)
                 .eq('usuario_id', user.id);
@@ -82,6 +84,7 @@ export default function PlanHistoryScreen() {
                         tipo_deporte: (plan.tipo_deporte as string | null) ?? null,
                         fecha_evento: (plan.fecha_evento as string | null) ?? null,
                         completedAt: (plan.fecha_evento as string | null) ?? null,
+                        isCreator: String(plan.creador_id) === String(user.id),
                     };
                 })
                 .filter(Boolean) as HistoryItem[];
@@ -144,23 +147,40 @@ export default function PlanHistoryScreen() {
                         ) : null
                     }
                     renderItem={({ item }) => (
-                        <TouchableOpacity
-                            style={styles.card}
-                            activeOpacity={0.85}
-                            onPress={() => router.push({ pathname: '/plan/[id]', params: { id: item.planId } })}
-                        >
-                            <PlanImage
-                                source={resolvePlanImageSource(item.imagen_url)}
-                                style={styles.thumb}
-                                recyclingKey={item.planId}
-                            />
-                            <View style={styles.cardBody}>
-                                <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
-                                <Text style={styles.cardCat}>{getPlanCategoryDisplay(item, t)}</Text>
-                                <Text style={styles.cardDate}>{formatDate(item.fecha_evento ?? item.completedAt)}</Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
-                        </TouchableOpacity>
+                        <View style={styles.card}>
+                            <TouchableOpacity
+                                style={styles.cardMain}
+                                activeOpacity={0.85}
+                                onPress={() => router.push({ pathname: '/plan/[id]', params: { id: item.planId } })}
+                            >
+                                <PlanImage
+                                    source={resolvePlanImageSource(item.imagen_url)}
+                                    style={styles.thumb}
+                                    recyclingKey={item.planId}
+                                />
+                                <View style={styles.cardBody}>
+                                    <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
+                                    <Text style={styles.cardCat}>{getPlanCategoryDisplay(item, t)}</Text>
+                                    <Text style={styles.cardDate}>{formatDate(item.fecha_evento ?? item.completedAt)}</Text>
+                                </View>
+                            </TouchableOpacity>
+                            {item.isCreator ? (
+                                <TouchableOpacity
+                                    style={styles.dupBtn}
+                                    onPress={() =>
+                                        router.push({
+                                            pathname: '/create-plan',
+                                            params: { duplicateId: item.planId },
+                                        })
+                                    }
+                                    hitSlop={8}
+                                >
+                                    <Ionicons name="copy-outline" size={18} color={PRIMARY_DARK} />
+                                </TouchableOpacity>
+                            ) : (
+                                <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                            )}
+                        </View>
                     )}
                 />
             )}
@@ -203,12 +223,21 @@ const styles = StyleSheet.create({
         borderRadius: 18,
         padding: 12,
         marginBottom: 10,
-        gap: 12,
+        gap: 8,
         elevation: 3,
         shadowColor: '#1E3A8A',
         shadowOpacity: 0.08,
         shadowRadius: 10,
         shadowOffset: { width: 0, height: 4 },
+    },
+    cardMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+    dupBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: '#EFF6FF',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     thumb: { width: 54, height: 54, borderRadius: 16, backgroundColor: '#E3ECFB' },
     cardBody: { flex: 1 },

@@ -30,7 +30,6 @@ export default function BlockedAccountsScreen() {
     const { t } = useT();
     const [loading, setLoading] = useState(true);
     const [users, setUsers] = useState<Awaited<ReturnType<typeof getBlockedUsers>>>([]);
-    const [busyId, setBusyId] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -54,13 +53,20 @@ export default function BlockedAccountsScreen() {
             { text: t('common.cancel'), style: 'cancel' },
             {
                 text: t('settings.unblock'),
-                onPress: async () => {
-                    const { data: { user } } = await supabase.auth.getUser();
-                    if (!user) return;
-                    setBusyId(id);
-                    await unblockUser(user.id, id);
-                    setBusyId(null);
-                    void load();
+                onPress: () => {
+                    const removed = users.find((u) => u.id === id);
+                    setUsers((prev) => prev.filter((u) => u.id !== id));
+                    void supabase.auth.getUser().then(({ data: { user } }) => {
+                        if (!user) {
+                            if (removed) setUsers((prev) => [removed, ...prev]);
+                            return;
+                        }
+                        void unblockUser(user.id, id).then(({ error }) => {
+                            if (error && removed) {
+                                setUsers((prev) => [removed, ...prev]);
+                            }
+                        });
+                    });
                 },
             },
         ]);
@@ -99,13 +105,8 @@ export default function BlockedAccountsScreen() {
                             <TouchableOpacity
                                 style={styles.unblockBtn}
                                 onPress={() => handleUnblock(item.id, item.nombre)}
-                                disabled={busyId === item.id}
                             >
-                                {busyId === item.id ? (
-                                    <ActivityIndicator size="small" color={PRIMARY_DARK} />
-                                ) : (
-                                    <Text style={styles.unblockText}>{t('settings.unblock')}</Text>
-                                )}
+                                <Text style={styles.unblockText}>{t('settings.unblock')}</Text>
                             </TouchableOpacity>
                         </View>
                     )}

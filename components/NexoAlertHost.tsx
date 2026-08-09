@@ -17,6 +17,7 @@ import {
     type NexoAlertButton,
     type NexoAlertRequest,
 } from '../lib/nexoAlert';
+import { hapticAlert, hapticSelection, hapticSoft, hapticWarning } from '../lib/haptics';
 
 const INK = '#0F2A4A';
 const MUTED = '#64748B';
@@ -36,6 +37,8 @@ export function NexoAlertHost({ children }: Props) {
 
     useEffect(() => {
         registerNexoAlertPresenter((req) => {
+            const hasDestructive = req.buttons.some((b) => b.style === 'destructive');
+            hapticAlert(hasDestructive ? 'danger' : 'info');
             setQueue((prev) => [...prev, req]);
         });
         return () => registerNexoAlertPresenter(null);
@@ -51,6 +54,9 @@ export function NexoAlertHost({ children }: Props) {
         async (btn: NexoAlertButton) => {
             if (closingRef.current || busy) return;
             closingRef.current = true;
+            if (btn.style === 'destructive') hapticWarning();
+            else if (btn.style === 'cancel') hapticSoft();
+            else hapticSelection();
             try {
                 if (btn.onPress) {
                     setBusy(true);
@@ -119,8 +125,11 @@ export function NexoAlertHost({ children }: Props) {
                                                 disabled={busy}
                                                 onPress={() => void runButton(btn)}
                                             >
-                                                {busy && isPrimary ? (
-                                                    <ActivityIndicator color="#FFF" size="small" />
+                                                {busy ? (
+                                                    <ActivityIndicator
+                                                        color={isDestructive ? DANGER : isPrimary ? '#FFF' : INK}
+                                                        size="small"
+                                                    />
                                                 ) : (
                                                     <Text
                                                         style={[

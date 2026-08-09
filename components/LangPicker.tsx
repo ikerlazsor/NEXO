@@ -1,5 +1,6 @@
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LANG_OPTIONS, type Lang } from '../lib/i18n';
+import { hapticSelection } from '../lib/haptics';
 
 const BORDER = '#E2E8F0';
 const ACCENT = '#2563EB';
@@ -21,7 +22,11 @@ export function LangPicker({ lang, onChange, compact }: Props) {
                         compact && styles.optionCompact,
                         lang === opt.code && styles.optionActive,
                     ]}
-                    onPress={() => onChange(opt.code)}
+                    onPress={() => {
+                        if (opt.code === lang) return;
+                        hapticSelection();
+                        onChange(opt.code);
+                    }}
                     activeOpacity={0.8}
                 >
                     <Text style={[styles.code, compact && styles.codeCompact, lang === opt.code && styles.codeActive]}>
@@ -53,15 +58,16 @@ const styles = StyleSheet.create({
         minWidth: 44,
     },
     optionCompact: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        minWidth: 36,
+        paddingHorizontal: 7,
+        paddingVertical: 4,
+        minWidth: 30,
+        borderRadius: 8,
     },
     optionActive: {
         borderColor: ACCENT,
         backgroundColor: '#EFF6FF',
     },
     code: { fontSize: 14, fontWeight: '800', color: '#64748B' },
-    codeCompact: { fontSize: 12 },
+    codeCompact: { fontSize: 11 },
     codeActive: { color: ACCENT },
 });

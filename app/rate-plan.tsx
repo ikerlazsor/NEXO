@@ -10,6 +10,7 @@ import { useCallback,
     useState } from 'react';
 import {
     ActivityIndicator,
+    InteractionManager,
     ScrollView,
     StyleSheet,
     Text,
@@ -19,7 +20,10 @@ import {
 import { Alert } from '../lib/nexoAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '../components/ProfileAvatar';
+import { trackFunnel } from '../lib/analytics';
 import { getAuthUser } from '../lib/auth';
+import { getFriendStatus, sendFriendRequest } from '../lib/friends';
+import { hapticLight, hapticSelection, hapticSuccess } from '../lib/haptics';
 import { useT } from '../lib/i18n';
 import {
     EMPTY_RATING_DRAFT,
@@ -50,7 +54,7 @@ const SUCCESS = '#16A34A';
 const DANGER = '#DC2626';
 const GOLD = '#F59E0B';
 
-type Stage = 'happened' | 'list' | 'person';
+type Stage = 'happened' | 'list' | 'person' | 'friends';
 
 function StepDots({ active }: { active: 1 | 2 | 3 }) {
     return (
@@ -87,6 +91,9 @@ export default function RatePlanScreen() {
     const [draft, setDraft] = useState<RatingDraft>(EMPTY_RATING_DRAFT);
     const [ratedIds, setRatedIds] = useState<Set<string>>(new Set());
     const [justSaved, setJustSaved] = useState(false);
+    const [friendCandidates, setFriendCandidates] = useState<RatingPeer[]>([]);
+    const [friendSentIds, setFriendSentIds] = useState<Set<string>>(new Set());
+    const [friendBusyId, setFriendBusyId] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -108,6 +115,9 @@ export default function RatePlanScreen() {
             }
             setSelectedPeer(null);
             setDraft(EMPTY_RATING_DRAFT);
+            if (found) {
+                trackFunnel('rating_start', { userId: user.id, props: { planId: found.planId } });
+            }
         } finally {
             setLoading(false);
         }
@@ -126,12 +136,50 @@ export default function RatePlanScreen() {
     const pendingCount = totalPeers - ratedCount;
     const progressPct = totalPeers > 0 ? ratedCount / totalPeers : 0;
 
-    const stepActive: 1 | 2 | 3 = stage === 'happened' ? 1 : stage === 'list' ? 2 : 3;
+    const stepActive: 1 | 2 | 3 =
+        stage === 'happened' ? 1 : stage === 'list' || stage === 'friends' ? 2 : 3;
     const canSubmitPerson = isPersonDraftComplete(draft);
 
-    const finishAndArchive = async (messageKey: 'ratings.doneMsg' | 'ratings.skippedMsg') => {
+    const resolveFriendCandidates = async (peers: RatingPeer[], uid: string) => {
+        const out: RatingPeer[] = [];
+        // Limitar trabajo: muchas consultas seguidas congelan la UI (sobre todo en Expo Go).
+        const slice = peers.slice(0, 12);
+        await Promise.all(
+            slice.map(async (peer) => {
+                try {
+                    const st = await getFriendStatus(uid, peer.id);
+                    if (st.status === 'none') out.push(peer);
+                } catch {
+                    /* skip */
+                }
+            }),
+        );
+        return out;
+    };
+
+    const goBackSafe = () => {
+        // Diferir el back: Alert modal + router.back() a la vez congela Expo Go.
+        requestAnimationFrame(() => {
+            InteractionManager.runAfterInteractions(() => {
+                if (router.canGoBack()) router.back();
+                else router.replace('/(tabs)/my-plans');
+            });
+        });
+    };
+
+    /** Nunca navegar en el mismo tick que abrir el Alert (modales anidados). */
+    const doneAndLeave = (title: string, message: string) => {
+        Alert.alert(title, message, [
+            {
+                text: t('common.ok'),
+                onPress: () => goBackSafe(),
+            },
+        ]);
+    };
+
+    const finishAndArchive = async () => {
         if (!userId || !plan) {
-            router.back();
+            goBackSafe();
             return;
         }
         setSaving(true);
@@ -141,31 +189,61 @@ export default function RatePlanScreen() {
                 Alert.alert(t('profile.error'), t('ratings.saveError'));
                 return;
             }
-            Alert.alert(t('ratings.doneTitle'), t(messageKey));
-            router.back();
+            trackFunnel('rating_complete', {
+                userId,
+                props: { planId: plan.planId, rated: ratedIds.size },
+            });
+            const peers = (plan.peers ?? []).filter((p) => ratedIds.has(p.id));
+            // Mostrar primero la pantalla de amigos; filtrar en background (evita JS bloqueado).
+            if (peers.length === 0) {
+                doneAndLeave(t('ratings.doneTitle'), t('ratings.doneMsg'));
+                return;
+            }
+            setFriendCandidates(peers);
+            setFriendSentIds(new Set());
+            setStage('friends');
+            setSaving(false);
+            try {
+                const candidates = await Promise.race([
+                    resolveFriendCandidates(peers, userId),
+                    new Promise<RatingPeer[]>((resolve) => setTimeout(() => resolve(peers), 1500)),
+                ]);
+                if (candidates.length === 0) {
+                    doneAndLeave(t('ratings.doneTitle'), t('ratings.doneMsg'));
+                    return;
+                }
+                setFriendCandidates(candidates);
+            } catch {
+                /* dejar la lista provisional */
+            }
         } finally {
             setSaving(false);
         }
     };
 
-    const omitFlow = () => {
-        Alert.alert(t('ratings.omitTitle'), t('ratings.omitMsg'), [
-            { text: t('common.cancel'), style: 'cancel' },
-            {
-                text: t('ratings.omitConfirm'),
-                style: 'destructive',
-                onPress: () => void finishAndArchive('ratings.skippedMsg'),
-            },
-        ]);
+    const sendAddFriend = async (peer: RatingPeer) => {
+        if (!userId || friendSentIds.has(peer.id)) return;
+        setFriendBusyId(peer.id);
+        try {
+            const { error } = await sendFriendRequest(userId, peer.id);
+            if (error) {
+                Alert.alert(t('profile.error'), error);
+                return;
+            }
+            setFriendSentIds((prev) => new Set(prev).add(peer.id));
+        } finally {
+            setFriendBusyId(null);
+        }
     };
 
     const onPlanHappened = async (attended: boolean) => {
         if (!attended) {
+            hapticLight();
             if (userId && plan) await dismissRatingWithoutHistory(userId, plan.planId);
-            Alert.alert(t('ratings.doneTitle'), t('ratings.notAttendedMsg'));
-            router.back();
+            doneAndLeave(t('ratings.doneTitle'), t('ratings.notAttendedMsg'));
             return;
         }
+        hapticSuccess();
         if (userId && plan) {
             await markRatingSessionStarted(userId, plan.planId);
             // Al confirmar asistencia, suma ya a planes hechos
@@ -180,6 +258,7 @@ export default function RatePlanScreen() {
 
     const openPeer = (peer: RatingPeer) => {
         if (ratedIds.has(peer.id)) return;
+        hapticSelection();
         setSelectedPeer(peer);
         setDraft(EMPTY_RATING_DRAFT);
         setJustSaved(false);
@@ -190,9 +269,11 @@ export default function RatePlanScreen() {
         setDraft((prev) => {
             const cur = prev[list];
             if (cur.includes(key)) {
+                hapticSelection();
                 return { ...prev, [list]: cur.filter((x) => x !== key) };
             }
             if (cur.length >= MAX_ASPECTS) return prev;
+            hapticSelection();
             return { ...prev, [list]: [...cur, key] };
         });
     };
@@ -215,6 +296,7 @@ export default function RatePlanScreen() {
                 );
                 return;
             }
+            hapticSuccess();
             const nextRated = new Set(ratedIds);
             nextRated.add(selectedPeer.id);
             setRatedIds(nextRated);
@@ -222,7 +304,7 @@ export default function RatePlanScreen() {
 
             const stillPending = (plan.peers ?? []).filter((p) => !nextRated.has(p.id));
             if (stillPending.length === 0) {
-                await finishAndArchive('ratings.doneMsg');
+                await finishAndArchive();
                 return;
             }
             setSelectedPeer(null);
@@ -249,7 +331,7 @@ export default function RatePlanScreen() {
                     <Ionicons name="star-outline" size={32} color={MUTED} />
                 </View>
                 <Text style={styles.empty}>{t('ratings.noneOpen')}</Text>
-                <TouchableOpacity style={styles.primaryBtn} onPress={() => router.back()}>
+                <TouchableOpacity style={styles.primaryBtn} onPress={goBackSafe}>
                     <Text style={styles.primaryBtnText}>{t('common.back')}</Text>
                 </TouchableOpacity>
             </View>
@@ -278,11 +360,6 @@ export default function RatePlanScreen() {
                     <Text style={styles.title} numberOfLines={1}>{t('ratings.rateTitle')}</Text>
                     <Text style={styles.sub} numberOfLines={1}>{plan.titulo}</Text>
                 </View>
-                {stage !== 'happened' ? (
-                    <TouchableOpacity onPress={omitFlow} hitSlop={8} style={styles.omitChip}>
-                        <Text style={styles.omitLink}>{t('ratings.omit')}</Text>
-                    </TouchableOpacity>
-                ) : null}
             </View>
 
             <StepDots active={stepActive} />
@@ -300,7 +377,6 @@ export default function RatePlanScreen() {
                                 <Ionicons name="calendar-outline" size={28} color={PRIMARY_DARK} />
                             </View>
                             <Text style={styles.introTitle}>{t('ratings.attendedPlanQ')}</Text>
-                            <Text style={styles.introSub}>{t('ratings.attendedPlanHint')}</Text>
                         </View>
 
                         <TouchableOpacity
@@ -321,7 +397,53 @@ export default function RatePlanScreen() {
                             <Ionicons name="close-circle" size={22} color={DANGER} />
                             <Text style={styles.bigChoiceNoText}>{t('ratings.attendedPlanNo')}</Text>
                         </TouchableOpacity>
-                        <Text style={styles.footerHint}>{t('ratings.attendedPlanFooter')}</Text>
+                    </>
+                )}
+
+                {stage === 'friends' && (
+                    <>
+                        <View style={styles.introCard}>
+                            <View style={styles.introIcon}>
+                                <Ionicons name="people-outline" size={28} color={PRIMARY_DARK} />
+                            </View>
+                            <Text style={styles.introTitle}>{t('ratings.addFriendsTitle')}</Text>
+                        </View>
+                        {friendCandidates.map((peer) => {
+                            const sent = friendSentIds.has(peer.id);
+                            const busy = friendBusyId === peer.id;
+                            return (
+                                <View key={peer.id} style={styles.peerRow}>
+                                    <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={48} />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.peerRowName}>{peer.nombre}</Text>
+                                        {sent ? (
+                                            <Text style={[styles.peerRowMeta, { color: SUCCESS }]}>
+                                                {t('ratings.friendRequestSent')}
+                                            </Text>
+                                        ) : null}
+                                    </View>
+                                    <TouchableOpacity
+                                        style={[styles.ratePill, sent && styles.donePill]}
+                                        onPress={() => void sendAddFriend(peer)}
+                                        disabled={sent || busy}
+                                    >
+                                        {busy ? (
+                                            <ActivityIndicator size="small" color={PRIMARY_DARK} />
+                                        ) : (
+                                            <Text style={[styles.ratePillText, sent && { color: SUCCESS }]}>
+                                                {sent ? t('ratings.friendSent') : t('ratings.addFriend')}
+                                            </Text>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
+                            );
+                        })}
+                        <TouchableOpacity
+                            style={styles.primaryBtn}
+                            onPress={() => doneAndLeave(t('ratings.doneTitle'), t('ratings.doneMsg'))}
+                        >
+                            <Text style={styles.primaryBtnText}>{t('ratings.finish')}</Text>
+                        </TouchableOpacity>
                     </>
                 )}
 
@@ -380,7 +502,7 @@ export default function RatePlanScreen() {
 
                         <TouchableOpacity
                             style={[styles.primaryBtn, saving && { opacity: 0.7 }]}
-                            onPress={() => void finishAndArchive('ratings.doneMsg')}
+                            onPress={() => void finishAndArchive()}
                             disabled={saving}
                         >
                             {saving ? (
@@ -441,7 +563,10 @@ export default function RatePlanScreen() {
                                             {[1, 2, 3, 4, 5].map((n) => (
                                                 <TouchableOpacity
                                                     key={n}
-                                                    onPress={() => setDraft((d) => ({ ...d, puntuacion_general: n }))}
+                                                    onPress={() => {
+                                                        hapticSelection();
+                                                        setDraft((d) => ({ ...d, puntuacion_general: n }));
+                                                    }}
                                                     hitSlop={8}
                                                     style={styles.starBtn}
                                                 >
@@ -611,13 +736,6 @@ const styles = StyleSheet.create({
     },
     title: { fontSize: 18, fontWeight: '900', color: INK },
     sub: { fontSize: 13, color: MUTED, fontWeight: '600', marginTop: 2 },
-    omitChip: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 10,
-        backgroundColor: 'rgba(148,163,184,0.15)',
-    },
-    omitLink: { fontSize: 12, fontWeight: '800', color: MUTED },
     stepsRow: {
         flexDirection: 'row',
         alignItems: 'center',

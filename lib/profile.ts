@@ -212,10 +212,11 @@ export async function deleteAccount(): Promise<{ error: string | null }> {
     }
 
     if (rpcError) {
-        const { error: profileDeleteError } = await supabase.from('perfiles').delete().eq('id', userId);
-        if (profileDeleteError) {
-            return { error: rpcError };
-        }
+        // Sin el RPC no se borra auth.users: el email seguiría “ya registrado”.
+        // Limpiamos perfil localmente si se puede, pero reportamos el fallo.
+        await supabase.from('perfiles').delete().eq('id', userId);
+        await supabase.auth.signOut({ scope: 'local' });
+        return { error: rpcError };
     }
 
     await supabase.auth.signOut({ scope: 'local' });

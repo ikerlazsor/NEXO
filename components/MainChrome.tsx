@@ -1,24 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
-import { Dimensions, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-    Easing,
-    runOnJS,
-    useAnimatedStyle,
-    useSharedValue,
-    withTiming,
-} from 'react-native-reanimated';
+import { usePathname, useRouter } from 'expo-router';
+import { useCallback, useState, type ReactNode } from 'react';
+import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LangPicker } from './LangPicker';
+import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
 import { getAuthUser } from '../lib/auth';
 import { getUnreadChatCount, peekChatUnreadMap, subscribeChatUnread } from '../lib/chatUnread';
+import { hapticLight, hapticMedium, hapticSelection } from '../lib/haptics';
 import { useT } from '../lib/i18n';
-import { consumeMainTabEnterDir, peekMainTabEnterDir, setMainTabEnterDir } from '../lib/mainTabNav';
-import { getProfileNotificationCount, peekProfileNotificationCount } from '../lib/notifications';
+import {
+    getProfileNotificationCount,
+    peekProfileNotificationCount,
+    subscribeProfileNotifications,
+} from '../lib/notifications';
 import { scheduleHomePrefetch } from '../lib/prefetchHome';
 import { emitFeedHomeRetap } from '../lib/feedReload';
 import { cacheGetStale, cacheIsFresh, cacheSet } from '../lib/ttlCache';
@@ -33,23 +31,10 @@ const INK = '#0F2A4A';
 const BG_TOP = '#DCEBFF';
 const BG_BOTTOM = '#F2F7FF';
 
-const SLIDE_MS = 220;
-const SLIDE_EASING = Easing.out(Easing.cubic);
-
-function initialTranslateX(width: number): number {
-    const dir = peekMainTabEnterDir();
-    if (dir === 1) return width;
-    if (dir === -1) return -width;
-    return 0;
-}
-
 export type MainTab = 'feed' | 'chats' | 'my-plans' | 'search';
 
-/** Orden de la barra inferior (sin el +). */
-const SWIPE_TABS: MainTab[] = ['chats', 'my-plans', 'feed', 'search'];
-
 type Props = {
-    active: MainTab;
+    active?: MainTab;
     children: ReactNode;
 };
 
@@ -60,46 +45,24 @@ function tabPath(tab: MainTab): '/' | '/chats' | '/my-plans' | '/search-profiles
     return '/search-profiles';
 }
 
-export function MainChrome({ active, children }: Props) {
+export function activeTabFromPathname(pathname: string): MainTab {
+    if (pathname.includes('chats')) return 'chats';
+    if (pathname.includes('my-plans')) return 'my-plans';
+    if (pathname.includes('search-profiles')) return 'search';
+    return 'feed';
+}
+
+export function MainChrome({ active: activeProp, children }: Props) {
     const router = useRouter();
-    const isFocused = useIsFocused();
+    const pathname = usePathname();
+    const insets = useSafeAreaInsets();
+    const active = activeProp ?? activeTabFromPathname(pathname);
     const { t, lang, setLang } = useT();
     const [userId, setUserId] = useState<string | null>(null);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
     const [notifCount, setNotifCount] = useState(0);
     const [chatUnreadCount, setChatUnreadCount] = useState(0);
     const [openRatingsCount, setOpenRatingsCount] = useState(0);
-
-    const screenWidth = Dimensions.get('window').width;
-    const translateX = useSharedValue(initialTranslateX(screenWidth));
-    const animating = useSharedValue(false);
-    const canGoPrev = useSharedValue(false);
-    const canGoNext = useSharedValue(false);
-    const widthSV = useSharedValue(screenWidth);
-
-    useEffect(() => {
-        const idx = SWIPE_TABS.indexOf(active);
-        canGoPrev.value = idx > 0;
-        canGoNext.value = idx >= 0 && idx < SWIPE_TABS.length - 1;
-        widthSV.value = screenWidth;
-    }, [active, screenWidth, canGoPrev, canGoNext, widthSV]);
-
-    // Antes del paint: la pantalla nueva entra desde el lado (evita flash en el centro).
-    useLayoutEffect(() => {
-        if (!isFocused) return;
-        const dir = consumeMainTabEnterDir();
-        animating.value = false;
-        if (dir === 1) {
-            // Ya puede estar en screenWidth por el valor inicial; forzar y animar a 0.
-            translateX.value = screenWidth;
-            translateX.value = withTiming(0, { duration: SLIDE_MS, easing: SLIDE_EASING });
-        } else if (dir === -1) {
-            translateX.value = -screenWidth;
-            translateX.value = withTiming(0, { duration: SLIDE_MS, easing: SLIDE_EASING });
-        } else {
-            translateX.value = 0;
-        }
-    }, [isFocused, screenWidth, translateX, animating]);
 
     const hydrateChromeFromCache = useCallback((uid: string) => {
         const cachedAvatar = cacheGetStale<string | null>(chromeAvatarKey(uid));
@@ -147,125 +110,49 @@ export function MainChrome({ active, children }: Props) {
                     if (user) void getUnreadChatCount(user.id, { force: true }).then(setChatUnreadCount);
                 });
             });
-            return unsub;
+            const unsubNotif = subscribeProfileNotifications(() => {
+                void refreshChrome({ force: true });
+            });
+            return () => {
+                unsub();
+                unsubNotif();
+            };
         }, [refreshChrome]),
-    );
-
-    const navigateTo = useCallback(
-        (tab: MainTab) => {
-            router.replace(tabPath(tab));
-        },
-        [router],
-    );
-
-    const commitTabChange = useCallback(
-        (tab: MainTab, dir: -1 | 1) => {
-            setMainTabEnterDir(dir);
-            navigateTo(tab);
-        },
-        [navigateTo],
-    );
-
-    const goAdjacent = useCallback(
-        (direction: -1 | 1, withEnterAnim = true) => {
-            const idx = SWIPE_TABS.indexOf(active);
-            if (idx < 0) return;
-            const next = SWIPE_TABS[idx + direction];
-            if (!next) return;
-            if (withEnterAnim) {
-                commitTabChange(next, direction);
-            } else {
-                // La salida ya empujó la pantalla fuera: el destino aparece centrado (sin segundo tirón).
-                setMainTabEnterDir(0);
-                navigateTo(next);
-            }
-        },
-        [active, commitTabChange, navigateTo],
     );
 
     const go = useCallback(
         (tab: MainTab) => {
             if (tab === 'feed' && active === 'feed') {
+                hapticSelection();
                 emitFeedHomeRetap();
                 return;
             }
-            if (tab === active || animating.value) return;
-            // Tap en la barra: cambio instantáneo, sin animación de deslizamiento.
-            setMainTabEnterDir(0);
-            translateX.value = 0;
-            navigateTo(tab);
+            if (tab === active) {
+                hapticSelection();
+                return;
+            }
+            hapticLight();
+            router.navigate(tabPath(tab));
         },
-        [active, animating, navigateTo, translateX],
+        [active, router],
     );
-
-    const swipeGesture = useMemo(
-        () =>
-            Gesture.Pan()
-                // Prioriza scroll vertical: solo activa el cambio de pestaña con gesto claramente horizontal.
-                .activeOffsetX([-48, 48])
-                .failOffsetY([-8, 8])
-                .maxPointers(1)
-                .onUpdate((e) => {
-                    'worklet';
-                    if (animating.value) return;
-                    let x = e.translationX;
-                    if (x < 0 && !canGoNext.value) x *= 0.18;
-                    if (x > 0 && !canGoPrev.value) x *= 0.18;
-                    translateX.value = x;
-                })
-                .onEnd((e) => {
-                    'worklet';
-                    if (animating.value) return;
-                    const dist = e.translationX;
-                    const vel = e.velocityX;
-                    const goNext = (dist < -72 || vel < -750) && canGoNext.value;
-                    const goPrev = (dist > 72 || vel > 750) && canGoPrev.value;
-
-                    if (goNext) {
-                        // Completar la salida sin resetear a 0 (el reset a mitad causaba el tirón).
-                        animating.value = true;
-                        translateX.value = withTiming(
-                            -widthSV.value,
-                            { duration: SLIDE_MS, easing: SLIDE_EASING },
-                            (finished) => {
-                                if (finished) runOnJS(goAdjacent)(1, false);
-                            },
-                        );
-                    } else if (goPrev) {
-                        animating.value = true;
-                        translateX.value = withTiming(
-                            widthSV.value,
-                            { duration: SLIDE_MS, easing: SLIDE_EASING },
-                            (finished) => {
-                                if (finished) runOnJS(goAdjacent)(-1, false);
-                            },
-                        );
-                    } else {
-                        translateX.value = withTiming(0, {
-                            duration: 200,
-                            easing: SLIDE_EASING,
-                        });
-                    }
-                }),
-        [animating, canGoNext, canGoPrev, goAdjacent, translateX, widthSV],
-    );
-
-    const bodyStyle = useAnimatedStyle(() => ({
-        transform: [{ translateX: translateX.value }],
-    }));
 
     return (
         <View style={styles.container}>
             <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
 
-            <View style={styles.header}>
+            <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) + 12 }]}>
                 <View style={styles.headerSpacer} />
                 <View style={styles.headerRight}>
                     <LangPicker lang={lang} onChange={setLang} compact />
                     <TouchableOpacity
                         style={styles.profileBtn}
-                        onPress={() => router.push('/profile')}
+                        onPress={() => {
+                            hapticLight();
+                            router.push('/profile');
+                        }}
                         accessibilityLabel={t('profile.user')}
+                        activeOpacity={0.88}
                     >
                         <View style={styles.profileAvatarWrap}>
                             <ProfileAvatar uri={avatarUrl} name="U" size={44} recyclingKey={userId ?? undefined} />
@@ -281,17 +168,24 @@ export function MainChrome({ active, children }: Props) {
                 </View>
             </View>
 
-            <View style={styles.bodyClip}>
-                <GestureDetector gesture={swipeGesture}>
-                    <Animated.View style={[styles.body, bodyStyle]}>{children}</Animated.View>
-                </GestureDetector>
-            </View>
+            <View style={styles.body}>{children}</View>
 
-            <View style={styles.floatingBar}>
-                <TouchableOpacity
+            <View
+                style={[
+                    styles.floatingBar,
+                    {
+                        bottom:
+                            Platform.OS === 'android'
+                                ? Math.max(insets.bottom, 28) + 12
+                                : Math.max(insets.bottom, 16) + 14,
+                    },
+                ]}
+            >
+                <PressScale
                     style={[styles.floatingBtn, active === 'chats' && styles.floatingBtnActive]}
                     onPress={() => go('chats')}
-                    activeOpacity={0.9}
+                    accessibilityLabel={t('chats.title')}
+                    haptic={false}
                 >
                     <Ionicons name="chatbubbles" size={22} color="#fff" />
                     {chatUnreadCount > 0 && (
@@ -301,12 +195,13 @@ export function MainChrome({ active, children }: Props) {
                             </Text>
                         </View>
                     )}
-                </TouchableOpacity>
+                </PressScale>
 
-                <TouchableOpacity
+                <PressScale
                     style={[styles.floatingBtn, active === 'my-plans' && styles.floatingBtnActive]}
                     onPress={() => go('my-plans')}
-                    activeOpacity={0.9}
+                    accessibilityLabel={t('myplans.title')}
+                    haptic={false}
                 >
                     <Ionicons name="albums" size={22} color="#fff" />
                     {openRatingsCount > 0 && (
@@ -316,33 +211,40 @@ export function MainChrome({ active, children }: Props) {
                             </Text>
                         </View>
                     )}
-                </TouchableOpacity>
+                </PressScale>
 
-                <TouchableOpacity
+                <PressScale
                     style={[styles.floatingBtn, active === 'feed' && styles.floatingBtnActive]}
                     onPress={() => go('feed')}
-                    activeOpacity={0.9}
+                    accessibilityLabel={t('feed.greeting')}
+                    haptic={false}
                 >
                     <Ionicons name="home" size={22} color="#fff" />
-                </TouchableOpacity>
+                </PressScale>
 
-                <TouchableOpacity
+                <PressScale
                     style={[styles.floatingBtn, active === 'search' && styles.floatingBtnActive]}
                     onPress={() => go('search')}
-                    activeOpacity={0.9}
+                    accessibilityLabel={t('feed.searchProfiles')}
+                    haptic={false}
                 >
                     <Ionicons name="search" size={22} color="#fff" />
-                </TouchableOpacity>
+                </PressScale>
 
-                <TouchableOpacity
+                <PressScale
                     style={styles.floatingBtn}
-                    onPress={() => router.push('/create-plan')}
-                    activeOpacity={0.9}
+                    haptic={false}
+                    onPress={() => {
+                        hapticMedium();
+                        router.push('/create-plan');
+                    }}
+                    accessibilityLabel={t('feed.create')}
+                    pressedScale={0.92}
                 >
                     <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.floatingBtnGradient}>
                         <Ionicons name="add" size={26} color="#fff" />
                     </LinearGradient>
-                </TouchableOpacity>
+                </PressScale>
             </View>
         </View>
     );
@@ -354,7 +256,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        paddingTop: Platform.OS === 'ios' ? 60 : 48,
         paddingHorizontal: 24,
         marginBottom: 12,
     },
@@ -377,11 +278,9 @@ const styles = StyleSheet.create({
         borderColor: '#FFF',
     },
     profileNotifText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
-    bodyClip: { flex: 1, overflow: 'hidden' },
     body: { flex: 1 },
     floatingBar: {
         position: 'absolute',
-        bottom: 28,
         left: 20,
         right: 20,
         flexDirection: 'row',

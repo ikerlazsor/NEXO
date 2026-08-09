@@ -10,13 +10,15 @@ interface Props {
 
 export function ProfileAvatar({ uri, name = 'U', size = 100, recyclingKey }: Props) {
     const source = uri || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=E2E8F0&color=475569&size=${size}`;
+    const radius = size / 2;
 
     return (
-        <View style={[styles.wrap, { width: size, height: size, borderRadius: size / 2 }]}>
+        <View style={[styles.wrap, { width: size, height: size, borderRadius: radius }]}>
             <Image
                 source={{ uri: source }}
-                style={{ width: size, height: size, borderRadius: size / 2 }}
+                style={{ width: size, height: size, borderRadius: radius }}
                 contentFit="cover"
+                contentPosition="center"
                 cachePolicy="memory-disk"
                 priority="high"
                 recyclingKey={recyclingKey ?? uri ?? name}
@@ -28,5 +30,11 @@ export function ProfileAvatar({ uri, name = 'U', size = 100, recyclingKey }: Pro
 }
 
 const styles = StyleSheet.create({
-    wrap: { position: 'relative', overflow: 'hidden', backgroundColor: '#E2E8F0' },
+    wrap: {
+        position: 'relative',
+        overflow: 'hidden',
+        backgroundColor: '#E2E8F0',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
 });

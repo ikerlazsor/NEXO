@@ -14,6 +14,7 @@ import {
     LayoutAnimation,
     Linking,
     Modal,
+    Platform,
     Pressable,
     Share,
     StyleSheet,
@@ -22,13 +23,18 @@ import {
     View,
 } from 'react-native';
 import { Alert } from '../lib/nexoAlert';
-import MapView, { Marker } from 'react-native-maps';
+import { Marker } from 'react-native-maps';
+import { NexoMapView } from './NexoMapView';
 import { resolvePlanImageSource, resolvePlanCategories } from '../lib/sports';
 import { canJoinWaitlist, type Membership } from '../lib/participants';
 import { canJoinPlanByGender, isSoloChicasPlan } from '../lib/soloChicas';
+import { allFemaleGenero } from '../lib/profileFields';
 import { kickParticipant } from '../lib/kickParticipant';
+import { hapticMedium, hapticSelection } from '../lib/haptics';
 import { useT } from '../lib/i18n';
+import { buildPlanShareMessage } from '../lib/shareLinks';
 import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../lib/planInvites';
+import { formatSocialJoinedBanner } from '../lib/socialJoinedBanner';
 import { PlanImage } from './PlanImage';
 import { InvitePeopleSheet, type InviteProfile } from './InvitePeopleSheet';
 
@@ -118,14 +124,17 @@ interface PlanCardProps {
     isSaved: boolean;
     friendIds?: Set<string>;
     coincidedIds?: Set<string>;
+    /** Solo el owner: puede eliminar cualquier plan del feed. */
+    isOwner?: boolean;
     onJoin: (id: string) => void;
+    joining?: boolean;
     onLeave: (id: string) => void;
     onDelete: (id: string) => void;
     onEdit: (id: string) => void;
     onToggleSave: (id: string) => void;
-    onReport?: (id: string) => void;
     onOpenDetail?: (id: string) => void;
     onParticipantsChanged?: () => void;
+    distanceLabel?: string;
     router: any;
 }
 
@@ -138,17 +147,19 @@ function PlanCardInner({
     isSaved,
     friendIds,
     coincidedIds,
+    isOwner,
     onJoin,
+    joining = false,
     onLeave,
     onDelete,
     onEdit,
     onToggleSave,
-    onReport,
     onOpenDetail,
     onParticipantsChanged,
+    distanceLabel,
     router,
 }: PlanCardProps) {
-    const { t } = useT();
+    const { t, lang } = useT();
     const [expanded, setExpanded] = useState(false);
     const [showRoster, setShowRoster] = useState(false);
     const [showInviteSheet, setShowInviteSheet] = useState(false);
@@ -174,27 +185,39 @@ function PlanCardInner({
     const isFull = item.joinedCount >= item.maximo_participantes;
     const requiresApproval = !!item.requiere_aprobacion;
     const participants = item.participantsList || [];
-    const friendsInPlan = friendIds
-        ? participants.filter((p: { id?: string }) => p.id && friendIds.has(p.id)).length
-        : 0;
-    // Conocidos = coincidencia previa real; no se solapa con amigos (un amigo no cuenta aquí).
-    const coincidedInPlan = coincidedIds
-        ? participants.filter(
-            (p: { id?: string }) =>
-                p.id &&
-                p.id !== currentUserId &&
-                coincidedIds.has(p.id) &&
-                !(friendIds && friendIds.has(p.id)),
-        ).length
-        : 0;
+    const eventDate = item.fecha_evento ? new Date(item.fecha_evento) : null;
+    const isToday = eventDate ? isSameCalendarDay(eventDate, new Date()) : false;
+    const isPast = eventDate ? eventDate.getTime() < Date.now() : false;
+    const friendParticipants = friendIds
+        ? participants.filter((p: { id?: string }) => p.id && friendIds.has(p.id))
+        : [];
+    const friendsInPlan = friendParticipants.length;
+    // Conocidos = coincidencia previa; no en planes ya pasados ni solapados con amigos.
+    const coincidedParticipants =
+        !isPast && coincidedIds
+            ? participants.filter(
+                (p: { id?: string }) =>
+                    p.id &&
+                    p.id !== currentUserId &&
+                    coincidedIds.has(p.id) &&
+                    !(friendIds && friendIds.has(p.id)),
+            )
+            : [];
+    const coincidedInPlan = coincidedParticipants.length;
+    const friendsAllFemale = allFemaleGenero(friendParticipants);
+    const coincidedAllFemale = allFemaleGenero(coincidedParticipants);
+    const socialJoinedText = formatSocialJoinedBanner({
+        friendsCount: friendsInPlan,
+        coincidedCount: coincidedInPlan,
+        friendsAllFemale,
+        coincidedAllFemale,
+        t,
+    });
 
     const { main: mainCategory, sub: subCategory } = resolvePlanCategories(item);
     const mainCategoryLabel = mainCategory ? t(`cat.main.${mainCategory}`) : '';
     const subCategoryLabel = subCategory ? t(`cat.sub.${subCategory}`) : '';
 
-    const eventDate = item.fecha_evento ? new Date(item.fecha_evento) : null;
-    const isToday = eventDate ? isSameCalendarDay(eventDate, new Date()) : false;
-    const isPast = eventDate ? eventDate.getTime() < Date.now() : false;
     const isSoloChicas = isSoloChicasPlan(item);
     const isFriendsOnly = !!item.solo_amigos && !item.modo_privado;
     const isPrivate = !!item.modo_privado;
@@ -216,12 +239,25 @@ function PlanCardInner({
     const pressIn = () => Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
     const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
 
-    const buildShareMessage = () => {
-        const when = eventDate ? `${dateString}${timeString ? ` a las ${timeString}` : ''}` : '';
-        const where = item.nombre_ubicacion ? `\n📍 ${item.nombre_ubicacion}` : '';
-        const date = when ? `\n🗓️ ${when}` : '';
-        return `¡Únete a "${item.titulo}" en Nexo! 🎉${where}${date}\n\nÁbrelo en la app Nexo para apuntarte.`;
-    };
+    const creator = participants.find((p: { isCreator?: boolean }) => p.isCreator) || participants[0];
+    // Una sola etiqueta especial en la card (menos ruido visual).
+    const specialTag: 'private' | 'friends' | 'soloChicas' | null = isPrivate
+        ? 'private'
+        : isFriendsOnly
+          ? 'friends'
+          : isSoloChicas
+            ? 'soloChicas'
+            : null;
+
+    const buildShareMessage = () =>
+        buildPlanShareMessage({
+            title: item.titulo,
+            location: item.nombre_ubicacion,
+            when: eventDate ? `${dateString}${timeString ? ` · ${timeString}` : ''}` : null,
+            planId: item.id,
+            hint: t('planDetail.shareHint'),
+            lang,
+        });
 
     const openNativeShare = async () => {
         try {
@@ -324,7 +360,10 @@ function PlanCardInner({
         }
         if (membership === 'requested') {
             return (
-                <TouchableOpacity style={styles.requestedButton} onPress={() => onLeave(item.id)}>
+                <TouchableOpacity style={styles.requestedButton} onPress={() => {
+                    hapticSelection();
+                    onLeave(item.id);
+                }}>
                     <Ionicons name="time" size={18} color="#B45309" />
                     <Text style={styles.requestedButtonText}>{t('card.requested')}</Text>
                 </TouchableOpacity>
@@ -332,15 +371,23 @@ function PlanCardInner({
         }
         if (membership === 'joined') {
             return (
-                <TouchableOpacity style={styles.joinedButton} onPress={() => onLeave(item.id)}>
+                <TouchableOpacity style={styles.joinedButton} onPress={() => {
+                    hapticSelection();
+                    onLeave(item.id);
+                }}>
                     <Ionicons name="checkmark-circle" size={18} color={SUCCESS} />
-                    <Text style={styles.joinedButtonText}>{t('card.joined')}</Text>
+                    <Text style={styles.joinedButtonText}>
+                        {t(userGenero === 'femenino' ? 'card.joinedF' : 'card.joined')}
+                    </Text>
                 </TouchableOpacity>
             );
         }
         if (membership === 'waitlist') {
             return (
-                <TouchableOpacity style={styles.waitlistButton} onPress={() => onLeave(item.id)}>
+                <TouchableOpacity style={styles.waitlistButton} onPress={() => {
+                    hapticSelection();
+                    onLeave(item.id);
+                }}>
                     <Ionicons name="hourglass" size={18} color="#7C3AED" />
                     <Text style={styles.waitlistButtonText}>{t('card.waitlist')}</Text>
                 </TouchableOpacity>
@@ -364,14 +411,32 @@ function PlanCardInner({
                 );
             }
             return (
-                <TouchableOpacity style={styles.waitlistJoinButton} onPress={() => onJoin(item.id)} activeOpacity={0.85}>
+                <TouchableOpacity
+                    style={[styles.waitlistJoinButton, joining && { opacity: 0.55 }]}
+                    onPress={() => {
+                        if (joining) return;
+                        hapticMedium();
+                        onJoin(item.id);
+                    }}
+                    disabled={joining}
+                    activeOpacity={0.85}
+                >
                     <Ionicons name="list" size={18} color="#FFF" />
                     <Text style={styles.waitlistJoinText}>{t('card.joinWaitlist')}</Text>
                 </TouchableOpacity>
             );
         }
         return (
-            <TouchableOpacity style={styles.joinButton} onPress={() => onJoin(item.id)} activeOpacity={0.85}>
+            <TouchableOpacity
+                style={[styles.joinButton, joining && { opacity: 0.55 }]}
+                onPress={() => {
+                    if (joining) return;
+                    hapticMedium();
+                    onJoin(item.id);
+                }}
+                disabled={joining}
+                activeOpacity={0.85}
+            >
                 <Text style={styles.joinButtonText}>{requiresApproval ? t('card.request') : t('card.join')}</Text>
                 <Ionicons name={requiresApproval ? 'shield-checkmark' : 'arrow-forward'} size={18} color="#FFF" />
             </TouchableOpacity>
@@ -483,22 +548,24 @@ function PlanCardInner({
                                 ) : null}
                                 {subCategoryLabel ? (
                                     <View style={styles.subCategoryTag}>
-                                        <Text style={styles.subCategoryText}>{subCategoryLabel}</Text>
+                                        <Text style={styles.subCategoryText} numberOfLines={1}>
+                                            {subCategoryLabel}
+                                        </Text>
                                     </View>
                                 ) : null}
-                                {isSoloChicas ? (
+                                {specialTag === 'soloChicas' ? (
                                     <View style={styles.soloChicasTag}>
                                         <Ionicons name="female" size={11} color="#FFF" />
                                         <Text style={styles.soloChicasTagText}>{t('createplan.soloChicasTitle')}</Text>
                                     </View>
                                 ) : null}
-                                {isFriendsOnly ? (
+                                {specialTag === 'friends' ? (
                                     <View style={styles.friendsOnlyTag}>
                                         <Ionicons name="people" size={11} color="#FFF" />
                                         <Text style={styles.friendsOnlyTagText}>{t('createplan.friendsOnlyTitle')}</Text>
                                     </View>
                                 ) : null}
-                                {isPrivate ? (
+                                {specialTag === 'private' ? (
                                     <View style={styles.privateTag}>
                                         <Ionicons name="lock-closed" size={11} color="#FFF" />
                                         <Text style={styles.privateTagText}>{t('card.privateTag')}</Text>
@@ -506,21 +573,11 @@ function PlanCardInner({
                                 ) : null}
                             </View>
                             <View style={styles.topRightGroup}>
-                                {!isCreator && onReport ? (
-                                    <TouchableOpacity
-                                        style={styles.circleBtnSmall}
-                                        onPress={() => onReport(item.id)}
-                                        hitSlop={8}
-                                        activeOpacity={0.85}
-                                    >
-                                        <Ionicons name="flag" size={16} color="#FECACA" />
-                                    </TouchableOpacity>
-                                ) : null}
                                 <TouchableOpacity style={styles.circleBtn} onPress={handleShare} hitSlop={8}>
-                                    <Ionicons name="arrow-redo" size={19} color="#FFF" />
+                                    <Ionicons name="arrow-redo" size={16} color="#FFF" />
                                 </TouchableOpacity>
                                 <TouchableOpacity style={styles.circleBtn} onPress={() => onToggleSave(item.id)} hitSlop={8}>
-                                    <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={20} color={isSaved ? DANGER : '#FFF'} />
+                                    <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={17} color={isSaved ? DANGER : '#FFF'} />
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -548,37 +605,26 @@ function PlanCardInner({
                             }}
                         />
 
-                        {(friendsInPlan > 0 || coincidedInPlan > 0 || isToday) && (
-                            <View style={styles.bannerStack}>
-                                {friendsInPlan > 0 && (
-                                    <View style={[styles.friendsBanner, isPrivate && styles.friendsBannerOnPrivate, isFriendsOnly && styles.friendsBannerOnFriends]}>
-                                        <Ionicons name="people" size={16} color={isFriendsOnly ? '#15803D' : PRIMARY_DARK} />
-                                        <Text style={[styles.friendsBannerText, isFriendsOnly && styles.friendsBannerTextFriends]}>
-                                            {t(friendsInPlan === 1 ? 'card.friendsJoinedOne' : 'card.friendsJoinedMany', { n: friendsInPlan })}
-                                        </Text>
-                                    </View>
-                                )}
+                        {creator?.nombre ? (
+                            <TouchableOpacity
+                                style={styles.hostRow}
+                                activeOpacity={0.85}
+                                onPress={() => creator.id && router.push(`/user-profile/${creator.id}`)}
+                            >
+                                <Text style={styles.hostText} numberOfLines={1}>
+                                    {t('card.hostedBy', { name: creator.nombre })}
+                                </Text>
+                            </TouchableOpacity>
+                        ) : null}
 
-                                {coincidedInPlan > 0 && (
-                                    <View style={[styles.coincidedBanner, isPrivate && styles.coincidedBannerOnPrivate]}>
-                                        <Ionicons name="sparkles" size={14} color="#7C3AED" />
-                                        <Text style={styles.coincidedBannerText}>
-                                            {t(
-                                                coincidedInPlan === 1 ? 'card.coincidedOne' : 'card.coincidedMany',
-                                                { n: coincidedInPlan },
-                                            )}
-                                        </Text>
-                                    </View>
-                                )}
-
-                                {isToday && (
-                                    <View style={styles.todayBanner}>
-                                        <Ionicons name="time" size={16} color="#B45309" />
-                                        <Text style={styles.todayBannerText}>{t('card.today')}</Text>
-                                    </View>
-                                )}
+                        {socialJoinedText ? (
+                            <View style={[styles.friendsBanner, isPrivate && styles.friendsBannerOnPrivate, isFriendsOnly && styles.friendsBannerOnFriends]}>
+                                <Ionicons name="people" size={16} color={isFriendsOnly ? '#15803D' : PRIMARY_DARK} />
+                                <Text style={[styles.friendsBannerText, isFriendsOnly && styles.friendsBannerTextFriends]}>
+                                    {socialJoinedText}
+                                </Text>
                             </View>
-                        )}
+                        ) : null}
 
                         <View style={styles.metaRow}>
                             <View style={styles.metaItem}>
@@ -606,7 +652,11 @@ function PlanCardInner({
                                     styles.metaText,
                                     isFriendsOnly && styles.metaTextFriends,
                                     isPrivate && styles.metaTextPrivate,
-                                ]} numberOfLines={1}>{item.nombre_ubicacion || t('card.location')}</Text>
+                                ]} numberOfLines={1}>
+                                    {distanceLabel
+                                        ? `${distanceLabel}${item.nombre_ubicacion ? ` · ${item.nombre_ubicacion}` : ''}`
+                                        : (item.nombre_ubicacion || t('card.location'))}
+                                </Text>
                             </View>
                         </View>
 
@@ -615,14 +665,30 @@ function PlanCardInner({
                                 <Text style={[styles.descLabel, isPrivate && styles.descLabelPrivate]}>{t('card.aboutPlan')}</Text>
                                 <Text style={[styles.descriptionText, isPrivate && styles.descriptionTextPrivate]}>{item.descripcion || t('card.noDescription')}</Text>
                                 <View style={styles.miniMapContainer}>
-                                    <MapView
+                                    <NexoMapView
+                                        key={`mini-${item.id}-${item.latitud}-${item.longitud}`}
                                         style={styles.miniMap}
-                                        scrollEnabled
-                                        zoomEnabled
-                                        initialRegion={{ latitude: item.latitud || 40.4167, longitude: item.longitud || -3.7037, latitudeDelta: 0.005, longitudeDelta: 0.005 }}
+                                        scrollEnabled={false}
+                                        zoomEnabled={false}
+                                        pitchEnabled={false}
+                                        rotateEnabled={false}
+                                        liteMode={Platform.OS === 'android'}
+                                        loadingEnabled
+                                        moveOnMarkerPress={false}
+                                        initialRegion={{
+                                            latitude: item.latitud || 40.4167,
+                                            longitude: item.longitud || -3.7037,
+                                            latitudeDelta: 0.005,
+                                            longitudeDelta: 0.005,
+                                        }}
                                     >
-                                        <Marker coordinate={{ latitude: item.latitud || 40.4167, longitude: item.longitud || -3.7037 }} />
-                                    </MapView>
+                                        <Marker
+                                            coordinate={{
+                                                latitude: item.latitud || 40.4167,
+                                                longitude: item.longitud || -3.7037,
+                                            }}
+                                        />
+                                    </NexoMapView>
                                 </View>
                             </View>
                         )}
@@ -634,7 +700,19 @@ function PlanCardInner({
                             <Ionicons name={onOpenDetail ? 'open-outline' : expanded ? 'chevron-up' : 'chevron-down'} size={16} color={isPrivate ? '#334155' : '#94A3B8'} />
                         </TouchableOpacity>
 
-                        <View style={styles.cardFooter}>{renderFooter()}</View>
+                        <View style={styles.cardFooter}>
+                            {renderFooter()}
+                            {isOwner && !isCreator ? (
+                                <TouchableOpacity
+                                    style={styles.ownerDeleteBtn}
+                                    onPress={() => onDelete(item.id)}
+                                    activeOpacity={0.85}
+                                >
+                                    <Ionicons name="trash" size={16} color="#FFF" />
+                                    <Text style={styles.ownerDeleteBtnText}>{t('admin.deletePlanConfirm')}</Text>
+                                </TouchableOpacity>
+                            ) : null}
+                        </View>
                     </View>
                     </View>
                 </View>
@@ -667,7 +745,9 @@ function PlanCardInner({
                                     <View style={{ flex: 1 }}>
                                         <Text style={styles.rosterName}>{p.nombre || t('profile.user')}</Text>
                                         {p.isCreator && (
-                                            <Text style={styles.rosterCreatorLabel}>{t('chat.host')}</Text>
+                                            <Text style={styles.rosterCreatorLabel}>
+                                                {t(p.genero === 'femenino' ? 'chat.hostF' : 'chat.host')}
+                                            </Text>
                                         )}
                                     </View>
                                     <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
@@ -676,30 +756,36 @@ function PlanCardInner({
                                     <TouchableOpacity
                                         style={styles.rosterKickBtn}
                                         onPress={() => {
-                                            Alert.alert(
-                                                t('planDetail.kickTitle'),
-                                                t('planDetail.kickMsg', { name: p.nombre || t('profile.user') }),
-                                                [
-                                                    { text: t('common.cancel'), style: 'cancel' },
-                                                    {
-                                                        text: t('planDetail.kickConfirm'),
-                                                        style: 'destructive',
-                                                        onPress: async () => {
-                                                            const { error } = await kickParticipant(
-                                                                item.id,
-                                                                p.id,
-                                                                currentUserId,
-                                                            );
-                                                            if (error) Alert.alert(t('feed.error'), error);
-                                                            else onParticipantsChanged?.();
-                                                            setShowRoster(false);
+                                            const targetId = p.id as string;
+                                            const targetName = p.nombre || t('profile.user');
+                                            setShowRoster(false);
+                                            setTimeout(() => {
+                                                Alert.alert(
+                                                    t('planDetail.kickTitle'),
+                                                    t('planDetail.kickMsg', { name: targetName }),
+                                                    [
+                                                        { text: t('common.cancel'), style: 'cancel' },
+                                                        {
+                                                            text: t('planDetail.kickConfirm'),
+                                                            style: 'destructive',
+                                                            onPress: () => {
+                                                                void (async () => {
+                                                                    const { error } = await kickParticipant(
+                                                                        item.id,
+                                                                        targetId,
+                                                                        currentUserId,
+                                                                    );
+                                                                    if (error) Alert.alert(t('feed.error'), error);
+                                                                    else onParticipantsChanged?.();
+                                                                })();
+                                                            },
                                                         },
-                                                    },
-                                                ],
-                                            );
+                                                    ],
+                                                );
+                                            }, 250);
                                         }}
                                     >
-                                        <Ionicons name="person-remove" size={20} color={DANGER} />
+                                        <Ionicons name="ban-outline" size={20} color={DANGER} />
                                     </TouchableOpacity>
                                 )}
                             </View>
@@ -800,7 +886,7 @@ const styles = StyleSheet.create({
     fullVeil: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(185,28,28,0.28)' },
     topRow: { position: 'absolute', top: 12, left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', zIndex: 4 },
     topLeftTags: { flexDirection: 'column', alignItems: 'flex-start', gap: 5, flexShrink: 1, maxWidth: '62%' },
-    topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+    topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0 },
     mainCategoryTag: {
         backgroundColor: 'rgba(255,255,255,0.95)',
         paddingHorizontal: 10,
@@ -831,8 +917,7 @@ const styles = StyleSheet.create({
         borderRadius: 10,
     },
     soloChicasTagText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
-    circleBtn: { backgroundColor: 'rgba(15,42,74,0.4)', width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center' },
-    circleBtnSmall: { backgroundColor: 'rgba(127,29,29,0.75)', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+    circleBtn: { backgroundColor: 'rgba(15,42,74,0.4)', width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
     fullBadgeCenter: { position: 'absolute', top: 60, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: DANGER_DARK, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, transform: [{ rotate: '-4deg' }], elevation: 4, borderWidth: 2, borderColor: '#FFF' },
     fullBadgeCenterText: { color: '#FFF', fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
     imageBottomRow: { position: 'absolute', left: 16, right: 16, bottom: 14, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
@@ -865,7 +950,17 @@ const styles = StyleSheet.create({
     fieldModalSub: { fontSize: 13, fontWeight: '600', color: '#64748B' },
     fieldModalBody: { flex: 1, padding: 18 },
     fieldModalHint: { textAlign: 'center', color: '#64748B', fontWeight: '600', fontSize: 13, marginTop: 14 },
-    metaRow: { gap: 8 },
+    hostRow: { gap: 6, marginTop: 2 },
+    hostText: { fontSize: 13, fontWeight: '700', color: '#334155' },
+    hostTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    hostTag: {
+        backgroundColor: '#EFF6FF',
+        borderRadius: 999,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+    },
+    hostTagText: { fontSize: 11, fontWeight: '700', color: PRIMARY_DARK, maxWidth: 120 },
+    metaRow: { gap: 8, marginTop: 6 },
     metaItem: { flexDirection: 'row', alignItems: 'center' },
     metaText: { marginLeft: 7, fontSize: 14, color: '#475569', fontWeight: '600', flexShrink: 1 },
 
@@ -877,7 +972,17 @@ const styles = StyleSheet.create({
     expandHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 12 },
     expandHintText: { fontSize: 12, color: '#94A3B8', fontWeight: '600' },
 
-    cardFooter: { marginTop: 12 },
+    cardFooter: { marginTop: 12, gap: 8 },
+    ownerDeleteBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 12,
+        borderRadius: 16,
+        backgroundColor: DANGER,
+    },
+    ownerDeleteBtnText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
     joinButton: { backgroundColor: PRIMARY_DARK, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16 },
     joinButtonText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
     joinedButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: SUCCESS + '18', borderWidth: 1, borderColor: SUCCESS },
@@ -917,6 +1022,8 @@ const styles = StyleSheet.create({
         paddingHorizontal: 12,
         borderWidth: 1,
         borderColor: '#BFDBFE',
+        marginTop: 10,
+        marginBottom: 10,
     },
     friendsBannerText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 13, flex: 1 },
     coincidedBanner: {

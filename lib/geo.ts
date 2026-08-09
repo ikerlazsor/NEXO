@@ -12,6 +12,36 @@ export function isLocationInSpain(lat: number, lng: number): boolean {
     return peninsula || canarias;
 }
 
+/** Islas europeas al sur de lat 36 (el bbox principal las excluye a propósito). */
+function isSouthernEuropeanException(lat: number, lng: number): boolean {
+    const malta = lat >= 35.7 && lat <= 36.15 && lng >= 14.1 && lng <= 14.65;
+    const crete = lat >= 34.8 && lat <= 35.75 && lng >= 23.4 && lng <= 26.4;
+    const cyprus = lat >= 34.5 && lat <= 35.75 && lng >= 32.2 && lng <= 34.65;
+    const southAegean =
+        lat >= 35.3 && lat <= 36.0 && lng >= 26.3 && lng <= 28.3;
+    return malta || crete || cyprus || southAegean;
+}
+
+/**
+ * Europa (aprox.) sin el rectángulo que se comía el Magreb.
+ * Caja principal desde lat 36 + islas atlánticas + excepciones mediterráneas.
+ */
+export function isLocationInEurope(lat: number, lng: number): boolean {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+
+    const mainland =
+        lat >= 36.0 && lat <= 71.5 && lng >= -25 && lng <= 45;
+    const canarias =
+        lat >= 27.5 && lat <= 29.5 && lng >= -18.3 && lng <= -13.2;
+    const azores =
+        lat >= 36.9 && lat <= 39.8 && lng >= -31.3 && lng <= -24.9;
+    const madeira =
+        lat >= 32.4 && lat <= 33.2 && lng >= -17.3 && lng <= -16.2;
+
+    if (mainland || canarias || azores || madeira) return true;
+    return isSouthernEuropeanException(lat, lng);
+}
+
 /** Distancia en km entre dos coordenadas (haversine). */
 export function distanceKm(
     lat1: number,

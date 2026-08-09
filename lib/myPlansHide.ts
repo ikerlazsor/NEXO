@@ -15,3 +15,14 @@ export async function isPlanHiddenFromMyList(userId: string, planId: string): Pr
     const v = await AsyncStorage.getItem(hideKey(userId, planId));
     return !!v;
 }
+
+/** Lote: evita N getItem al filtrar planes pasados. */
+export async function getHiddenPlanIdSet(userId: string, planIds: string[]): Promise<Set<string>> {
+    if (planIds.length === 0) return new Set();
+    const pairs = await AsyncStorage.multiGet(planIds.map((id) => hideKey(userId, id)));
+    const hidden = new Set<string>();
+    for (let i = 0; i < planIds.length; i++) {
+        if (pairs[i]?.[1]) hidden.add(planIds[i]);
+    }
+    return hidden;
+}

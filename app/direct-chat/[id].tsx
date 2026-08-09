@@ -13,9 +13,9 @@ import { useCallback,
     useMemo,
     useRef,
     useState } from 'react';
+import { FlashList } from '@shopify/flash-list';
 import {
     ActivityIndicator,
-    FlatList,
     Image,
     KeyboardAvoidingView,
     Modal,
@@ -28,11 +28,23 @@ import {
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
+import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
 import { getAuthUser } from '../../lib/auth';
 import { uploadChatFile } from '../../lib/chatUpload';
 import { markDirectChatRead } from '../../lib/chatUnread';
 import { hideDirectChat } from '../../lib/directChat';
+import { setActiveConversation } from '../../lib/activeConversation';
+import {
+    enqueueChatOutbox,
+    flushChatOutbox,
+    subscribeOutboxFlush,
+} from '../../lib/chatOutbox';
+import { encodeReplyContent, previewForReply, type ReplyQuote } from '../../lib/chatReply';
+import { hapticLight, hapticMedium } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
+import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
+import { getIsOnline } from '../../lib/network';
 import { cacheGetStale, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
@@ -58,14 +70,7 @@ interface Message {
     tipo: 'texto' | 'imagen' | 'video' | 'audio';
     archivo_url: string | null;
     perfiles: MessageProfile | MessageProfile[] | null;
-}
-
-function normalizeProfile(
-    perfiles: Message['perfiles']
-): MessageProfile | null {
-    if (!perfiles) return null;
-    if (Array.isArray(perfiles)) return perfiles[0] ?? null;
-    return perfiles;
+    pending?: boolean;
 }
 
 function formatDuration(totalSeconds: number): string {
@@ -116,9 +121,14 @@ export default function DirectChatScreen() {
     const headerHeight = useHeaderHeight();
     const insets = useSafeAreaInsets();
 
-    const [otherUserName, setOtherUserName] = useState('Cargando...');
+    const [otherUserName, setOtherUserName] = useState(() => '…');
     const [otherUserAvatar, setOtherUserAvatar] = useState<string | null>(null);
+    const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
     const [messageText, setMessageText] = useState('');
+    const [replyTo, setReplyTo] = useState<ReplyQuote | null>(null);
+    const [typingNames, setTypingNames] = useState<string[]>([]);
+    const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -138,6 +148,15 @@ export default function DirectChatScreen() {
     const soundRef = useRef<Audio.Sound | null>(null);
     const isMountedRef = useRef(true);
     const loadingDurationsRef = useRef<Set<string>>(new Set());
+    const messagesRef = useRef(messages);
+    messagesRef.current = messages;
+    const [myProfile, setMyProfile] = useState<{ nombre: string; avatar_url: string | null }>({
+        nombre: 'Yo',
+        avatar_url: null,
+    });
+
+    const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
+    const { reactions, setReactions } = useMessageReactions(messageIds);
 
     const stopAudio = useCallback(async () => {
         if (soundRef.current) {
@@ -202,11 +221,12 @@ export default function DirectChatScreen() {
     }, []);
 
     const loadMoreMessages = useCallback(async () => {
-        if (!otherUserId || loadingMore || !hasMore || messages.length === 0) return;
+        const current = messagesRef.current;
+        if (!otherUserId || loadingMore || !hasMore || current.length === 0) return;
 
         setLoadingMore(true);
         try {
-            const oldest = messages[messages.length - 1];
+            const oldest = current[current.length - 1];
             const older = await fetchMessages(oldest.creado_en);
 
             const nextHasMore = older.length >= PAGE_SIZE;
@@ -225,11 +245,11 @@ export default function DirectChatScreen() {
                 return next;
             });
         } catch (error) {
-            console.error('Error cargando más mensajes:', error);
+            if (__DEV__) console.error('Error cargando más mensajes:', error);
         } finally {
             setLoadingMore(false);
         }
-    }, [otherUserId, loadingMore, hasMore, messages, fetchMessages, currentUserId, persistDirectChatCache]);
+    }, [otherUserId, loadingMore, hasMore, fetchMessages, currentUserId, persistDirectChatCache]);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -245,6 +265,10 @@ export default function DirectChatScreen() {
         loadingDurationsRef.current.add(messageId);
 
         try {
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+            });
             const { sound } = await Audio.Sound.createAsync({ uri: audioUrl }, { shouldPlay: false });
             const status = await sound.getStatusAsync();
             await sound.unloadAsync();
@@ -253,8 +277,8 @@ export default function DirectChatScreen() {
                 const seconds = Math.max(1, Math.round(status.durationMillis / 1000));
                 setAudioDurations((prev) => ({ ...prev, [messageId]: seconds }));
             }
-        } catch (error) {
-            console.error('Error obteniendo duración de audio:', error);
+        } catch {
+            /* duración opcional; no molestar al usuario */
         } finally {
             loadingDurationsRef.current.delete(messageId);
         }
@@ -319,15 +343,20 @@ export default function DirectChatScreen() {
                     setHasMore(true);
                 }
 
-                const { data: otherProfile } = await supabase
-                    .from('perfiles')
-                    .select('nombre, avatar_url')
-                    .eq('id', otherUserId)
-                    .single();
+                const [{ data: otherProfile }, { data: meProfile }] = await Promise.all([
+                    supabase.from('perfiles').select('nombre, avatar_url').eq('id', otherUserId).single(),
+                    supabase.from('perfiles').select('nombre, avatar_url').eq('id', user.id).maybeSingle(),
+                ]);
 
                 if (otherProfile) {
                     setOtherUserName(otherProfile.nombre);
                     setOtherUserAvatar(otherProfile.avatar_url);
+                }
+                if (meProfile) {
+                    setMyProfile({
+                        nombre: meProfile.nombre || t('chats.you'),
+                        avatar_url: meProfile.avatar_url ?? null,
+                    });
                 }
 
                 const initialMessages = await fetchMessages();
@@ -387,7 +416,17 @@ export default function DirectChatScreen() {
                             if (isMountedRef.current) {
                                 setMessages((prev) => {
                                     if (prev.some((m) => m.id === newMessage.id)) return prev;
-                                    const next = [newMessage, ...prev];
+                                    const withoutOptimistic = prev.filter(
+                                        (m) =>
+                                            !(
+                                                m.id.startsWith('local-') &&
+                                                m.emisor_id === newMessage.emisor_id &&
+                                                m.tipo === newMessage.tipo &&
+                                                m.contenido === newMessage.contenido &&
+                                                m.archivo_url === newMessage.archivo_url
+                                            ),
+                                    );
+                                    const next = [newMessage, ...withoutOptimistic];
                                     persistDirectChatCache(user.id, otherUserId, { messages: next });
                                     return next;
                                 });
@@ -414,10 +453,12 @@ export default function DirectChatScreen() {
 
     useFocusEffect(
         useCallback(() => {
+            if (otherUserId) setActiveConversation({ kind: 'direct', id: otherUserId });
             if (currentUserId && otherUserId) {
                 void markDirectChatRead(currentUserId, otherUserId);
             }
             return () => {
+                setActiveConversation(null);
                 if (currentUserId && otherUserId) {
                     void markDirectChatRead(currentUserId, otherUserId);
                 }
@@ -425,41 +466,210 @@ export default function DirectChatScreen() {
         }, [currentUserId, otherUserId])
     );
 
+    useEffect(() => {
+        if (!otherUserId) return;
+        const unsub = subscribeOutboxFlush((ev) => {
+            if (ev.kind !== 'direct' || ev.receptorId !== otherUserId) return;
+            if (!currentUserId) return;
+            setMessages((prev) => {
+                const next = prev.map((m) =>
+                    m.id === ev.tempId
+                        ? { ...m, id: ev.serverId, creado_en: ev.creadoEn, pending: false }
+                        : m,
+                );
+                persistDirectChatCache(currentUserId, otherUserId, { messages: next });
+                return next;
+            });
+        });
+        if (getIsOnline()) void flushChatOutbox();
+        return unsub;
+    }, [currentUserId, otherUserId]);
+
+    useEffect(() => {
+        if (!currentUserId || !otherUserId) return;
+        const [a, b] = [currentUserId, otherUserId].sort();
+        const channel = supabase.channel(`typing:direct:${a}:${b}`);
+        typingChannelRef.current = channel;
+        const typingMap = new Map<string, { name: string; at: number }>();
+
+        const refreshTyping = () => {
+            const now = Date.now();
+            const names: string[] = [];
+            typingMap.forEach((v, id) => {
+                if (id === currentUserId) return;
+                if (now - v.at > 3500) typingMap.delete(id);
+                else if (v.name) names.push(v.name);
+            });
+            setTypingNames(names.slice(0, 3));
+        };
+
+        channel
+            .on('broadcast', { event: 'typing' }, ({ payload }) => {
+                const uid = String(payload?.userId ?? '');
+                const name = String(payload?.name ?? '');
+                if (!uid || uid === currentUserId) return;
+                typingMap.set(uid, { name: name || otherUserName || 'Alguien', at: Date.now() });
+                refreshTyping();
+            })
+            .subscribe();
+
+        const tick = setInterval(refreshTyping, 1000);
+        return () => {
+            clearInterval(tick);
+            typingChannelRef.current = null;
+            void supabase.removeChannel(channel);
+        };
+    }, [currentUserId, otherUserId, otherUserName]);
+
+    const emitTyping = useCallback(() => {
+        if (!currentUserId) return;
+        void typingChannelRef.current?.send({
+            type: 'broadcast',
+            event: 'typing',
+            payload: { userId: currentUserId, name: myProfile?.nombre || 'Alguien' },
+        });
+    }, [currentUserId, myProfile?.nombre]);
+
+    const onMessageTextChange = useCallback(
+        (text: string) => {
+            setMessageText(text);
+            if (!text.trim()) return;
+            if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+            typingTimerRef.current = setTimeout(() => emitTyping(), 350);
+        },
+        [emitTyping],
+    );
+
     const sendMessage = async (
         tipo: 'texto' | 'imagen' | 'video' | 'audio' = 'texto',
         archivoUrl: string | null = null,
         audioDurationSec?: number
     ) => {
-        if (!currentUserId || !otherUserId) return;
+        if (!currentUserId || !otherUserId || isSending) return;
 
         const tempText = messageText.trim();
         if (tipo === 'texto' && !tempText) return;
 
-        if (tipo === 'texto') setMessageText('');
         setIsSending(true);
+        hapticMedium();
+        const replySnapshot = tipo === 'texto' ? replyTo : null;
+        if (tipo === 'texto') {
+            setMessageText('');
+            setReplyTo(null);
+        }
 
         const contenidoPayload =
             tipo === 'texto'
-                ? tempText
+                ? (replySnapshot ? encodeReplyContent(tempText, replySnapshot) : tempText)
                 : tipo === 'audio' && audioDurationSec
                   ? String(audioDurationSec)
                   : '';
 
-        const { error } = await supabase.from('mensajes').insert({
-            emisor_id: currentUserId,
-            receptor_id: otherUserId,
-            plan_id: null, // Campo explícito en null al ser chat privado
+        const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const optimistic: Message = {
+            id: tempId,
             contenido: contenidoPayload,
+            emisor_id: currentUserId,
+            creado_en: new Date().toISOString(),
             tipo,
             archivo_url: archivoUrl,
+            perfiles: myProfile,
+            pending: !getIsOnline() && tipo === 'texto',
+        };
+        setMessages((prev) => {
+            const next = [optimistic, ...prev];
+            persistDirectChatCache(currentUserId, otherUserId, { messages: next });
+            return next;
         });
+
+        if (!getIsOnline()) {
+            if (tipo !== 'texto') {
+                setMessages((prev) => prev.filter((m) => m.id !== tempId));
+                setIsSending(false);
+                Alert.alert(t('chat.errorTitle'), t('chat.sendError'));
+                return;
+            }
+            await enqueueChatOutbox({
+                tempId,
+                kind: 'direct',
+                receptorId: otherUserId,
+                emisorId: currentUserId,
+                contenido: contenidoPayload,
+                tipo,
+                archivoUrl,
+                createdAt: optimistic.creado_en,
+            });
+            setIsSending(false);
+            return;
+        }
+
+        const { data, error } = await supabase
+            .from('mensajes')
+            .insert({
+                emisor_id: currentUserId,
+                receptor_id: otherUserId,
+                plan_id: null,
+                contenido: contenidoPayload,
+                tipo,
+                archivo_url: archivoUrl,
+            })
+            .select('id, creado_en')
+            .maybeSingle();
 
         setIsSending(false);
 
         if (error) {
+            if (tipo === 'texto') {
+                await enqueueChatOutbox({
+                    tempId,
+                    kind: 'direct',
+                    receptorId: otherUserId,
+                    emisorId: currentUserId,
+                    contenido: contenidoPayload,
+                    tipo,
+                    archivoUrl,
+                    createdAt: optimistic.creado_en,
+                });
+                setMessages((prev) => {
+                    const next = prev.map((m) => (m.id === tempId ? { ...m, pending: true } : m));
+                    persistDirectChatCache(currentUserId, otherUserId, { messages: next });
+                    return next;
+                });
+                return;
+            }
+            setMessages((prev) => prev.filter((m) => m.id !== tempId));
             Alert.alert(t('chat.errorTitle'), t('chat.sendError'));
             if (tipo === 'texto') setMessageText(tempText);
+            return;
         }
+
+        if (data?.id) {
+            setMessages((prev) => {
+                const next = prev.map((m) =>
+                    m.id === tempId
+                        ? {
+                              ...m,
+                              id: data.id as string,
+                              creado_en: (data.creado_en as string) || m.creado_en,
+                              pending: false,
+                          }
+                        : m,
+                );
+                persistDirectChatCache(currentUserId, otherUserId, { messages: next });
+                return next;
+            });
+        }
+
+        const preview =
+            tipo === 'texto'
+                ? tempText
+                : tipo === 'imagen'
+                  ? t('chats.previewImage')
+                  : tipo === 'video'
+                    ? t('chats.previewVideo')
+                    : t('chats.previewVoice');
+        const { notifyDirectMessage } = await import('../../lib/push');
+        notifyDirectMessage(otherUserId, preview);
     };
 
     const pickMedia = async () => {
@@ -536,7 +746,10 @@ export default function DirectChatScreen() {
 
             const uri = activeRecording.getURI();
             await activeRecording.stopAndUnloadAsync();
-            await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+            });
 
             if (!uri) return;
 
@@ -567,7 +780,7 @@ export default function DirectChatScreen() {
         }
     };
 
-    const playAudio = async (messageId: string, audioUrl: string) => {
+    const playAudio = useCallback(async (messageId: string, audioUrl: string) => {
         try {
             if (playingMessageId === messageId) {
                 await stopAudio();
@@ -575,6 +788,10 @@ export default function DirectChatScreen() {
             }
 
             await stopAudio();
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+            });
 
             const { sound: newSound } = await Audio.Sound.createAsync(
                 { uri: audioUrl },
@@ -591,11 +808,10 @@ export default function DirectChatScreen() {
                 }
             });
         } catch (error) {
-            console.error('Error reproduciendo audio:', error);
-            Alert.alert(t('chat.errorTitle'), t('chat.audioError'));
+            if (__DEV__) console.error('Error reproduciendo audio:', error);
             setPlayingMessageId(null);
         }
-    };
+    }, [playingMessageId, stopAudio]);
 
     const inputDisabled = isUploading || isSending || loading;
     const actionIcon = useMemo(() => {
@@ -605,109 +821,69 @@ export default function DirectChatScreen() {
         return 'mic';
     }, [isUploading, isSending, messageText, recording]);
 
-    const renderItem = ({ item }: { item: Message }) => {
-        const isMe = item.emisor_id === currentUserId;
-        const profile = normalizeProfile(item.perfiles);
-        const nombreMostrar = profile?.nombre || 'Usuario';
-        const avatarUri = profile?.avatar_url
-            ? profile.avatar_url
-            : `https://ui-avatars.com/api/?name=${encodeURIComponent(nombreMostrar)}&background=4DA6FF&color=fff`;
-        const isThisPlaying = playingMessageId === item.id;
+    const openMessageProfile = useCallback(
+        (userId: string) => {
+            router.push({ pathname: '/user-profile/[id]', params: { id: userId } });
+        },
+        [router],
+    );
 
-        const renderContent = () => {
-            if (item.tipo === 'imagen' && item.archivo_url) {
-                return (
-                    <TouchableOpacity onPress={() => setModalImage(item.archivo_url)}>
-                        <Image
-                            source={{ uri: item.archivo_url }}
-                            style={styles.mediaImage}
-                            resizeMode="cover"
-                        />
-                    </TouchableOpacity>
-                );
-            }
+    const onPickMessageReaction = useCallback(
+        (messageId: string, emoji: string) => {
+            if (!currentUserId) return;
+            if (messageId.startsWith('local-')) return;
+            void applyMessageReaction({
+                messageId,
+                userId: currentUserId,
+                emoji,
+                reactions,
+                setReactions,
+            });
+        },
+        [currentUserId, reactions, setReactions],
+    );
 
-            if (item.tipo === 'video' && item.archivo_url) {
-                return (
-                    <TouchableOpacity
-                        style={styles.videoContainer}
-                        onPress={() => setModalVideo(item.archivo_url)}
-                    >
-                        <View style={styles.videoPlaceholder}>
-                            <Ionicons name="play-circle" size={48} color="#FFF" />
-                            <Text style={styles.videoLabel}>{t('chat.videoLabel')}</Text>
-                        </View>
-                    </TouchableOpacity>
-                );
-            }
-
-            if (item.tipo === 'audio' && item.archivo_url) {
-                const storedDuration = parseStoredDuration(item.contenido);
-                const durationSec = storedDuration ?? audioDurations[item.id];
-                const durationLabel = durationSec ? formatDuration(durationSec) : '--:--';
-
-                return (
-                    <TouchableOpacity
-                        style={styles.audioContainer}
-                        onPress={() => playAudio(item.id, item.archivo_url!)}
-                    >
-                        <Ionicons
-                            name={isThisPlaying ? 'pause' : 'play'}
-                            size={20}
-                            color={isMe ? '#FFF' : PRIMARY}
-                        />
-                        <View style={styles.audioInfo}>
-                            <Text style={[styles.audioText, isMe ? styles.myMsgText : styles.otherMsgText]}>
-                                {isThisPlaying ? 'Reproduciendo' : 'Nota de voz'}
-                            </Text>
-                            <Text style={[styles.audioDuration, isMe ? styles.myTime : styles.otherTime]}>
-                                {durationLabel}
-                            </Text>
-                        </View>
-                    </TouchableOpacity>
-                );
-            }
-
-            return (
-                <Text style={[styles.msgText, isMe ? styles.myMsgText : styles.otherMsgText]}>
-                    {item.contenido}
-                </Text>
-            );
-        };
-
-        return (
-            <View style={[styles.msgContainer, isMe ? styles.myMsgContainer : styles.otherMsgContainer]}>
-                {!isMe && (
-                    <TouchableOpacity
-                        style={styles.avatarWrap}
-                        onPress={() =>
-                            router.push({
-                                pathname: '/user-profile/[id]',
-                                params: { id: item.emisor_id },
-                            })
-                        }
-                    >
-                        <Image source={{ uri: avatarUri }} style={styles.miniAvatar} />
-                    </TouchableOpacity>
-                )}
-                <View style={[styles.bubble, isMe ? styles.myBubble : styles.otherBubble]}>
-                    {!isMe && <Text style={styles.senderName}>{nombreMostrar}</Text>}
-                    {renderContent()}
-                    <Text style={[styles.timeText, isMe ? styles.myTime : styles.otherTime]}>
-                        {new Date(item.creado_en).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                        })}
-                    </Text>
-                </View>
-                {isMe && (
-                    <View style={styles.avatarWrapMe}>
-                        <Image source={{ uri: avatarUri }} style={styles.miniAvatar} />
-                    </View>
-                )}
-            </View>
-        );
-    };
+    const renderItem = useCallback(
+        ({ item }: { item: Message }) => (
+            <ChatMessageRow
+                item={item}
+                currentUserId={currentUserId}
+                isPlaying={playingMessageId === item.id}
+                audioDurationSec={audioDurations[item.id]}
+                reactions={reactions}
+                videoLabel={t('chat.videoLabel')}
+                onOpenProfile={openMessageProfile}
+                onOpenImage={setModalImage}
+                onOpenVideo={setModalVideo}
+                onPlayAudio={playAudio}
+                onLongPressMessage={setReactionPickerId}
+                onReplyMessage={(messageId) => {
+                    const msg = messagesRef.current.find((m) => m.id === messageId);
+                    if (!msg) return;
+                    const name = Array.isArray(msg.perfiles)
+                        ? msg.perfiles[0]?.nombre
+                        : msg.perfiles?.nombre;
+                    setReplyTo({
+                        id: msg.id,
+                        name: name || otherUserName || 'Usuario',
+                        preview: previewForReply(msg.contenido, msg.tipo),
+                    });
+                }}
+                onPickReaction={onPickMessageReaction}
+            />
+        ),
+        [
+            currentUserId,
+            playingMessageId,
+            audioDurations,
+            reactions,
+            t,
+            openMessageProfile,
+            playAudio,
+            onPickMessageReaction,
+            otherUserName,
+        ],
+    );
 
     const renderListFooter = () => {
         if (!loadingMore) return null;
@@ -775,42 +951,62 @@ export default function DirectChatScreen() {
 
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                keyboardVerticalOffset={headerHeight}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
             >
                 {loading ? (
                     <View style={styles.loading}>
                         <ActivityIndicator color={PRIMARY} size="large" />
                     </View>
                 ) : (
-                    <FlatList
-                        data={messages}
-                        keyExtractor={(item) => item.id}
-                        renderItem={renderItem}
-                        inverted
-                        contentContainerStyle={styles.listContent}
-                        keyboardShouldPersistTaps="handled"
-                        onEndReached={loadMoreMessages}
-                        onEndReachedThreshold={0.3}
-                        ListFooterComponent={renderListFooter}
-                        ListEmptyComponent={
-                            <View style={styles.emptyChat}>
-                                <Text style={styles.emptyChatText}>
-                                    No hay mensajes aún. ¡Sé el primero en escribir!
-                                </Text>
+                    <View style={{ flex: 1 }}>
+                        <FlashList
+                            style={{ flex: 1 }}
+                            data={messages}
+                            keyExtractor={(item) => item.id}
+                            renderItem={renderItem}
+                            getItemType={chatMessageItemType}
+                            inverted
+                            drawDistance={FLASH_LIST_DRAW_DISTANCE}
+                            contentContainerStyle={styles.listContent}
+                            keyboardShouldPersistTaps="handled"
+                            onEndReached={loadMoreMessages}
+                            onEndReachedThreshold={0.3}
+                            ListFooterComponent={renderListFooter}
+                        />
+                        {messages.length === 0 ? (
+                            <View style={styles.emptyChatOverlay} pointerEvents="none">
+                                <Text style={styles.emptyChatText}>{t('chat.emptyThread')}</Text>
                             </View>
-                        }
-                    />
-                )}
-
-                {isUploading && (
-                    <View style={styles.uploadBanner}>
-                        <ActivityIndicator color={PRIMARY} size="small" />
-                        <Text style={styles.uploadBannerText}>{t('chat.uploading')}</Text>
+                        ) : null}
                     </View>
                 )}
 
-                <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+                {typingNames.length > 0 ? (
+                    <Text style={styles.typingHint}>
+                        {typingNames.length === 1
+                            ? t('chat.typingOne', { name: typingNames[0] })
+                            : t('chat.typingMany', { names: typingNames.join(', ') })}
+                    </Text>
+                ) : null}
+
+                {replyTo ? (
+                    <View style={styles.replyChip}>
+                        <View style={styles.replyChipBody}>
+                            <Text style={styles.replyChipName} numberOfLines={1}>
+                                {t('chat.replyingTo', { name: replyTo.name })}
+                            </Text>
+                            <Text style={styles.replyChipPreview} numberOfLines={1}>
+                                {replyTo.preview}
+                            </Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={8}>
+                            <Ionicons name="close" size={20} color="#64748B" />
+                        </TouchableOpacity>
+                    </View>
+                ) : null}
+
+                <View style={[styles.inputBar, { paddingBottom: Platform.OS === 'android' ? 8 : Math.max(insets.bottom, 8) }]}>
                     <TouchableOpacity
                         onPress={pickMedia}
                         style={styles.attachBtn}
@@ -833,7 +1029,7 @@ export default function DirectChatScreen() {
                             placeholderTextColor="#64748B"
                             style={styles.textInput}
                             value={messageText}
-                            onChangeText={setMessageText}
+                            onChangeText={onMessageTextChange}
                             multiline
                             editable={!recording && !inputDisabled}
                         />
@@ -852,6 +1048,23 @@ export default function DirectChatScreen() {
                     </TouchableOpacity>
                 </View>
             </KeyboardAvoidingView>
+
+            <ReactionEmojiPicker
+                visible={!!reactionPickerId}
+                onClose={() => setReactionPickerId(null)}
+                onPick={(emoji) => {
+                    const mid = reactionPickerId;
+                    setReactionPickerId(null);
+                    if (!mid || !currentUserId || mid.startsWith('local-')) return;
+                    void applyMessageReaction({
+                        messageId: mid,
+                        userId: currentUserId,
+                        emoji,
+                        reactions,
+                        setReactions,
+                    });
+                }}
+            />
 
             <Modal
                 visible={modalImage !== null}
@@ -925,8 +1138,13 @@ const styles = StyleSheet.create({
     headerTitle: { fontSize: 17, fontWeight: '700', color: '#1E293B' },
     headerSubtitle: { fontSize: 12, color: '#64748B' },
     loading: { flex: 1, justifyContent: 'center' },
-    emptyChat: { padding: 40, alignItems: 'center', transform: [{ scaleY: -1 }] },
-    emptyChatText: { color: '#94A3B8', fontSize: 14, textAlign: 'center' },
+    emptyChatOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 40,
+    },
+    emptyChatText: { color: '#94A3B8', fontSize: 14, textAlign: 'center', lineHeight: 20 },
     loadMore: { paddingVertical: 16, alignItems: 'center' },
     listContent: { paddingHorizontal: 10, paddingVertical: 20, flexGrow: 1 },
     msgContainer: {
@@ -948,8 +1166,9 @@ const styles = StyleSheet.create({
     avatarWrap: { marginRight: 8 },
     avatarWrapMe: { marginLeft: 8 },
     miniAvatar: { width: 32, height: 32, borderRadius: 16 },
+    bubbleCol: { maxWidth: '78%', flexShrink: 1 },
     bubble: {
-        maxWidth: '70%',
+        maxWidth: '100%',
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 18,
@@ -988,6 +1207,29 @@ const styles = StyleSheet.create({
     audioInfo: { marginLeft: 8 },
     audioText: { fontSize: 13, fontWeight: '600' },
     audioDuration: { fontSize: 11, marginTop: 2 },
+    typingHint: {
+        paddingHorizontal: 16,
+        paddingBottom: 4,
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#64748B',
+    },
+    replyChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginHorizontal: 12,
+        marginBottom: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 12,
+        backgroundColor: '#EFF6FF',
+        borderLeftWidth: 3,
+        borderLeftColor: PRIMARY,
+        gap: 8,
+    },
+    replyChipBody: { flex: 1 },
+    replyChipName: { fontSize: 12, fontWeight: '800', color: PRIMARY },
+    replyChipPreview: { fontSize: 13, color: '#64748B', marginTop: 1 },
     inputBar: {
         flexDirection: 'row',
         alignItems: 'flex-end',

@@ -126,7 +126,32 @@ export async function getUserStats(userId: string, options?: { skipCache?: boole
         numeroExpulsiones,
     };
 
-    cacheSet(statsCacheKey(userId), stats, STATS_TTL_MS);
+    const cooled = await applyLowRatingCooling(userId, stats);
+    cacheSet(statsCacheKey(userId), cooled, STATS_TTL_MS);
+    return cooled;
+}
+
+/** Valoraciones ≤2 estrellas recientes no muestran el aspecto negativo un tiempo (evita broncas). */
+const LOW_RATING_THRESHOLD = 2;
+const LOW_RATING_HIDE_DAYS = 7;
+
+async function applyLowRatingCooling(userId: string, stats: UserStats): Promise<UserStats> {
+    if (!stats.aspectoNegativoMasVotado) return stats;
+    try {
+        const since = new Date(Date.now() - LOW_RATING_HIDE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+        const { data, error } = await supabase
+            .from('valoraciones')
+            .select('id')
+            .eq('evaluado_id', userId)
+            .lte('puntuacion_general', LOW_RATING_THRESHOLD)
+            .gte('creado_en', since)
+            .limit(1);
+        if (!error && data && data.length > 0) {
+            return { ...stats, aspectoNegativoMasVotado: null };
+        }
+    } catch {
+        /* ignore */
+    }
     return stats;
 }
 

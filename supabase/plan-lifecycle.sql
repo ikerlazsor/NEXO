@@ -63,7 +63,30 @@ BEGIN
 END;
 $$;
 
--- Elimina el chat de planes caducados (fecha_evento + 24h).
+-- Quita de guardados los planes cuya fecha/hora ya ha llegado (como el feed).
+CREATE OR REPLACE FUNCTION public.purge_past_saved_plans()
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    n integer := 0;
+BEGIN
+    WITH deleted AS (
+        DELETE FROM public.planes_guardados pg
+        USING public.planes p
+        WHERE pg.plan_id = p.id
+          AND p.fecha_evento IS NOT NULL
+          AND p.fecha_evento <= now()
+        RETURNING pg.plan_id
+    )
+    SELECT COUNT(*)::integer INTO n FROM deleted;
+    RETURN COALESCE(n, 0);
+END;
+$$;
+
+-- Elimina chats caducados (fecha_evento + 24h).
 -- Conserva el plan + historial + valoraciones para estadísticas.
 CREATE OR REPLACE FUNCTION public.purge_expired_plan_chats()
 RETURNS integer
@@ -76,6 +99,7 @@ DECLARE
     n integer := 0;
 BEGIN
     PERFORM public.archive_all_ended_plans();
+    PERFORM public.purge_past_saved_plans();
 
     FOR r IN
         SELECT id FROM public.planes
@@ -100,9 +124,11 @@ $$;
 REVOKE ALL ON FUNCTION public.archive_ended_plan(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.archive_all_ended_plans() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.purge_expired_plan_chats() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.purge_past_saved_plans() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.archive_ended_plan(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.archive_all_ended_plans() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.purge_expired_plan_chats() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.purge_past_saved_plans() TO authenticated;
 
 -- RLS valoraciones (si no existen)
 ALTER TABLE public.valoraciones ENABLE ROW LEVEL SECURITY;

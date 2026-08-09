@@ -22,21 +22,37 @@ import {
 import { getPlanJoinRequestCount, getProfileNotificationCount } from './notifications';
 import { isAcceptedParticipant, mapEstadoToMembership } from './participants';
 import { getIncomingPlanInvites } from './planInvites';
-import { isPlanChatAlive } from './planLifecycle';
+import { isPlanActiveForSaved, isPlanChatAlive, purgePastSavedPlansForUser } from './planLifecycle';
 import { calcAge, parseHabitos, parsePrivacy, type Genero } from './profileFields';
 import { loadProfileRow, resolveDisplayName, syncProfileFromAuth } from './profile';
-import { getOpenRatingPlanMap, getPendingRatingPlans, isPlanAttendanceDismissed } from './ratings';
+import { getDismissedPlanIdSet, getOpenRatingPlanMap, getPendingRatingPlans } from './ratings';
 import {
     adoptPublicRankings,
     prefetchPublicRankings,
     prefetchSearchRankings,
 } from './rankings';
-import { scheduleCoverPrefetch } from './prefetchCovers';
+import { diskGet, diskSet } from './diskCache';
+import { getIsOnline } from './network';
+import { prefetchRemoteImages, scheduleCoverPrefetch } from './prefetchCovers';
+import { withRetry } from './retry';
 import { screenCacheKey, ScreenCacheTTL } from './screenCaches';
 import { getUserStats } from './stats';
 import { supabase } from './supabase';
 import { cacheGetStale, cacheIsFresh, cacheSet } from './ttlCache';
 import type { User } from '@supabase/supabase-js';
+
+const FEED_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CHATS_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MY_PLANS_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Último userId conocido para hidratar chats/mis planes en cold start. */
+const LAST_USER_DISK_KEY = 'lastUserId';
+
+type MyPlansDiskSnap = {
+    plans: unknown[];
+    pendingCount: number;
+    ratingByPlan: Record<string, unknown>;
+};
 
 let inflight: Promise<void> | null = null;
 let publicInflight: Promise<void> | null = null;
@@ -111,12 +127,15 @@ async function prefetchProfile(userId: string, authUser: Awaited<ReturnType<type
 
 async function prefetchChats(userId: string) {
     if (cacheIsFresh(screenCacheKey.chatsList(userId))) return;
+    if (!getIsOnline()) return;
 
-    const [{ data: myParts }, directConversations, unreadMap] = await Promise.all([
-        supabase.from('participantes').select('plan_id').eq('usuario_id', userId).eq('estado', 'aceptado'),
-        getDirectConversations(userId).catch(() => []),
-        getChatUnreadMap(userId),
-    ]);
+    const [{ data: myParts }, directConversations, unreadMap] = await withRetry(() =>
+        Promise.all([
+            supabase.from('participantes').select('plan_id').eq('usuario_id', userId).eq('estado', 'aceptado'),
+            getDirectConversations(userId).catch(() => []),
+            getChatUnreadMap(userId),
+        ]),
+    );
 
     const planIds = [...new Set((myParts ?? []).map((p) => p.plan_id))].filter(Boolean);
     let planRows: Array<{
@@ -205,18 +224,21 @@ async function prefetchChats(userId: string) {
         (a, b) => new Date(b.lastAt || 0).getTime() - new Date(a.lastAt || 0).getTime(),
     );
     cacheSet(screenCacheKey.chatsList(userId), rows, ScreenCacheTTL.chatsList);
+    void diskSet(screenCacheKey.chatsList(userId), rows);
+    void diskSet(LAST_USER_DISK_KEY, userId);
 }
 
 async function prefetchMyPlans(userId: string) {
     if (cacheIsFresh(screenCacheKey.myPlans(userId))) return;
 
     const now = Date.now();
+    const planCols = 'id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id';
     const [pending, openRatings, createdRes, joinedRes] = await Promise.all([
         getPlanJoinRequestCount(userId),
         getOpenRatingPlanMap(userId),
         supabase
             .from('planes')
-            .select('id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url))')
+            .select(`${planCols}, participantes(usuario_id, estado)`)
             .eq('creador_id', userId)
             .order('fecha_evento', { ascending: true }),
         supabase
@@ -224,8 +246,8 @@ async function prefetchMyPlans(userId: string) {
             .select(`
                 plan_id,
                 planes (
-                    id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id,
-                    participantes ( usuario_id, estado, perfiles:usuario_id ( id, nombre, avatar_url ) )
+                    ${planCols},
+                    participantes ( usuario_id, estado )
                 )
             `)
             .eq('usuario_id', userId)
@@ -245,17 +267,35 @@ async function prefetchMyPlans(userId: string) {
         isPast: boolean;
     };
 
+    const pendingUserIds = new Set<string>();
+    for (const p of createdRes.data || []) {
+        for (const x of (p.participantes || []) as { usuario_id: string; estado: string }[]) {
+            if (x.estado === 'pendiente' && x.usuario_id !== userId) pendingUserIds.add(x.usuario_id);
+        }
+    }
+    const pendingProfiles = new Map<string, { id: string; nombre?: string; avatar_url?: string | null }>();
+    if (pendingUserIds.size > 0) {
+        const { data: profiles } = await supabase
+            .from('perfiles')
+            .select('id, nombre, avatar_url')
+            .in('id', [...pendingUserIds]);
+        for (const pr of profiles ?? []) {
+            pendingProfiles.set(pr.id, {
+                id: pr.id,
+                nombre: pr.nombre ?? undefined,
+                avatar_url: pr.avatar_url,
+            });
+        }
+    }
+
     const formatPlan = (p: any, role: 'creator' | 'member'): PlanItem | null => {
         if (!p || !isFeedPlan(p)) return null;
-        const parts = (p.participantes || []) as any[];
+        const parts = (p.participantes || []) as { usuario_id: string; estado: string }[];
         const accepted = parts.filter((x) => isAcceptedParticipant(x.estado));
         const pendingReqs = role === 'creator'
             ? parts
-                .filter((x) => x.estado === 'pendiente' && x.usuario_id !== userId && x.perfiles)
-                .map((x) => {
-                    const prof = Array.isArray(x.perfiles) ? x.perfiles[0] : x.perfiles;
-                    return { ...prof, id: x.usuario_id };
-                })
+                .filter((x) => x.estado === 'pendiente' && x.usuario_id !== userId)
+                .map((x) => pendingProfiles.get(x.usuario_id) ?? { id: x.usuario_id })
             : [];
         const eventMs = p.fecha_evento ? new Date(p.fecha_evento).getTime() : 0;
         return {
@@ -286,10 +326,8 @@ async function prefetchMyPlans(userId: string) {
     }
 
     const all = Array.from(byId.values());
-    const dismissedFlags = await Promise.all(
-        all.filter((p) => p.isPast).map(async (p) => [p.id, await isPlanAttendanceDismissed(userId, p.id)] as const),
-    );
-    const dismissed = new Set(dismissedFlags.filter(([, d]) => d).map(([id]) => id));
+    const pastIds = all.filter((p) => p.isPast).map((p) => p.id);
+    const dismissed = await getDismissedPlanIdSet(userId, pastIds);
     const visible = all.filter((p) => !p.isPast || !dismissed.has(p.id));
     const upcoming = visible
         .filter((p) => !p.isPast)
@@ -306,15 +344,61 @@ async function prefetchMyPlans(userId: string) {
             return db - da;
         });
 
-    cacheSet(screenCacheKey.myPlans(userId), {
+    const myPlansSnap = {
         plans: [...upcoming, ...past],
         pendingCount: pending,
         ratingByPlan: openRatings,
-    }, ScreenCacheTTL.myPlans);
+    };
+    cacheSet(screenCacheKey.myPlans(userId), myPlansSnap, ScreenCacheTTL.myPlans);
+    void diskSet(screenCacheKey.myPlans(userId), myPlansSnap);
+    void diskSet(LAST_USER_DISK_KEY, userId);
+}
+
+/** Semilla vacía solo para tabs principales (chats / mis planes).
+ * No sembrar friends/savedPlans: una caché vacía “fresca” bloquea el prefetch real
+ * y las pantallas se quedan en blanco hasta un pull-to-refresh. */
+function seedEmptyPersonalCaches(userId: string): void {
+    if (cacheGetStale(screenCacheKey.chatsList(userId)) == null) {
+        cacheSet(screenCacheKey.chatsList(userId), [], ScreenCacheTTL.chatsList);
+    }
+    if (cacheGetStale(screenCacheKey.myPlans(userId)) == null) {
+        cacheSet(screenCacheKey.myPlans(userId), {
+            plans: [],
+            pendingCount: 0,
+            ratingByPlan: {},
+        }, ScreenCacheTTL.myPlans);
+    }
+}
+
+function friendsCacheLooksPopulated(snap: {
+    friends?: unknown[];
+    incoming?: unknown[];
+    outgoing?: unknown[];
+    planInvites?: unknown[];
+} | null): boolean {
+    if (!snap) return false;
+    return (
+        (snap.friends?.length ?? 0) > 0
+        || (snap.incoming?.length ?? 0) > 0
+        || (snap.outgoing?.length ?? 0) > 0
+        || (snap.planInvites?.length ?? 0) > 0
+    );
+}
+
+function savedPlansCacheLooksPopulated(snap: { savedPlans?: unknown[] } | null): boolean {
+    return (snap?.savedPlans?.length ?? 0) > 0;
 }
 
 async function prefetchFriends(userId: string) {
-    if (cacheIsFresh(screenCacheKey.friends(userId))) return;
+    const key = screenCacheKey.friends(userId);
+    const existing = cacheGetStale<{
+        friends: unknown[];
+        incoming: unknown[];
+        outgoing: unknown[];
+        planInvites: unknown[];
+    }>(key);
+    // Caché vacía no cuenta como válida (p. ej. semilla antigua).
+    if (cacheIsFresh(key) && friendsCacheLooksPopulated(existing)) return;
 
     const [friendsData, incomingData, outgoingData, invitesData] = await Promise.all([
         getFriends(userId),
@@ -323,7 +407,7 @@ async function prefetchFriends(userId: string) {
         getIncomingPlanInvites(userId).catch(() => []),
     ]);
 
-    cacheSet(screenCacheKey.friends(userId), {
+    cacheSet(key, {
         friends: friendsData,
         incoming: incomingData,
         outgoing: outgoingData,
@@ -332,22 +416,29 @@ async function prefetchFriends(userId: string) {
 }
 
 async function prefetchSavedPlans(userId: string) {
-    if (cacheIsFresh(screenCacheKey.savedPlans(userId))) return;
+    const key = screenCacheKey.savedPlans(userId);
+    const existing = cacheGetStale<{ savedPlans: unknown[] }>(key);
+    if (cacheIsFresh(key) && savedPlansCacheLooksPopulated(existing)) return;
+
+    await purgePastSavedPlansForUser(userId);
 
     const [{ data: myProfile }, { data: savedData }, { data: joinedData }] = await Promise.all([
         supabase.from('perfiles').select('genero').eq('id', userId).maybeSingle(),
         supabase
             .from('planes_guardados')
-            .select('plan_id, planes (*, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url)))')
+            .select('plan_id, planes (*, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)))')
             .eq('usuario_id', userId),
         supabase.from('participantes').select('plan_id, estado').eq('usuario_id', userId),
     ]);
 
-    const rawPlans = (savedData || []).map((s: any) => s.planes).filter(Boolean);
+    const rawPlans = (savedData || [])
+        .map((s: any) => s.planes)
+        .filter(Boolean)
+        .filter((plan: any) => isPlanActiveForSaved(plan));
     const creatorIds = Array.from(new Set(rawPlans.map((p: any) => p.creador_id).filter(Boolean)));
     let creatorMap: Record<string, any> = {};
     if (creatorIds.length > 0) {
-        const { data: creators } = await supabase.from('perfiles').select('id, nombre, avatar_url').in('id', creatorIds);
+        const { data: creators } = await supabase.from('perfiles').select('id, nombre, avatar_url, genero').in('id', creatorIds);
         creatorMap = Object.fromEntries((creators || []).map((c) => [c.id, c]));
     }
 
@@ -370,11 +461,59 @@ async function prefetchSavedPlans(userId: string) {
         if (m) membershipMap[p.plan_id] = m;
     });
 
-    cacheSet(screenCacheKey.savedPlans(userId), {
+    cacheSet(key, {
         savedPlans: formatted,
         membershipMap,
         currentUserGenero: myProfile?.genero ?? null,
     }, ScreenCacheTTL.savedPlans);
+}
+
+/** Precarga Amigos + Guardados (p. ej. al abrir perfil, antes de entrar). */
+export function warmFriendsAndSavedPlans(userId?: string | null): void {
+    void (async () => {
+        const uid = userId ?? (await getAuthUser())?.id;
+        if (!uid) return;
+        await Promise.allSettled([prefetchFriends(uid), prefetchSavedPlans(uid)]);
+    })();
+}
+
+function warmFeedImages(snap: FeedSnapshot) {
+    const uris: Array<string | null | undefined> = [];
+    for (const plan of snap.plans.slice(0, 20)) {
+        uris.push(plan?.imagen_url);
+        const creator = plan?.participantsList?.[0];
+        if (creator?.avatar_url) uris.push(creator.avatar_url);
+    }
+    prefetchRemoteImages(uris, 28);
+}
+
+/** Restaura el último feed guardado en disco (arranque / offline). */
+export async function hydrateFeedFromDisk(): Promise<void> {
+    if (cacheGetStale(FEED_CACHE_KEY) != null) return;
+    const snap = await diskGet<FeedSnapshot>(FEED_CACHE_KEY, FEED_DISK_MAX_AGE_MS);
+    if (!snap?.plans?.length) return;
+    cacheSet(FEED_CACHE_KEY, snap, FEED_CACHE_TTL_MS);
+    warmFeedImages(snap);
+}
+
+/** Restaura lista de chats desde disco (cold start / offline). */
+export async function hydrateChatsFromDisk(userId?: string | null): Promise<void> {
+    const uid = userId ?? (await diskGet<string>(LAST_USER_DISK_KEY));
+    if (!uid) return;
+    if (cacheGetStale(screenCacheKey.chatsList(uid)) != null) return;
+    const rows = await diskGet<unknown[]>(screenCacheKey.chatsList(uid), CHATS_DISK_MAX_AGE_MS);
+    if (!Array.isArray(rows)) return;
+    cacheSet(screenCacheKey.chatsList(uid), rows, ScreenCacheTTL.chatsList);
+}
+
+/** Restaura mis planes desde disco (cold start / offline). */
+export async function hydrateMyPlansFromDisk(userId?: string | null): Promise<void> {
+    const uid = userId ?? (await diskGet<string>(LAST_USER_DISK_KEY));
+    if (!uid) return;
+    if (cacheGetStale(screenCacheKey.myPlans(uid)) != null) return;
+    const snap = await diskGet<MyPlansDiskSnap>(screenCacheKey.myPlans(uid), MY_PLANS_DISK_MAX_AGE_MS);
+    if (!snap || !Array.isArray(snap.plans)) return;
+    cacheSet(screenCacheKey.myPlans(uid), snap, ScreenCacheTTL.myPlans);
 }
 
 async function prefetchFeed(userId: string | null): Promise<void> {
@@ -384,15 +523,22 @@ async function prefetchFeed(userId: string | null): Promise<void> {
         if (snap?.currentUserId === userId) return;
     }
 
-    const nowIso = new Date().toISOString();
-    const { data: plansData, error } = await supabase
-        .from('planes')
-        .select(FEED_PLAN_COLUMNS)
-        .or(`fecha_evento.is.null,fecha_evento.gte.${nowIso}`)
-        .order('fecha_evento', { ascending: true })
-        .limit(100);
+    if (!getIsOnline()) {
+        await hydrateFeedFromDisk();
+        return;
+    }
 
-    if (error) throw error;
+    const nowIso = new Date().toISOString();
+    const { data: plansData } = await withRetry(async () => {
+        const res = await supabase
+            .from('planes')
+            .select(FEED_PLAN_COLUMNS)
+            .or(`fecha_evento.is.null,fecha_evento.gte.${nowIso}`)
+            .order('fecha_evento', { ascending: true })
+            .limit(100);
+        if (res.error) throw res.error;
+        return res;
+    });
 
     const safePlans = (plansData || []).filter(isFeedPlan);
     const planIds = safePlans.map((p) => p.id);
@@ -402,12 +548,15 @@ async function prefetchFeed(userId: string | null): Promise<void> {
         planIds.length > 0
             ? supabase
                 .from('participantes')
-                .select('plan_id, usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url)')
+                .select('plan_id, usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)')
                 .in('plan_id', planIds)
                 .eq('estado', 'aceptado')
             : Promise.resolve({ data: [] as any[], error: null }),
         creatorIds.length > 0
-            ? supabase.from('perfiles').select('id, nombre, avatar_url').in('id', creatorIds)
+            ? supabase
+                .from('perfiles')
+                .select('id, nombre, avatar_url, genero, ambientes_preferidos, etiquetas')
+                .in('id', creatorIds)
             : Promise.resolve({ data: [] as any[], error: null }),
     ]);
 
@@ -512,7 +661,7 @@ async function prefetchFeed(userId: string | null): Promise<void> {
         ]);
     }
 
-    cacheSet(FEED_CACHE_KEY, {
+    const snapshot: FeedSnapshot = {
         plans: formattedPlans,
         membershipMap,
         savedPlans,
@@ -523,36 +672,10 @@ async function prefetchFeed(userId: string | null): Promise<void> {
         invitedPlanIds,
         feedTaste,
         notifBreakdown,
-    } satisfies FeedSnapshot, FEED_CACHE_TTL_MS);
-}
-
-/** Semilla vacía solo si aún no hay caché (nuevo usuario / prefetch fallido). */
-function seedEmptyPersonalCaches(userId: string): void {
-    if (cacheGetStale(screenCacheKey.chatsList(userId)) == null) {
-        cacheSet(screenCacheKey.chatsList(userId), [], ScreenCacheTTL.chatsList);
-    }
-    if (cacheGetStale(screenCacheKey.myPlans(userId)) == null) {
-        cacheSet(screenCacheKey.myPlans(userId), {
-            plans: [],
-            pendingCount: 0,
-            ratingByPlan: {},
-        }, ScreenCacheTTL.myPlans);
-    }
-    if (cacheGetStale(screenCacheKey.friends(userId)) == null) {
-        cacheSet(screenCacheKey.friends(userId), {
-            friends: [],
-            incoming: [],
-            outgoing: [],
-            planInvites: [],
-        }, ScreenCacheTTL.friends);
-    }
-    if (cacheGetStale(screenCacheKey.savedPlans(userId)) == null) {
-        cacheSet(screenCacheKey.savedPlans(userId), {
-            savedPlans: [],
-            membershipMap: {},
-            currentUserGenero: null,
-        }, ScreenCacheTTL.savedPlans);
-    }
+    };
+    cacheSet(FEED_CACHE_KEY, snapshot, FEED_CACHE_TTL_MS);
+    void diskSet(FEED_CACHE_KEY, snapshot);
+    warmFeedImages(snapshot);
 }
 
 async function runPrefetch(userId: string, authUser: User) {
@@ -615,13 +738,24 @@ export function scheduleHomePrefetch(): void {
         const user = await getAuthUser();
         if (!user || inflight) return;
 
+        const friendsSnap = cacheGetStale<{
+            friends?: unknown[];
+            incoming?: unknown[];
+            outgoing?: unknown[];
+            planInvites?: unknown[];
+        }>(screenCacheKey.friends(user.id));
+        const savedSnap = cacheGetStale<{ savedPlans?: unknown[] }>(
+            screenCacheKey.savedPlans(user.id),
+        );
         const allFresh =
             cacheIsFresh(FEED_CACHE_KEY)
             && cacheIsFresh(screenCacheKey.profileUI(user.id))
             && cacheIsFresh(screenCacheKey.chatsList(user.id))
             && cacheIsFresh(screenCacheKey.myPlans(user.id))
             && cacheIsFresh(screenCacheKey.friends(user.id))
+            && friendsCacheLooksPopulated(friendsSnap)
             && cacheIsFresh(screenCacheKey.savedPlans(user.id))
+            && savedPlansCacheLooksPopulated(savedSnap)
             && cacheIsFresh(screenCacheKey.rankings(user.id, 'plans', 'global'));
         if (allFresh) return;
 

@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { isLocationInEurope } from './geo';
 
 export type GeocodeResult = {
     id: string;
@@ -9,6 +10,14 @@ export type GeocodeResult = {
 };
 
 const USER_AGENT = `Nexo/1.0 (${Platform.OS})`;
+
+/** Códigos ISO de países europeos para Nominatim (sin sesgo a solo España). */
+const EUROPE_COUNTRY_CODES = [
+    'ad', 'al', 'at', 'ba', 'be', 'bg', 'by', 'ch', 'cy', 'cz', 'de', 'dk', 'ee', 'es',
+    'fi', 'fo', 'fr', 'gb', 'gg', 'gi', 'gr', 'hr', 'hu', 'ie', 'im', 'is', 'it', 'je',
+    'li', 'lt', 'lu', 'lv', 'mc', 'md', 'me', 'mk', 'mt', 'nl', 'no', 'pl', 'pt', 'ro',
+    'rs', 'se', 'si', 'sk', 'sm', 'ua', 'va', 'xk',
+].join(',');
 
 function formatPhotonFeature(feat: {
     geometry: { coordinates: [number, number] };
@@ -29,61 +38,69 @@ function formatPhotonFeature(feat: {
     };
 }
 
+function onlyInEurope(items: GeocodeResult[]): GeocodeResult[] {
+    return items.filter((item) => isLocationInEurope(item.latitude, item.longitude));
+}
+
 async function searchPhoton(
     query: string,
-    bias?: { lat: number; lon: number }
+    bias?: { lat: number; lon: number },
 ): Promise<GeocodeResult[]> {
-    let url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=8`;
+    let url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=12`;
+    // bbox Europa aprox. (Photon: minLon,minLat,maxLon,maxLat)
+    url += '&bbox=-31.5,27.5,45,71.5';
     if (bias) url += `&lat=${bias.lat}&lon=${bias.lon}`;
     const response = await fetch(url);
     if (!response.ok) return [];
     const data = await response.json();
     if (data?.type !== 'FeatureCollection' || !Array.isArray(data.features)) return [];
-    return data.features.map(formatPhotonFeature);
+    return onlyInEurope(data.features.map(formatPhotonFeature));
 }
 
 async function searchNominatim(query: string): Promise<GeocodeResult[]> {
     const url =
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}` +
-        '&format=json&limit=8&countrycodes=es&addressdetails=1';
+        `&format=json&limit=8&countrycodes=${EUROPE_COUNTRY_CODES}&addressdetails=1`;
     const response = await fetch(url, {
         headers: {
             Accept: 'application/json',
-            'Accept-Language': 'es',
+            'Accept-Language': 'en',
             'User-Agent': USER_AGENT,
         },
     });
     if (!response.ok) return [];
     const data = await response.json();
     if (!Array.isArray(data)) return [];
-    return data.map((item: { place_id: number; lat: string; lon: string; name?: string; display_name: string }) => ({
-        id: `nominatim-${item.place_id}`,
-        latitude: parseFloat(item.lat),
-        longitude: parseFloat(item.lon),
-        label: item.name || item.display_name.split(',')[0]?.trim() || item.display_name,
-        subtitle: item.display_name,
-    }));
+    return onlyInEurope(
+        data.map((item: { place_id: number; lat: string; lon: string; name?: string; display_name: string }) => ({
+            id: `nominatim-${item.place_id}`,
+            latitude: parseFloat(item.lat),
+            longitude: parseFloat(item.lon),
+            label: item.name || item.display_name.split(',')[0]?.trim() || item.display_name,
+            subtitle: item.display_name,
+        })),
+    );
 }
 
-/** Busca lugares (Photon + Nominatim como respaldo). */
+/** Busca lugares en Europa (Photon + Nominatim). El bias es opcional (solo si el usuario ya eligió sitio). */
 export async function searchPlaces(
     query: string,
-    bias?: { lat: number; lon: number }
+    bias?: { lat: number; lon: number } | null,
 ): Promise<GeocodeResult[]> {
     const trimmed = query.trim();
     if (trimmed.length < 2) return [];
 
-    const photon = await searchPhoton(trimmed, bias);
-    if (photon.length > 0) return photon;
+    const photon = await searchPhoton(trimmed, bias ?? undefined);
+    if (photon.length > 0) return photon.slice(0, 8);
 
-    return searchNominatim(trimmed);
+    return (await searchNominatim(trimmed)).slice(0, 8);
 }
 
 /** Dirección legible a partir de coordenadas. */
 export async function reverseGeocodePlace(lat: number, lon: number): Promise<string> {
     try {
         const response = await fetch(
-            `https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`
+            `https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`,
         );
         if (response.ok) {
             const data = await response.json();
@@ -102,10 +119,10 @@ export async function reverseGeocodePlace(lat: number, lon: number): Promise<str
             {
                 headers: {
                     Accept: 'application/json',
-                    'Accept-Language': 'es',
+                    'Accept-Language': 'en',
                     'User-Agent': USER_AGENT,
                 },
-            }
+            },
         );
         if (response.ok) {
             const data = await response.json();

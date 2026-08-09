@@ -20,8 +20,8 @@ import {
     setPendingVerifyEmail,
 } from '../lib/emailVerification';
 import { useT } from '../lib/i18n';
-import { clearPendingSignup } from '../lib/pendingSignup';
-import { ensureProfile } from '../lib/profile';
+import { clearPendingSignup, getPendingSignup } from '../lib/pendingSignup';
+import { deleteAccount, ensureProfile } from '../lib/profile';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY_DARK = '#2563EB';
@@ -50,6 +50,7 @@ export default function VerifyEmailScreen() {
     const [email, setEmail] = useState<string | null>(null);
     const [checking, setChecking] = useState(true);
     const [resending, setResending] = useState(false);
+    const [changingEmail, setChangingEmail] = useState(false);
 
     const goNext = useCallback(async () => {
         await clearPendingVerifyEmail();
@@ -178,11 +179,49 @@ export default function VerifyEmailScreen() {
         }
     };
 
-    const handleChangeEmail = async () => {
-        await clearPendingVerifyEmail();
-        await clearPendingSignup();
-        await supabase.auth.signOut({ scope: 'local' });
-        router.replace('/login');
+    const handleChangeEmail = () => {
+        if (changingEmail) return;
+        Alert.alert(t('verifyEmail.changeEmailConfirmTitle'), t('verifyEmail.changeEmailConfirmMsg'), [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: t('verifyEmail.changeEmailConfirm'),
+                style: 'destructive',
+                onPress: () => {
+                    void (async () => {
+                        setChangingEmail(true);
+                        try {
+                            let deleted = false;
+                            const user = await getAuthUser();
+                            if (user) {
+                                const { error } = await deleteAccount();
+                                deleted = !error;
+                            }
+                            if (!deleted) {
+                                const pending = await getPendingSignup();
+                                if (pending?.email && pending?.password) {
+                                    const { error: signInError } = await supabase.auth.signInWithPassword({
+                                        email: pending.email,
+                                        password: pending.password,
+                                    });
+                                    if (!signInError) {
+                                        await deleteAccount();
+                                    } else {
+                                        await supabase.auth.signOut({ scope: 'local' });
+                                    }
+                                } else {
+                                    await supabase.auth.signOut({ scope: 'local' });
+                                }
+                            }
+                        } finally {
+                            await clearPendingVerifyEmail();
+                            await clearPendingSignup();
+                            setChangingEmail(false);
+                            router.replace('/login');
+                        }
+                    })();
+                },
+            },
+        ]);
     };
 
     const handleAlreadyVerified = async () => {
@@ -237,8 +276,16 @@ export default function VerifyEmailScreen() {
                         )}
                     </TouchableOpacity>
 
-                    <TouchableOpacity onPress={() => void handleChangeEmail()} style={styles.linkBtn}>
-                        <Text style={styles.linkText}>{t('verifyEmail.changeEmail')}</Text>
+                    <TouchableOpacity
+                        onPress={handleChangeEmail}
+                        style={styles.linkBtn}
+                        disabled={changingEmail || resending || checking}
+                    >
+                        {changingEmail ? (
+                            <ActivityIndicator color={PRIMARY_DARK} />
+                        ) : (
+                            <Text style={styles.linkText}>{t('verifyEmail.changeEmail')}</Text>
+                        )}
                     </TouchableOpacity>
                 </View>
             </SafeAreaView>

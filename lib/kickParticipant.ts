@@ -25,8 +25,8 @@ export async function kickParticipant(
         return { error: 'No puedes eliminar al creador del plan' };
     }
 
-    // Registrar expulsión (best effort) antes de borrar la participación
-    await supabase.from('expulsiones_plan').upsert(
+    // Registrar expulsión (best effort; no bloquear si la tabla/RLS falla)
+    void supabase.from('expulsiones_plan').upsert(
         {
             plan_id: planId,
             usuario_id: targetUserId,
@@ -46,6 +46,6 @@ export async function kickParticipant(
     }
 
     invalidateUserStatsCache(targetUserId);
-    await promoteWaitlist(planId);
+    void promoteWaitlist(planId);
     return { error: null };
 }

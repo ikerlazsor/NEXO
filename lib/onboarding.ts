@@ -110,5 +110,13 @@ export async function saveOnboardingPreferences(
 
     await supabase.auth.refreshSession().catch(() => {});
 
+    try {
+        const { trackFunnel } = await import('./analytics');
+        trackFunnel('signup_complete', { userId });
+        trackFunnel('onboarding_complete', { userId });
+    } catch {
+        /* ignore */
+    }
+
     return { error: null };
 }

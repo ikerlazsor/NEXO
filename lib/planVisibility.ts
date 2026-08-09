@@ -2,6 +2,7 @@
  * Visibilidad de planes en el feed:
  * - modo_privado: solo creador, participantes e invitados
  * - solo_amigos: solo amigos del creador (+ creador / ya dentro / invitados)
+ * - owner: ve todos los planes de meetup (moderación)
  */
 
 export type PlanVisibilityFlags = {
@@ -17,12 +18,16 @@ export type FeedVisibilityContext = {
     membershipPlanIds: Set<string>;
     /** Planes con invitación pendiente al user */
     invitedPlanIds: Set<string>;
+    /** Owner: ve privados / solo amigos / solo chicas en el feed */
+    isOwner?: boolean;
 };
 
 export function canSeePlanInFeed(
     plan: PlanVisibilityFlags & { id?: string },
     ctx: FeedVisibilityContext,
 ): boolean {
+    if (ctx.isOwner) return true;
+
     const uid = ctx.userId;
     if (!uid) {
         // Sin sesión: ocultar restringidos

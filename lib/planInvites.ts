@@ -1,4 +1,6 @@
 import { supabase } from './supabase';
+import { canJoinMorePlans } from './planLimits';
+import { invalidateProfileNotificationCount } from './notifications';
 
 export type PlanInviteType = 'plan' | 'grupo';
 
@@ -79,6 +81,12 @@ export async function sendPlanInvite(
         estado: 'pendiente',
     });
 
+    if (!error) {
+        const { notifyPlanInvite } = await import('./push');
+        notifyPlanInvite(planId, invitadoId);
+        invalidateProfileNotificationCount(invitadoId);
+    }
+
     return { error: error?.message ?? null };
 }
 
@@ -108,9 +116,12 @@ export async function getIncomingPlanInvites(userId: string): Promise<PlanInvite
 export async function acceptPlanInvite(
     invite: PlanInvite,
     userId: string
-): Promise<{ error: string | null; chatId?: string }> {
+): Promise<{ error: string | null; chatId?: string; estado?: string; max?: number }> {
     const plan = invite.plan;
     if (!plan) return { error: 'no_plan' };
+
+    const limitCheck = await canJoinMorePlans(userId, invite.plan_id);
+    if (!limitCheck.allowed) return { error: 'limit', max: limitCheck.max };
 
     const { count } = await supabase
         .from('participantes')
@@ -135,14 +146,26 @@ export async function acceptPlanInvite(
 
     await supabase.from('invitaciones_planes').update({ estado: 'aceptado' }).eq('id', invite.id);
 
-    return { error: null, chatId: invite.plan_id };
+    const { notifyPlanJoin } = await import('./push');
+    notifyPlanJoin(invite.plan_id, estado);
+    invalidateProfileNotificationCount(userId);
+
+    return { error: null, chatId: invite.plan_id, estado };
 }
 
 export async function rejectPlanInvite(inviteId: string): Promise<{ error: string | null }> {
+    const { data: row } = await supabase
+        .from('invitaciones_planes')
+        .select('invitado_id')
+        .eq('id', inviteId)
+        .maybeSingle();
     const { error } = await supabase
         .from('invitaciones_planes')
         .update({ estado: 'rechazado' })
         .eq('id', inviteId);
+    if (!error && row?.invitado_id) {
+        invalidateProfileNotificationCount(row.invitado_id as string);
+    }
     return { error: error?.message ?? null };
 }
 

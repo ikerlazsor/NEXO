@@ -1,19 +1,29 @@
-import { Tabs } from 'expo-router';
+import { withLayoutContext } from 'expo-router';
+import { MainChrome } from '../../components/MainChrome';
+import { createPagerTabNavigator } from '../../lib/createPagerTabNavigator';
 
+const { Navigator } = createPagerTabNavigator();
+const PagerTabs = withLayoutContext(Navigator);
+
+/**
+ * Orden del deslizamiento: chats → mis planes → feed → buscar.
+ * PagerView enseña la pantalla de destino mientras deslizas.
+ */
 export default function TabLayout() {
     return (
-        <Tabs
-            screenOptions={{
-                headerShown: false,
-                tabBarStyle: { display: 'none' },
-                freezeOnBlur: true,
-            }}
-        >
-            <Tabs.Screen name="index" />
-            <Tabs.Screen name="chats" />
-            <Tabs.Screen name="my-plans" />
-            <Tabs.Screen name="search-profiles" />
-            <Tabs.Screen name="explore" options={{ href: null }} />
-        </Tabs>
+        <MainChrome>
+            <PagerTabs
+                initialRouteName="index"
+                screenOptions={{
+                    swipeEnabled: true,
+                    lazy: false,
+                }}
+            >
+                <PagerTabs.Screen name="chats" />
+                <PagerTabs.Screen name="my-plans" />
+                <PagerTabs.Screen name="index" />
+                <PagerTabs.Screen name="search-profiles" />
+            </PagerTabs>
+        </MainChrome>
     );
 }

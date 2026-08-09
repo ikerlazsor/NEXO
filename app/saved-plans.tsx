@@ -7,9 +7,9 @@ import React,
     { useCallback,
     useRef,
     useState } from 'react';
+import { FlashList } from '@shopify/flash-list';
 import {
     ActivityIndicator,
-    FlatList,
     Platform,
     StyleSheet,
     Text,
@@ -21,7 +21,7 @@ import { PlanCard, type Membership } from '../components/PlanCard';
 import { useListScrollRestore } from '../hooks/useListScrollRestore';
 import { deletePlanCompletely } from '../lib/deletePlan';
 import { useT } from '../lib/i18n';
-import { OPTIMIZED_LIST_PROPS } from '../lib/listConfig';
+import { FLASH_LIST_DRAW_DISTANCE } from '../lib/listConfig';
 import { ScreenKeys } from '../lib/screenState';
 import {
     isAcceptedParticipant,
@@ -34,7 +34,8 @@ import { canJoinPlanByGender } from '../lib/soloChicas';
 import { canJoinMorePlans } from '../lib/planLimits';
 import { getAuthUser } from '../lib/auth';
 import type { Genero } from '../lib/profileFields';
-import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
+import { isPlanActiveForSaved, purgePastSavedPlansForUser, runPlanLifecycleMaintenance } from '../lib/planLifecycle';
+import { screenCacheKey, ScreenCacheTTL, invalidatePlanMembershipCaches } from '../lib/screenCaches';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 import { supabase } from '../lib/supabase';
 
@@ -60,22 +61,25 @@ export default function SavedPlansScreen() {
     const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(null);
     const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.SAVED_PLANS);
     const hasDataRef = useRef(false);
+    const fetchGenRef = useRef(0);
 
-    useFocusEffect(useCallback(() => { void fetchSavedData(); }, []));
-
-    const fetchSavedData = async () => {
+    const fetchSavedData = useCallback(async () => {
+        const gen = ++fetchGenRef.current;
         try {
             const user = await getAuthUser();
             if (!user) return;
+            if (gen !== fetchGenRef.current) return;
             setCurrentUserId(user.id);
 
-            const cached = cacheGetStale<SavedPlansSnapshot>(screenCacheKey.savedPlans(user.id));
+            const cacheKey = screenCacheKey.savedPlans(user.id);
+            const cached = cacheGetStale<SavedPlansSnapshot>(cacheKey);
             if (cached && !hasDataRef.current) {
-                setSavedPlans(cached.savedPlans);
+                const upcoming = (cached.savedPlans ?? []).filter((p) => isPlanActiveForSaved(p));
+                setSavedPlans(upcoming);
                 setMembershipMap(cached.membershipMap);
                 setCurrentUserGenero(cached.currentUserGenero);
-                hasDataRef.current = cached.savedPlans.length > 0;
-                setLoading(false);
+                hasDataRef.current = upcoming.length > 0;
+                if (upcoming.length > 0) setLoading(false);
             } else if (!hasDataRef.current) {
                 setLoading(true);
             }
@@ -85,12 +89,17 @@ export default function SavedPlansScreen() {
                 .select('genero')
                 .eq('id', user.id)
                 .maybeSingle();
+            if (gen !== fetchGenRef.current) return;
             const nextGenero = (myProfile?.genero as Genero) ?? null;
             setCurrentUserGenero(nextGenero);
 
+            void runPlanLifecycleMaintenance();
+            await purgePastSavedPlansForUser(user.id);
+            if (gen !== fetchGenRef.current) return;
+
             const { data: savedData } = await supabase
                 .from('planes_guardados')
-                .select('plan_id, planes (*, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url)))')
+                .select('plan_id, planes (*, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)))')
                 .eq('usuario_id', user.id);
 
             const { data: joinedData } = await supabase
@@ -98,12 +107,17 @@ export default function SavedPlansScreen() {
                 .select('plan_id, estado')
                 .eq('usuario_id', user.id);
 
-            const rawPlans = (savedData || []).map((s: any) => s.planes).filter(Boolean);
+            if (gen !== fetchGenRef.current) return;
+
+            const rawPlans = (savedData || [])
+                .map((s: any) => s.planes)
+                .filter(Boolean)
+                .filter((plan: any) => isPlanActiveForSaved(plan));
 
             const creatorIds = Array.from(new Set(rawPlans.map((p: any) => p.creador_id).filter(Boolean)));
             let creatorMap: Record<string, any> = {};
             if (creatorIds.length > 0) {
-                const { data: creators } = await supabase.from('perfiles').select('id, nombre, avatar_url').in('id', creatorIds);
+                const { data: creators } = await supabase.from('perfiles').select('id, nombre, avatar_url, genero').in('id', creatorIds);
                 creatorMap = Object.fromEntries((creators || []).map(c => [c.id, c]));
             }
 
@@ -121,7 +135,7 @@ export default function SavedPlansScreen() {
             });
 
             setSavedPlans(formatted);
-            hasDataRef.current = formatted.length > 0;
+            hasDataRef.current = true;
 
             const map: Record<string, Membership> = {};
             (joinedData || []).forEach((p: any) => {
@@ -130,17 +144,23 @@ export default function SavedPlansScreen() {
             });
             setMembershipMap(map);
 
-            cacheSet(screenCacheKey.savedPlans(user.id), {
+            cacheSet(cacheKey, {
                 savedPlans: formatted,
                 membershipMap: map,
                 currentUserGenero: nextGenero,
             } satisfies SavedPlansSnapshot, ScreenCacheTTL.savedPlans);
         } catch (error) {
-            console.error(error);
+            if (__DEV__) console.error(error);
         } finally {
-            setLoading(false);
+            if (gen === fetchGenRef.current) setLoading(false);
         }
-    };
+    }, []);
+
+    useFocusEffect(
+        useCallback(() => {
+            void fetchSavedData();
+        }, [fetchSavedData]),
+    );
 
     const handleJoin = async (planId: string) => {
         if (!currentUserId) return;
@@ -169,6 +189,17 @@ export default function SavedPlansScreen() {
             setSavedPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: p.joinedCount + 1 } : p));
         }
         await supabase.from('participantes').insert({ plan_id: planId, usuario_id: currentUserId, estado });
+        invalidatePlanMembershipCaches(currentUserId);
+        const { notifyPlanJoin, schedulePlanLifecycleReminders } = await import('../lib/push');
+            notifyPlanJoin(planId, estado);
+            if (estado === 'aceptado') {
+                void schedulePlanLifecycleReminders({
+                planId,
+                planTitle: plan.titulo,
+                fechaEvento: plan.fecha_evento,
+                categoria: plan.categoria,
+            });
+        }
     };
 
     const handleLeave = async (planId: string) => {
@@ -185,6 +216,7 @@ export default function SavedPlansScreen() {
                 setMembershipMap(prev => { const n = { ...prev }; delete n[planId]; return n; });
                 if (wasJoined) setSavedPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: Math.max(0, p.joinedCount - 1) } : p));
                 await supabase.from('participantes').delete().eq('plan_id', planId).eq('usuario_id', currentUserId);
+                invalidatePlanMembershipCaches(currentUserId);
                 if (wasJoined) {
                     await promoteWaitlist(planId);
                     fetchSavedData();
@@ -232,14 +264,15 @@ export default function SavedPlansScreen() {
             </View>
 
             <View style={{ flex: 1 }}>
-                <FlatList
+                <FlashList
                     ref={listRef}
+                    style={{ flex: 1 }}
                     data={savedPlans}
                     keyExtractor={(item) => item.id}
                     showsVerticalScrollIndicator={false}
                     onScroll={onScroll}
                     scrollEventThrottle={scrollEventThrottle}
-                    {...OPTIMIZED_LIST_PROPS}
+                    drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     renderItem={({ item, index }) => (
                         <PlanCard
                             item={item}

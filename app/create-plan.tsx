@@ -25,9 +25,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { PlanCoverPicker } from '../components/PlanCoverPicker';
 import { PlanLocationPicker } from '../components/PlanLocationPicker';
 import { InvitePeopleSheet, type InviteProfile } from '../components/InvitePeopleSheet';
-import { isLocationInSpain } from '../lib/geo';
+import { isLocationInEurope } from '../lib/geo';
 import { useT } from '../lib/i18n';
-import { canJoinMorePlans } from '../lib/planLimits';
+import { getAuthUser } from '../lib/auth';
+import { FEED_CACHE_KEY } from '../lib/feedCache';
+import { markFeedNeedsRefresh } from '../lib/feedReload';
+import { hapticError, hapticMedium, hapticSelection, hapticSuccess, hapticToggle } from '../lib/haptics';
+import { canCreateMorePlans, MAX_ACTIVE_PLANS } from '../lib/planLimits';
+import { invalidatePlanMembershipCaches } from '../lib/screenCaches';
+import { cacheInvalidate } from '../lib/ttlCache';
 import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../lib/planInvites';
 import { moderatePlanTitle, type TitleModerationReason } from '../lib/titleModeration';
 import {
@@ -65,10 +71,65 @@ function minPlanDate(): Date {
 export default function CreatePlanScreen() {
     const router = useRouter();
     const { t } = useT();
-    const { editId } = useLocalSearchParams(); 
+    const { editId, duplicateId } = useLocalSearchParams<{ editId?: string; duplicateId?: string }>();
+    const sourcePlanId = editId ? String(editId) : duplicateId ? String(duplicateId) : null;
+    const isDuplicate = !!duplicateId && !editId;
     const mapRef = useRef<MapView>(null);
     const scrollRef = useRef<ScrollView>(null);
+    const publishingRef = useRef(false);
+    const mountedRef = useRef(true);
     const [loading, setLoading] = useState(false);
+    /** Aviso visible en pantalla (el Alert nativo queda detrás del modal de crear). */
+    const [formBanner, setFormBanner] = useState<string | null>(null);
+    const [limitBlocked, setLimitBlocked] = useState(false);
+    const [limitChecking, setLimitChecking] = useState(() => !editId);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            publishingRef.current = false;
+        };
+    }, []);
+
+    // Comprobar límite al abrir (crear / duplicar), no solo al publicar.
+    useEffect(() => {
+        if (editId) {
+            setLimitBlocked(false);
+            setLimitChecking(false);
+            return;
+        }
+        let cancelled = false;
+        setLimitChecking(true);
+        void (async () => {
+            try {
+                const user = await getAuthUser();
+                if (!user || cancelled) return;
+                const check = await canCreateMorePlans(user.id);
+                if (cancelled || !mountedRef.current) return;
+                if (!check.allowed) {
+                    setLimitBlocked(true);
+                    setFormBanner(
+                        check.error
+                            ? t('createplan.planLimitCheckError')
+                            : t('createplan.planLimitReached', { max: check.max }),
+                    );
+                } else {
+                    setLimitBlocked(false);
+                }
+            } catch {
+                if (!cancelled && mountedRef.current) {
+                    setLimitBlocked(true);
+                    setFormBanner(t('createplan.planLimitCheckError'));
+                }
+            } finally {
+                if (!cancelled && mountedRef.current) setLimitChecking(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [editId, t]);
 
     const [title, setTitle] = useState('');
     /** Resultado de moderación del título (mientras rellena el resto del formulario). */
@@ -112,6 +173,8 @@ export default function CreatePlanScreen() {
         longitude: -3.703790,
         address: ''
     });
+    /** El pin de Madrid es solo vista inicial; hay que elegir ubicación de verdad. */
+    const [locationPicked, setLocationPicked] = useState(false);
 
     useEffect(() => {
         supabase.auth.getUser().then(async ({ data: { user } }) => {
@@ -123,77 +186,86 @@ export default function CreatePlanScreen() {
     }, []);
 
     useEffect(() => {
-        if (editId) {
-            const loadPlanData = async () => {
-                const [{ data, error }, partsRes] = await Promise.all([
-                    supabase.from('planes').select('*').eq('id', editId).single(),
-                    supabase
-                        .from('participantes')
-                        .select('usuario_id, estado')
-                        .eq('plan_id', String(editId))
-                        .eq('estado', 'aceptado'),
-                ]);
-                if (data && !error) {
-                    setTitle(data.titulo ?? '');
-                    setDescription(data.descripcion ?? '');
-                    const resolved = resolvePlanCategories(data);
-                    if (resolved.main) {
-                        setCategory(resolved.main);
-                        setSubcategory(resolved.sub ?? SUBCATEGORIES[resolved.main][0]);
+        if (!sourcePlanId) return;
+        const loadPlanData = async () => {
+            const [{ data, error }, partsRes] = await Promise.all([
+                supabase.from('planes').select('*').eq('id', sourcePlanId).single(),
+                editId
+                    ? supabase
+                          .from('participantes')
+                          .select('usuario_id, estado')
+                          .eq('plan_id', String(editId))
+                          .eq('estado', 'aceptado')
+                    : Promise.resolve({ data: [] as { usuario_id: string; estado: string }[] }),
+            ]);
+            if (data && !error) {
+                setTitle(data.titulo ?? '');
+                setDescription(data.descripcion ?? '');
+                const resolved = resolvePlanCategories(data);
+                if (resolved.main) {
+                    setCategory(resolved.main);
+                    setSubcategory(resolved.sub ?? SUBCATEGORIES[resolved.main][0]);
+                }
+                const joined = editId ? (partsRes.data?.length ?? 0) : 0;
+                setJoinedCount(joined);
+                const loadedMax = Math.min(
+                    MAX_PEOPLE,
+                    Math.max(Math.max(MIN_PEOPLE, joined || MIN_PEOPLE), data.maximo_participantes ?? 5),
+                );
+                setMaxPeople(loadedMax);
+                setRequiereAprobacion(!!data.requiere_aprobacion);
+                setSoloChicas(!!data.solo_chicas);
+                setVisibility(
+                    data.modo_privado ? 'private' : data.solo_amigos ? 'friends' : 'public',
+                );
+                if (data.modo_privado && editId) {
+                    try {
+                        const invitees = await getPlanPendingInvitees(String(editId));
+                        setPendingInvites(
+                            invitees.map((i) => ({
+                                id: i.id,
+                                nombre: i.nombre,
+                                nombre_usuario: i.nombre_usuario,
+                                avatar_url: i.avatar_url,
+                                invitedByName: i.invitadorNombre,
+                            })),
+                        );
+                    } catch {
+                        setPendingInvites([]);
                     }
-                    const joined = partsRes.data?.length ?? 0;
-                    setJoinedCount(joined);
-                    const loadedMax = Math.min(
-                        MAX_PEOPLE,
-                        Math.max(Math.max(MIN_PEOPLE, joined), data.maximo_participantes ?? 5),
-                    );
-                    setMaxPeople(loadedMax);
-                    setRequiereAprobacion(!!data.requiere_aprobacion);
-                    setSoloChicas(!!data.solo_chicas);
-                    setVisibility(
-                        data.modo_privado ? 'private' : data.solo_amigos ? 'friends' : 'public',
-                    );
-                    if (data.modo_privado && editId) {
-                        try {
-                            const invitees = await getPlanPendingInvitees(String(editId));
-                            setPendingInvites(
-                                invitees.map((i) => ({
-                                    id: i.id,
-                                    nombre: i.nombre,
-                                    nombre_usuario: i.nombre_usuario,
-                                    avatar_url: i.avatar_url,
-                                    invitedByName: i.invitadorNombre,
-                                })),
-                            );
-                        } catch {
-                            setPendingInvites([]);
-                        }
-                    }
-                    const eventDate = new Date(data.fecha_evento);
+                } else if (isDuplicate) {
+                    setPendingInvites([]);
+                }
+                const eventDate = new Date(data.fecha_evento);
+                if (isDuplicate || eventDate.getTime() < Date.now() + MIN_LEAD_MS) {
+                    setDate(minPlanDate());
+                    setOriginalEventMs(null);
+                } else {
                     setDate(eventDate);
                     setOriginalEventMs(eventDate.getTime());
-                    setLocation({
-                        latitude: data.latitud || 40.416775,
-                        longitude: data.longitud || -3.703790,
-                        address: data.nombre_ubicacion ?? '',
-                    });
-
-                    const img = String(data.imagen_url || '');
-                    if (img.startsWith('nexo_cover:')) {
-                        const idx = parseInt(img.split(':')[3] || '0', 10);
-                        setCoverIndex(Number.isFinite(idx) ? idx : 0);
-                    }
                 }
-            };
-            loadPlanData();
-        }
-    }, [editId]);
+                setLocation({
+                    latitude: data.latitud || 40.416775,
+                    longitude: data.longitud || -3.703790,
+                    address: data.nombre_ubicacion ?? '',
+                });
+                setLocationPicked(true);
+
+                const img = String(data.imagen_url || '');
+                if (img.startsWith('nexo_cover:')) {
+                    const idx = parseInt(img.split(':')[3] || '0', 10);
+                    setCoverIndex(Number.isFinite(idx) ? idx : 0);
+                }
+            }
+        };
+        void loadPlanData();
+    }, [sourcePlanId, editId, isDuplicate]);
 
     useEffect(() => {
-        if (!editId) {
+        if (!editId && !isDuplicate) {
             setCoverIndex(0);
         }
-    }, [category, subcategory, editId]);
+    }, [category, subcategory, editId, isDuplicate]);
 
     // Revisar título 3 s después de dejar de escribir (nunca al instante)
     const TITLE_CHECK_DELAY_MS = 3000;
@@ -233,6 +305,7 @@ export default function CreatePlanScreen() {
 
     const selectMainCategory = (main: MainCategoryId) => {
         if (nearStartLock) return;
+        hapticSelection();
         setCategory(main);
         setSubcategory(SUBCATEGORIES[main][0]);
         setCoverIndex(0);
@@ -240,6 +313,7 @@ export default function CreatePlanScreen() {
 
     const selectSubcategory = (sub: string) => {
         if (nearStartLock) return;
+        hapticSelection();
         setSubcategory(sub);
         setCoverIndex(0);
     };
@@ -249,10 +323,16 @@ export default function CreatePlanScreen() {
     const minEditableMax = Math.max(MIN_PEOPLE, joinedCount || 0);
 
     const incrementMax = () => {
-        if (maxPeople < MAX_PEOPLE) setMaxPeople(maxPeople + 1);
+        if (maxPeople < MAX_PEOPLE) {
+            hapticSelection();
+            setMaxPeople(maxPeople + 1);
+        }
     };
     const decrementMax = () => {
-        if (maxPeople > minEditableMax) setMaxPeople(maxPeople - 1);
+        if (maxPeople > minEditableMax) {
+            hapticSelection();
+            setMaxPeople(maxPeople - 1);
+        }
     };
 
     const spotsHint = t('createplan.spotsHintMax', { max: maxPeople });
@@ -277,29 +357,55 @@ export default function CreatePlanScreen() {
     // Guardar clave estable del asset (no URI local)
     const getCoverImageKey = () => encodeCoverImageKey(category, subcategory, coverIndex);
 
+    const showFormError = (message: string) => {
+        hapticError();
+        setFormBanner(message);
+        // El create-plan es modal nativo: Alert queda detrás. Aun así lo encolamos por si cierran.
+        Alert.alert(t('createplan.incomplete'), message);
+    };
+
     const handleCreatePlan = async () => {
+        if (publishingRef.current || loading || limitChecking) return;
+        hapticMedium();
+
+        if (!editId && limitBlocked) {
+            showFormError(t('createplan.planLimitReached', { max: MAX_ACTIVE_PLANS }));
+            return;
+        }
+
         if (!title.trim() || !description.trim()) {
-            Alert.alert(t('createplan.incomplete'), t('createplan.incompleteMsg'));
+            showFormError(t('createplan.incompleteMsg'));
             return;
         }
         if (date.getTime() < minPlanDate().getTime()) {
-            Alert.alert(t('createplan.incomplete'), t('createplan.minLeadTime'));
+            showFormError(t('createplan.minLeadTime'));
             return;
         }
         if (maxPeople < MIN_PEOPLE) {
-            Alert.alert(t('createplan.incomplete'), t('createplan.incompleteMsg'));
+            showFormError(t('createplan.incompleteMsg'));
             return;
         }
         if (editId && maxPeople < joinedCount) {
-            Alert.alert(t('createplan.incomplete'), t('createplan.maxBelowJoined', { n: joinedCount }));
+            showFormError(t('createplan.maxBelowJoined', { n: joinedCount }));
             return;
         }
-        if (!isLocationInSpain(location.latitude, location.longitude)) {
-            Alert.alert(t('createplan.incomplete'), t('createplan.locationSpainOnly'));
+        if (!isLocationInEurope(location.latitude, location.longitude)) {
+            showFormError(t('createplan.locationEuropeOnly'));
+            return;
+        }
+        const locationAddress = location.address.trim();
+        const resolvingLabel = t('createplan.mapResolving');
+        if (
+            !locationPicked ||
+            !locationAddress ||
+            locationAddress === resolvingLabel ||
+            locationAddress === t('createplan.noLocationName')
+        ) {
+            showFormError(t('createplan.locationRequired'));
             return;
         }
         if (visibility === 'private' && pendingInvites.length < 1) {
-            Alert.alert(t('createplan.incomplete'), t('createplan.needInvite'));
+            showFormError(t('createplan.needInvite'));
             return;
         }
 
@@ -311,20 +417,34 @@ export default function CreatePlanScreen() {
             titleCheck.status === 'bad' &&
             titleCheck.title === trimmedTitle
         ) {
-            Alert.alert(t('createplan.titleBad'), t('createplan.titleBadMsg'));
+            showFormError(t('createplan.titleBadMsg'));
             return;
         }
 
-        try {
-            setLoading(true);
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
+        publishingRef.current = true;
+        setLoading(true);
+        setFormBanner(null);
 
+        try {
+            const user = await getAuthUser();
+            if (!user) {
+                showFormError(t('createplan.saveError'));
+                return;
+            }
+            if (!mountedRef.current) return;
+
+            // Límite ANTES de insertar (si falla el conteo, no publica a ciegas).
             if (!editId) {
-                const limitCheck = await canJoinMorePlans(user.id);
+                const limitCheck = await canCreateMorePlans(user.id);
+                if (!mountedRef.current) return;
+                if (limitCheck.error) {
+                    setLimitBlocked(true);
+                    showFormError(t('createplan.planLimitCheckError'));
+                    return;
+                }
                 if (!limitCheck.allowed) {
-                    Alert.alert(t('createplan.incomplete'), t('feed.planLimitReached', { max: limitCheck.max }));
-                    setLoading(false);
+                    setLimitBlocked(true);
+                    showFormError(t('createplan.planLimitReached', { max: limitCheck.max }));
                     return;
                 }
             }
@@ -333,7 +453,7 @@ export default function CreatePlanScreen() {
 
             const planPayload: Record<string, unknown> = {
                 descripcion: description.trim(),
-                nombre_ubicacion: location.address || t('createplan.noLocationName'),
+                nombre_ubicacion: locationAddress,
                 maximo_participantes: maxPeople,
                 imagen_url: imageKey,
                 fecha_evento: date.toISOString(),
@@ -358,67 +478,100 @@ export default function CreatePlanScreen() {
                 planPayload.creador_id = user.id;
             }
 
-            const savePlan = async (payload: Record<string, unknown>) => {
-                if (editId) {
-                    return supabase.from('planes').update(payload).eq('id', editId);
-                }
-                return supabase.from('planes').insert(payload).select().single();
-            };
-
-            const result = await savePlan(planPayload);
-
-            if (result.error) throw result.error;
-
             if (editId) {
+                const { error: updateError } = await supabase
+                    .from('planes')
+                    .update(planPayload)
+                    .eq('id', editId);
+                if (!mountedRef.current) return;
+                if (updateError) throw updateError;
+
                 if (visibility === 'private' && pendingInvites.length > 0) {
                     await Promise.all(
                         pendingInvites.map((p) => sendPlanInvite(String(editId), user.id, p.id, 'plan')),
                     );
                 }
-                router.back();
-            } else {
-                const planData = 'data' in result ? result.data : null;
-                if (!planData?.id) throw new Error('plan_insert_failed');
-
-                const { error: participantError } = await supabase
-                    .from('participantes')
-                    .insert({ plan_id: planData.id, usuario_id: user.id, estado: 'aceptado' });
-
-                if (participantError) throw participantError;
-
-                if (visibility === 'private' && pendingInvites.length > 0) {
-                    await Promise.all(
-                        pendingInvites.map((p) => sendPlanInvite(planData.id, user.id, p.id, 'plan')),
-                    );
-                }
-
-                void supabase.from('mensajes').insert({
-                    plan_id: planData.id,
-                    emisor_id: user.id,
-                    contenido: t('chat.planCreated'),
-                    tipo: 'texto',
-                });
-
-                router.replace('/(tabs)');
+                cacheInvalidate(FEED_CACHE_KEY);
+                invalidatePlanMembershipCaches(user.id);
+                markFeedNeedsRefresh();
+                hapticSuccess();
+                if (mountedRef.current) router.back();
+                return;
             }
 
+            // Crear vía RPC (evita fallo RLS de insert().select())
+            const { data: planData, error: createError } = await supabase.rpc('create_meetup_plan', {
+                p_payload: planPayload,
+            });
+            if (!mountedRef.current) return;
+            if (createError) throw createError;
+            if (!planData?.id) throw new Error('plan_insert_failed');
+
+            if (visibility === 'private' && pendingInvites.length > 0) {
+                await Promise.all(
+                    pendingInvites.map((p) => sendPlanInvite(planData.id, user.id, p.id, 'plan')),
+                );
+            }
+
+            void supabase.from('mensajes').insert({
+                plan_id: planData.id,
+                emisor_id: user.id,
+                contenido: t('chat.planCreated'),
+                tipo: 'texto',
+            });
+
+            cacheInvalidate(FEED_CACHE_KEY);
+            invalidatePlanMembershipCaches(user.id);
+            markFeedNeedsRefresh();
+            hapticSuccess();
+            if (mountedRef.current) {
+                // Siempre al feed (también si se abrió desde Mis planes).
+                router.replace('/');
+            }
         } catch (error: unknown) {
-            console.error(error);
+            if (__DEV__) console.error(error);
+            if (!mountedRef.current) return;
+            hapticError();
             const msg = error instanceof Error ? error.message : '';
             Alert.alert(t('profile.error'), t('createplan.saveError') + (msg ? `\n${msg}` : ''));
-        } finally { setLoading(false); }
+        } finally {
+            publishingRef.current = false;
+            if (mountedRef.current) setLoading(false);
+        }
     };
 
     return (
         <SafeAreaView style={styles.safe} edges={['top', 'left', 'right', 'bottom']}>
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
                 <View style={styles.header}>
-                    <Pressable onPress={() => router.back()} style={styles.closeBtn}>
+                    <Pressable
+                        onPress={() => {
+                            publishingRef.current = false;
+                            mountedRef.current = false;
+                            router.back();
+                        }}
+                        style={styles.closeBtn}
+                    >
                         <Ionicons name="close" size={28} color="#1E293B" />
                     </Pressable>
-                    <Text style={styles.headerTitle}>{editId ? t('createplan.edit') : t('createplan.create')}</Text>
+                    <Text style={styles.headerTitle}>
+                        {editId
+                            ? t('createplan.edit')
+                            : isDuplicate
+                              ? t('createplan.duplicate')
+                              : t('createplan.create')}
+                    </Text>
                     <View style={{ width: 28 }} />
                 </View>
+
+                {formBanner ? (
+                    <View style={styles.formBannerSticky}>
+                        <View style={styles.formBanner}>
+                            <Ionicons name="warning" size={18} color="#B45309" />
+                            <Text style={styles.formBannerText}>{formBanner}</Text>
+                        </View>
+                    </View>
+                ) : null}
 
                 <ScrollView
                     ref={scrollRef}
@@ -558,13 +711,14 @@ export default function CreatePlanScreen() {
 
                     <PlanLocationPicker
                         location={location}
-                        onLocationChange={setLocation}
+                        onLocationChange={(loc) => {
+                            setLocationPicked(true);
+                            setLocation(loc);
+                        }}
                         mapRef={mapRef}
                     />
 
                     <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>{t('createplan.spots')}</Text>
-
                         <Text style={styles.spotsSubLabel}>{t('createplan.maxSpots')}</Text>
                         <View style={styles.peopleSelector}>
                             <TouchableOpacity
@@ -598,7 +752,10 @@ export default function CreatePlanScreen() {
                                 </View>
                                 <Switch
                                     value={soloChicas}
-                                    onValueChange={setSoloChicas}
+                                    onValueChange={(v) => {
+                                        hapticToggle(v);
+                                        setSoloChicas(v);
+                                    }}
                                     trackColor={{ false: '#E2E8F0', true: '#F9A8D4' }}
                                     thumbColor={soloChicas ? SOLO_PINK : '#FFF'}
                                 />
@@ -611,7 +768,10 @@ export default function CreatePlanScreen() {
                         <View style={styles.joinTypeRow}>
                             <TouchableOpacity
                                 style={[styles.joinTypeBtn, !requiereAprobacion && styles.joinTypeBtnActive]}
-                                onPress={() => setRequiereAprobacion(false)}
+                                onPress={() => {
+                                    hapticSelection();
+                                    setRequiereAprobacion(false);
+                                }}
                                 activeOpacity={0.85}
                             >
                                 <Ionicons name="flash" size={22} color={!requiereAprobacion ? PRIMARY : '#94A3B8'} />
@@ -620,7 +780,10 @@ export default function CreatePlanScreen() {
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={[styles.joinTypeBtn, requiereAprobacion && styles.joinTypeBtnActive]}
-                                onPress={() => setRequiereAprobacion(true)}
+                                onPress={() => {
+                                    hapticSelection();
+                                    setRequiereAprobacion(true);
+                                }}
                                 activeOpacity={0.85}
                             >
                                 <Ionicons name="shield-checkmark" size={22} color={requiereAprobacion ? PRIMARY : '#94A3B8'} />
@@ -656,6 +819,7 @@ export default function CreatePlanScreen() {
                                         key={opt.id}
                                         style={[styles.visibilityOption, active && styles.visibilityOptionActive]}
                                         onPress={() => {
+                                            hapticSelection();
                                             setVisibility(opt.id);
                                             if (opt.id !== 'private') setPendingInvites([]);
                                             if (opt.id === 'private') {
@@ -706,8 +870,22 @@ export default function CreatePlanScreen() {
                 </ScrollView>
 
                 <View style={styles.footer}>
-                    <TouchableOpacity style={[styles.createBtn, loading && { opacity: 0.7 }]} onPress={handleCreatePlan} disabled={loading}>
-                        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>{editId ? t('createplan.saveChanges') : t('createplan.publish')}</Text>}
+                    <TouchableOpacity
+                        style={[
+                            styles.createBtn,
+                            (loading || limitBlocked || limitChecking) && { opacity: 0.7 },
+                            limitBlocked && styles.createBtnBlocked,
+                        ]}
+                        onPress={handleCreatePlan}
+                        disabled={loading || limitBlocked || limitChecking}
+                    >
+                        {loading || limitChecking ? (
+                            <ActivityIndicator color="#fff" />
+                        ) : (
+                            <Text style={styles.createBtnText} numberOfLines={1}>
+                                {editId ? t('createplan.saveChanges') : t('createplan.publish')}
+                            </Text>
+                        )}
                     </TouchableOpacity>
                 </View>
 
@@ -721,14 +899,20 @@ export default function CreatePlanScreen() {
                         return { error: null, silent: true };
                     }}
                     onRemove={async (id) => {
+                        let removed: InviteProfile | undefined;
+                        setPendingInvites((prev) => {
+                            removed = prev.find((p) => p.id === id);
+                            return prev.filter((p) => p.id !== id);
+                        });
                         if (editId) {
                             const { error } = await cancelPlanInvite(String(editId), id);
-                            if (!error) {
-                                setPendingInvites((prev) => prev.filter((p) => p.id !== id));
+                            if (error && removed) {
+                                setPendingInvites((prev) =>
+                                    prev.some((p) => p.id === removed!.id) ? prev : [...prev, removed!],
+                                );
                             }
                             return { error };
                         }
-                        setPendingInvites((prev) => prev.filter((p) => p.id !== id));
                         return { error: null };
                     }}
                 />
@@ -740,7 +924,7 @@ export default function CreatePlanScreen() {
 const styles = StyleSheet.create({
     safe: { flex: 1, backgroundColor: '#FFF' },
     header: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderColor: '#F1F5F9', alignItems: 'center' },
-    closeBtn: { padding: 4 },
+    closeBtn: { padding: 8, marginLeft: 2, zIndex: 2 },
     headerTitle: { fontSize: 18, fontWeight: '800', color: '#1E293B' },
     scrollContent: { paddingBottom: 120 },
     categorySection: {
@@ -913,6 +1097,34 @@ const styles = StyleSheet.create({
     inviteOpenBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
     inviteOpenBtnSub: { color: '#94A3B8', fontWeight: '600', fontSize: 12, marginTop: 2 },
     footer: { position: 'absolute', bottom: 0, width: '100%', padding: 20, backgroundColor: '#FFF', borderTopWidth: 1, borderColor: '#F1F5F9' },
+    formBannerSticky: {
+        paddingHorizontal: 20,
+        paddingTop: 4,
+        paddingBottom: 8,
+        backgroundColor: '#FFF',
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#E2E8F0',
+        zIndex: 2,
+        elevation: 3,
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.06,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 3 },
+    },
+    formBanner: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+        backgroundColor: '#FFFBEB',
+        borderWidth: 1,
+        borderColor: '#FCD34D',
+        borderRadius: 14,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        marginBottom: 0,
+    },
+    formBannerText: { flex: 1, fontSize: 13, fontWeight: '700', color: '#92400E', lineHeight: 18 },
     createBtn: { backgroundColor: '#2563EB', padding: 18, borderRadius: 20, alignItems: 'center', elevation: 5, shadowColor: '#2563EB', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
+    createBtnBlocked: { backgroundColor: '#94A3B8', shadowOpacity: 0 },
     createBtnText: { color: '#FFF', fontWeight: '800', fontSize: 16, textTransform: 'uppercase', letterSpacing: 1 }
 });

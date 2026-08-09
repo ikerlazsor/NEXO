@@ -8,31 +8,34 @@ import {
     useRef,
     useState,
 } from 'react';
+import { FlashList } from '@shopify/flash-list';
 import {
-    ActivityIndicator,
-    FlatList,
-    Image,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
-import { MainChrome } from '../../components/MainChrome';
 import { PlanImage } from '../../components/PlanImage';
+import { ProfileAvatar } from '../../components/ProfileAvatar';
+import { MyPlansSkeletonList } from '../../components/SkeletonShimmer';
 import { useListScrollRestore } from '../../hooks/useListScrollRestore';
+import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../../lib/planDetailCache';
 import { isFeedPlan } from '../../lib/feedPlans';
 import { useT } from '../../lib/i18n';
-import { OPTIMIZED_LIST_PROPS } from '../../lib/listConfig';
+import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { getAuthUser } from '../../lib/auth';
-import { getPlanJoinRequestCount } from '../../lib/notifications';
+import { getPlanJoinRequestCount, invalidateProfileNotificationCount } from '../../lib/notifications';
+import { hapticLight, hapticSelection, hapticSuccess } from '../../lib/haptics';
 import { isAcceptedParticipant } from '../../lib/participants';
-import { getOpenRatingPlanMap, isPlanAttendanceDismissed, type PendingRatingPlan } from '../../lib/ratings';
-import { isPlanHiddenFromMyList } from '../../lib/myPlansHide';
+import { type Genero } from '../../lib/profileFields';
+import { getDismissedPlanIdSet, getOpenRatingPlanMap, type PendingRatingPlan } from '../../lib/ratings';
+import { getHiddenPlanIdSet } from '../../lib/myPlansHide';
 import { ScreenKeys } from '../../lib/screenState';
 import { resolvePlanImageSource } from '../../lib/sports';
+import { diskSet } from '../../lib/diskCache';
 import { screenCacheKey, ScreenCacheTTL } from '../../lib/screenCaches';
-import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
+import { cacheGetStale, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -44,9 +47,6 @@ const MUTED = '#64748B';
 const GOLD = '#B45309';
 const GOLD_BG = '#FEF3C7';
 const GOLD_BORDER = '#FCD34D';
-
-const avatarFallback = (name?: string) =>
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'N')}&background=4DA6FF&color=fff`;
 
 type PlanItem = {
     id: string;
@@ -65,11 +65,14 @@ export default function MyPlansScreen() {
     const router = useRouter();
     const { t, lang } = useT();
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(false);
     const [plans, setPlans] = useState<PlanItem[]>([]);
-    const [busyId, setBusyId] = useState<string | null>(null);
     const [pendingCount, setPendingCount] = useState(0);
     const [ratingByPlan, setRatingByPlan] = useState<Record<string, PendingRatingPlan>>({});
+    const [userGenero, setUserGenero] = useState<Genero | null>(null);
     const hasDataRef = useRef(false);
+    const fetchGenRef = useRef(0);
+    const didSessionLoadRef = useRef(false);
     const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore<PlanItem>(ScreenKeys.MY_PLANS);
 
     useEffect(() => {
@@ -90,20 +93,20 @@ export default function MyPlansScreen() {
         });
     }, []);
 
-    useFocusEffect(useCallback(() => { void fetchMyPlans(); }, []));
-
     const locale = lang === 'en' ? 'en-GB' : 'es-ES';
 
-    const fetchMyPlans = async () => {
+    const fetchMyPlans = useCallback(async (opts?: { force?: boolean }) => {
+        const gen = ++fetchGenRef.current;
         try {
             const user = await getAuthUser();
             if (!user) { router.replace('/login'); return; }
 
+            const cacheKey = screenCacheKey.myPlans(user.id);
             const cached = cacheGetStale<{
                 plans: PlanItem[];
                 pendingCount: number;
                 ratingByPlan: Record<string, PendingRatingPlan>;
-            }>(screenCacheKey.myPlans(user.id));
+            }>(cacheKey);
             if (cached && !hasDataRef.current) {
                 setPlans(cached.plans ?? []);
                 setPendingCount(cached.pendingCount ?? 0);
@@ -114,14 +117,22 @@ export default function MyPlansScreen() {
                 setLoading(true);
             }
 
-            const now = Date.now();
+            if (!opts?.force && cacheIsFresh(cacheKey) && hasDataRef.current) {
+                setLoading(false);
+                return;
+            }
 
-            const [pending, openRatings, createdRes, joinedRes] = await Promise.all([
+            const now = Date.now();
+            const planCols = 'id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id';
+
+            const [myProfileRes, pending, openRatings, createdRes, joinedRes] = await Promise.all([
+                supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle(),
                 getPlanJoinRequestCount(user.id),
                 getOpenRatingPlanMap(user.id),
+                // Sin perfiles anidados: solo ids/estado; perfiles solo para pendientes.
                 supabase
                     .from('planes')
-                    .select('id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url))')
+                    .select(`${planCols}, participantes(usuario_id, estado)`)
                     .eq('creador_id', user.id)
                     .order('fecha_evento', { ascending: true }),
                 supabase
@@ -129,27 +140,56 @@ export default function MyPlansScreen() {
                     .select(`
                         plan_id,
                         planes (
-                            id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id,
-                            participantes ( usuario_id, estado, perfiles:usuario_id ( id, nombre, avatar_url ) )
+                            ${planCols},
+                            participantes ( usuario_id, estado )
                         )
                     `)
                     .eq('usuario_id', user.id)
                     .eq('estado', 'aceptado'),
             ]);
+            if (gen !== fetchGenRef.current) return;
+
+            setUserGenero((myProfileRes.data?.genero as Genero) ?? null);
             setPendingCount(pending);
             setRatingByPlan(openRatings);
 
+            const pendingUserIds = new Set<string>();
+            const collectPendingIds = (parts: { usuario_id: string; estado: string }[]) => {
+                for (const x of parts) {
+                    if (x.estado === 'pendiente' && x.usuario_id !== user.id) {
+                        pendingUserIds.add(x.usuario_id);
+                    }
+                }
+            };
+
+            for (const p of createdRes.data || []) {
+                collectPendingIds((p.participantes || []) as { usuario_id: string; estado: string }[]);
+            }
+
+            const pendingProfiles = new Map<string, { id: string; nombre?: string; avatar_url?: string | null }>();
+            if (pendingUserIds.size > 0) {
+                const { data: profiles } = await supabase
+                    .from('perfiles')
+                    .select('id, nombre, avatar_url')
+                    .in('id', [...pendingUserIds]);
+                for (const pr of profiles ?? []) {
+                    pendingProfiles.set(pr.id, {
+                        id: pr.id,
+                        nombre: pr.nombre ?? undefined,
+                        avatar_url: pr.avatar_url,
+                    });
+                }
+            }
+            if (gen !== fetchGenRef.current) return;
+
             const formatPlan = (p: any, role: 'creator' | 'member'): PlanItem | null => {
                 if (!p || !isFeedPlan(p)) return null;
-                const parts = (p.participantes || []) as any[];
+                const parts = (p.participantes || []) as { usuario_id: string; estado: string }[];
                 const accepted = parts.filter((x) => isAcceptedParticipant(x.estado));
                 const pendingReqs = role === 'creator'
                     ? parts
-                        .filter((x) => x.estado === 'pendiente' && x.usuario_id !== user.id && x.perfiles)
-                        .map((x) => {
-                            const prof = Array.isArray(x.perfiles) ? x.perfiles[0] : x.perfiles;
-                            return { ...prof, id: x.usuario_id };
-                        })
+                        .filter((x) => x.estado === 'pendiente' && x.usuario_id !== user.id)
+                        .map((x) => pendingProfiles.get(x.usuario_id) ?? { id: x.usuario_id })
                     : [];
                 const eventMs = p.fecha_evento ? new Date(p.fecha_evento).getTime() : 0;
                 return {
@@ -182,14 +222,12 @@ export default function MyPlansScreen() {
             }
 
             const all = Array.from(byId.values());
-            const dismissedFlags = await Promise.all(
-                all.filter((p) => p.isPast).map(async (p) => [p.id, await isPlanAttendanceDismissed(user.id, p.id)] as const),
-            );
-            const dismissed = new Set(dismissedFlags.filter(([, d]) => d).map(([id]) => id));
-            const hiddenFlags = await Promise.all(
-                all.filter((p) => p.isPast).map(async (p) => [p.id, await isPlanHiddenFromMyList(user.id, p.id)] as const),
-            );
-            const hidden = new Set(hiddenFlags.filter(([, d]) => d).map(([id]) => id));
+            const pastIds = all.filter((p) => p.isPast).map((p) => p.id);
+            const [dismissed, hidden] = await Promise.all([
+                getDismissedPlanIdSet(user.id, pastIds),
+                getHiddenPlanIdSet(user.id, pastIds),
+            ]);
+            if (gen !== fetchGenRef.current) return;
 
             const visible = all.filter((p) => !p.isPast || (!dismissed.has(p.id) && !hidden.has(p.id)));
             const upcoming = visible
@@ -210,54 +248,148 @@ export default function MyPlansScreen() {
             const merged = [...upcoming, ...past];
             setPlans(merged);
             hasDataRef.current = true;
-            cacheSet(screenCacheKey.myPlans(user.id), {
+            const snap = {
                 plans: merged,
                 pendingCount: pending,
                 ratingByPlan: openRatings,
-            }, ScreenCacheTTL.myPlans);
+            };
+            cacheSet(cacheKey, snap, ScreenCacheTTL.myPlans);
+            void diskSet(cacheKey, snap);
+            setLoadError(false);
         } catch (e) {
-            console.error(e);
+            if (__DEV__) console.error(e);
+            if (!hasDataRef.current) setLoadError(true);
         } finally {
-            setLoading(false);
+            if (gen === fetchGenRef.current) setLoading(false);
         }
-    };
+    }, [router]);
 
-    const handleAccept = async (planId: string, userId: string) => {
-        setBusyId(planId + userId);
-        const { error } = await supabase
-            .from('participantes')
-            .update({ estado: 'aceptado' })
-            .eq('plan_id', planId)
-            .eq('usuario_id', userId)
-            .eq('estado', 'pendiente');
+    useFocusEffect(
+        useCallback(() => {
+            // Siempre forzar red: unirse / aceptación del host deja la caché desfasada.
+            if (!didSessionLoadRef.current) {
+                didSessionLoadRef.current = true;
+            }
+            void fetchMyPlans({ force: true });
+        }, [fetchMyPlans]),
+    );
 
-        setBusyId(null);
-        if (error) {
-            Alert.alert(
-                t('profile.error'),
-                error.message.includes('policy') || error.message.includes('RLS')
-                    ? t('myplans.rlsHint')
-                    : error.message,
-            );
+    const handleAccept = (planId: string, userId: string) => {
+        const plan = plans.find((p) => p.id === planId);
+        if (!plan) return;
+        if (plan.joinedCount >= plan.maximo_participantes) {
+            Alert.alert(t('profile.error'), t('myplans.full'));
             return;
         }
-        void fetchMyPlans();
+        hapticSuccess();
+
+        let snapshot: PlanItem | undefined;
+        setPlans((prev) =>
+            prev.map((p) => {
+                if (p.id !== planId) return p;
+                snapshot = p;
+                return {
+                    ...p,
+                    pending: p.pending.filter((u) => u.id !== userId),
+                    joinedCount: p.joinedCount + 1,
+                };
+            }),
+        );
+        setPendingCount((c) => Math.max(0, c - 1));
+
+        void (async () => {
+            const { count, error: countError } = await supabase
+                .from('participantes')
+                .select('id', { count: 'exact', head: true })
+                .eq('plan_id', planId)
+                .eq('estado', 'aceptado');
+
+            if (countError) {
+                if (snapshot) {
+                    setPlans((prev) => prev.map((p) => (p.id === planId ? snapshot! : p)));
+                    setPendingCount((c) => c + 1);
+                }
+                Alert.alert(t('profile.error'), countError.message);
+                return;
+            }
+
+            if ((count ?? 0) >= plan.maximo_participantes) {
+                if (snapshot) {
+                    setPlans((prev) => prev.map((p) => (p.id === planId ? snapshot! : p)));
+                    setPendingCount((c) => c + 1);
+                }
+                Alert.alert(t('profile.error'), t('myplans.full'));
+                return;
+            }
+
+            const { error } = await supabase
+                .from('participantes')
+                .update({ estado: 'aceptado' })
+                .eq('plan_id', planId)
+                .eq('usuario_id', userId)
+                .eq('estado', 'pendiente');
+
+            if (error) {
+                if (snapshot) {
+                    setPlans((prev) => prev.map((p) => (p.id === planId ? snapshot! : p)));
+                    setPendingCount((c) => c + 1);
+                }
+                const msg = error.message || '';
+                Alert.alert(
+                    t('profile.error'),
+                    msg.includes('plan_full') || msg.includes('active_plan_limit')
+                        ? t('myplans.full')
+                        : msg.includes('policy') || msg.includes('RLS')
+                          ? t('myplans.rlsHint')
+                          : msg,
+                );
+                return;
+            }
+            void import('../../lib/push').then(({ notifyPlanJoinDecision }) => {
+                notifyPlanJoinDecision(planId, userId, true);
+            });
+            void getAuthUser().then((u) => {
+                if (u) invalidateProfileNotificationCount(u.id);
+            });
+        })();
     };
 
-    const handleReject = async (planId: string, userId: string) => {
-        setBusyId(planId + userId);
-        const { error } = await supabase
+    const handleReject = (planId: string, userId: string) => {
+        hapticLight();
+        let snapshot: PlanItem | undefined;
+        setPlans((prev) =>
+            prev.map((p) => {
+                if (p.id !== planId) return p;
+                snapshot = p;
+                return {
+                    ...p,
+                    pending: p.pending.filter((u) => u.id !== userId),
+                };
+            }),
+        );
+        setPendingCount((c) => Math.max(0, c - 1));
+
+        void supabase
             .from('participantes')
             .delete()
             .eq('plan_id', planId)
-            .eq('usuario_id', userId);
-
-        setBusyId(null);
-        if (error) {
-            Alert.alert(t('profile.error'), error.message);
-            return;
-        }
-        void fetchMyPlans();
+            .eq('usuario_id', userId)
+            .then(({ error }) => {
+                if (error) {
+                    if (snapshot) {
+                        setPlans((prev) => prev.map((p) => (p.id === planId ? snapshot! : p)));
+                        setPendingCount((c) => c + 1);
+                    }
+                    Alert.alert(t('profile.error'), error.message);
+                    return;
+                }
+                void import('../../lib/push').then(({ notifyPlanJoinDecision }) => {
+                    notifyPlanJoinDecision(planId, userId, false);
+                });
+                void getAuthUser().then((u) => {
+                    if (u) invalidateProfileNotificationCount(u.id);
+                });
+            });
     };
 
     const formatDate = (iso: string | null) => {
@@ -292,7 +424,12 @@ export default function MyPlansScreen() {
                 <TouchableOpacity
                     style={[styles.card, item.isPast && styles.cardPast]}
                     activeOpacity={0.88}
-                    onPress={() => router.push(`/plan/${item.id}`)}
+                    onPress={() => {
+                        hapticSelection();
+                        seedPlanDetailFromFeed(item as unknown as Record<string, unknown>);
+                        prefetchPlanDetail(item.id);
+                        router.push(`/plan/${item.id}`);
+                    }}
                 >
                     <View style={styles.cardHeader}>
                         <PlanImage
@@ -301,14 +438,7 @@ export default function MyPlansScreen() {
                             recyclingKey={String(item.id)}
                         />
                         <View style={{ flex: 1, marginLeft: 12 }}>
-                            <View style={styles.titleRow}>
-                                <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
-                                {!item.isPast && !isCreator ? (
-                                    <View style={styles.memberTag}>
-                                        <Text style={styles.memberTagText}>{t('myplans.joined')}</Text>
-                                    </View>
-                                ) : null}
-                            </View>
+                            <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
                             {item.fecha_evento ? (
                                 <Text style={styles.dateText}>{formatDate(item.fecha_evento)}</Text>
                             ) : null}
@@ -317,6 +447,13 @@ export default function MyPlansScreen() {
                                 <Text style={[styles.countText, isFull && { color: '#B8860B' }]}>
                                     {item.joinedCount}/{item.maximo_participantes}
                                 </Text>
+                                {!item.isPast && !isCreator ? (
+                                    <View style={styles.memberTag}>
+                                        <Text style={styles.memberTagText}>
+                                            {t(userGenero === 'femenino' ? 'myplans.joinedF' : 'myplans.joined')}
+                                        </Text>
+                                    </View>
+                                ) : null}
                             </View>
                             {rating ? (
                                 <TouchableOpacity
@@ -364,7 +501,6 @@ export default function MyPlansScreen() {
                                         {t('myplans.requests', { n: item.pending.length })}
                                     </Text>
                                     {item.pending.map((p) => {
-                                        const busy = busyId === item.id + p.id;
                                         return (
                                             <View key={p.id} style={styles.requestRow}>
                                                 <TouchableOpacity
@@ -376,10 +512,14 @@ export default function MyPlansScreen() {
                                                         })
                                                     }
                                                 >
-                                                    <Image
-                                                        source={{ uri: p.avatar_url || avatarFallback(p.nombre) }}
-                                                        style={styles.reqAvatar}
-                                                    />
+                                                    <View style={{ marginRight: 10 }}>
+                                                        <ProfileAvatar
+                                                            uri={p.avatar_url}
+                                                            name={p.nombre || t('profile.user')}
+                                                            size={36}
+                                                            recyclingKey={p.id}
+                                                        />
+                                                    </View>
                                                     <View style={{ flex: 1 }}>
                                                         <Text style={styles.reqName} numberOfLines={1}>
                                                             {p.nombre || t('profile.user')}
@@ -387,28 +527,24 @@ export default function MyPlansScreen() {
                                                         <Text style={styles.reqHint}>{t('myplans.viewProfile')}</Text>
                                                     </View>
                                                 </TouchableOpacity>
-                                                {busy ? (
-                                                    <ActivityIndicator color={PRIMARY_DARK} style={{ width: 78 }} />
-                                                ) : (
-                                                    <View style={styles.reqActions}>
-                                                        <TouchableOpacity
-                                                            style={[
-                                                                styles.reqBtn,
-                                                                { backgroundColor: isFull ? '#E2E8F0' : SUCCESS },
-                                                            ]}
-                                                            onPress={() => !isFull && handleAccept(item.id, p.id)}
-                                                            disabled={isFull}
-                                                        >
-                                                            <Ionicons name="checkmark" size={20} color="#FFF" />
-                                                        </TouchableOpacity>
-                                                        <TouchableOpacity
-                                                            style={[styles.reqBtn, styles.reqReject]}
-                                                            onPress={() => handleReject(item.id, p.id)}
-                                                        >
-                                                            <Ionicons name="close" size={20} color={DANGER} />
-                                                        </TouchableOpacity>
-                                                    </View>
-                                                )}
+                                                <View style={styles.reqActions}>
+                                                    <TouchableOpacity
+                                                        style={[
+                                                            styles.reqBtn,
+                                                            { backgroundColor: isFull ? '#E2E8F0' : SUCCESS },
+                                                        ]}
+                                                        onPress={() => !isFull && handleAccept(item.id, p.id)}
+                                                        disabled={isFull}
+                                                    >
+                                                        <Ionicons name="checkmark" size={20} color="#FFF" />
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity
+                                                        style={[styles.reqBtn, styles.reqReject]}
+                                                        onPress={() => handleReject(item.id, p.id)}
+                                                    >
+                                                        <Ionicons name="close" size={20} color={DANGER} />
+                                                    </TouchableOpacity>
+                                                </View>
                                             </View>
                                         );
                                     })}
@@ -423,7 +559,6 @@ export default function MyPlansScreen() {
     };
 
     return (
-        <MainChrome active="my-plans">
             <View style={styles.container}>
                 <View style={styles.pageHeader}>
                     <View style={styles.pageTitleWrap}>
@@ -439,42 +574,54 @@ export default function MyPlansScreen() {
                 </View>
 
                 <View style={{ flex: 1 }}>
-                    <FlatList
-                        ref={listRef}
-                        data={plans}
-                        keyExtractor={(item) => item.id}
-                        renderItem={renderPlan}
-                        showsVerticalScrollIndicator={false}
-                        onScroll={onScroll}
-                        scrollEventThrottle={scrollEventThrottle}
-                        {...OPTIMIZED_LIST_PROPS}
-                        contentContainerStyle={styles.list}
-                        ListEmptyComponent={
-                            !loading ? (
+                    {loading && plans.length === 0 ? (
+                        <MyPlansSkeletonList count={5} />
+                    ) : (
+                        <FlashList
+                            ref={listRef}
+                            style={{ flex: 1 }}
+                            data={plans}
+                            keyExtractor={(item) => item.id}
+                            renderItem={renderPlan}
+                            getItemType={(item) => (item.isPast ? 'past' : item.role)}
+                            showsVerticalScrollIndicator={false}
+                            onScroll={onScroll}
+                            scrollEventThrottle={scrollEventThrottle}
+                            drawDistance={FLASH_LIST_DRAW_DISTANCE}
+                            contentContainerStyle={styles.list}
+                            ListEmptyComponent={
                                 <View style={styles.center}>
                                     <View style={styles.emptyIconWrap}>
-                                        <Ionicons name="calendar-outline" size={48} color={PRIMARY} />
+                                        <Ionicons
+                                            name={loadError ? 'cloud-offline-outline' : 'calendar-outline'}
+                                            size={48}
+                                            color={PRIMARY}
+                                        />
                                     </View>
-                                    <Text style={styles.emptyTitle}>{t('myplans.empty')}</Text>
+                                    <Text style={styles.emptyTitle}>
+                                        {loadError ? t('myplans.loadError') : t('myplans.empty')}
+                                    </Text>
                                     <TouchableOpacity
                                         style={styles.exploreBtn}
-                                        onPress={() => router.push('/create-plan')}
+                                        onPress={() => {
+                                            if (loadError) {
+                                                setLoadError(false);
+                                                void fetchMyPlans({ force: true });
+                                            } else {
+                                                router.push('/create-plan');
+                                            }
+                                        }}
                                     >
-                                        <Text style={styles.exploreBtnText}>{t('feed.create')}</Text>
+                                        <Text style={styles.exploreBtnText}>
+                                            {loadError ? t('myplans.retry') : t('feed.create')}
+                                        </Text>
                                     </TouchableOpacity>
                                 </View>
-                            ) : null
-                        }
-                    />
-                    {loading && plans.length === 0 ? (
-                        <ActivityIndicator
-                            style={{ position: 'absolute', alignSelf: 'center', top: 80 }}
-                            color={PRIMARY_DARK}
+                            }
                         />
-                    ) : null}
+                    )}
                 </View>
             </View>
-        </MainChrome>
     );
 }
 
@@ -522,9 +669,14 @@ const styles = StyleSheet.create({
     cardPast: { opacity: 0.96 },
     cardHeader: { flexDirection: 'row', alignItems: 'center' },
     thumb: { width: 54, height: 54, borderRadius: 16, backgroundColor: '#E3ECFB' },
-    cardTitle: { fontSize: 16, fontWeight: '800', color: INK, flex: 1 },
-    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    memberTag: { backgroundColor: '#EFF6FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+    cardTitle: { fontSize: 16, fontWeight: '800', color: INK },
+    memberTag: {
+        backgroundColor: '#EFF6FF',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 8,
+        marginLeft: 4,
+    },
     memberTagText: { fontSize: 10, fontWeight: '800', color: PRIMARY_DARK, textTransform: 'uppercase' },
     dateText: { fontSize: 12, fontWeight: '600', color: MUTED, marginTop: 3 },
     rateChip: {

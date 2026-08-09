@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     ScrollView,
@@ -11,7 +11,6 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { MainChrome } from '../../components/MainChrome';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { getAuthUser } from '../../lib/auth';
 import { useT } from '../../lib/i18n';
@@ -156,34 +155,61 @@ export default function SearchProfilesScreen() {
         void loadRankings(rankKey, rankScope, currentUserId);
     }, [rankKey, rankScope, currentUserId, loadRankings]);
 
+    const searchGenRef = useRef(0);
+
     useEffect(() => {
-        const run = async () => {
-            if (query.trim().length < 2) {
-                setResults([]);
-                return;
-            }
-            setSearching(true);
-            try {
-                const data = await searchProfilesByUsername(query, currentUserId ?? undefined);
-                setResults(data.map((p) => ({
+        const q = query.trim();
+        if (q.length < 2) {
+            searchGenRef.current += 1;
+            setResults([]);
+            setSearching(false);
+            return;
+        }
+
+        const gen = ++searchGenRef.current;
+        setSearching(true);
+
+        const applyRows = (
+            data: Awaited<ReturnType<typeof searchProfilesByUsername>>,
+        ) => {
+            if (gen !== searchGenRef.current) return;
+            setResults(
+                data.map((p) => ({
                     id: p.id,
                     nombre: p.nombre || t('profile.user'),
                     avatar_url: p.avatar_url,
                     nombre_usuario: p.nombre_usuario,
                     score: 0,
-                })));
-            } catch {
-                setResults([]);
-            } finally {
-                setSearching(false);
-            }
+                })),
+            );
+            setSearching(false);
         };
-        const timer = setTimeout(run, 300);
-        return () => clearTimeout(timer);
+
+        // Prefijo primero (rápido). Solo si hay pocos resultados, ampliar.
+        const fastTimer = setTimeout(() => {
+            void searchProfilesByUsername(q, currentUserId ?? undefined)
+                .then((data) => {
+                    applyRows(data);
+                    if (gen !== searchGenRef.current) return;
+                    if (data.length >= 6 || q.length < 3) return;
+                    void searchProfilesByUsername(q, currentUserId ?? undefined, { deep: true })
+                        .then(applyRows)
+                        .catch(() => {});
+                })
+                .catch(() => {
+                    if (gen === searchGenRef.current) {
+                        setResults([]);
+                        setSearching(false);
+                    }
+                });
+        }, 50);
+
+        return () => {
+            clearTimeout(fastTimer);
+        };
     }, [query, currentUserId, t]);
 
     const rankLabels: Record<RankKey, string> = {
-        friends: t('search.rankFriends'),
         plans: t('search.rankPlans'),
         badges: t('search.rankBadges'),
     };
@@ -293,7 +319,6 @@ export default function SearchProfilesScreen() {
     };
 
     return (
-        <MainChrome active="search">
             <View style={styles.container}>
                 <View style={styles.pageHeader}>
                     <Text style={styles.pageTitle}>{t('search.title')}</Text>
@@ -343,7 +368,7 @@ export default function SearchProfilesScreen() {
                         ))}
                     </View>
                     <View style={styles.rankTabs}>
-                        {(['plans', 'badges', 'friends'] as RankKey[]).map((key) => (
+                        {(['plans', 'badges'] as RankKey[]).map((key) => (
                             <TouchableOpacity
                                 key={key}
                                 style={[styles.rankTab, rankKey === key && styles.rankTabActive]}
@@ -367,7 +392,6 @@ export default function SearchProfilesScreen() {
                     </View>
                 </ScrollView>
             </View>
-        </MainChrome>
     );
 }
 
@@ -422,17 +446,20 @@ const styles = StyleSheet.create({
     },
     scopeTabText: { fontSize: 13, fontWeight: '700', color: '#64748B' },
     scopeTabTextActive: { color: PRIMARY_DARK },
-    rankTabs: { flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' },
+    rankTabs: { flexDirection: 'row', gap: 8, marginBottom: 12 },
     rankTab: {
-        paddingHorizontal: 14,
-        paddingVertical: 8,
+        flex: 1,
+        paddingHorizontal: 10,
+        paddingVertical: 10,
         borderRadius: 12,
         backgroundColor: '#FFF',
         borderWidth: 1,
         borderColor: '#E2E8F0',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     rankTabActive: { backgroundColor: PRIMARY_DARK, borderColor: PRIMARY_DARK },
-    rankTabText: { fontSize: 13, fontWeight: '700', color: '#64748B' },
+    rankTabText: { fontSize: 13, fontWeight: '700', color: '#64748B', textAlign: 'center' },
     rankTabTextActive: { color: '#FFF' },
     profileRow: {
         flexDirection: 'row',

@@ -1,0 +1,48 @@
+﻿{
+  "id": "e97a7b42-59df-4816-9c7a-7d1f8267f8a5",
+  "status": "ERRORED",
+  "platform": "ANDROID",
+  "error": {
+    "errorCode": "UNKNOWN_ERROR",
+    "message": "Unknown error. See logs of the Read app config build phase for more information."
+  },
+  "artifacts": {},
+  "fingerprint": {
+    "id": "019fa1fc-c892-734f-9760-872f6cd3698c",
+    "hash": "7c92954d31b8e20d0382f0e775cf6e6c95843b78"
+  },
+  "initiatingActor": {
+    "id": "c16d1dc2-3ef5-41a9-a305-6f4287a306d6",
+    "displayName": "ikerlazsor"
+  },
+  "logFiles": [
+    "https://storage.googleapis.com/eas-workflows-production/logs/edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e/e97a7b42-59df-4816-9c7a-7d1f8267f8a5/2026-07-27T05%3A12%3A09Z-0333ae9a-8a42-4fff-8b9b-51e13cfeeadd.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260727%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260727T051441Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=90518baecbc4c46b50b6715ad97ba4000d2a5ee215147d989eaaca4512205692570bc670625053f789f041ca2ef74f704cfe6b65f9f96e610f362abd6b6a9bd7f715f67dbe2800c6d380bd36fc5d7a6f340942272b6216b9e3df5e4dcd457fbaf4e4abef52eae1d9fb0ec21878ddfb12a3ea3ca1150c51d0c4a3d98532007a36f5c3eb023bf0cce2c5961975ce167134839e6ea8dcaa56f1847432fadb05638cd5263112290c756da20b2f02c9f4aa214734e32f09b528c14a03c9b04cae4e2f3158ed1f5274fbabb2ae32563b3c0b78fc71449be5dedf67d5872e50d1c61ccc6622b5ddf672bfe3ff9fa92649084bb9c26c004b2053bf22e42cf45fdc83c9d4"
+  ],
+  "project": {
+    "id": "edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e",
+    "name": "nexo",
+    "slug": "nexo",
+    "ownerAccount": {
+      "id": "6f061dba-13c1-4f88-9df6-b9be1443838f",
+      "name": "ikerlazsor"
+    }
+  },
+  "distribution": "INTERNAL",
+  "buildProfile": "preview",
+  "sdkVersion": "54.0.0",
+  "appVersion": "1.0.0",
+  "appBuildVersion": "1",
+  "gitCommitHash": "31932e087aa0ad9f1f409b899a8703fcc9bff912",
+  "gitCommitMessage": ".",
+  "priority": "NORMAL_PLUS",
+  "createdAt": "2026-07-27T05:12:05.957Z",
+  "updatedAt": "2026-07-27T05:12:35.597Z",
+  "completedAt": "2026-07-27T05:12:35.349Z",
+  "expirationDate": "2026-08-10T05:12:06.024Z",
+  "isForIosSimulator": false,
+  "metrics": {
+    "buildWaitTime": 3193,
+    "buildQueueTime": 4669,
+    "buildDuration": 21530
+  }
+}

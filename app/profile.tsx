@@ -37,6 +37,7 @@ import { useT } from '../lib/i18n';
 import { getProfileNotificationCount } from '../lib/notifications';
 import { getAuthUser } from '../lib/auth';
 import { formatCountdown } from '../lib/planLifecycle';
+import { warmFriendsAndSavedPlans } from '../lib/prefetchHome';
 import { getPendingRatingPlans, type PendingRatingPlan } from '../lib/ratings';
 import {
     deleteAccount,
@@ -180,6 +181,8 @@ export default function ProfileScreen() {
     useFocusEffect(
         useCallback(() => {
             void fetchUserData();
+            // Precargar Amigos / Guardados mientras estás en perfil (antes de entrar).
+            warmFriendsAndSavedPlans();
         }, [])
     );
 
@@ -656,17 +659,11 @@ export default function ProfileScreen() {
                         <TouchableOpacity
                             style={styles.statItem}
                             onPress={() => router.push({ pathname: '/friends', params: { tab: 'friends' } })}
+                            onPressIn={() => warmFriendsAndSavedPlans(user?.id)}
                             activeOpacity={0.8}
                         >
                             <View style={styles.statBadgeWrap}>
                                 <Text style={styles.statValue}>{friendsCount}</Text>
-                                {friendsNotifCount > 0 && (
-                                    <View style={styles.statNotif}>
-                                        <Text style={styles.statNotifText}>
-                                            {friendsNotifCount > 9 ? '9+' : friendsNotifCount}
-                                        </Text>
-                                    </View>
-                                )}
                             </View>
                             <Text style={styles.statLabel}>{t('profile.friendsLabel')}</Text>
                         </TouchableOpacity>
@@ -749,6 +746,7 @@ export default function ProfileScreen() {
                         <TouchableOpacity
                             key={action.key}
                             style={styles.quickTile}
+                            onPressIn={() => warmFriendsAndSavedPlans(user?.id)}
                             onPress={() => {
                                 if (action.key === 'friends' && (action.badge ?? 0) > 0) {
                                     router.push({ pathname: '/friends', params: { tab: 'requests' } });
@@ -866,19 +864,24 @@ export default function ProfileScreen() {
                             {badges.filter((b) => b.unlocked).length}/{badges.length}
                         </Text>
                     </View>
-                    <View style={styles.badgeGrid}>
-                        {badgesLoading ? (
-                            <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 24, alignSelf: 'center' }} />
-                        ) : (
-                            badges.map((badge) => (
+                    {badgesLoading ? (
+                        <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 24, alignSelf: 'center' }} />
+                    ) : (
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            nestedScrollEnabled
+                            contentContainerStyle={styles.badgeRow}
+                        >
+                            {badges.map((badge) => (
                                 <BadgeTile
                                     key={badge.family.id}
                                     badge={badge}
                                     onPress={() => setSelectedBadge(badge)}
                                 />
-                            ))
-                        )}
-                    </View>
+                            ))}
+                        </ScrollView>
+                    )}
                 </View>
 
                 <TouchableOpacity
@@ -1090,12 +1093,13 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         marginTop: 22,
         marginHorizontal: 4,
-        marginBottom: 8,
-        backgroundColor: '#F1F7FF',
-        borderRadius: 20,
-        paddingVertical: 16,
+        marginBottom: 4,
+        backgroundColor: '#F8FBFF',
+        borderRadius: 22,
+        paddingVertical: 18,
+        paddingHorizontal: 6,
         borderWidth: 1,
-        borderColor: '#DBEAFE',
+        borderColor: '#E0EFFF',
         width: '100%',
     },
     historyBtn: {
@@ -1488,5 +1492,11 @@ const styles = StyleSheet.create({
     habitChipActive: { backgroundColor: '#ECFDF5', borderColor: '#22C55E' },
     habitChipText: { fontWeight: '700', color: MUTED, fontSize: 13 },
     habitChipTextActive: { color: '#059669' },
-    badgeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
+    badgeRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 12,
+        paddingVertical: 4,
+        paddingRight: 4,
+    },
 });

@@ -1,5 +1,6 @@
 import { Asset } from 'expo-asset';
-import { Image, InteractionManager } from 'react-native';
+import { Image } from 'expo-image';
+import { InteractionManager } from 'react-native';
 import {
     MAIN_CATEGORY_IDS,
     PLACEHOLDER_COVER_URI,
@@ -9,7 +10,7 @@ import {
 
 let started = false;
 
-/** Precarga en disco/memoria todas las portadas de crear plan. */
+/** Precarga en disco/memoria todas las portadas de crear plan (misma caché que PlanImage). */
 export function scheduleCoverPrefetch(): void {
     if (started) return;
     started = true;
@@ -40,9 +41,19 @@ export function scheduleCoverPrefetch(): void {
                 }
             }
 
-            await Promise.allSettled(
-                remote.map((uri) => Image.prefetch(uri)),
-            );
+            await Promise.allSettled(remote.map((uri) => Image.prefetch(uri)));
         })();
+    });
+}
+
+/** Precarga URLs remotas (portadas/avatares del feed) en la caché de expo-image. */
+export function prefetchRemoteImages(uris: Array<string | null | undefined>, limit = 24): void {
+    const unique = [...new Set(uris.filter((u): u is string => typeof u === 'string' && u.startsWith('http')))].slice(
+        0,
+        limit,
+    );
+    if (!unique.length) return;
+    InteractionManager.runAfterInteractions(() => {
+        void Promise.allSettled(unique.map((uri) => Image.prefetch(uri)));
     });
 }

@@ -21,7 +21,24 @@ import {
     fetchModerationCounts,
     type ModerationCounts,
 } from '../lib/moderation';
+import {
+    getNotificationCategoryPrefs,
+    setNotificationCategoryPrefs,
+    syncNotificationCategoryPrefsFromServer,
+    type NotificationCategoryPrefs,
+} from '../lib/notificationPrefs';
 import { deleteAccount } from '../lib/profile';
+import {
+    cancelAllScheduledNexoNotifications,
+    enablePushWithPermission,
+    getNotificationPermissionStatus,
+    getPushPreference,
+    openSystemNotificationSettings,
+    setPushPreference,
+    syncPushPreferenceFromServer,
+    unregisterPushToken,
+} from '../lib/push';
+import { hapticLight, hapticToggle, hapticWarning } from '../lib/haptics';
 import { fetchAccountAccess } from '../lib/roles';
 import { supabase } from '../lib/supabase';
 
@@ -38,14 +55,18 @@ type RowProps = {
     color?: string;
     onPress?: () => void;
     right?: React.ReactNode;
+    subtitle?: string;
 };
 
-const Row = ({ icon, label, color = INK, onPress, right }: RowProps) => (
+const Row = ({ icon, label, color = INK, onPress, right, subtitle }: RowProps) => (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
         <View style={[styles.rowIcon, { backgroundColor: color === DANGER ? '#FEE2E2' : '#EFF6FF' }]}>
             <Ionicons name={icon} size={20} color={color === DANGER ? DANGER : PRIMARY_DARK} />
         </View>
-        <Text style={[styles.rowLabel, { color }]}>{label}</Text>
+        <View style={styles.rowTextCol}>
+            <Text style={[styles.rowLabel, { color }]}>{label}</Text>
+            {subtitle ? <Text style={styles.rowSub}>{subtitle}</Text> : null}
+        </View>
         {right ?? (onPress ? <Ionicons name="chevron-forward" size={18} color="#CBD5E1" /> : null)}
     </TouchableOpacity>
 );
@@ -54,17 +75,39 @@ export default function SettingsScreen() {
     const router = useRouter();
     const { t, lang, setLang } = useT();
     const [notifications, setNotifications] = useState(true);
+    const [osDenied, setOsDenied] = useState(false);
+    const [cats, setCats] = useState<NotificationCategoryPrefs>({
+        messages: true,
+        social: true,
+        reminders: true,
+    });
     const [deleting, setDeleting] = useState(false);
     const [isStaff, setIsStaff] = useState(false);
+    const [isOwner, setIsOwner] = useState(false);
     const [modCounts, setModCounts] = useState<ModerationCounts | null>(null);
+    const [userId, setUserId] = useState<string | null>(null);
 
     useFocusEffect(
         useCallback(() => {
             let alive = true;
             void (async () => {
-                const access = await fetchAccountAccess();
+                const { data } = await supabase.auth.getUser();
+                const uid = data.user?.id ?? null;
+                const [pref, access, perm, categoryPrefs] = await Promise.all([
+                    uid ? syncPushPreferenceFromServer(uid) : getPushPreference(),
+                    fetchAccountAccess(),
+                    getNotificationPermissionStatus(),
+                    uid
+                        ? syncNotificationCategoryPrefsFromServer(uid)
+                        : getNotificationCategoryPrefs(),
+                ]);
                 if (!alive) return;
+                setUserId(uid);
+                setNotifications(pref && perm !== 'denied');
+                setOsDenied(perm === 'denied');
+                setCats(categoryPrefs);
                 setIsStaff(access.isStaff);
+                setIsOwner(access.isOwner);
                 if (access.isStaff) {
                     const counts = await fetchModerationCounts();
                     if (alive) setModCounts(counts);
@@ -78,14 +121,58 @@ export default function SettingsScreen() {
         }, []),
     );
 
+    const handleNotificationsToggle = async (value: boolean) => {
+        hapticToggle(value);
+        if (!value) {
+            setNotifications(false);
+            await setPushPreference(false, userId ?? undefined);
+            return;
+        }
+        const result = await enablePushWithPermission(userId ?? undefined);
+        setNotifications(result.enabled);
+        setOsDenied(result.denied);
+        if (result.denied) {
+            hapticWarning();
+            Alert.alert(t('settings.notifPermissionDenied'), t('settings.notifPermissionBody'), [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('settings.notifOpenSettings'),
+                    onPress: () => {
+                        void openSystemNotificationSettings();
+                    },
+                },
+            ]);
+        }
+    };
+
+    const updateCat = async (key: keyof NotificationCategoryPrefs, value: boolean) => {
+        hapticToggle(value);
+        const next = { ...cats, [key]: value };
+        setCats(next);
+        await setNotificationCategoryPrefs(next, userId ?? undefined);
+        if (key === 'reminders' && !value) {
+            await cancelAllScheduledNexoNotifications();
+        }
+    };
+
     const handleLogout = () => {
+        hapticLight();
         Alert.alert(t('settings.logout'), t('settings.logoutConfirm'), [
             { text: t('common.cancel'), style: 'cancel' },
-            { text: t('common.yes'), style: 'destructive', onPress: async () => { await supabase.auth.signOut(); router.replace('/login'); } },
+            {
+                text: t('common.yes'),
+                style: 'destructive',
+                onPress: async () => {
+                    await unregisterPushToken(userId ?? undefined);
+                    await supabase.auth.signOut();
+                    router.replace('/login');
+                },
+            },
         ]);
     };
 
     const confirmDeleteAccount = () => {
+        hapticWarning();
         Alert.alert(t('profile.deleteAccountTitle'), t('profile.deleteAccountMsg'), [
             { text: t('profile.cancel'), style: 'cancel' },
             {
@@ -93,6 +180,8 @@ export default function SettingsScreen() {
                 style: 'destructive',
                 onPress: async () => {
                     setDeleting(true);
+                    await unregisterPushToken(userId ?? undefined);
+                    await cancelAllScheduledNexoNotifications();
                     const { error } = await deleteAccount();
                     setDeleting(false);
                     if (error) {
@@ -128,9 +217,87 @@ export default function SettingsScreen() {
                     <Row
                         icon="notifications-outline"
                         label={t('settings.notifications')}
+                        subtitle={t('settings.notificationsHint')}
                         onPress={undefined}
-                        right={<Switch value={notifications} onValueChange={setNotifications} trackColor={{ true: PRIMARY, false: '#CBD5E1' }} thumbColor="#FFF" />}
+                        right={
+                            <Switch
+                                value={notifications}
+                                onValueChange={(v) => {
+                                    void handleNotificationsToggle(v);
+                                }}
+                                trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
+                                thumbColor="#FFF"
+                            />
+                        }
                     />
+                    {osDenied ? (
+                        <>
+                            <View style={styles.divider} />
+                            <Row
+                                icon="warning-outline"
+                                label={t('settings.notifPermissionDenied')}
+                                subtitle={t('settings.notifPermissionBody')}
+                                onPress={() => {
+                                    void openSystemNotificationSettings();
+                                }}
+                            />
+                        </>
+                    ) : null}
+                    {notifications && !osDenied ? (
+                        <>
+                            <View style={styles.divider} />
+                            <Row
+                                icon="chatbubbles-outline"
+                                label={t('settings.notifMessages')}
+                                subtitle={t('settings.notifMessagesHint')}
+                                onPress={undefined}
+                                right={
+                                    <Switch
+                                        value={cats.messages}
+                                        onValueChange={(v) => {
+                                            void updateCat('messages', v);
+                                        }}
+                                        trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
+                                        thumbColor="#FFF"
+                                    />
+                                }
+                            />
+                            <View style={styles.divider} />
+                            <Row
+                                icon="people-outline"
+                                label={t('settings.notifSocial')}
+                                subtitle={t('settings.notifSocialHint')}
+                                onPress={undefined}
+                                right={
+                                    <Switch
+                                        value={cats.social}
+                                        onValueChange={(v) => {
+                                            void updateCat('social', v);
+                                        }}
+                                        trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
+                                        thumbColor="#FFF"
+                                    />
+                                }
+                            />
+                            <View style={styles.divider} />
+                            <Row
+                                icon="alarm-outline"
+                                label={t('settings.notifReminders')}
+                                subtitle={t('settings.notifRemindersHint')}
+                                onPress={undefined}
+                                right={
+                                    <Switch
+                                        value={cats.reminders}
+                                        onValueChange={(v) => {
+                                            void updateCat('reminders', v);
+                                        }}
+                                        trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
+                                        thumbColor="#FFF"
+                                    />
+                                }
+                            />
+                        </>
+                    ) : null}
                     <View style={styles.divider} />
                     <Row icon="ban-outline" label={t('settings.blockedAccounts')} onPress={() => router.push('/blocked-accounts')} />
                     <View style={styles.divider} />
@@ -138,9 +305,21 @@ export default function SettingsScreen() {
                     <View style={styles.divider} />
                     <Row icon="lock-closed-outline" label={t('settings.privacy')} onPress={() => router.push('/privacy')} />
                     <View style={styles.divider} />
+                    <Row icon="people-outline" label={t('settings.communityNorms')} onPress={() => router.push('/community-norms')} />
+                    <View style={styles.divider} />
                     <Row icon="shield-checkmark-outline" label={t('settings.terms')} onPress={() => router.push('/terms')} />
                     <View style={styles.divider} />
                     <Row icon="help-circle-outline" label={t('settings.helpCenter')} onPress={() => router.push('/help-center')} />
+                    {isOwner ? (
+                        <>
+                            <View style={styles.divider} />
+                            <Row
+                                icon="stats-chart-outline"
+                                label={t('settings.analytics')}
+                                onPress={() => router.push('/analytics')}
+                            />
+                        </>
+                    ) : null}
                     {isStaff ? (
                         <>
                             <View style={styles.divider} />
@@ -181,6 +360,8 @@ const styles = StyleSheet.create({
     card: { backgroundColor: '#FFF', borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#1E3A8A', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
     row: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
     rowIcon: { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-    rowLabel: { flex: 1, fontSize: 16, fontWeight: '600' },
+    rowTextCol: { flex: 1 },
+    rowLabel: { fontSize: 16, fontWeight: '600' },
+    rowSub: { marginTop: 3, fontSize: 12, fontWeight: '500', color: '#94A3B8', lineHeight: 16 },
     divider: { height: 1, backgroundColor: '#F1F5F9', marginLeft: 68 },
 });

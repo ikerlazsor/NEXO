@@ -84,7 +84,12 @@ async function tryReclaimIncompleteEmail(email: string, password: string): Promi
     }
 
     const { error: delError } = await deleteAccount();
-    return !delError;
+    if (delError) {
+        // Este flujo auxiliar no debe dejar iniciada una cuenta incompleta.
+        await supabase.auth.signOut({ scope: 'local' });
+        return false;
+    }
+    return true;
 }
 
 export default function LoginScreen() {

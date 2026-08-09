@@ -138,36 +138,6 @@ export async function isUsernameTaken(
     }
 }
 
-/** Error si no se pudo comprobar si el email ya existe. */
-export class EmailCheckError extends Error {
-    constructor(message = 'email_check_failed') {
-        super(message);
-        this.name = 'EmailCheckError';
-    }
-}
-
-export async function isEmailTaken(email: string): Promise<boolean> {
-    const normalized = email.trim().toLowerCase();
-    if (!normalized) return false;
-
-    try {
-        const { data, error } = await runWithTimeout(
-            () =>
-                supabase.rpc('is_email_taken', {
-                    check_email: normalized,
-                }),
-            8000,
-        );
-        if (!error) return data === true;
-        console.warn('isEmailTaken rpc:', error.message);
-        throw new EmailCheckError(error.message);
-    } catch (e) {
-        if (e instanceof EmailCheckError) throw e;
-        console.warn('isEmailTaken rpc failed:', e);
-        throw new EmailCheckError();
-    }
-}
-
 export async function deleteAccount(): Promise<{ error: string | null }> {
     const session = await getAuthSession();
     if (!session?.user) {
@@ -189,10 +159,8 @@ export async function deleteAccount(): Promise<{ error: string | null }> {
     }
 
     if (rpcError) {
-        // Sin el RPC no se borra auth.users: el email seguiría “ya registrado”.
-        // Limpiamos perfil localmente si se puede, pero reportamos el fallo.
-        await supabase.from('perfiles').delete().eq('id', userId);
-        await supabase.auth.signOut({ scope: 'local' });
+        // Una caída temporal no debe dejar una cuenta a medias. Conservamos
+        // tanto la sesión como el perfil para que el usuario pueda reintentarlo.
         return { error: rpcError };
     }
 

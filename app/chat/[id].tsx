@@ -1078,16 +1078,10 @@ export default function ChatScreen() {
             });
         }
 
-        const preview =
-            tipo === 'texto'
-                ? tempText
-                : tipo === 'imagen'
-                  ? t('chats.previewImage')
-                  : tipo === 'video'
-                    ? t('chats.previewVideo')
-                    : t('chats.previewVoice');
-        const { notifyPlanMessage } = await import('../../lib/push');
-        notifyPlanMessage(planId, preview);
+        if (data?.id) {
+            const { notifyPlanMessage } = await import('../../lib/push');
+            notifyPlanMessage(planId, String(data.id));
+        }
         trackFunnel('chat_send', { userId: currentUserId, props: { planId, tipo } });
     };
 

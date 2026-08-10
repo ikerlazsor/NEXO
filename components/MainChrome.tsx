@@ -5,7 +5,6 @@ import { usePathname, useRouter } from 'expo-router';
 import { useCallback, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LangPicker } from './LangPicker';
 import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
 import { getAuthUser } from '../lib/auth';
@@ -57,7 +56,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
     const pathname = usePathname();
     const insets = useSafeAreaInsets();
     const active = activeProp ?? activeTabFromPathname(pathname);
-    const { t, lang, setLang } = useT();
+    const { t } = useT();
     const [userId, setUserId] = useState<string | null>(null);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
     const [notifCount, setNotifCount] = useState(0);
@@ -137,14 +136,25 @@ export function MainChrome({ active: activeProp, children }: Props) {
         [active, router],
     );
 
+    const activeTitle =
+        active === 'chats'
+            ? t('chats.title')
+            : active === 'my-plans'
+                ? t('myplans.title')
+                : active === 'search'
+                    ? t('feed.searchProfiles')
+                    : t('feed.greeting');
+
     return (
         <View style={styles.container}>
             <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
 
             <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) + 12 }]}>
-                <View style={styles.headerSpacer} />
+                <View style={styles.headerCopy}>
+                    <Text style={styles.brand}>NEXO</Text>
+                    <Text style={styles.sectionTitle} numberOfLines={1}>{activeTitle}</Text>
+                </View>
                 <View style={styles.headerRight}>
-                    <LangPicker lang={lang} onChange={setLang} compact />
                     <TouchableOpacity
                         style={styles.profileBtn}
                         onPress={() => {
@@ -259,8 +269,10 @@ const styles = StyleSheet.create({
         paddingHorizontal: 24,
         marginBottom: 12,
     },
-    headerSpacer: { flex: 1 },
-    headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    headerCopy: { flex: 1, paddingRight: 16 },
+    brand: { color: PRIMARY_DARK, fontSize: 11, fontWeight: '900', letterSpacing: 1.8 },
+    sectionTitle: { color: INK, fontSize: 22, fontWeight: '900', marginTop: 2 },
+    headerRight: { flexDirection: 'row', alignItems: 'center' },
     profileBtn: { padding: 2 },
     profileAvatarWrap: { position: 'relative' },
     profileNotifBadge: {

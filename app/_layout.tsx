@@ -6,7 +6,7 @@ Sesión + onboarding hecho → (tabs)
  */
 
 import 'react-native-gesture-handler';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import * as Sentry from '@sentry/react-native';
 import { Session } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
@@ -18,7 +18,6 @@ import { Platform, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Asset } from 'expo-asset';
 import { AndroidSwipeBack } from '../components/AndroidSwipeBack';
 import { NexoAlertHost } from '../components/NexoAlertHost';
@@ -277,13 +276,11 @@ function AuthGate({ children }: { children: ReactNode }) {
 }
 
 function RootLayout() {
-  const colorScheme = useColorScheme();
-
   return (
     <I18nProvider>
       <GestureHandlerRootView style={styles.root}>
         <NexoAlertHost>
-          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <ThemeProvider value={DefaultTheme}>
             <AuthGate>
               <Stack
                 screenOptions={{

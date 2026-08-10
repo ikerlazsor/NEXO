@@ -6,6 +6,7 @@ import { useFocusEffect,
 import { useCallback,
     useState } from 'react';
 import {
+    ActivityIndicator,
     Platform,
     ScrollView,
     StyleSheet,
@@ -75,6 +76,7 @@ export default function SettingsScreen() {
     const router = useRouter();
     const { t, lang, setLang } = useT();
     const [notifications, setNotifications] = useState(true);
+    const [settingsReady, setSettingsReady] = useState(false);
     const [osDenied, setOsDenied] = useState(false);
     const [cats, setCats] = useState<NotificationCategoryPrefs>({
         messages: true,
@@ -90,6 +92,7 @@ export default function SettingsScreen() {
     useFocusEffect(
         useCallback(() => {
             let alive = true;
+            setSettingsReady(false);
             void (async () => {
                 const { data } = await supabase.auth.getUser();
                 const uid = data.user?.id ?? null;
@@ -114,6 +117,7 @@ export default function SettingsScreen() {
                 } else {
                     setModCounts(null);
                 }
+                if (alive) setSettingsReady(true);
             })();
             return () => {
                 alive = false;
@@ -206,6 +210,12 @@ export default function SettingsScreen() {
             </View>
 
             <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+                {!settingsReady ? (
+                    <View style={styles.loadingCard}>
+                        <ActivityIndicator size="small" color={PRIMARY_DARK} />
+                    </View>
+                ) : (
+                    <>
                 <View style={styles.card}>
                     <Row
                         icon="language-outline"
@@ -213,7 +223,9 @@ export default function SettingsScreen() {
                         onPress={undefined}
                         right={<LangPicker lang={lang} onChange={setLang} compact />}
                     />
-                    <View style={styles.divider} />
+                </View>
+
+                <View style={[styles.card, { marginTop: 16 }]}>
                     <Row
                         icon="notifications-outline"
                         label={t('settings.notifications')}
@@ -298,7 +310,9 @@ export default function SettingsScreen() {
                             />
                         </>
                     ) : null}
-                    <View style={styles.divider} />
+                </View>
+
+                <View style={[styles.card, { marginTop: 16 }]}>
                     <Row icon="ban-outline" label={t('settings.blockedAccounts')} onPress={() => router.push('/blocked-accounts')} />
                     <View style={styles.divider} />
                     <Row icon="diamond-outline" label={t('settings.nexoPlus')} onPress={() => router.push('/nexo-plus')} />
@@ -346,6 +360,8 @@ export default function SettingsScreen() {
                         onPress={deleting ? undefined : confirmDeleteAccount}
                     />
                 </View>
+                    </>
+                )}
             </ScrollView>
         </View>
     );
@@ -357,6 +373,7 @@ const styles = StyleSheet.create({
     backButton: { width: 45, height: 45, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 15, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
     headerTitle: { fontSize: 22, fontWeight: '900', color: INK },
     content: { paddingHorizontal: 20, paddingBottom: 40 },
+    loadingCard: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },
     card: { backgroundColor: '#FFF', borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#1E3A8A', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
     row: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
     rowIcon: { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },

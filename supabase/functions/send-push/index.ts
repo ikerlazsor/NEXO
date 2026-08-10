@@ -272,7 +272,9 @@ serve(async (req) => {
       category = 'social';
     } else if (type === 'plan_message') {
       const planId = readUuid(body.planId, 'planId');
-      const messageId = readUuid(body.messageId, 'messageId');
+      const requestedMessageId = body.messageId
+        ? readUuid(body.messageId, 'messageId')
+        : null;
       const { data: part } = await admin
         .from('participantes')
         .select('id')
@@ -287,17 +289,22 @@ serve(async (req) => {
         .maybeSingle();
       if (!part && plan?.creador_id !== user.id) throw new Error('not_allowed');
 
-      const { data: message, error: messageError } = await admin
+      let messageQuery = admin
         .from('mensajes')
         .select('id, contenido, tipo, creado_en')
-        .eq('id', messageId)
         .eq('plan_id', planId)
-        .eq('emisor_id', user.id)
+        .eq('emisor_id', user.id);
+      if (requestedMessageId) {
+        messageQuery = messageQuery.eq('id', requestedMessageId);
+      }
+      const { data: message, error: messageError } = await messageQuery
+        .order('creado_en', { ascending: false })
+        .limit(1)
         .maybeSingle();
       if (messageError || !message || !isRecentMessage(message.creado_en)) {
         throw new Error('invalid_message');
       }
-      claimedMessageId = messageId;
+      claimedMessageId = String(message.id);
 
       const { data: members } = await admin
         .from('participantes')
@@ -327,16 +334,23 @@ serve(async (req) => {
       collapseId = `plan-msg:${planId}`;
     } else if (type === 'direct_message') {
       const toUserId = readUuid(body.toUserId, 'toUserId');
-      const messageId = readUuid(body.messageId, 'messageId');
+      const requestedMessageId = body.messageId
+        ? readUuid(body.messageId, 'messageId')
+        : null;
       if (toUserId === user.id) throw new Error('not_allowed');
 
-      const { data: message, error: messageError } = await admin
+      let messageQuery = admin
         .from('mensajes')
         .select('id, contenido, tipo, creado_en')
-        .eq('id', messageId)
         .eq('emisor_id', user.id)
         .eq('receptor_id', toUserId)
-        .is('plan_id', null)
+        .is('plan_id', null);
+      if (requestedMessageId) {
+        messageQuery = messageQuery.eq('id', requestedMessageId);
+      }
+      const { data: message, error: messageError } = await messageQuery
+        .order('creado_en', { ascending: false })
+        .limit(1)
         .maybeSingle();
       if (messageError || !message || !isRecentMessage(message.creado_en)) {
         throw new Error('invalid_message');
@@ -352,7 +366,7 @@ serve(async (req) => {
       if (blockError) throw new Error('block_check_failed');
       if ((blocks ?? []).length > 0) throw new Error('not_allowed');
 
-      claimedMessageId = messageId;
+      claimedMessageId = String(message.id);
       targetIds = [toUserId];
       title = senderName;
       notifBody = messagePreview(message);

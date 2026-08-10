@@ -5,7 +5,8 @@
  * Body (JSON):
  * {
  *   type: 'friend_request' | 'friend_accepted' | 'plan_join_request' | 'plan_joined'
- *       | 'plan_join_accepted' | 'plan_join_rejected' | 'plan_invite'
+ *       | 'plan_invite' | 'plan_message' | 'direct_message' | 'rated',
+ *   // aceptación/rechazo se gestionan exclusivamente mediante el outbox
  *       | 'plan_message' | 'direct_message' | 'rated',
  *   ...campos según tipo
  * }
@@ -45,16 +46,38 @@ async function sendExpo(messages: PushPayload[]): Promise<ExpoDeliveryResult[]> 
   const results: ExpoDeliveryResult[] = [];
   for (let offset = 0; offset < messages.length; offset += 100) {
     const chunk = messages.slice(offset, offset + 100);
-    const res = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Accept-Encoding': 'gzip, deflate',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(chunk),
-    });
-    if (!res.ok) throw new Error(`expo_push_${res.status}`);
+    let res: Response | null = null;
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        res = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Accept-Encoding': 'gzip, deflate',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(chunk),
+        });
+        if (res.ok) break;
+        if (res.status < 500 && res.status !== 429) {
+          throw new Error(`expo_push_${res.status}`);
+        }
+        lastError = new Error(`expo_push_${res.status}`);
+      } catch (error) {
+        lastError = error;
+        res = null;
+      }
+
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+      }
+    }
+
+    if (!res?.ok) {
+      throw lastError instanceof Error ? lastError : new Error('expo_push_unavailable');
+    }
 
     const json = await res.json() as {
       data?: Array<{
@@ -77,7 +100,7 @@ async function sendExpo(messages: PushPayload[]): Promise<ExpoDeliveryResult[]> 
         ...(error ? { error } : {}),
         dead:
           ticket.status === 'error' &&
-          (error === 'DeviceNotRegistered' || error === 'InvalidCredentials'),
+          error === 'DeviceNotRegistered',
       });
     });
   }
@@ -246,8 +269,7 @@ serve(async (req) => {
       // Desde la fase 4 estos eventos solo se generan y despachan desde el
       // outbox de PostgreSQL. Un JWT de usuario nunca puede elegir el resultado
       // ni el destinatario de esta notificación.
-      return new Response(JSON.stringify({ error: 'server_managed_notification' }), {
-        status: 409,
+      return new Response(JSON.stringify({ sent: 0, serverManaged: true }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       });
     } else if (type === 'plan_invite') {

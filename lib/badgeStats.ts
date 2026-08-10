@@ -137,6 +137,7 @@ async function fetchBadgeStatsTable(
     }
 
     return {
+        ...EMPTY_STATS,
         valoracionMedia: Number(row.valoracion_media) || 0,
         porcentajeRepetiria: Number(row.porcentaje_repetiria) || 0,
         numeroValoraciones: row.numero_valoraciones ?? 0,

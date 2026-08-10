@@ -45,10 +45,11 @@ serve(async (req) => {
   }
 
   const admin = createClient(supabaseUrl, serviceKey);
+  let eventId = '';
 
   try {
     const payload = await req.json();
-    const eventId = String(payload?.eventId ?? payload?.record?.id ?? '');
+    eventId = String(payload?.eventId ?? payload?.record?.id ?? '');
     if (!eventId) return json({ error: 'event_id_required' }, 400);
 
     const { data: claimed, error: claimError } = await admin.rpc(
@@ -166,8 +167,6 @@ serve(async (req) => {
     // Si el evento ya se había adquirido, lo liberamos como fallido para que
     // pueda reintentarse. La RPC es segura aunque el id no esté processing.
     try {
-      const payload = await req.clone().json();
-      const eventId = String(payload?.eventId ?? payload?.record?.id ?? '');
       if (eventId) {
         await admin.rpc('complete_push_outbox_event', {
           p_event_id: eventId,

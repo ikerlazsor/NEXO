@@ -896,7 +896,6 @@ export default function CreatePlanScreen() {
                     selected={pendingInvites}
                     onAdd={(profile) => {
                         setPendingInvites((prev) => (prev.some((p) => p.id === profile.id) ? prev : [...prev, profile]));
-                        return { error: null, silent: true };
                     }}
                     onRemove={async (id) => {
                         let removed: InviteProfile | undefined;

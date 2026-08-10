@@ -96,9 +96,9 @@ export async function getUserStats(userId: string, options?: { skipCache?: boole
                 .eq('usuario_id', userId)
                 .maybeSingle();
             if (fallback.error || !fallback.data) return EMPTY_STATS;
-            row = fallback.data as Record<string, unknown>;
+            row = fallback.data as unknown as Record<string, unknown>;
         } else {
-            row = data as Record<string, unknown>;
+            row = data as unknown as Record<string, unknown>;
         }
     }
 

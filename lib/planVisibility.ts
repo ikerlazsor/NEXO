@@ -43,7 +43,7 @@ export function canSeePlanInFeed(
         (planId && ctx.invitedPlanIds.has(planId));
 
     if (plan.modo_privado) {
-        return alreadyIn;
+        return Boolean(alreadyIn);
     }
 
     if (plan.solo_amigos) {

@@ -254,7 +254,7 @@ export function OnboardingReadyReveal({
                 const padLen = Math.max(0, removeLen - insertLen);
                 const paddedFinal =
                     rewritePlan.prefix +
-                    rewritePlan.insert +
+                    rewritePlan.insertChars.join('') +
                     '\u00a0'.repeat(padLen);
                 setLayoutText(paddedFinal);
                 setTypedCount(rewritePlan.prefixLen);

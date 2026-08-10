@@ -4,7 +4,7 @@
  * Se invoca cada minuto desde pg_cron. También acepta { eventId: "<uuid>" }
  * para procesar inmediatamente un evento concreto.
  *
- * Solo admite la clave service_role del proyecto.
+ * Solo admite un secreto interno independiente configurado en Supabase Secrets.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
@@ -207,9 +207,14 @@ serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  if (!supabaseUrl || !serviceKey) return json({ error: 'missing_env' }, 500);
+  const dispatchSecret = Deno.env.get('NEXO_DISPATCH_SECRET') ?? '';
+  if (!supabaseUrl || !serviceKey || !dispatchSecret) {
+    return json({ error: 'missing_env' }, 500);
+  }
 
-  if (req.headers.get('Authorization') !== `Bearer ${serviceKey}`) {
+  // La función se despliega con --no-verify-jwt y aplica su propia autenticación.
+  // Así el programador no necesita almacenar la clave administrativa service_role.
+  if (req.headers.get('Authorization') !== `Bearer ${dispatchSecret}`) {
     return json({ error: 'unauthorized' }, 401);
   }
 

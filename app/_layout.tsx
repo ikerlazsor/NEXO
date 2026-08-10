@@ -330,7 +330,6 @@ function RootLayout() {
                 <Stack.Screen
                   name="profile"
                   options={{
-                    presentation: 'modal',
                     animation: 'slide_from_bottom',
                     animationDuration: 320,
                     gestureEnabled: Platform.OS === 'ios',
@@ -339,7 +338,10 @@ function RootLayout() {
                     contentStyle: { backgroundColor: '#FFF' },
                   }}
                 />
-                <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen
+                  name="settings"
+                  options={{ animation: 'slide_from_right', freezeOnBlur: false }}
+                />
                 <Stack.Screen name="analytics" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="community-norms" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="friends" options={{ animation: 'slide_from_right' }} />

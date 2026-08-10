@@ -38,8 +38,6 @@ type DispatchResult = {
 };
 
 const MAX_BATCH_SIZE = 25;
-const MAX_ATTEMPTS = 8;
-const LEASE_MINUTES = 5;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

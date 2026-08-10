@@ -479,7 +479,7 @@ export default function LoginScreen() {
                     </View>
 
                     {/* ---------- Tarjeta ---------- */}
-                    <View style={styles.card} importantForAutofill="noExcludeDescendants">
+                    <View style={styles.card}>
                         <View style={styles.segmented}>
                             <TouchableOpacity
                                 style={[styles.segmentBtn, !isRegistering && styles.segmentBtnActive]}

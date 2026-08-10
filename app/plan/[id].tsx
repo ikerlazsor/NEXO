@@ -239,6 +239,7 @@ export default function PlanDetailScreen() {
         | 'plan'
         | 'grupo'
         | undefined;
+    const [inviteHandled, setInviteHandled] = useState(false);
     const fromInvite = !!pendingInviteId && !inviteHandled;
     const scrollKey = planId ? `${ScreenKeys.PLAN_DETAIL}:${planId}` : ScreenKeys.PLAN_DETAIL;
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(scrollKey);
@@ -271,7 +272,6 @@ export default function PlanDetailScreen() {
     const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
     const [showInviteSheet, setShowInviteSheet] = useState(false);
     const [invitees, setInvitees] = useState<InviteProfile[]>([]);
-    const [inviteHandled, setInviteHandled] = useState(false);
     const [waitlistPosition, setWaitlistPosition] = useState<number | null>(null);
     const hasLoadedRef = useRef(!!cachedDetail);
     const loadGenRef = useRef(0);

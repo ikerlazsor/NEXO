@@ -20,7 +20,7 @@ import {
     setPendingVerifyEmail,
 } from '../lib/emailVerification';
 import { useT } from '../lib/i18n';
-import { clearPendingSignup, getPendingSignup } from '../lib/pendingSignup';
+import { clearPendingSignup } from '../lib/pendingSignup';
 import { deleteAccount, ensureProfile } from '../lib/profile';
 import { supabase } from '../lib/supabase';
 
@@ -197,20 +197,9 @@ export default function VerifyEmailScreen() {
                                 deleted = !error;
                             }
                             if (!deleted) {
-                                const pending = await getPendingSignup();
-                                if (pending?.email && pending?.password) {
-                                    const { error: signInError } = await supabase.auth.signInWithPassword({
-                                        email: pending.email,
-                                        password: pending.password,
-                                    });
-                                    if (!signInError) {
-                                        await deleteAccount();
-                                    } else {
-                                        await supabase.auth.signOut({ scope: 'local' });
-                                    }
-                                } else {
-                                    await supabase.auth.signOut({ scope: 'local' });
-                                }
+                                // No persistimos contraseñas para reautenticar. Si no hay sesión,
+                                // se limpia el registro local sin conservar credenciales sensibles.
+                                await supabase.auth.signOut({ scope: 'local' });
                             }
                         } finally {
                             await clearPendingVerifyEmail();

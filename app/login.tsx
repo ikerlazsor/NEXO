@@ -38,14 +38,11 @@ import {
     deleteAccount,
     ensureProfile,
     isValidDisplayName,
-    isEmailTaken,
     isUsernameTaken,
     isValidUsername,
     normalizeDisplayName,
     formatUsernameInput,
     normalizeUsername,
-    getLoginEmailByUsername,
-    EmailCheckError,
     UsernameCheckError,
     USERNAME_MAX_LENGTH,
 } from '../lib/profile';
@@ -87,7 +84,12 @@ async function tryReclaimIncompleteEmail(email: string, password: string): Promi
     }
 
     const { error: delError } = await deleteAccount();
-    return !delError;
+    if (delError) {
+        // Este flujo auxiliar no debe dejar iniciada una cuenta incompleta.
+        await supabase.auth.signOut({ scope: 'local' });
+        return false;
+    }
+    return true;
 }
 
 export default function LoginScreen() {
@@ -234,15 +236,8 @@ export default function LoginScreen() {
 
         setLoading(true);
         try {
-            let loginEmail = email.trim().toLowerCase();
-            if (!loginEmail.includes('@')) {
-                const resolved = await getLoginEmailByUsername(loginEmail.replace(/^@/, ''));
-                if (!resolved) {
-                    Alert.alert(t('login.notice'), t('login.userNotFound'));
-                    return;
-                }
-                loginEmail = resolved;
-            } else if (!validateEmail(loginEmail)) {
+            const loginEmail = email.trim().toLowerCase();
+            if (!validateEmail(loginEmail)) {
                 Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
                 return;
             }
@@ -265,7 +260,7 @@ export default function LoginScreen() {
             return Alert.alert(t('login.notice'), t('login.fillAll'));
         }
 
-        if (isRegistering && !validateEmail(email)) {
+        if (!validateEmail(email)) {
             return Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
         }
 
@@ -302,21 +297,6 @@ export default function LoginScreen() {
                         return Alert.alert(t('login.notice'), t('login.usernameCheckFailed'));
                     }
                     return Alert.alert(t('login.notice'), t('login.usernameCheckFailed'));
-                }
-
-                try {
-                    const emailTaken = await isEmailTaken(email);
-                    if (emailTaken) {
-                        const reclaimed = await tryReclaimIncompleteEmail(email, password);
-                        if (!reclaimed) {
-                            return Alert.alert(t('login.notice'), t('login.emailTaken'));
-                        }
-                    }
-                } catch (e) {
-                    if (e instanceof EmailCheckError) {
-                        return Alert.alert(t('login.notice'), t('login.emailCheckFailed'));
-                    }
-                    return Alert.alert(t('login.notice'), t('login.emailCheckFailed'));
                 }
 
                 const registerEmail = email.trim().toLowerCase();
@@ -358,7 +338,6 @@ export default function LoginScreen() {
 
                 await setPendingSignup({
                     email: registerEmail,
-                    password,
                     nombre: displayName,
                     nombreUsuario: handle,
                 });
@@ -398,21 +377,7 @@ export default function LoginScreen() {
                 return;
             }
 
-            let loginEmail = email.trim();
-            if (loginEmail.includes('@')) {
-                loginEmail = loginEmail.toLowerCase();
-                if (!validateEmail(loginEmail)) {
-                    Alert.alert(t('login.invalidEmail'), t('login.invalidEmailMsg'));
-                    return;
-                }
-            } else {
-                const resolved = await getLoginEmailByUsername(loginEmail.replace(/^@/, ''));
-                if (!resolved) {
-                    Alert.alert(t('login.authError'), t('login.userNotFound'));
-                    return;
-                }
-                loginEmail = resolved;
-            }
+            const loginEmail = email.trim().toLowerCase();
 
             const { data, error } = await supabase.auth.signInWithPassword({
                 email: loginEmail,
@@ -645,7 +610,7 @@ export default function LoginScreen() {
                             }}
                         >
                             <Text style={styles.label}>
-                                {isRegistering ? t('login.email') : t('login.emailOrUsername')}
+                                {isRegistering ? t('login.email') : t('login.email')}
                             </Text>
                             <View style={fieldStyle('email')}>
                                 {isRegistering ? (
@@ -656,7 +621,7 @@ export default function LoginScreen() {
                                     placeholder={
                                         isRegistering
                                             ? t('login.emailPlaceholder')
-                                            : t('login.emailOrUsernamePlaceholder')
+                                            : t('login.emailPlaceholder')
                                     }
                                     placeholderTextColor={PLACEHOLDER}
                                     style={styles.fieldInput}
@@ -666,7 +631,7 @@ export default function LoginScreen() {
                                     onBlur={() => setFocusedField(null)}
                                     autoCapitalize="none"
                                     autoCorrect={false}
-                                    keyboardType={isRegistering ? 'email-address' : 'default'}
+                                    keyboardType="email-address"
                                     returnKeyType="next"
                                     blurOnSubmit={false}
                                     onSubmitEditing={() => focusNextField('email')}

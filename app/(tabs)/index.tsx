@@ -1561,7 +1561,6 @@ export default function HomeScreen() {
                                     tracksViewChanges={false}
                                     stopPropagation
                                     onPress={(e) => {
-                                        // @ts-expect-error stopPropagation en el evento nativo de maps
                                         e?.stopPropagation?.();
                                         selectMapPlan(String(p.id));
                                     }}

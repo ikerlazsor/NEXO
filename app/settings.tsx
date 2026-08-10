@@ -22,12 +22,6 @@ import {
     fetchModerationCounts,
     type ModerationCounts,
 } from '../lib/moderation';
-import {
-    getNotificationCategoryPrefs,
-    setNotificationCategoryPrefs,
-    syncNotificationCategoryPrefsFromServer,
-    type NotificationCategoryPrefs,
-} from '../lib/notificationPrefs';
 import { deleteAccount } from '../lib/profile';
 import {
     cancelAllScheduledNexoNotifications,
@@ -78,11 +72,6 @@ export default function SettingsScreen() {
     const [notifications, setNotifications] = useState(true);
     const [settingsReady, setSettingsReady] = useState(false);
     const [osDenied, setOsDenied] = useState(false);
-    const [cats, setCats] = useState<NotificationCategoryPrefs>({
-        messages: true,
-        social: true,
-        reminders: true,
-    });
     const [deleting, setDeleting] = useState(false);
     const [isStaff, setIsStaff] = useState(false);
     const [isOwner, setIsOwner] = useState(false);
@@ -96,19 +85,15 @@ export default function SettingsScreen() {
             void (async () => {
                 const { data } = await supabase.auth.getUser();
                 const uid = data.user?.id ?? null;
-                const [pref, access, perm, categoryPrefs] = await Promise.all([
+                const [pref, access, perm] = await Promise.all([
                     uid ? syncPushPreferenceFromServer(uid) : getPushPreference(),
                     fetchAccountAccess(),
                     getNotificationPermissionStatus(),
-                    uid
-                        ? syncNotificationCategoryPrefsFromServer(uid)
-                        : getNotificationCategoryPrefs(),
                 ]);
                 if (!alive) return;
                 setUserId(uid);
                 setNotifications(pref && perm !== 'denied');
                 setOsDenied(perm === 'denied');
-                setCats(categoryPrefs);
                 setIsStaff(access.isStaff);
                 setIsOwner(access.isOwner);
                 if (access.isStaff) {
@@ -146,16 +131,6 @@ export default function SettingsScreen() {
                     },
                 },
             ]);
-        }
-    };
-
-    const updateCat = async (key: keyof NotificationCategoryPrefs, value: boolean) => {
-        hapticToggle(value);
-        const next = { ...cats, [key]: value };
-        setCats(next);
-        await setNotificationCategoryPrefs(next, userId ?? undefined);
-        if (key === 'reminders' && !value) {
-            await cancelAllScheduledNexoNotifications();
         }
     };
 
@@ -252,61 +227,6 @@ export default function SettingsScreen() {
                                 onPress={() => {
                                     void openSystemNotificationSettings();
                                 }}
-                            />
-                        </>
-                    ) : null}
-                    {notifications && !osDenied ? (
-                        <>
-                            <View style={styles.divider} />
-                            <Row
-                                icon="chatbubbles-outline"
-                                label={t('settings.notifMessages')}
-                                subtitle={t('settings.notifMessagesHint')}
-                                onPress={undefined}
-                                right={
-                                    <Switch
-                                        value={cats.messages}
-                                        onValueChange={(v) => {
-                                            void updateCat('messages', v);
-                                        }}
-                                        trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
-                                        thumbColor="#FFF"
-                                    />
-                                }
-                            />
-                            <View style={styles.divider} />
-                            <Row
-                                icon="people-outline"
-                                label={t('settings.notifSocial')}
-                                subtitle={t('settings.notifSocialHint')}
-                                onPress={undefined}
-                                right={
-                                    <Switch
-                                        value={cats.social}
-                                        onValueChange={(v) => {
-                                            void updateCat('social', v);
-                                        }}
-                                        trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
-                                        thumbColor="#FFF"
-                                    />
-                                }
-                            />
-                            <View style={styles.divider} />
-                            <Row
-                                icon="alarm-outline"
-                                label={t('settings.notifReminders')}
-                                subtitle={t('settings.notifRemindersHint')}
-                                onPress={undefined}
-                                right={
-                                    <Switch
-                                        value={cats.reminders}
-                                        onValueChange={(v) => {
-                                            void updateCat('reminders', v);
-                                        }}
-                                        trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
-                                        thumbColor="#FFF"
-                                    />
-                                }
                             />
                         </>
                     ) : null}

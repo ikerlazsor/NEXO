@@ -5,8 +5,9 @@
 -- Requisitos previos:
 -- 1. Haber ejecutado security-hardening-phase4-notification-outbox.sql.
 -- 2. Haber guardado en Vault los secretos nexo_project_url y
---    nexo_service_role_key (consulta las instrucciones de despliegue de la PR).
--- 3. Haber desplegado dispatch-push-outbox.
+--    nexo_dispatch_secret (consulta las instrucciones de despliegue de la PR).
+-- 3. Haber configurado el mismo NEXO_DISPATCH_SECRET en Edge Functions.
+-- 4. Haber desplegado dispatch-push-outbox con --no-verify-jwt.
 
 begin;
 
@@ -49,7 +50,7 @@ set search_path = public, pg_temp
 as $$
 declare
     v_project_url text;
-    v_service_role_key text;
+    v_dispatch_secret text;
 begin
     select decrypted_secret
       into v_project_url
@@ -58,13 +59,13 @@ begin
      limit 1;
 
     select decrypted_secret
-      into v_service_role_key
+      into v_dispatch_secret
       from vault.decrypted_secrets
-     where name = 'nexo_service_role_key'
+     where name = 'nexo_dispatch_secret'
      limit 1;
 
     if nullif(trim(v_project_url), '') is null
-       or nullif(trim(v_service_role_key), '') is null then
+       or nullif(trim(v_dispatch_secret), '') is null then
         raise warning 'NEXO push dispatcher: faltan secretos en Vault';
         return;
     end if;
@@ -73,7 +74,7 @@ begin
         url := rtrim(v_project_url, '/') || '/functions/v1/dispatch-push-outbox',
         headers := jsonb_build_object(
             'Content-Type', 'application/json',
-            'Authorization', 'Bearer ' || v_service_role_key
+            'Authorization', 'Bearer ' || v_dispatch_secret
         ),
         body := '{}'::jsonb,
         timeout_milliseconds := 30000

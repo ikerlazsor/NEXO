@@ -5,8 +5,8 @@
  * Body (JSON):
  * {
  *   type: 'friend_request' | 'friend_accepted' | 'plan_join_request' | 'plan_joined'
- *       | 'plan_join_accepted' | 'plan_join_rejected' | 'plan_invite'
- *       | 'plan_message' | 'direct_message' | 'rated',
+ *       | 'plan_invite' | 'plan_message' | 'direct_message' | 'rated',
+ *   // aceptación/rechazo se gestionan exclusivamente mediante el outbox
  *   ...campos según tipo
  * }
  */
@@ -31,45 +31,81 @@ type PushPayload = {
   collapseId?: string;
 };
 
-async function sendExpo(
-  messages: PushPayload[],
-): Promise<{ deadTokens: string[] }> {
-  const deadTokens: string[] = [];
-  if (!messages.length) return { deadTokens };
-  const chunks: PushPayload[][] = [];
-  for (let i = 0; i < messages.length; i += 100) {
-    chunks.push(messages.slice(i, i + 100));
-  }
-  for (const chunk of chunks) {
-    const res = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Accept-Encoding': 'gzip, deflate',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(chunk),
-    });
-    if (!res.ok) throw new Error(`expo_push_${res.status}`);
-    try {
-      const json = await res.json() as {
-        data?: Array<{ status?: string; details?: { error?: string }; message?: string }>;
-      };
-      (json.data ?? []).forEach((ticket, idx) => {
-        const err = ticket?.details?.error || ticket?.message || '';
-        if (
-          ticket?.status === 'error' &&
-          (String(err).includes('DeviceNotRegistered') || String(err).includes('InvalidCredentials'))
-        ) {
-          const token = chunk[idx]?.to;
-          if (token) deadTokens.push(token);
-        }
-      });
-    } catch {
-      /* ignore parse */
+type ExpoDeliveryResult = {
+  token: string;
+  accepted: boolean;
+  ticketId?: string;
+  error?: string;
+  dead: boolean;
+};
+
+async function sendExpo(messages: PushPayload[]): Promise<ExpoDeliveryResult[]> {
+  if (!messages.length) return [];
+
+  const results: ExpoDeliveryResult[] = [];
+  for (let offset = 0; offset < messages.length; offset += 100) {
+    const chunk = messages.slice(offset, offset + 100);
+    let res: Response | null = null;
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        res = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Accept-Encoding': 'gzip, deflate',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(chunk),
+        });
+      } catch (error) {
+        lastError = error;
+        res = null;
+      }
+
+      if (res?.ok) break;
+      if (res) {
+        lastError = new Error(`expo_push_${res.status}`);
+        if (res.status < 500 && res.status !== 429) break;
+      }
+
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+      }
     }
+
+    if (!res?.ok) {
+      throw lastError instanceof Error ? lastError : new Error('expo_push_unavailable');
+    }
+
+    const json = await res.json() as {
+      data?: Array<{
+        status?: 'ok' | 'error';
+        id?: string;
+        details?: { error?: string };
+        message?: string;
+      }>;
+    };
+    const tickets = json.data ?? [];
+    if (tickets.length !== chunk.length) throw new Error('expo_invalid_ticket_count');
+
+    tickets.forEach((ticket, idx) => {
+      const token = chunk[idx].to;
+      const error = ticket.details?.error ?? ticket.message;
+      results.push({
+        token,
+        accepted: ticket.status === 'ok' && Boolean(ticket.id),
+        ...(ticket.id ? { ticketId: ticket.id } : {}),
+        ...(error ? { error } : {}),
+        dead:
+          ticket.status === 'error' &&
+          error === 'DeviceNotRegistered',
+      });
+    });
   }
-  return { deadTokens };
+
+  return results;
 }
 
 function channelFor(category: NotifCategory): string {
@@ -230,27 +266,12 @@ serve(async (req) => {
       category = 'social';
       collapseId = `plan-social:${planId}`;
     } else if (type === 'plan_join_accepted' || type === 'plan_join_rejected') {
-      const planId = String(body.planId ?? '');
-      const toUserId = String(body.toUserId ?? '');
-      if (!planId || !toUserId) throw new Error('params');
-      const { data: plan } = await admin
-        .from('planes')
-        .select('id, titulo, creador_id')
-        .eq('id', planId)
-        .maybeSingle();
-      if (!plan || plan.creador_id !== user.id) throw new Error('not_allowed');
-      targetIds = [toUserId];
-      const planTitle = (plan.titulo as string) || 'el plan';
-      if (type === 'plan_join_accepted') {
-        title = 'Solicitud aceptada';
-        notifBody = `Te han aceptado en «${planTitle}»`;
-        data = { type, screen: 'plan', planId };
-      } else {
-        title = 'Solicitud rechazada';
-        notifBody = `No te han aceptado en «${planTitle}»`;
-        data = { type, screen: 'feed' };
-      }
-      category = 'social';
+      // Desde la fase 4 estos eventos solo se generan y despachan desde el
+      // outbox de PostgreSQL. Un JWT de usuario nunca puede elegir el resultado
+      // ni el destinatario de esta notificación.
+      return new Response(JSON.stringify({ sent: 0, serverManaged: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      });
     } else if (type === 'plan_invite') {
       const planId = String(body.planId ?? '');
       const toUserId = String(body.toUserId ?? '');
@@ -404,19 +425,6 @@ serve(async (req) => {
       });
     }
 
-    if (claimedMessageId) {
-      const { data: claimed, error: claimError } = await admin.rpc(
-        'claim_push_message',
-        { p_message_id: claimedMessageId, p_sender_id: user.id },
-      );
-      if (claimError) throw new Error('push_claim_unavailable');
-      if (claimed !== true) {
-        return new Response(JSON.stringify({ sent: 0, duplicate: true }), {
-          headers: { ...cors, 'Content-Type': 'application/json' },
-        });
-      }
-    }
-
     const { data: prefs } = await admin
       .from('perfiles')
       .select('id, notificaciones_push, notif_messages, notif_social')
@@ -454,12 +462,82 @@ serve(async (req) => {
       ...(collapseId ? { collapseId } : {}),
     }));
 
-    const { deadTokens } = await sendExpo(messages);
+    let queuedMessages = messages;
+
+    // La idempotencia de mensajes se controla por dispositivo. Un fallo en un
+    // token no bloquea los demás y una entrega fallida puede reintentarse.
+    if (claimedMessageId) {
+      const claims = await Promise.all(
+        messages.map(async (message) => {
+          const { data: claimed, error: claimError } = await admin.rpc(
+            'claim_push_message_delivery',
+            {
+              p_message_id: claimedMessageId,
+              p_sender_id: user.id,
+              p_push_token: message.to,
+            },
+          );
+          if (claimError) throw new Error('push_claim_unavailable');
+          return claimed === true;
+        }),
+      );
+      queuedMessages = messages.filter((_, index) => claims[index]);
+
+      if (!queuedMessages.length) {
+        return new Response(JSON.stringify({ sent: 0, duplicate: true }), {
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
+    let deliveryResults: ExpoDeliveryResult[];
+    try {
+      deliveryResults = await sendExpo(queuedMessages);
+    } catch (error) {
+      if (claimedMessageId) {
+        const failure = error instanceof Error ? error.message : 'expo_delivery_failed';
+        await Promise.all(
+          queuedMessages.map((message) =>
+            admin.rpc('complete_push_message_delivery', {
+              p_message_id: claimedMessageId,
+              p_sender_id: user.id,
+              p_push_token: message.to,
+              p_succeeded: false,
+              p_ticket_id: null,
+              p_error: failure,
+            })
+          ),
+        );
+      }
+      throw error;
+    }
+
+    if (claimedMessageId) {
+      await Promise.all(
+        deliveryResults.map((result) =>
+          admin.rpc('complete_push_message_delivery', {
+            p_message_id: claimedMessageId,
+            p_sender_id: user.id,
+            p_push_token: result.token,
+            p_succeeded: result.accepted,
+            p_ticket_id: result.ticketId ?? null,
+            p_error: result.accepted ? null : (result.error ?? 'expo_ticket_rejected'),
+          })
+        ),
+      );
+    }
+
+    const deadTokens = deliveryResults.filter((result) => result.dead).map((result) => result.token);
     if (deadTokens.length) {
       await admin.from('push_tokens').delete().in('token', deadTokens);
     }
 
-    return new Response(JSON.stringify({ sent: messages.length, pruned: deadTokens.length }), {
+    const acceptedCount = deliveryResults.filter((result) => result.accepted).length;
+    return new Response(JSON.stringify({
+      sent: acceptedCount,
+      rejected: deliveryResults.length - acceptedCount,
+      pruned: deadTokens.length,
+    }), {
       headers: { ...cors, 'Content-Type': 'application/json' },
     });
   } catch (e) {

@@ -86,7 +86,9 @@ serve(async (req) => {
       .eq('user_id', event.recipient_id);
     if (tokenError) throw new Error('token_lookup_failed');
 
-    const tokens = [...new Set((tokenRows ?? []).map((row) => String(row.token)).filter(Boolean))];
+    const tokens: string[] = [
+      ...new Set<string>((tokenRows ?? []).map((row) => String(row.token)).filter(Boolean)),
+    ];
     if (!tokens.length) {
       await admin.rpc('complete_push_outbox_event', {
         p_event_id: event.id,

@@ -110,7 +110,7 @@ begin
     end if;
     return new;
 end;
-$;
+$$;
 
 revoke all on function public.queue_plan_join_decision_push() from public, anon, authenticated;
 

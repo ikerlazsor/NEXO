@@ -7,7 +7,6 @@
  *   type: 'friend_request' | 'friend_accepted' | 'plan_join_request' | 'plan_joined'
  *       | 'plan_invite' | 'plan_message' | 'direct_message' | 'rated',
  *   // aceptación/rechazo se gestionan exclusivamente mediante el outbox
- *       | 'plan_message' | 'direct_message' | 'rated',
  *   ...campos según tipo
  * }
  */
@@ -60,14 +59,15 @@ async function sendExpo(messages: PushPayload[]): Promise<ExpoDeliveryResult[]> 
           },
           body: JSON.stringify(chunk),
         });
-        if (res.ok) break;
-        if (res.status < 500 && res.status !== 429) {
-          throw new Error(`expo_push_${res.status}`);
-        }
-        lastError = new Error(`expo_push_${res.status}`);
       } catch (error) {
         lastError = error;
         res = null;
+      }
+
+      if (res?.ok) break;
+      if (res) {
+        lastError = new Error(`expo_push_${res.status}`);
+        if (res.status < 500 && res.status !== 429) break;
       }
 
       if (attempt < 3) {

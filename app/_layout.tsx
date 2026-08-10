@@ -329,7 +329,15 @@ function RootLayout() {
                 />
                 <Stack.Screen
                   name="profile"
-                  options={{ animation: 'fade_from_bottom', animationDuration: 260 }}
+                  options={{
+                    presentation: 'modal',
+                    animation: 'slide_from_bottom',
+                    animationDuration: 320,
+                    gestureEnabled: Platform.OS === 'ios',
+                    fullScreenGestureEnabled: false,
+                    freezeOnBlur: false,
+                    contentStyle: { backgroundColor: '#FFF' },
+                  }}
                 />
                 <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="analytics" options={{ animation: 'slide_from_right' }} />

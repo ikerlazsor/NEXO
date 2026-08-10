@@ -136,15 +136,6 @@ export function MainChrome({ active: activeProp, children }: Props) {
         [active, router],
     );
 
-    const activeTitle =
-        active === 'chats'
-            ? t('chats.title')
-            : active === 'my-plans'
-                ? t('myplans.title')
-                : active === 'search'
-                    ? t('feed.searchProfiles')
-                    : t('feed.greeting');
-
     return (
         <View style={styles.container}>
             <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
@@ -152,7 +143,6 @@ export function MainChrome({ active: activeProp, children }: Props) {
             <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) + 12 }]}>
                 <View style={styles.headerCopy}>
                     <Text style={styles.brand}>NEXO</Text>
-                    <Text style={styles.sectionTitle} numberOfLines={1}>{activeTitle}</Text>
                 </View>
                 <View style={styles.headerRight}>
                     <TouchableOpacity
@@ -270,8 +260,7 @@ const styles = StyleSheet.create({
         marginBottom: 12,
     },
     headerCopy: { flex: 1, paddingRight: 16 },
-    brand: { color: PRIMARY_DARK, fontSize: 11, fontWeight: '900', letterSpacing: 1.8 },
-    sectionTitle: { color: INK, fontSize: 22, fontWeight: '900', marginTop: 2 },
+    brand: { color: INK, fontSize: 24, fontWeight: '900', letterSpacing: 1.2 },
     headerRight: { flexDirection: 'row', alignItems: 'center' },
     profileBtn: { padding: 2 },
     profileAvatarWrap: { position: 'relative' },

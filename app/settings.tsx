@@ -204,7 +204,7 @@ export default function SettingsScreen() {
                     <Row
                         icon="notifications-outline"
                         label={t('settings.notifications')}
-                        subtitle={t('settings.notificationsHint')}
+                        subtitle={osDenied ? t('settings.notifPermissionBody') : t('settings.notificationsHint')}
                         onPress={undefined}
                         right={
                             <Switch
@@ -217,19 +217,6 @@ export default function SettingsScreen() {
                             />
                         }
                     />
-                    {osDenied ? (
-                        <>
-                            <View style={styles.divider} />
-                            <Row
-                                icon="warning-outline"
-                                label={t('settings.notifPermissionDenied')}
-                                subtitle={t('settings.notifPermissionBody')}
-                                onPress={() => {
-                                    void openSystemNotificationSettings();
-                                }}
-                            />
-                        </>
-                    ) : null}
                 </View>
 
                 <View style={[styles.card, { marginTop: 16 }]}>

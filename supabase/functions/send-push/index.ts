@@ -50,6 +50,7 @@ async function sendExpo(
       },
       body: JSON.stringify(chunk),
     });
+    if (!res.ok) throw new Error(`expo_push_${res.status}`);
     try {
       const json = await res.json() as {
         data?: Array<{ status?: string; details?: { error?: string }; message?: string }>;
@@ -73,6 +74,35 @@ async function sendExpo(
 
 function channelFor(category: NotifCategory): string {
   return category === 'messages' ? 'messages' : 'social';
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_MESSAGE_AGE_MS = 10 * 60 * 1000;
+
+function readUuid(value: unknown, field: string): string {
+  const parsed = String(value ?? '').trim();
+  if (!UUID_RE.test(parsed)) throw new Error(field);
+  return parsed;
+}
+
+function messagePreview(message: { contenido?: unknown; tipo?: unknown }): string {
+  const type = String(message.tipo ?? 'texto');
+  if (type === 'imagen') return '📷 Foto';
+  if (type === 'video') return '🎬 Vídeo';
+  if (type === 'audio') return '🎤 Audio';
+
+  let content = String(message.contenido ?? '');
+  const mark = '@@nexo_reply:';
+  if (content.startsWith(mark)) {
+    const end = content.indexOf('@@\n', mark.length);
+    if (end >= 0) content = content.slice(end + 3);
+  }
+  return content.replace(/\s+/g, ' ').trim().slice(0, 100) || 'Mensaje';
+}
+
+function isRecentMessage(createdAt: unknown): boolean {
+  const timestamp = new Date(String(createdAt ?? '')).getTime();
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= MAX_MESSAGE_AGE_MS;
 }
 
 serve(async (req) => {
@@ -107,6 +137,18 @@ serve(async (req) => {
     }
 
     const admin = createClient(supabaseUrl, serviceKey);
+    const { data: quotaAllowed, error: quotaError } = await admin.rpc(
+      'consume_push_dispatch_quota',
+      { p_user_id: user.id },
+    );
+    if (quotaError) throw new Error('push_quota_unavailable');
+    if (quotaAllowed !== true) {
+      return new Response(JSON.stringify({ error: 'rate_limited' }), {
+        status: 429,
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      });
+    }
+
     const body = await req.json();
     const type = String(body?.type ?? '');
 
@@ -123,6 +165,7 @@ serve(async (req) => {
     let data: Record<string, string> = { type };
     let category: NotifCategory = 'social';
     let collapseId: string | undefined;
+    let claimedMessageId: string | null = null;
 
     if (type === 'friend_request') {
       const toUserId = String(body.toUserId ?? '');
@@ -165,11 +208,13 @@ serve(async (req) => {
         .eq('id', planId)
         .maybeSingle();
       if (!plan?.creador_id || plan.creador_id === user.id) throw new Error('not_allowed');
+      const expectedState = type === 'plan_join_request' ? 'pendiente' : 'aceptado';
       const { data: part } = await admin
         .from('participantes')
         .select('estado')
         .eq('plan_id', planId)
         .eq('usuario_id', user.id)
+        .eq('estado', expectedState)
         .maybeSingle();
       if (!part) throw new Error('not_allowed');
       targetIds = [plan.creador_id as string];
@@ -226,9 +271,10 @@ serve(async (req) => {
       data = { type, screen: 'plan', planId };
       category = 'social';
     } else if (type === 'plan_message') {
-      const planId = String(body.planId ?? '');
-      const preview = String(body.preview ?? '').slice(0, 120);
-      if (!planId) throw new Error('planId');
+      const planId = readUuid(body.planId, 'planId');
+      const requestedMessageId = body.messageId
+        ? readUuid(body.messageId, 'messageId')
+        : null;
       const { data: part } = await admin
         .from('participantes')
         .select('id')
@@ -242,6 +288,24 @@ serve(async (req) => {
         .eq('id', planId)
         .maybeSingle();
       if (!part && plan?.creador_id !== user.id) throw new Error('not_allowed');
+
+      let messageQuery = admin
+        .from('mensajes')
+        .select('id, contenido, tipo, creado_en')
+        .eq('plan_id', planId)
+        .eq('emisor_id', user.id);
+      if (requestedMessageId) {
+        messageQuery = messageQuery.eq('id', requestedMessageId);
+      }
+      const { data: message, error: messageError } = await messageQuery
+        .order('creado_en', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (messageError || !message || !isRecentMessage(message.creado_en)) {
+        throw new Error('invalid_message');
+      }
+      claimedMessageId = String(message.id);
+
       const { data: members } = await admin
         .from('participantes')
         .select('usuario_id')
@@ -264,17 +328,48 @@ serve(async (req) => {
       }
 
       title = (plan?.titulo as string) || 'Chat del plan';
-      notifBody = preview ? `${senderName}: ${preview}` : `${senderName} ha enviado un mensaje`;
+      notifBody = `${senderName}: ${messagePreview(message)}`;
       data = { type, screen: 'chat', planId };
       category = 'messages';
       collapseId = `plan-msg:${planId}`;
     } else if (type === 'direct_message') {
-      const toUserId = String(body.toUserId ?? '');
-      const preview = String(body.preview ?? '').slice(0, 120);
-      if (!toUserId) throw new Error('toUserId');
+      const toUserId = readUuid(body.toUserId, 'toUserId');
+      const requestedMessageId = body.messageId
+        ? readUuid(body.messageId, 'messageId')
+        : null;
+      if (toUserId === user.id) throw new Error('not_allowed');
+
+      let messageQuery = admin
+        .from('mensajes')
+        .select('id, contenido, tipo, creado_en')
+        .eq('emisor_id', user.id)
+        .eq('receptor_id', toUserId)
+        .is('plan_id', null);
+      if (requestedMessageId) {
+        messageQuery = messageQuery.eq('id', requestedMessageId);
+      }
+      const { data: message, error: messageError } = await messageQuery
+        .order('creado_en', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (messageError || !message || !isRecentMessage(message.creado_en)) {
+        throw new Error('invalid_message');
+      }
+
+      const { data: blocks, error: blockError } = await admin
+        .from('bloqueos')
+        .select('id')
+        .or(
+          `and(usuario_origen_id.eq.${user.id},usuario_destino_id.eq.${toUserId}),and(usuario_origen_id.eq.${toUserId},usuario_destino_id.eq.${user.id})`,
+        )
+        .limit(1);
+      if (blockError) throw new Error('block_check_failed');
+      if ((blocks ?? []).length > 0) throw new Error('not_allowed');
+
+      claimedMessageId = String(message.id);
       targetIds = [toUserId];
       title = senderName;
-      notifBody = preview || 'Te ha enviado un mensaje';
+      notifBody = messagePreview(message);
       data = { type, screen: 'direct-chat', otherUserId: user.id };
       category = 'messages';
       collapseId = `dm:${[user.id, toUserId].sort().join(':')}`;
@@ -307,6 +402,19 @@ serve(async (req) => {
       return new Response(JSON.stringify({ sent: 0 }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       });
+    }
+
+    if (claimedMessageId) {
+      const { data: claimed, error: claimError } = await admin.rpc(
+        'claim_push_message',
+        { p_message_id: claimedMessageId, p_sender_id: user.id },
+      );
+      if (claimError) throw new Error('push_claim_unavailable');
+      if (claimed !== true) {
+        return new Response(JSON.stringify({ sent: 0, duplicate: true }), {
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        });
+      }
     }
 
     const { data: prefs } = await admin

@@ -142,20 +142,13 @@ export async function flushChatOutbox(): Promise<void> {
                     }
                 });
 
-                const preview =
-                    item.tipo === 'texto'
-                        ? item.contenido
-                        : item.tipo === 'imagen'
-                          ? '📷'
-                          : item.tipo === 'video'
-                            ? '🎬'
-                            : '🎤';
                 try {
                     const { notifyPlanMessage, notifyDirectMessage } = await import('./push');
+                    const messageId = String(data.id);
                     if (item.kind === 'plan' && item.planId) {
-                        notifyPlanMessage(item.planId, preview);
+                        notifyPlanMessage(item.planId, messageId);
                     } else if (item.kind === 'direct' && item.receptorId) {
-                        notifyDirectMessage(item.receptorId, preview);
+                        notifyDirectMessage(item.receptorId, messageId);
                     }
                 } catch {
                     /* ignore */

@@ -659,16 +659,10 @@ export default function DirectChatScreen() {
             });
         }
 
-        const preview =
-            tipo === 'texto'
-                ? tempText
-                : tipo === 'imagen'
-                  ? t('chats.previewImage')
-                  : tipo === 'video'
-                    ? t('chats.previewVideo')
-                    : t('chats.previewVoice');
-        const { notifyDirectMessage } = await import('../../lib/push');
-        notifyDirectMessage(otherUserId, preview);
+        if (data?.id) {
+            const { notifyDirectMessage } = await import('../../lib/push');
+            notifyDirectMessage(otherUserId, String(data.id));
+        }
     };
 
     const pickMedia = async () => {

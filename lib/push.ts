@@ -299,12 +299,12 @@ export function notifyPlanInvite(planId: string, toUserId: string) {
     notifyPush({ type: 'plan_invite', planId, toUserId });
 }
 
-export function notifyPlanMessage(planId: string, preview: string) {
-    notifyPush({ type: 'plan_message', planId, preview });
+export function notifyPlanMessage(planId: string, messageId: string) {
+    notifyPush({ type: 'plan_message', planId, messageId });
 }
 
-export function notifyDirectMessage(toUserId: string, preview: string) {
-    notifyPush({ type: 'direct_message', toUserId, preview });
+export function notifyDirectMessage(toUserId: string, messageId: string) {
+    notifyPush({ type: 'direct_message', toUserId, messageId });
 }
 
 /** Alguien te ha valorado tras un plan. */

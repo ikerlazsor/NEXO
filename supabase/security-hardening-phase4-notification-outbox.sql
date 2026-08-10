@@ -55,7 +55,10 @@ declare
     v_participant_id text;
 begin
     if old.estado is distinct from 'pendiente' then
-        return coalesce(new, old);
+        if tg_op = 'DELETE' then
+            return old;
+        end if;
+        return new;
     end if;
 
     select p.creador_id, coalesce(nullif(trim(p.titulo), ''), 'el plan')
@@ -65,7 +68,10 @@ begin
 
     -- Solo una decisión realizada por el creador puede generar este evento.
     if v_actor_id is null or v_creator_id is null or v_actor_id <> v_creator_id then
-        return coalesce(new, old);
+        if tg_op = 'DELETE' then
+            return old;
+        end if;
+        return new;
     end if;
 
     if tg_op = 'DELETE' then
@@ -99,9 +105,12 @@ begin
     )
     on conflict (event_key) do nothing;
 
-    return coalesce(new, old);
+    if tg_op = 'DELETE' then
+        return old;
+    end if;
+    return new;
 end;
-$$;
+$;
 
 revoke all on function public.queue_plan_join_decision_push() from public, anon, authenticated;
 
@@ -174,7 +183,7 @@ begin
            end,
            available_at = case
                when p_succeeded then available_at
-               else now() + least(interval '15 minutes', interval '30 seconds' * power(2, greatest(attempts - 1, 0)))
+               else now() + make_interval(secs => least(900, (30 * power(2, greatest(attempts - 1, 0)))::integer))
            end,
            processing_started_at = null,
            updated_at = now()
@@ -308,10 +317,5 @@ revoke all on function public.complete_push_message_delivery(text, uuid, text, b
     from public, anon, authenticated;
 grant execute on function public.complete_push_message_delivery(text, uuid, text, boolean, text, text)
     to service_role;
-
--- La tabla antigua queda conservada para no destruir historial, pero deja de
--- intervenir en los nuevos envíos. Puede retirarse en una migración posterior.
-comment on table public.push_message_dispatches is
-    'Legacy phase-3 message claims; superseded by push_message_deliveries.';
 
 commit;

@@ -196,23 +196,12 @@ async function dispatchEvent(
 }
 
 async function getDueEventIds(admin: AdminClient): Promise<string[]> {
-  const leaseCutoff = new Date(
-    Date.now() - LEASE_MINUTES * 60 * 1000,
-  ).toISOString();
-
-  const { data, error } = await admin
-    .from('push_notification_outbox')
-    .select('id')
-    .lte('available_at', new Date().toISOString())
-    .lt('attempts', MAX_ATTEMPTS)
-    .or(
-      `status.in.(pending,failed),and(status.eq.processing,processing_started_at.lt.${leaseCutoff})`,
-    )
-    .order('created_at', { ascending: true })
-    .limit(MAX_BATCH_SIZE);
+  const { data, error } = await admin.rpc('get_due_push_outbox_event_ids', {
+    p_limit: MAX_BATCH_SIZE,
+  });
 
   if (error) throw new Error('outbox_due_lookup_failed');
-  return (data ?? []).map((row) => String(row.id)).filter(Boolean);
+  return (data ?? []).map((row: { id?: unknown }) => String(row.id ?? '')).filter(Boolean);
 }
 
 serve(async (req) => {

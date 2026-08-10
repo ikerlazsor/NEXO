@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'expo-router';
 import { useCallback, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LangPicker } from './LangPicker';
 import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
 import { getAuthUser } from '../lib/auth';
@@ -56,7 +57,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
     const pathname = usePathname();
     const insets = useSafeAreaInsets();
     const active = activeProp ?? activeTabFromPathname(pathname);
-    const { t } = useT();
+    const { t, lang, setLang } = useT();
     const [userId, setUserId] = useState<string | null>(null);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
     const [notifCount, setNotifCount] = useState(0);
@@ -141,10 +142,9 @@ export function MainChrome({ active: activeProp, children }: Props) {
             <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
 
             <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) + 12 }]}>
-                <View style={styles.headerCopy}>
-                    <Text style={styles.brand}>NEXO</Text>
-                </View>
+                <View style={styles.headerSpacer} />
                 <View style={styles.headerRight}>
+                    <LangPicker lang={lang} onChange={setLang} compact />
                     <TouchableOpacity
                         style={styles.profileBtn}
                         onPress={() => {
@@ -259,9 +259,8 @@ const styles = StyleSheet.create({
         paddingHorizontal: 24,
         marginBottom: 12,
     },
-    headerCopy: { flex: 1, paddingRight: 16 },
-    brand: { color: INK, fontSize: 24, fontWeight: '900', letterSpacing: 1.2 },
-    headerRight: { flexDirection: 'row', alignItems: 'center' },
+    headerSpacer: { flex: 1 },
+    headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     profileBtn: { padding: 2 },
     profileAvatarWrap: { position: 'relative' },
     profileNotifBadge: {

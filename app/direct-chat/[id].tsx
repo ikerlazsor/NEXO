@@ -639,7 +639,6 @@ export default function DirectChatScreen() {
             }
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
             Alert.alert(t('chat.errorTitle'), t('chat.sendError'));
-            if (tipo === 'texto') setMessageText(tempText);
             return;
         }
 

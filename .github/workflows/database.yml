@@ -1,0 +1,44 @@
+name: Database migrations
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/**"
+      - ".github/workflows/database.yml"
+  push:
+    branches: [main]
+    paths:
+      - "supabase/**"
+      - ".github/workflows/database.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migrations:
+    name: Rebuild schema and run pgTAP
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.113.0
+
+      - name: Start local Supabase
+        run: supabase start
+
+      - name: Rebuild from versioned migrations
+        run: supabase db reset
+
+      - name: Run database tests
+        run: supabase test db

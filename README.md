@@ -1,50 +1,110 @@
-# Welcome to your Expo app 👋
+# NEXO
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+NEXO is an Expo/React Native social planning application for creating plans,
+joining local activities, managing friendships and using plan or direct chats.
+The client runs on Android and iPhone and uses Supabase for Auth, PostgreSQL,
+Realtime, Storage and Edge Functions.
 
-## Get started
+## Requirements
 
-1. Install dependencies
+- Node.js 20
+- npm
+- Expo/EAS account access
+- Docker-compatible runtime and the Supabase CLI for database work
+- A separate Supabase project for mobile E2E tests
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Local application setup
 
 ```bash
-npm run reset-project
+npm ci
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Create a local `.env` with the public client values used by the app. Never add
+the Supabase service-role key, Sentry token or database password to the
+repository.
 
-## Learn more
+## Quality checks
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run deps:check
+npm run bundle:check
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+GitHub repeats these checks on each pull request. The bundle check compiles the
+JavaScript and assets separately for Android and iPhone; labeled EAS workflows
+run the full Maestro mobile flows.
 
-## Join the community
+The dependency audit is initially informational because the current Expo 54
+tree contains pre-existing transitive advisories, including packages for which
+no compatible fix is published. Dependabot opens grouped update PRs; each group
+must pass Expo compatibility, bundles and mobile tests before merging. Once the
+baseline is cleared, remove `continue-on-error` from the audit step.
 
-Join our community of developers creating universal apps.
+## Database workflow
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+The live schema was baselined on 2026-08-11 in
+`supabase/migrations/20260811000100_production_schema_baseline.sql`. No
+production rows, auth users, secrets or file contents are included.
+
+```bash
+supabase start
+supabase db reset
+supabase test db
+```
+
+For future changes:
+
+```bash
+supabase migration new descriptive_name
+# edit the generated SQL
+supabase db reset
+supabase test db
+supabase gen types --lang typescript --local > lib/database.types.ts
+```
+
+The production project pre-dates migration tracking. On the first linked
+deployment, mark only the baseline as already applied, preview the remaining
+migration, then push it:
+
+```bash
+supabase link --project-ref nixeproyzxvqzyrvsxcx
+supabase migration repair 20260811000100 --status applied --linked
+supabase db push --dry-run
+supabase db push
+```
+
+Never run `supabase db reset --linked` against production.
+
+See [the security audit](docs/supabase-security-audit.md) for verified controls
+and the two client-coordinated privacy remediations still required.
+
+## Sentry
+
+Production EAS builds upload source maps automatically. Configure
+`SENTRY_AUTH_TOKEN` as a sensitive EAS environment variable and provide
+`SENTRY_ORG` and `SENTRY_PROJECT` for the production environment. Preview and
+E2E builds keep automatic upload disabled.
+
+After a release, verify symbolication with a controlled test error in a
+non-production account before relying on stack traces.
+
+## Mobile E2E
+
+The Maestro flows in `.maestro/` must use an isolated Supabase test project.
+Add the `mobile-e2e` label to a pull request only after the EAS preview
+environment has the variables described in `.maestro/README.md`.
+
+## Repository map
+
+- `app/`: Expo Router screens and navigation.
+- `components/`, `features/`: shared UI and feature modules.
+- `lib/`: Supabase access, caching, notifications and domain services.
+- `theme/`: common visual tokens.
+- `supabase/migrations/`: ordered database history.
+- `supabase/tests/database/`: pgTAP authorization and schema tests.
+- `.github/workflows/`: code, dependency and database checks.
+- `.eas/workflows/`: native builds and Maestro flows.

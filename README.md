@@ -38,6 +38,12 @@ GitHub repeats these checks on each pull request. The bundle check compiles the
 JavaScript and assets separately for Android and iPhone; labeled EAS workflows
 run the full Maestro mobile flows.
 
+The dependency audit is initially informational because the current Expo 54
+tree contains pre-existing transitive advisories, including packages for which
+no compatible fix is published. Dependabot opens grouped update PRs; each group
+must pass Expo compatibility, bundles and mobile tests before merging. Once the
+baseline is cleared, remove `continue-on-error` from the audit step.
+
 ## Database workflow
 
 The live schema was baselined on 2026-08-11 in

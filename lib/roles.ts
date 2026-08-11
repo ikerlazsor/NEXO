@@ -9,6 +9,8 @@ export type AccountAccess = {
     banReason: string | null;
     isStaff: boolean;
     isOwner: boolean;
+    /** False when the database did not confirm the account state. */
+    verified: boolean;
 };
 
 const DEFAULT_ACCESS: AccountAccess = {
@@ -17,6 +19,12 @@ const DEFAULT_ACCESS: AccountAccess = {
     banReason: null,
     isStaff: false,
     isOwner: false,
+    verified: true,
+};
+
+const UNVERIFIED_ACCESS: AccountAccess = {
+    ...DEFAULT_ACCESS,
+    verified: false,
 };
 
 function mapAccess(row: {
@@ -35,6 +43,7 @@ function mapAccess(row: {
         banReason: row?.baneado_motivo ?? null,
         isStaff,
         isOwner,
+        verified: true,
     };
 }
 
@@ -54,10 +63,12 @@ export async function fetchAccountAccess(userId?: string): Promise<AccountAccess
         .maybeSingle();
 
     if (error) {
-        // Columnas aún no migradas → tratar como user normal
-        if (/rol|baneado|column/i.test(error.message)) return DEFAULT_ACCESS;
         console.warn('fetchAccountAccess:', error.message);
-        return DEFAULT_ACCESS;
+        return UNVERIFIED_ACCESS;
+    }
+    if (!data) {
+        console.warn('fetchAccountAccess: perfil no encontrado');
+        return UNVERIFIED_ACCESS;
     }
     return mapAccess(data);
 }

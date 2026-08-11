@@ -27,6 +27,7 @@ import { PersonBubble } from '../../features/plan-detail/PersonBubble';
 import type { Participant, PlanDetailSnapshot, PlanRow } from '../../features/plan-detail/types';
 import { Marker } from 'react-native-maps';
 import { NexoMapView } from '../../components/NexoMapView';
+import { NexoEmptyState, NexoLoadingState } from '../../components/ui/NexoState';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { PlanImage } from '../../components/PlanImage';
@@ -66,28 +67,29 @@ import { invalidatePlanDetailCache } from '../../lib/planDetailCache';
 import { cacheGetStale, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
 import { getWaitlistPosition } from '../../lib/waitlistPosition';
 import { supabase } from '../../lib/supabase';
+import { theme } from '../../theme';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const HERO_H = Math.min(380, SCREEN_W * 0.92);
 const PLAN_DETAIL_TTL_MS = 90_000;
 const planDetailKey = (id: string) => `planDetail:${id}`;
 
-const PRIMARY = '#4DA6FF';
-const PRIMARY_DARK = '#2563EB';
-const INK = '#0F2A4A';
-const MUTED = '#64748B';
-const SURFACE = '#FFFFFF';
-const BORDER = '#E2E8F0';
-const SUCCESS = '#22C55E';
-const DANGER = '#EF4444';
-const FRIEND = '#10B981';
-const FRIEND_BG = '#ECFDF5';
+const PRIMARY = theme.colors.brand;
+const PRIMARY_DARK = theme.colors.primary;
+const INK = theme.colors.text;
+const MUTED = theme.colors.textMuted;
+const SURFACE = theme.colors.surface;
+const BORDER = theme.colors.border;
+const SUCCESS = theme.colors.success;
+const DANGER = theme.colors.danger;
+const FRIEND = theme.colors.successStrong;
+const FRIEND_BG = theme.colors.successSoft;
 const FRIEND_BORDER = '#6EE7B7';
-const ACQUAINTANCE = '#7C3AED';
+const ACQUAINTANCE = theme.colors.accent;
 const ACQUAINTANCE_BG = '#F5F3FF';
 const ACQUAINTANCE_BORDER = '#C4B5FD';
-const GOLD = '#F59E0B';
-const WAITLIST = '#7C3AED';
+const GOLD = theme.colors.warning;
+const WAITLIST = theme.colors.accent;
 
 export default function PlanDetailScreen() {
     const router = useRouter();
@@ -746,7 +748,7 @@ export default function PlanDetailScreen() {
                             disabled={actionBusy}
                         >
                             {actionBusy ? (
-                                <ActivityIndicator color="#FFF" />
+                                <ActivityIndicator color=theme.colors.surface />
                             ) : (
                                 <Text style={styles.inviteDecisionJoinText}>{t('planDetail.inviteJoin')}</Text>
                             )}
@@ -774,7 +776,7 @@ export default function PlanDetailScreen() {
                             onPress={() => router.push(`/chat/${plan!.id}`)}
                         >
                             <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
-                                <Ionicons name="chatbubbles" size={22} color="#FFF" />
+                                <Ionicons name="chatbubbles" size={22} color=theme.colors.surface />
                                 <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
                             </LinearGradient>
                         </TouchableOpacity>
@@ -797,7 +799,7 @@ export default function PlanDetailScreen() {
                             onPress={() => router.push(`/chat/${plan!.id}`)}
                         >
                             <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
-                                <Ionicons name="chatbubbles" size={22} color="#FFF" />
+                                <Ionicons name="chatbubbles" size={22} color=theme.colors.surface />
                                 <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
                             </LinearGradient>
                         </TouchableOpacity>
@@ -840,7 +842,7 @@ export default function PlanDetailScreen() {
                             accessibilityLabel={t('planDetail.openChat')}
                         >
                             <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatIconBtnGradient}>
-                                <Ionicons name="chatbubbles" size={22} color="#FFF" />
+                                <Ionicons name="chatbubbles" size={22} color=theme.colors.surface />
                             </LinearGradient>
                         </TouchableOpacity>
                     ) : null}
@@ -890,7 +892,7 @@ export default function PlanDetailScreen() {
             }
             return (
                 <TouchableOpacity style={styles.waitlistJoinBtn} onPress={handleJoin} activeOpacity={0.9} disabled={actionBusy}>
-                    <Ionicons name="list" size={20} color="#FFF" />
+                    <Ionicons name="list" size={20} color=theme.colors.surface />
                     <Text style={styles.waitlistJoinText}>{t('card.joinWaitlist')}</Text>
                 </TouchableOpacity>
             );
@@ -900,28 +902,25 @@ export default function PlanDetailScreen() {
             <TouchableOpacity style={styles.joinBtn} onPress={handleJoin} activeOpacity={0.9} disabled={actionBusy}>
                 <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.joinBtnGradient}>
                     <Text style={styles.joinBtnText}>{requiresApproval ? t('card.request') : t('card.join')}</Text>
-                    <Ionicons name={requiresApproval ? 'shield-checkmark' : 'arrow-forward'} size={20} color="#FFF" />
+                    <Ionicons name={requiresApproval ? 'shield-checkmark' : 'arrow-forward'} size={20} color=theme.colors.surface />
                 </LinearGradient>
             </TouchableOpacity>
         );
     };
 
     if (loading && !plan) {
-        return (
-            <View style={styles.loadingWrap}>
-                <ActivityIndicator size="large" color={PRIMARY_DARK} />
-            </View>
-        );
+        return <NexoLoadingState style={styles.loadingWrap} />;
     }
 
     if (!plan) {
         return (
             <SafeAreaView style={styles.notFoundWrap}>
-                <Ionicons name="compass-outline" size={56} color={MUTED} />
-                <Text style={styles.notFoundTitle}>{t('planDetail.notFound')}</Text>
-                <TouchableOpacity style={styles.backLink} onPress={() => router.back()}>
-                    <Text style={styles.backLinkText}>{t('common.back')}</Text>
-                </TouchableOpacity>
+                <NexoEmptyState
+                    icon="compass-outline"
+                    title={t('planDetail.notFound')}
+                    actionLabel={t('common.back')}
+                    onAction={() => router.back()}
+                />
             </SafeAreaView>
         );
     }
@@ -960,17 +959,17 @@ export default function PlanDetailScreen() {
                     />
                     <View style={[styles.heroTopBar, { paddingTop: insets.top + 10 }]}>
                         <TouchableOpacity style={styles.glassBtn} onPress={() => router.back()} activeOpacity={0.85}>
-                            <Ionicons name="chevron-back" size={24} color="#FFF" />
+                            <Ionicons name="chevron-back" size={24} color=theme.colors.surface />
                         </TouchableOpacity>
                         <View style={styles.heroTopRight}>
                             {!isPastPlan ? (
                                 <TouchableOpacity style={styles.glassBtn} onPress={handleShare} activeOpacity={0.85}>
-                                    <Ionicons name="arrow-redo" size={18} color="#FFF" />
+                                    <Ionicons name="arrow-redo" size={18} color=theme.colors.surface />
                                 </TouchableOpacity>
                             ) : null}
                             {!isPastPlan && !isCreator ? (
                                 <TouchableOpacity style={styles.glassBtn} onPress={handleToggleSave} activeOpacity={0.85}>
-                                    <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={20} color={isSaved ? DANGER : '#FFF'} />
+                                    <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={20} color={isSaved ? DANGER : theme.colors.surface} />
                                 </TouchableOpacity>
                             ) : null}
                             {!isCreator && currentUserId ? (
@@ -981,7 +980,7 @@ export default function PlanDetailScreen() {
                                     }
                                     activeOpacity={0.85}
                                 >
-                                    <Ionicons name="flag-outline" size={18} color="#FECACA" />
+                                    <Ionicons name="flag-outline" size={18} color=theme.colors.dangerBorder />
                                 </TouchableOpacity>
                             ) : null}
                         </View>
@@ -1112,7 +1111,7 @@ export default function PlanDetailScreen() {
                                         ? ` ${t('invite.pendingCountParen', { n: invitees.length })}`
                                         : ''}
                                 </Text>
-                                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+                                <Ionicons name="chevron-forward" size={18} color=theme.colors.textSubtle />
                             </TouchableOpacity>
                         ) : null}
                         {participants.length === 0 ? (
@@ -1197,7 +1196,7 @@ export default function PlanDetailScreen() {
                             </NexoMapView>
                             <View style={styles.mapTapOverlay} pointerEvents="none">
                                 <View style={styles.mapExpandPill}>
-                                    <Ionicons name="expand" size={16} color="#FFF" />
+                                    <Ionicons name="expand" size={16} color=theme.colors.surface />
                                     <Text style={styles.mapExpandText}>{t('planDetail.expandMap')}</Text>
                                 </View>
                             </View>
@@ -1276,7 +1275,7 @@ export default function PlanDetailScreen() {
                                 activeOpacity={0.88}
                                 onPress={() => void openDirectionsTo(lat, lng, plan.nombre_ubicacion)}
                             >
-                                <Ionicons name="navigate" size={18} color="#FFF" />
+                                <Ionicons name="navigate" size={18} color=theme.colors.surface />
                                 <Text style={styles.directionsBtnText}>{t('planDetail.getDirections')}</Text>
                             </TouchableOpacity>
                         </View>

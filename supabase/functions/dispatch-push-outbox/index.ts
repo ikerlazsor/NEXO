@@ -213,8 +213,8 @@ serve(async (req) => {
   }
 
   // La función se despliega con --no-verify-jwt y aplica su propia autenticación.
-  // Así el programador no necesita almacenar la clave administrativa service_role.
-  if (req.headers.get('Authorization') !== `Bearer ${dispatchSecret}`) {
+  // La cabecera propia evita que la pasarela intente interpretar el secreto como JWT.\n  // Así el programador no necesita almacenar la clave administrativa service_role.
+  if (req.headers.get('x-nexo-dispatch-secret') !== dispatchSecret) {
     return json({ error: 'unauthorized' }, 401);
   }
 

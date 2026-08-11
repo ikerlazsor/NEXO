@@ -19,6 +19,7 @@ import { useT } from '../lib/i18n';
 import { isStrongPassword } from '../lib/passwordRules';
 import { setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { supabase } from '../lib/supabase';
+import { signOutAndClearLocalData } from '../lib/session';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -122,7 +123,7 @@ export default function ResetPasswordScreen() {
             const { error } = await supabase.auth.updateUser({ password });
             if (error) throw error;
             await setPasswordRecoveryPending(false);
-            await supabase.auth.signOut({ scope: 'local' });
+            await signOutAndClearLocalData({ scope: 'local' });
             Alert.alert(t('login.resetDoneTitle'), t('login.resetDoneMsg'));
             router.replace('/login');
         } catch (e: any) {

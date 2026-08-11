@@ -1,0 +1,30 @@
+appId: com.ikerlazsor.nexo
+name: Privacy, blocked accounts and deep links
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: auth-email
+- inputText: ${MAESTRO_TEST_EMAIL}
+- tapOn:
+    id: auth-password
+- inputText: ${MAESTRO_TEST_PASSWORD}
+- tapOn:
+    id: auth-submit
+- extendedWaitUntil:
+    visible: 'Descubre planes'
+    timeout: 20000
+- tapOn: 'Usuario'
+- tapOn:
+    id: profile-open-settings
+- tapOn: 'Privacidad'
+- assertVisible: 'Última actualización: julio 2026'
+- back
+- tapOn: 'Cuentas bloqueadas'
+- assertVisible: 'Cuentas bloqueadas'
+- openLink: nexo://feed
+- assertVisible: 'Descubre planes'
+- openLink: nexo://plan/${MAESTRO_PLAN_ID}
+- extendedWaitUntil:
+    visible: ${MAESTRO_JOINABLE_PLAN}
+    timeout: 15000

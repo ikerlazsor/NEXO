@@ -483,6 +483,7 @@ export default function LoginScreen() {
                     <View style={styles.card}>
                         <View style={styles.segmented}>
                             <TouchableOpacity
+                                testID="auth-mode-login"
                                 style={[styles.segmentBtn, !isRegistering && styles.segmentBtnActive]}
                                 onPress={() => switchMode(false)}
                                 activeOpacity={0.8}
@@ -492,6 +493,7 @@ export default function LoginScreen() {
                                 </Text>
                             </TouchableOpacity>
                             <TouchableOpacity
+                                testID="auth-mode-register"
                                 style={[styles.segmentBtn, isRegistering && styles.segmentBtnActive]}
                                 onPress={() => switchMode(true)}
                                 activeOpacity={0.8}
@@ -521,6 +523,7 @@ export default function LoginScreen() {
                                     <View style={fieldStyle('nombre')}>
                                         <Ionicons name="person-outline" size={20} color={focusedField === 'nombre' ? PRIMARY_DARK : PLACEHOLDER} />
                                         <TextInput
+                                            testID="auth-display-name"
                                             placeholder={t('login.displayNamePlaceholder')}
                                             placeholderTextColor={PLACEHOLDER}
                                             style={styles.fieldInput}
@@ -561,6 +564,7 @@ export default function LoginScreen() {
                                             @
                                         </Text>
                                         <TextInput
+                                            testID="auth-username"
                                             placeholder={t('login.usernamePlaceholder')}
                                             placeholderTextColor={PLACEHOLDER}
                                             style={[
@@ -618,6 +622,7 @@ export default function LoginScreen() {
                                     <Ionicons name="mail-outline" size={20} color={focusedField === 'email' ? PRIMARY_DARK : PLACEHOLDER} />
                                 ) : null}
                                 <TextInput
+                                    testID="auth-email"
                                     key={isRegistering ? 'reg-email' : 'login-email'}
                                     placeholder={
                                         isRegistering
@@ -656,6 +661,7 @@ export default function LoginScreen() {
                             <View style={fieldStyle('password')}>
                                 <Ionicons name="lock-closed-outline" size={20} color={focusedField === 'password' ? PRIMARY_DARK : PLACEHOLDER} />
                                 <TextInput
+                                    testID="auth-password"
                                     key={isRegistering ? 'reg-password' : 'login-password'}
                                     placeholder="••••••••"
                                     placeholderTextColor={PLACEHOLDER}
@@ -704,6 +710,7 @@ export default function LoginScreen() {
                         </View>
 
                         <TouchableOpacity
+                            testID="auth-submit"
                             onPress={handleAuth}
                             disabled={loading}
                             activeOpacity={0.9}

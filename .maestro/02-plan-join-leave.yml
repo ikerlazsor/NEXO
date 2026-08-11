@@ -1,0 +1,33 @@
+appId: com.ikerlazsor.nexo
+name: Join and leave a plan
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: auth-email
+- inputText: ${MAESTRO_TEST_EMAIL}
+- tapOn:
+    id: auth-password
+- inputText: ${MAESTRO_TEST_PASSWORD}
+- tapOn:
+    id: auth-submit
+- extendedWaitUntil:
+    visible: ${MAESTRO_JOINABLE_PLAN}
+    timeout: 20000
+- tapOn: ${MAESTRO_JOINABLE_PLAN}
+- tapOn: 'Unirme'
+- extendedWaitUntil:
+    visible: 'Unid[oa]'
+    timeout: 15000
+- tapOn: 'Unid[oa]'
+- tapOn: 'Sí'
+- extendedWaitUntil:
+    visible: 'Unirme'
+    timeout: 15000
+- back
+- tapOn: 'Crear plan'
+- assertVisible: 'Crear Plan NEXO'
+- tapOn:
+    id: plan-title-input
+- inputText: 'Plan E2E'
+- back

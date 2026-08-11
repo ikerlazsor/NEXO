@@ -1,0 +1,56 @@
+name: Destructive account E2E tests
+
+jobs:
+  build_android:
+    name: Build isolated Android test app
+    type: build
+    environment: preview
+    params:
+      platform: android
+      profile: e2e-test
+
+  build_ios:
+    name: Build isolated iPhone test app
+    type: build
+    environment: preview
+    params:
+      platform: ios
+      profile: e2e-test
+
+  register_and_delete_android:
+    name: Registration and account deletion (Android)
+    needs: [build_android]
+    type: maestro
+    environment: preview
+    env:
+      MAESTRO_SIGNUP_NAME: ${{ env.MAESTRO_ANDROID_SIGNUP_NAME }}
+      MAESTRO_SIGNUP_USERNAME: ${{ env.MAESTRO_ANDROID_SIGNUP_USERNAME }}
+      MAESTRO_SIGNUP_EMAIL: ${{ env.MAESTRO_ANDROID_SIGNUP_EMAIL }}
+      MAESTRO_SIGNUP_PASSWORD: ${{ env.MAESTRO_ANDROID_SIGNUP_PASSWORD }}
+      MAESTRO_DELETE_EMAIL: ${{ env.MAESTRO_ANDROID_DELETE_EMAIL }}
+      MAESTRO_DELETE_PASSWORD: ${{ env.MAESTRO_ANDROID_DELETE_PASSWORD }}
+    params:
+      build_id: ${{ needs.build_android.outputs.build_id }}
+      flow_path:
+        - .maestro/05-register.yml
+        - .maestro/06-delete-account.yml
+      record_screen: true
+
+  register_and_delete_ios:
+    name: Registration and account deletion (iPhone)
+    needs: [build_ios]
+    type: maestro
+    environment: preview
+    env:
+      MAESTRO_SIGNUP_NAME: ${{ env.MAESTRO_IOS_SIGNUP_NAME }}
+      MAESTRO_SIGNUP_USERNAME: ${{ env.MAESTRO_IOS_SIGNUP_USERNAME }}
+      MAESTRO_SIGNUP_EMAIL: ${{ env.MAESTRO_IOS_SIGNUP_EMAIL }}
+      MAESTRO_SIGNUP_PASSWORD: ${{ env.MAESTRO_IOS_SIGNUP_PASSWORD }}
+      MAESTRO_DELETE_EMAIL: ${{ env.MAESTRO_IOS_DELETE_EMAIL }}
+      MAESTRO_DELETE_PASSWORD: ${{ env.MAESTRO_IOS_DELETE_PASSWORD }}
+    params:
+      build_id: ${{ needs.build_ios.outputs.build_id }}
+      flow_path:
+        - .maestro/05-register.yml
+        - .maestro/06-delete-account.yml
+      record_screen: true

@@ -1,0 +1,62 @@
+name: Mobile E2E tests
+
+on:
+  pull_request_labeled:
+    labels: ['mobile-e2e']
+
+jobs:
+  build_android:
+    name: Build Android test app
+    type: build
+    environment: preview
+    params:
+      platform: android
+      profile: e2e-test
+
+  build_ios:
+    name: Build iPhone simulator app
+    type: build
+    environment: preview
+    params:
+      platform: ios
+      profile: e2e-test
+
+  test_android:
+    name: Critical flows (Android)
+    needs: [build_android]
+    type: maestro
+    environment: preview
+    env:
+      MAESTRO_TEST_EMAIL: ${{ env.MAESTRO_ANDROID_TEST_EMAIL }}
+      MAESTRO_TEST_PASSWORD: ${{ env.MAESTRO_ANDROID_TEST_PASSWORD }}
+      MAESTRO_JOINABLE_PLAN: ${{ env.MAESTRO_ANDROID_JOINABLE_PLAN }}
+      MAESTRO_PLAN_ID: ${{ env.MAESTRO_ANDROID_PLAN_ID }}
+      MAESTRO_GROUP_CHAT_TITLE: ${{ env.MAESTRO_ANDROID_GROUP_CHAT_TITLE }}
+    params:
+      build_id: ${{ needs.build_android.outputs.build_id }}
+      flow_path:
+        - .maestro/01-login-navigation.yml
+        - .maestro/02-plan-join-leave.yml
+        - .maestro/03-chat-notifications.yml
+        - .maestro/04-privacy-links.yml
+      record_screen: true
+
+  test_ios:
+    name: Critical flows (iPhone)
+    needs: [build_ios]
+    type: maestro
+    environment: preview
+    env:
+      MAESTRO_TEST_EMAIL: ${{ env.MAESTRO_IOS_TEST_EMAIL }}
+      MAESTRO_TEST_PASSWORD: ${{ env.MAESTRO_IOS_TEST_PASSWORD }}
+      MAESTRO_JOINABLE_PLAN: ${{ env.MAESTRO_IOS_JOINABLE_PLAN }}
+      MAESTRO_PLAN_ID: ${{ env.MAESTRO_IOS_PLAN_ID }}
+      MAESTRO_GROUP_CHAT_TITLE: ${{ env.MAESTRO_IOS_GROUP_CHAT_TITLE }}
+    params:
+      build_id: ${{ needs.build_ios.outputs.build_id }}
+      flow_path:
+        - .maestro/01-login-navigation.yml
+        - .maestro/02-plan-join-leave.yml
+        - .maestro/03-chat-notifications.yml
+        - .maestro/04-privacy-links.yml
+      record_screen: true

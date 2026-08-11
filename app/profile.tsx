@@ -522,7 +522,13 @@ export default function ProfileScreen() {
                     <Ionicons name="chevron-back" size={22} color={INK} />
                 </TouchableOpacity>
                 <Text style={styles.topTitle}>{t('profile.myProfile')}</Text>
-                <TouchableOpacity onPress={() => router.push('/settings')} style={styles.iconBtn} activeOpacity={0.8}>
+                <TouchableOpacity
+                    testID="profile-open-settings"
+                    accessibilityLabel={t('settings.title')}
+                    onPress={() => router.push('/settings')}
+                    style={styles.iconBtn}
+                    activeOpacity={0.8}
+                >
                     <Ionicons name="settings-outline" size={20} color={INK} />
                 </TouchableOpacity>
             </View>

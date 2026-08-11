@@ -648,6 +648,7 @@ export default function CreatePlanScreen() {
                             <Text style={styles.lockedTitle}>{title}</Text>
                         ) : (
                         <TextInput 
+                            testID="plan-title-input"
                             placeholder={t('createplan.titlePlaceholder')} 
                             placeholderTextColor={PLACEHOLDER_COLOR}
                             style={[
@@ -871,6 +872,7 @@ export default function CreatePlanScreen() {
 
                 <View style={styles.footer}>
                     <TouchableOpacity
+                        testID="plan-publish"
                         style={[
                             styles.createBtn,
                             (loading || limitBlocked || limitChecking) && { opacity: 0.7 },

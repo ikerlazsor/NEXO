@@ -41,6 +41,7 @@ import { fetchAccountAccess } from '../lib/roles';
 import {
   STARTUP_TIMEOUT_MS,
   StartupCoordinator,
+  shouldRunStartupForAuthEvent,
   throwIfAborted,
   type StartupFailure,
 } from '../lib/startupControl';
@@ -88,6 +89,7 @@ function AuthGate({ children }: { children: ReactNode }) {
   const sessionKnownRef = useRef(false);
   const retryRef = useRef<() => void>(() => {});
   const splashReleasedRef = useRef(false);
+  const startupReadyRef = useRef(false);
   const segments = useSegments();
   const router = useRouter();
   const ready = startupPhase === 'ready';
@@ -110,6 +112,7 @@ function AuthGate({ children }: { children: ReactNode }) {
 
     const runStartup = async (providedSession?: Session | null) => {
       if (!mounted) return;
+      startupReadyRef.current = false;
       setStartupFailure(null);
       setStartupPhase('loading');
 
@@ -182,6 +185,7 @@ function AuthGate({ children }: { children: ReactNode }) {
       if (!mounted) return;
 
       if (result.status === 'failure') {
+        startupReadyRef.current = false;
         setStartupFailure(result.failure);
         setStartupPhase('error');
         return;
@@ -192,6 +196,7 @@ function AuthGate({ children }: { children: ReactNode }) {
       setSession(result.value.session);
       setOnboardingDone(result.value.onboardingDone);
       setBanned(result.value.banned);
+      startupReadyRef.current = true;
       setStartupPhase('ready');
     };
 
@@ -202,6 +207,8 @@ function AuthGate({ children }: { children: ReactNode }) {
     void runStartup();
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, s) => {
+      const previousUserId = latestSessionRef.current?.user.id ?? null;
+      const nextUserId = s?.user.id ?? null;
       sessionKnownRef.current = true;
       latestSessionRef.current = s;
       if (event === 'PASSWORD_RECOVERY') {
@@ -209,6 +216,19 @@ function AuthGate({ children }: { children: ReactNode }) {
           await setPasswordRecoveryPending(true);
           router.replace('/reset-password');
         })();
+      }
+
+      if (
+        !shouldRunStartupForAuthEvent(
+          event,
+          previousUserId,
+          nextUserId,
+          startupReadyRef.current,
+        )
+      ) {
+        setSession(s);
+        if (metaOnboardingDone(s?.user)) setOnboardingDone(true);
+        return;
       }
       void runStartup(s);
     });

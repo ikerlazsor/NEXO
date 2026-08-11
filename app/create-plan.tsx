@@ -702,6 +702,11 @@ export default function CreatePlanScreen() {
                             onCancel={() => setPickerVisible(false)}
                             date={date}
                             is24Hour={true}
+                            isDarkModeEnabled={false}
+                            themeVariant="light"
+                            textColor="#0F172A"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            pickerContainerStyleIOS={{ backgroundColor: '#FFFFFF' }}
                             minimumDate={minPlanDate()}
                             maximumDate={maxDate}
                             confirmTextIOS={t('createplan.confirmDate')}

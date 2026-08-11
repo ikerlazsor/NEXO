@@ -95,7 +95,7 @@ const PERSONALITY_MAX = 3;
 export default function ProfileScreen() {
     const router = useRouter();
     const { t } = useT();
-    const [loading, setLoading] = useState(false);
+    const [avatarUploading, setAvatarUploading] = useState(false);
     const [user, setUser] = useState<any>(null);
     const [nombre, setNombre] = useState('');
     const [nombreUsuario, setNombreUsuario] = useState<string | null>(null);
@@ -293,8 +293,10 @@ export default function ProfileScreen() {
 
     const uploadImage = async (uri: string) => {
         if (!user?.id) return;
+        const previousAvatar = avatarUrl;
+        setAvatarUrl(uri);
+        setAvatarUploading(true);
         try {
-            setLoading(true);
             const fileName = `${user.id}/avatar.jpg`;
             const response = await fetch(uri);
             const blob = await response.blob();
@@ -315,6 +317,7 @@ export default function ProfileScreen() {
                 .upload(fileName, decode(base64data), { contentType: 'image/jpeg', upsert: true });
 
             if (uploadError) {
+                setAvatarUrl(previousAvatar);
                 Alert.alert(t('profile.error'), t('profile.uploadError') + ': ' + uploadError.message);
                 return;
             }
@@ -322,14 +325,19 @@ export default function ProfileScreen() {
             const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
             const urlWithTimestamp = `${publicUrl}?t=${Date.now()}`;
 
-            await supabase.from('perfiles').update({ avatar_url: urlWithTimestamp }).eq('id', user.id);
+            const { error: profileError } = await supabase
+                .from('perfiles')
+                .update({ avatar_url: urlWithTimestamp })
+                .eq('id', user.id);
+            if (profileError) throw profileError;
             void supabase.auth.updateUser({ data: { avatar_url: urlWithTimestamp } });
             setAvatarUrl(urlWithTimestamp);
         } catch (e: unknown) {
+            setAvatarUrl(previousAvatar);
             const msg = e instanceof Error ? e.message : t('profile.uploadError');
             Alert.alert(t('profile.error'), msg);
         } finally {
-            setLoading(false);
+            setAvatarUploading(false);
         }
     };
 
@@ -344,6 +352,7 @@ export default function ProfileScreen() {
     };
 
     const showPhotoMenu = () => {
+        if (avatarUploading) return;
         Alert.alert(t('profile.photoTitle'), t('profile.photoChoice'), [
             { text: t('profile.camera'), onPress: () => pickImage(true) },
             { text: t('profile.gallery'), onPress: () => pickImage(false) },
@@ -549,11 +558,20 @@ export default function ProfileScreen() {
                         style={styles.heroGlow}
                     />
                     <View style={styles.avatarBlock}>
-                        <TouchableOpacity onPress={showPhotoMenu} activeOpacity={0.9}>
+                        <TouchableOpacity onPress={showPhotoMenu} activeOpacity={0.9} disabled={avatarUploading}>
                             <ProfileAvatar uri={avatarUrl} name={displayName} size={104} recyclingKey={user?.id} />
                         </TouchableOpacity>
-                        <TouchableOpacity onPress={showPhotoMenu} style={styles.cameraBtn} activeOpacity={0.85}>
-                            <Ionicons name="camera" size={15} color={theme.colors.surface} />
+                        <TouchableOpacity
+                            onPress={showPhotoMenu}
+                            style={styles.cameraBtn}
+                            activeOpacity={0.85}
+                            disabled={avatarUploading}
+                        >
+                            {avatarUploading ? (
+                                <ActivityIndicator size="small" color={theme.colors.surface} />
+                            ) : (
+                                <Ionicons name="camera" size={15} color={theme.colors.surface} />
+                            )}
                         </TouchableOpacity>
                     </View>
 
@@ -617,7 +635,7 @@ export default function ProfileScreen() {
                     <View style={styles.statsRow}>
                         <TouchableOpacity
                             style={styles.statItem}
-                            onPress={() => router.push('/my-plans')}
+                            onPress={() => router.push('/plan-history')}
                             activeOpacity={0.8}
                         >
                             <Text style={styles.statValue}>{stats.numeroPlanesRealizados}</Text>
@@ -905,14 +923,6 @@ export default function ProfileScreen() {
                 onClose={() => setSelectedBadge(null)}
             />
 
-            {loading && (
-                <View style={styles.loadingOverlay}>
-                    <View style={styles.loadingBox}>
-                        <ActivityIndicator size="large" color={PRIMARY_DARK} />
-                        <Text style={styles.loadingText}>{t('profile.uploading')}</Text>
-                    </View>
-                </View>
-            )}
             </SafeAreaView>
         </View>
     );

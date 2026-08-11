@@ -41,12 +41,9 @@ import { supabase } from './supabase';
 import { cacheGetStale, cacheIsFresh, cacheSet } from './ttlCache';
 import type { User } from '@supabase/supabase-js';
 
-const FEED_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const CHATS_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const MY_PLANS_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** Último userId conocido para hidratar chats/mis planes en cold start. */
-const LAST_USER_DISK_KEY = 'lastUserId';
+const FEED_DISK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const CHATS_DISK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MY_PLANS_DISK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type MyPlansDiskSnap = {
     plans: unknown[];
@@ -225,7 +222,6 @@ async function prefetchChats(userId: string) {
     );
     cacheSet(screenCacheKey.chatsList(userId), rows, ScreenCacheTTL.chatsList);
     void diskSet(screenCacheKey.chatsList(userId), rows);
-    void diskSet(LAST_USER_DISK_KEY, userId);
 }
 
 async function prefetchMyPlans(userId: string) {
@@ -351,7 +347,6 @@ async function prefetchMyPlans(userId: string) {
     };
     cacheSet(screenCacheKey.myPlans(userId), myPlansSnap, ScreenCacheTTL.myPlans);
     void diskSet(screenCacheKey.myPlans(userId), myPlansSnap);
-    void diskSet(LAST_USER_DISK_KEY, userId);
 }
 
 /** Semilla vacía solo para tabs principales (chats / mis planes).
@@ -488,18 +483,17 @@ function warmFeedImages(snap: FeedSnapshot) {
 }
 
 /** Restaura el último feed guardado en disco (arranque / offline). */
-export async function hydrateFeedFromDisk(): Promise<void> {
+export async function hydrateFeedFromDisk(userId: string): Promise<void> {
     if (cacheGetStale(FEED_CACHE_KEY) != null) return;
     const snap = await diskGet<FeedSnapshot>(FEED_CACHE_KEY, FEED_DISK_MAX_AGE_MS);
-    if (!snap?.plans?.length) return;
+    if (!snap?.plans?.length || snap.currentUserId !== userId) return;
     cacheSet(FEED_CACHE_KEY, snap, FEED_CACHE_TTL_MS);
     warmFeedImages(snap);
 }
 
 /** Restaura lista de chats desde disco (cold start / offline). */
-export async function hydrateChatsFromDisk(userId?: string | null): Promise<void> {
-    const uid = userId ?? (await diskGet<string>(LAST_USER_DISK_KEY));
-    if (!uid) return;
+export async function hydrateChatsFromDisk(userId: string): Promise<void> {
+    const uid = userId;
     if (cacheGetStale(screenCacheKey.chatsList(uid)) != null) return;
     const rows = await diskGet<unknown[]>(screenCacheKey.chatsList(uid), CHATS_DISK_MAX_AGE_MS);
     if (!Array.isArray(rows)) return;
@@ -507,9 +501,8 @@ export async function hydrateChatsFromDisk(userId?: string | null): Promise<void
 }
 
 /** Restaura mis planes desde disco (cold start / offline). */
-export async function hydrateMyPlansFromDisk(userId?: string | null): Promise<void> {
-    const uid = userId ?? (await diskGet<string>(LAST_USER_DISK_KEY));
-    if (!uid) return;
+export async function hydrateMyPlansFromDisk(userId: string): Promise<void> {
+    const uid = userId;
     if (cacheGetStale(screenCacheKey.myPlans(uid)) != null) return;
     const snap = await diskGet<MyPlansDiskSnap>(screenCacheKey.myPlans(uid), MY_PLANS_DISK_MAX_AGE_MS);
     if (!snap || !Array.isArray(snap.plans)) return;
@@ -524,7 +517,7 @@ async function prefetchFeed(userId: string | null): Promise<void> {
     }
 
     if (!getIsOnline()) {
-        await hydrateFeedFromDisk();
+        if (userId) await hydrateFeedFromDisk(userId);
         return;
     }
 

@@ -188,7 +188,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     accessibilityLabel={t('chats.title')}
                     haptic={false}
                 >
-                    <Ionicons name="chatbubbles" size={22} color=theme.colors.surface />
+                    <Ionicons name="chatbubbles" size={22} color={theme.colors.surface} />
                     {chatUnreadCount > 0 && (
                         <View style={styles.chatNotifBadge}>
                             <Text style={styles.chatNotifText}>
@@ -204,7 +204,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     accessibilityLabel={t('myplans.title')}
                     haptic={false}
                 >
-                    <Ionicons name="albums" size={22} color=theme.colors.surface />
+                    <Ionicons name="albums" size={22} color={theme.colors.surface} />
                     {openRatingsCount > 0 && (
                         <View style={styles.chatNotifBadge}>
                             <Text style={styles.chatNotifText}>
@@ -220,7 +220,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     accessibilityLabel={t('feed.greeting')}
                     haptic={false}
                 >
-                    <Ionicons name="home" size={22} color=theme.colors.surface />
+                    <Ionicons name="home" size={22} color={theme.colors.surface} />
                 </PressScale>
 
                 <PressScale
@@ -229,7 +229,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     accessibilityLabel={t('feed.searchProfiles')}
                     haptic={false}
                 >
-                    <Ionicons name="search" size={22} color=theme.colors.surface />
+                    <Ionicons name="search" size={22} color={theme.colors.surface} />
                 </PressScale>
 
                 <PressScale
@@ -243,7 +243,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     pressedScale={0.92}
                 >
                     <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.floatingBtnGradient}>
-                        <Ionicons name="add" size={26} color=theme.colors.surface />
+                        <Ionicons name="add" size={26} color={theme.colors.surface} />
                     </LinearGradient>
                 </PressScale>
             </View>

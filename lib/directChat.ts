@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getChatSummaries, type ChatSummary } from './chatSummaries';
 import { getAvatarUri } from './friends';
 import { supabase } from './supabase';
 
@@ -17,6 +18,7 @@ export interface DirectConversation {
     lastMessage: DirectMessagePreview | null;
     /** Para ordenar hilos abiertos sin mensajes. */
     openedAt?: string;
+    unread: number;
 }
 
 const OPEN_PREFIX = '@nexo_direct_open:';
@@ -47,7 +49,7 @@ async function readOpenedEntries(userId: string): Promise<OpenedEntry[]> {
                 }
                 return null;
             })
-            .filter((x): x is OpenedEntry => !!x?.id);
+            .filter((entry): entry is OpenedEntry => !!entry?.id);
     } catch {
         return [];
     }
@@ -55,9 +57,8 @@ async function readOpenedEntries(userId: string): Promise<OpenedEntry[]> {
 
 async function writeOpenedEntries(userId: string, entries: OpenedEntry[]): Promise<void> {
     const byId = new Map<string, OpenedEntry>();
-    for (const e of entries) {
-        if (!e?.id) continue;
-        byId.set(e.id, e);
+    for (const entry of entries) {
+        if (entry?.id) byId.set(entry.id, entry);
     }
     await AsyncStorage.setItem(openThreadsKey(userId), JSON.stringify([...byId.values()]));
 }
@@ -69,10 +70,8 @@ async function writeOpenedEntries(userId: string, entries: OpenedEntry[]): Promi
 export async function ensureDirectConversation(userId: string, peerId: string): Promise<void> {
     if (!userId || !peerId || userId === peerId) return;
     const opened = await readOpenedEntries(userId);
-    const now = new Date().toISOString();
-    const rest = opened.filter((e) => e.id !== peerId);
-    await writeOpenedEntries(userId, [{ id: peerId, at: now }, ...rest]);
-    // Si lo habías ocultado, al “crearlo” de nuevo debe reaparecer.
+    const rest = opened.filter((entry) => entry.id !== peerId);
+    await writeOpenedEntries(userId, [{ id: peerId, at: new Date().toISOString() }, ...rest]);
     await supabase
         .from('chats_directos_ocultos')
         .delete()
@@ -82,107 +81,81 @@ export async function ensureDirectConversation(userId: string, peerId: string): 
 
 async function removeOpenedPeer(userId: string, peerId: string): Promise<void> {
     const opened = await readOpenedEntries(userId);
-    if (!opened.some((e) => e.id === peerId)) return;
+    if (!opened.some((entry) => entry.id === peerId)) return;
     await writeOpenedEntries(
         userId,
-        opened.filter((e) => e.id !== peerId),
+        opened.filter((entry) => entry.id !== peerId),
     );
 }
 
 /**
- * Conversaciones 1:1 del usuario, derivadas de los mensajes directos
- * (mensajes con receptor_id y sin plan_id), ordenadas por actividad reciente.
- * Incluye hilos abiertos sin mensajes (creados desde «Crear chat»).
- * Respeta chats ocultos: reaparecen si hay un mensaje nuevo después de ocultar.
+ * Conversaciones directas ya resumidas por Supabase. Solo se combinan aquí
+ * los hilos abiertos localmente que todavía no tienen ningún mensaje.
  */
-export async function getDirectConversations(userId: string): Promise<DirectConversation[]> {
-    const messagesPromise = supabase
-        .from('mensajes')
-        .select('emisor_id, receptor_id, contenido, tipo, creado_en')
-        .is('plan_id', null)
-        .or(`emisor_id.eq.${userId},receptor_id.eq.${userId}`)
-        .order('creado_en', { ascending: false })
-        .limit(500);
-
-    const hiddenPromise = supabase
-        .from('chats_directos_ocultos')
-        .select('peer_id, oculto_en')
-        .eq('usuario_id', userId);
-
-    const openedPromise = readOpenedEntries(userId);
-
-    const [{ data: messages, error }, hiddenResult, openedEntries] = await Promise.all([
-        messagesPromise,
-        hiddenPromise,
-        openedPromise,
+export async function getDirectConversations(
+    userId: string,
+    providedSummaries?: ChatSummary[],
+): Promise<DirectConversation[]> {
+    const [summaries, openedEntries, hiddenResult] = await Promise.all([
+        providedSummaries ? Promise.resolve(providedSummaries) : getChatSummaries(userId),
+        readOpenedEntries(userId),
+        supabase
+            .from('chats_directos_ocultos')
+            .select('peer_id')
+            .eq('usuario_id', userId),
     ]);
 
-    if (error) throw error;
+    const hiddenPeers = new Set((hiddenResult.data ?? []).map((row) => row.peer_id as string));
+    const directRows = summaries.filter((row) => row.conversation_kind === 'direct');
+    const conversations = new Map<string, DirectConversation>();
 
-    const hiddenAt = new Map<string, string>();
-    if (!hiddenResult.error) {
-        (hiddenResult.data ?? []).forEach((row) => {
-            if (row.peer_id) hiddenAt.set(row.peer_id, row.oculto_en);
+    for (const row of directRows) {
+        const peerId = row.conversation_id;
+        const nombre = row.title || 'Usuario';
+        conversations.set(peerId, {
+            peerId,
+            nombre,
+            avatar_url: row.image_url,
+            avatarUri: getAvatarUri({ nombre, avatar_url: row.image_url }),
+            lastMessage: row.last_at
+                ? {
+                      contenido: row.last_content ?? '',
+                      tipo: row.last_type ?? 'texto',
+                      creado_en: row.last_at,
+                      emisor_id: row.last_sender_id ?? peerId,
+                  }
+                : null,
+            unread: row.unread_count,
         });
     }
-    const lastByPeer = new Map<string, DirectMessagePreview>();
-    (messages ?? []).forEach((m) => {
-        const peerId = m.emisor_id === userId ? m.receptor_id : m.emisor_id;
-        if (!peerId || lastByPeer.has(peerId)) return;
-        lastByPeer.set(peerId, {
-            contenido: m.contenido ?? '',
-            tipo: m.tipo ?? 'texto',
-            creado_en: m.creado_en,
-            emisor_id: m.emisor_id,
-        });
-    });
 
-    for (const [peerId, last] of [...lastByPeer.entries()]) {
-        const hidden = hiddenAt.get(peerId);
-        if (hidden && new Date(last.creado_en).getTime() <= new Date(hidden).getTime()) {
-            lastByPeer.delete(peerId);
+    const missingOpened = openedEntries.filter(
+        (entry) => !conversations.has(entry.id) && !hiddenPeers.has(entry.id),
+    );
+    if (missingOpened.length > 0) {
+        const { data: profiles } = await supabase
+            .from('perfiles')
+            .select('id, nombre, avatar_url')
+            .in('id', missingOpened.map((entry) => entry.id));
+        const profileById = new Map((profiles ?? []).map((profile) => [profile.id, profile]));
+
+        for (const entry of missingOpened) {
+            const profile = profileById.get(entry.id);
+            const nombre = profile?.nombre || 'Usuario';
+            const avatarUrl = profile?.avatar_url ?? null;
+            conversations.set(entry.id, {
+                peerId: entry.id,
+                nombre,
+                avatar_url: avatarUrl,
+                avatarUri: getAvatarUri({ nombre, avatar_url: avatarUrl }),
+                lastMessage: null,
+                openedAt: entry.at,
+                unread: 0,
+            });
         }
     }
 
-    const openedAtByPeer = new Map(openedEntries.map((e) => [e.id, e.at]));
-
-    // Hilos abiertos sin mensajes (y no ocultos).
-    for (const entry of openedEntries) {
-        if (lastByPeer.has(entry.id)) continue;
-        if (hiddenAt.has(entry.id)) continue;
-        lastByPeer.set(entry.id, {
-            contenido: '',
-            tipo: 'texto',
-            creado_en: '',
-            emisor_id: userId,
-        });
-    }
-
-    if (lastByPeer.size === 0) return [];
-
-    const peerIds = Array.from(lastByPeer.keys());
-    const { data: profiles } = await supabase
-        .from('perfiles')
-        .select('id, nombre, avatar_url')
-        .in('id', peerIds);
-
-    const profileById = new Map((profiles ?? []).map((p) => [p.id, p]));
-
-    return peerIds.map((peerId) => {
-        const profile = profileById.get(peerId);
-        const nombre = profile?.nombre || 'Usuario';
-        const avatar_url = profile?.avatar_url ?? null;
-        const last = lastByPeer.get(peerId) ?? null;
-        const lastMessage = last && last.creado_en ? last : null;
-        return {
-            peerId,
-            nombre,
-            avatar_url,
-            avatarUri: getAvatarUri({ nombre, avatar_url }),
-            lastMessage,
-            openedAt: openedAtByPeer.get(peerId),
-        };
-    });
+    return [...conversations.values()];
 }
 
 /** Quita el chat directo de tu lista (reaparece si el otro te escribe de nuevo). */
@@ -201,11 +174,7 @@ export async function hideDirectChat(
         { onConflict: 'usuario_id,peer_id' },
     );
 
-    if (error) {
-        // Ocultar una conversación nunca debe borrar mensajes como alternativa.
-        // Se conserva todo y se muestra el error para poder corregir la migración.
-        return { error: error.message };
-    }
+    if (error) return { error: error.message };
 
     await removeOpenedPeer(userId, peerId);
     return { error: null };

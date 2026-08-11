@@ -547,7 +547,7 @@ export default function ProfileScreen() {
                             <ProfileAvatar uri={avatarUrl} name={displayName} size={104} recyclingKey={user?.id} />
                         </TouchableOpacity>
                         <TouchableOpacity onPress={showPhotoMenu} style={styles.cameraBtn} activeOpacity={0.85}>
-                            <Ionicons name="camera" size={15} color=theme.colors.surface />
+                            <Ionicons name="camera" size={15} color={theme.colors.surface} />
                         </TouchableOpacity>
                     </View>
 
@@ -566,7 +566,7 @@ export default function ProfileScreen() {
                                     onPress={saveName}
                                     style={styles.nameSaveBtn}
                                 >
-                                    <Ionicons name="checkmark" size={20} color=theme.colors.surface />
+                                    <Ionicons name="checkmark" size={20} color={theme.colors.surface} />
                                 </TouchableOpacity>
                             </View>
                         ) : (
@@ -592,7 +592,7 @@ export default function ProfileScreen() {
                                     maxLength={USERNAME_MAX_LENGTH}
                                 />
                                 <TouchableOpacity onPress={saveUsername} style={styles.nameSaveBtn}>
-                                    <Ionicons name="checkmark" size={18} color=theme.colors.surface />
+                                    <Ionicons name="checkmark" size={18} color={theme.colors.surface} />
                                 </TouchableOpacity>
                             </Pressable>
                         ) : (
@@ -765,7 +765,7 @@ export default function ProfileScreen() {
                                 value={aboutMe}
                                 onChangeText={(text) => { if (text.length <= 400) setAboutMe(text); }}
                                 placeholder={t('profile.aboutPlaceholder')}
-                                placeholderTextColor=theme.colors.textSubtle
+                                placeholderTextColor={theme.colors.textSubtle}
                                 multiline
                                 autoFocus
                             />
@@ -784,7 +784,7 @@ export default function ProfileScreen() {
                             <Text style={aboutMe ? styles.aboutText : styles.aboutPlaceholder}>
                                 {aboutMe || t('profile.aboutEmpty')}
                             </Text>
-                            <Ionicons name="create-outline" size={18} color=theme.colors.textSubtle />
+                            <Ionicons name="create-outline" size={18} color={theme.colors.textSubtle} />
                         </Pressable>
                     )}
                 </View>
@@ -863,7 +863,7 @@ export default function ProfileScreen() {
                     }}
                     activeOpacity={0.85}
                 >
-                    <Ionicons name="log-out-outline" size={20} color=theme.colors.danger />
+                    <Ionicons name="log-out-outline" size={20} color={theme.colors.danger} />
                     <Text style={styles.logoutText}>{t('profile.logout')}</Text>
                 </TouchableOpacity>
 
@@ -874,10 +874,10 @@ export default function ProfileScreen() {
                     activeOpacity={0.85}
                 >
                     {deletingAccount ? (
-                        <ActivityIndicator color=theme.colors.dangerDark />
+                        <ActivityIndicator color={theme.colors.dangerDark} />
                     ) : (
                         <>
-                            <Ionicons name="trash-outline" size={20} color=theme.colors.dangerDark />
+                            <Ionicons name="trash-outline" size={20} color={theme.colors.dangerDark} />
                             <Text style={styles.deleteAccountText}>{t('profile.deleteAccount')}</Text>
                         </>
                     )}

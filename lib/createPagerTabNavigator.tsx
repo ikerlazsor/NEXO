@@ -50,7 +50,7 @@ function PagerTabNavigator(props: Record<string, unknown>) {
                 style={styles.pager}
                 initialPage={state.index}
                 overdrag
-                offscreenPageLimit={3}
+                offscreenPageLimit={1}
                 onPageSelected={(e) => {
                     const position = e.nativeEvent.position;
                     pageIndexRef.current = position;
@@ -61,11 +61,14 @@ function PagerTabNavigator(props: Record<string, unknown>) {
                     }
                 }}
             >
-                {state.routes.map((route: { key: string; name: string }) => (
-                    <View key={route.key} collapsable={false} style={styles.page}>
-                        {descriptors[route.key].render()}
-                    </View>
-                ))}
+                {state.routes.map((route: { key: string; name: string }, index: number) => {
+                    const isInMountWindow = Math.abs(index - state.index) <= 1;
+                    return (
+                        <View key={route.key} collapsable={false} style={styles.page}>
+                            {isInMountWindow ? descriptors[route.key].render() : null}
+                        </View>
+                    );
+                })}
             </PagerView>
         </NavigationContent>
     );

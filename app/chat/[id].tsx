@@ -3,8 +3,7 @@ import {
 import { useHeaderHeight } from '@react-navigation/elements';
 import React from 'react';
 import { Audio,
-    ResizeMode,
-    Video } from 'expo-av';
+} from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams,
@@ -24,13 +23,26 @@ import {
     Modal,
     Platform,
     Share,
-    StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
+import { styles } from '../../features/chat/chatStyles';
+import { ChatMediaModals } from '../../features/chat/ChatMediaModals';
+import {
+    PAGE_SIZE,
+    PLAN_CHAT_TTL_MS,
+    planChatKey,
+    normalizeProfile,
+    formatDuration,
+    parseStoredDuration,
+    mapMessageRow,
+    mergeMessages,
+    type Message,
+    type PlanChatSnapshot,
+} from '../../features/chat/chatModel';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
 import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
@@ -77,83 +89,6 @@ const PRIMARY = '#4DA6FF';
 const FRIEND = '#10B981';
 const ACQUAINTANCE = '#7C3AED';
 const DANGER = '#EF4444';
-const PAGE_SIZE = 50;
-const PLAN_CHAT_TTL_MS = 15 * 60 * 1000;
-const planChatKey = (planId: string) => `planChat:${planId}`;
-
-interface MessageProfile {
-    nombre: string;
-    avatar_url: string | null;
-}
-
-interface Message {
-    id: string;
-    contenido: string;
-    emisor_id: string;
-    creado_en: string;
-    tipo: 'texto' | 'imagen' | 'video' | 'audio';
-    archivo_url: string | null;
-    perfiles: MessageProfile | MessageProfile[] | null;
-    pending?: boolean;
-}
-
-function normalizeProfile(
-    perfiles: Message['perfiles']
-): MessageProfile | null {
-    if (!perfiles) return null;
-    if (Array.isArray(perfiles)) return perfiles[0] ?? null;
-    return perfiles;
-}
-
-function formatDuration(totalSeconds: number): string {
-    const seconds = Math.max(0, totalSeconds);
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function parseStoredDuration(contenido: string): number | null {
-    if (!contenido || !/^\d+$/.test(contenido.trim())) return null;
-    const value = parseInt(contenido, 10);
-    return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function mapMessageRow(row: Record<string, unknown>): Message {
-    return {
-        id: row.id as string,
-        contenido: (row.contenido as string) ?? '',
-        emisor_id: row.emisor_id as string,
-        creado_en: row.creado_en as string,
-        tipo: (row.tipo as Message['tipo']) ?? 'texto',
-        archivo_url: (row.archivo_url as string | null) ?? null,
-        perfiles: row.perfiles as Message['perfiles'],
-    };
-}
-
-function mergeMessages(a: Message[], b: Message[]): Message[] {
-    const map = new Map<string, Message>();
-    for (const m of [...a, ...b]) map.set(m.id, m);
-    return Array.from(map.values()).sort(
-        (x, y) => new Date(y.creado_en).getTime() - new Date(x.creado_en).getTime(),
-    );
-}
-
-type PlanChatSnapshot = {
-    messages: Message[];
-    planName: string;
-    planImage: string | null;
-    participantNames: string;
-    isGroupChat: boolean;
-    planCategory: string | null;
-    planOwnerId: string | null;
-    members: { id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }[];
-    creatorId: string | null;
-    planFechaEvento: string | null;
-    modoPrivado: boolean;
-    accessDenied: boolean;
-    hasMore: boolean;
-};
-
 export default function ChatScreen() {
     const { id } = useLocalSearchParams<{ id: string | string[] }>();
     const planId = Array.isArray(id) ? id[0] : id;
@@ -1629,48 +1564,12 @@ export default function ChatScreen() {
                 }}
             />
 
-            <Modal
-                visible={modalImage !== null}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setModalImage(null)}
-            >
-                <TouchableOpacity
-                    style={styles.modalOverlay}
-                    activeOpacity={1}
-                    onPress={() => setModalImage(null)}
-                >
-                    <Image
-                        source={{ uri: modalImage || '' }}
-                        style={styles.modalImage}
-                        resizeMode="contain"
-                    />
-                    <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalImage(null)}>
-                        <Ionicons name="close" size={32} color="#FFF" />
-                    </TouchableOpacity>
-                </TouchableOpacity>
-            </Modal>
-
-            <Modal
-                visible={modalVideo !== null}
-                animationType="slide"
-                onRequestClose={() => setModalVideo(null)}
-            >
-                <View style={styles.videoModal}>
-                    <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalVideo(null)}>
-                        <Ionicons name="close" size={32} color="#FFF" />
-                    </TouchableOpacity>
-                    {modalVideo && (
-                        <Video
-                            source={{ uri: modalVideo }}
-                            style={styles.fullVideo}
-                            useNativeControls
-                            shouldPlay
-                            resizeMode={ResizeMode.CONTAIN}
-                        />
-                    )}
-                </View>
-            </Modal>
+            <ChatMediaModals
+                imageUrl={modalImage}
+                videoUrl={modalVideo}
+                onCloseImage={() => setModalImage(null)}
+                onCloseVideo={() => setModalVideo(null)}
+            />
 
             <Modal
                 visible={showMembers}
@@ -1894,246 +1793,3 @@ export default function ChatScreen() {
         </View>
     );
 }
-
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F2F2F2' },
-    header: {
-        minHeight: 60,
-        backgroundColor: '#FFF',
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 10,
-        paddingBottom: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#EEE',
-    },
-    backBtn: { padding: 5 },
-    planHeaderImageWrap: { marginLeft: 5, position: 'relative' },
-    planHeaderImage: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: '#F1F5F9',
-    },
-    groupPhotoBadge: {
-        position: 'absolute',
-        right: -4,
-        bottom: -4,
-        width: 24,
-        height: 24,
-        borderRadius: 12,
-        backgroundColor: '#2563EB',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 2,
-        borderColor: '#FFF',
-    },
-    changeGroupPhotoBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: '#EFF6FF',
-        paddingVertical: 12,
-        borderRadius: 14,
-        marginBottom: 12,
-    },
-    changeGroupPhotoText: { color: '#2563EB', fontWeight: '800', fontSize: 15 },
-    headerTitleContainer: { marginLeft: 10, flex: 1 },
-    headerTitle: { fontSize: 17, fontWeight: '700', color: '#1E293B' },
-    headerSubtitle: { fontSize: 12, color: '#64748B' },
-    expiryBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: '#FEF3C7',
-        borderBottomWidth: 1,
-        borderBottomColor: '#FCD34D',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-    },
-    expiryBannerText: { flex: 1, color: '#92400E', fontWeight: '700', fontSize: 13 },
-    membersBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EEF3FB', justifyContent: 'center', alignItems: 'center', marginLeft: 6 },
-    membersOverlay: { flex: 1, backgroundColor: 'rgba(15,42,74,0.4)', justifyContent: 'flex-end' },
-    membersSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 34 },
-    membersHandle: { alignSelf: 'center', width: 44, height: 5, borderRadius: 3, backgroundColor: '#E2E8F0', marginBottom: 14 },
-    membersTitle: { fontSize: 18, fontWeight: '900', color: '#0F2A4A', marginBottom: 12 },
-    memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 0 },
-    memberAvatarRing: {
-        width: 52,
-        height: 52,
-        borderRadius: 26,
-        marginRight: 12,
-        borderWidth: 2,
-        borderColor: '#E2E8F0',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#FFF',
-    },
-    memberAvatarRingFriend: { borderColor: FRIEND, backgroundColor: '#ECFDF5' },
-    memberAvatarRingAcquaintance: { borderColor: ACQUAINTANCE, backgroundColor: '#F5F3FF' },
-    memberNameFriend: { color: '#047857' },
-    memberNameAcquaintance: { color: '#6D28D9' },
-    memberRelationFriend: { fontSize: 12, fontWeight: '700', color: FRIEND, marginTop: 2 },
-    memberRelationAcquaintance: { fontSize: 12, fontWeight: '700', color: ACQUAINTANCE, marginTop: 2 },
-    memberRowWrap: { flexDirection: 'row', alignItems: 'center' },
-    memberKickBtn: { padding: 10 },
-    memberAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#E3ECFB' },
-    memberName: { fontSize: 16, fontWeight: '700', color: '#0F2A4A' },
-    memberCreator: { fontSize: 12, color: PRIMARY, fontWeight: '700', marginTop: 1 },
-    inviteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#EFF6FF' },
-    inviteBtnText: { color: PRIMARY, fontWeight: '800', fontSize: 15 },
-    muteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#F1F5F9' },
-    muteBtnText: { color: PRIMARY, fontWeight: '800', fontSize: 15 },
-    inviteEmpty: { textAlign: 'center', color: '#94A3B8', fontWeight: '600', marginVertical: 20 },
-    inviteCloseBtn: { marginTop: 12, paddingVertical: 12, alignItems: 'center' },
-    inviteCloseText: { color: '#64748B', fontWeight: '700', fontSize: 15 },
-    leaveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, paddingVertical: 14, borderRadius: 16, backgroundColor: '#FEE2E2' },
-    leaveBtnText: { color: '#EF4444', fontWeight: '800', fontSize: 15 },
-    typingHint: {
-        paddingHorizontal: 16,
-        paddingBottom: 4,
-        fontSize: 12,
-        fontWeight: '600',
-        color: '#64748B',
-    },
-    replyChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginHorizontal: 12,
-        marginBottom: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 12,
-        backgroundColor: '#EFF6FF',
-        borderLeftWidth: 3,
-        borderLeftColor: PRIMARY,
-        gap: 8,
-    },
-    replyChipBody: { flex: 1 },
-    replyChipName: { fontSize: 12, fontWeight: '800', color: PRIMARY },
-    replyChipPreview: { fontSize: 13, color: '#64748B', marginTop: 1 },
-    loading: { flex: 1, justifyContent: 'center' },
-    accessDenied: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingHorizontal: 32,
-        gap: 12,
-    },
-    accessDeniedTitle: { fontSize: 18, fontWeight: '700', color: '#1E293B' },
-    accessDeniedText: { fontSize: 14, color: '#64748B', textAlign: 'center' },
-    emptyChatOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingHorizontal: 40,
-    },
-    emptyChatText: { color: '#94A3B8', fontSize: 14, textAlign: 'center', lineHeight: 20 },
-    loadMore: { paddingVertical: 16, alignItems: 'center' },
-    listContent: { paddingHorizontal: 10, paddingVertical: 20, flexGrow: 1 },
-    msgContainer: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        marginBottom: 10,
-        maxWidth: '85%',
-    },
-    myMsgContainer: { alignSelf: 'flex-end' },
-    otherMsgContainer: { alignSelf: 'flex-start' },
-    avatarWrap: { marginRight: 8 },
-    avatarWrapMe: { marginLeft: 8 },
-    miniAvatar: { width: 32, height: 32, borderRadius: 16 },
-    bubbleCol: { maxWidth: '78%', flexShrink: 1 },
-    bubble: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, elevation: 1, flexShrink: 1 },
-    myBubble: { backgroundColor: '#70B7FF', borderTopRightRadius: 4 },
-    otherBubble: { backgroundColor: '#FFF', borderTopLeftRadius: 4 },
-    senderName: { fontSize: 12, fontWeight: 'bold', color: PRIMARY, marginBottom: 2 },
-    msgText: { fontSize: 16, color: '#1E293B' },
-    myMsgText: { color: '#FFF' },
-    otherMsgText: { color: '#000' },
-    timeText: { fontSize: 10, marginTop: 4, alignSelf: 'flex-end', color: '#94A3B8' },
-    myTime: { color: 'rgba(255, 255, 255, 0.7)' },
-    otherTime: { color: '#94A3B8' },
-    uploadBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 6,
-        backgroundColor: '#EFF6FF',
-    },
-    uploadBannerText: { color: PRIMARY, fontSize: 13, fontWeight: '600' },
-    inputBar: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        backgroundColor: '#FFF',
-        borderTopWidth: 1,
-        borderTopColor: '#E2E8F0',
-    },
-    attachBtn: { paddingHorizontal: 4, paddingBottom: 6 },
-    inputContainer: {
-        flex: 1,
-        backgroundColor: '#F1F5F9',
-        borderRadius: 20,
-        paddingHorizontal: 15,
-        paddingVertical: 8,
-        marginHorizontal: 8,
-        minHeight: 44,
-        maxHeight: 86,
-        justifyContent: 'center',
-    },
-    textInput: {
-        fontSize: 16,
-        lineHeight: 22,
-        color: '#1E293B',
-        padding: 0,
-        maxHeight: 66,
-        textAlignVertical: 'top',
-    },
-    sendCircle: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
-        backgroundColor: PRIMARY,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 3,
-    },
-    sendCircleDisabled: { backgroundColor: '#CBD5E1' },
-    recordingActive: { backgroundColor: '#EF4444' },
-    mediaImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 5 },
-    videoContainer: { marginBottom: 5 },
-    videoPlaceholder: {
-        width: 200,
-        height: 120,
-        borderRadius: 10,
-        backgroundColor: '#1E293B',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    videoLabel: { color: '#FFF', fontSize: 12, marginTop: 4 },
-    audioContainer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, minWidth: 140 },
-    audioInfo: { flex: 1 },
-    audioText: { fontSize: 14, fontWeight: '600' },
-    audioDuration: { fontSize: 12, marginTop: 2 },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.9)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    modalImage: { width: '90%', height: '80%' },
-    videoModal: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
-    fullVideo: { width: '100%', height: '80%' },
-    modalCloseBtn: {
-        position: 'absolute',
-        top: 50,
-        right: 20,
-        zIndex: 10,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        borderRadius: 20,
-        padding: 10,
-    },
-});

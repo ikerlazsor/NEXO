@@ -16,7 +16,7 @@ export default function TabLayout() {
                 initialRouteName="index"
                 screenOptions={{
                     swipeEnabled: true,
-                    lazy: false,
+                    lazy: true,
                 }}
             >
                 <PagerTabs.Screen name="chats" />

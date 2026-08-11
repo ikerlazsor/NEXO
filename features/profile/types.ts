@@ -1,0 +1,40 @@
+import { Ionicons } from "@expo/vector-icons";
+import type { PendingRatingPlan } from "../../lib/ratings";
+import type { UserBadge } from "../../lib/badges";
+import type { UserStats } from "../../lib/stats";
+import type {
+  Genero,
+  HabitoConsumo,
+  ProfilePrivacy,
+} from "../../lib/profileFields";
+
+export type QuickAction = {
+  key: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  labelKey: string;
+  route: string;
+  color: string;
+  bg: string;
+  badge?: number;
+};
+
+export type ProfileUiSnapshot = {
+  userId: string;
+  nombre: string;
+  nombreUsuario: string | null;
+  aboutMe: string;
+  avatarUrl: string | null;
+  age: number | null;
+  genero: Genero | null;
+  habitoBebida: HabitoConsumo;
+  habitoTabaco: HabitoConsumo;
+  aficiones: string[];
+  perfilGustos: Record<string, unknown>;
+  privacy: ProfilePrivacy;
+  stats: UserStats;
+  friendsCount: number;
+  friendsNotifCount: number;
+  planRequests: number;
+  pendingRatings: PendingRatingPlan[];
+  badges: UserBadge[];
+};

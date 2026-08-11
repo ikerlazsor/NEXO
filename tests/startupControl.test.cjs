@@ -4,7 +4,42 @@ const assert = require('node:assert/strict');
 const {
   StartupCoordinator,
   classifyStartupFailure,
+  shouldRunStartupForAuthEvent,
 } = require('../.test-dist/startupControl.js');
+
+test('profile metadata updates do not restart a verified session', () => {
+  assert.equal(
+    shouldRunStartupForAuthEvent('USER_UPDATED', 'user-1', 'user-1', true),
+    false,
+  );
+  assert.equal(
+    shouldRunStartupForAuthEvent('TOKEN_REFRESHED', 'user-1', 'user-1', true),
+    false,
+  );
+  assert.equal(
+    shouldRunStartupForAuthEvent('SIGNED_IN', 'user-1', 'user-1', true),
+    false,
+  );
+});
+
+test('account changes and unfinished startup still require verification', () => {
+  assert.equal(
+    shouldRunStartupForAuthEvent('SIGNED_IN', null, 'user-1', true),
+    true,
+  );
+  assert.equal(
+    shouldRunStartupForAuthEvent('SIGNED_IN', 'user-1', 'user-2', true),
+    true,
+  );
+  assert.equal(
+    shouldRunStartupForAuthEvent('SIGNED_OUT', 'user-1', null, true),
+    true,
+  );
+  assert.equal(
+    shouldRunStartupForAuthEvent('USER_UPDATED', 'user-1', 'user-1', false),
+    true,
+  );
+});
 
 test('a newer session cancels and invalidates the previous startup', async () => {
   const coordinator = new StartupCoordinator();

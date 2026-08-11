@@ -50,6 +50,7 @@ set search_path = public, pg_temp
 as $$
 declare
     v_project_url text;
+    v_function_base_url text;
     v_publishable_key text;
     v_dispatch_secret text;
 begin
@@ -78,8 +79,16 @@ begin
         return;
     end if;
 
+    -- Data API puede mostrar la URL con /rest/v1. Normalizamos cualquier
+    -- endpoint de Supabase a la raíz del proyecto antes de llamar a Functions.
+    v_function_base_url := regexp_replace(
+        rtrim(trim(v_project_url), '/'),
+        '/(rest|auth|storage|functions)/v1(/.*)?$',
+        ''
+    );
+
     perform net.http_post(
-        url := rtrim(v_project_url, '/') || '/functions/v1/dispatch-push-outbox',
+        url := v_function_base_url || '/functions/v1/dispatch-push-outbox',
         headers := jsonb_build_object(
             'Content-Type', 'application/json',
             'apikey', v_publishable_key,

@@ -1,9 +1,10 @@
 import { Platform, StyleSheet } from "react-native";
+import { theme } from "../../theme";
 
-const PRIMARY = "#4DA6FF";
-const PRIMARY_DARK = "#2563EB";
-const INK = "#0F2A4A";
-const BG_BOTTOM = "#F2F7FF";
+const PRIMARY = theme.colors.brand;
+const PRIMARY_DARK = theme.colors.primary;
+const INK = theme.colors.text;
+const BG_BOTTOM = theme.colors.backgroundAlt;
 
 export const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "transparent" },
@@ -11,7 +12,7 @@ export const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 18,
@@ -33,12 +34,12 @@ export const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#E3ECFB",
+    borderColor: theme.colors.border,
   },
   quickFilterBox: { flex: 1, justifyContent: "center" },
   quickFilterActive: {
@@ -70,7 +71,7 @@ export const styles = StyleSheet.create({
     width: 110,
     height: 110,
     borderRadius: 55,
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     justifyContent: "center",
     alignItems: "center",
     elevation: 4,
@@ -88,7 +89,7 @@ export const styles = StyleSheet.create({
   },
   emptySubtitle: {
     fontSize: 14,
-    color: "#64748B",
+    color: theme.colors.textMuted,
     textAlign: "center",
     marginTop: 8,
   },
@@ -99,16 +100,16 @@ export const styles = StyleSheet.create({
     paddingVertical: 13,
     borderRadius: 16,
   },
-  createBtnEmptySecondary: { marginTop: 10, backgroundColor: "#EEF3FB" },
-  createBtnEmptyText: { color: "#FFF", fontWeight: "700" },
+  createBtnEmptySecondary: { marginTop: 10, backgroundColor: theme.colors.surfaceSubtle },
+  createBtnEmptyText: { color: theme.colors.surface, fontWeight: "700" },
   firstRunBanner: {
     marginHorizontal: 16,
     marginBottom: 10,
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     borderRadius: 18,
     padding: 14,
     borderWidth: 1,
-    borderColor: "#DBEAFE",
+    borderColor: theme.colors.primaryBorder,
     position: "relative",
   },
   firstRunTitle: {
@@ -119,7 +120,7 @@ export const styles = StyleSheet.create({
   },
   firstRunBody: {
     fontSize: 13,
-    color: "#64748B",
+    color: theme.colors.textMuted,
     marginTop: 4,
     lineHeight: 18,
   },
@@ -136,9 +137,9 @@ export const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  firstRunPrimaryText: { color: "#FFF", fontWeight: "800", fontSize: 13 },
+  firstRunPrimaryText: { color: theme.colors.surface, fontWeight: "800", fontSize: 13 },
   firstRunSecondary: {
-    backgroundColor: "#EEF3FB",
+    backgroundColor: theme.colors.surfaceSubtle,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 12,
@@ -163,7 +164,7 @@ export const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(15,42,74,0.4)",
   },
-  modalSheet: { backgroundColor: "#FFF", borderRadius: 24, padding: 22 },
+  modalSheet: { backgroundColor: theme.colors.surface, borderRadius: 24, padding: 22 },
   modalTitle: { fontSize: 18, fontWeight: "800", color: INK, marginBottom: 0 },
   dateOption: {
     flexDirection: "row",
@@ -173,17 +174,17 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderRadius: 14,
     marginBottom: 8,
-    backgroundColor: "#F2F7FF",
+    backgroundColor: theme.colors.backgroundAlt,
   },
   dateOptionActive: {
-    backgroundColor: "#EFF6FF",
+    backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
     borderColor: PRIMARY,
   },
   dateOptionText: { fontSize: 15, color: "#475569", fontWeight: "600" },
 
   filtersSheet: {
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 18,
@@ -205,7 +206,7 @@ export const styles = StyleSheet.create({
   filterSectionLabel: {
     fontSize: 12,
     fontWeight: "800",
-    color: "#64748B",
+    color: theme.colors.textMuted,
     textTransform: "uppercase",
     letterSpacing: 0.4,
     marginTop: 10,
@@ -213,7 +214,7 @@ export const styles = StyleSheet.create({
   },
   filterHint: {
     fontSize: 13,
-    color: "#94A3B8",
+    color: theme.colors.textSubtle,
     fontWeight: "600",
     marginBottom: 8,
   },
@@ -222,32 +223,32 @@ export const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 10,
-    backgroundColor: "#F2F7FF",
+    backgroundColor: theme.colors.backgroundAlt,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#E3ECFB",
+    borderColor: theme.colors.border,
     paddingHorizontal: 14,
     paddingVertical: 12,
     marginBottom: 8,
   },
   provinceToggleTextWrap: { flex: 1, gap: 2 },
   provinceToggleTitle: { color: PRIMARY_DARK, fontWeight: "700", fontSize: 14 },
-  provinceToggleHint: { color: "#94A3B8", fontWeight: "600", fontSize: 12 },
+  provinceToggleHint: { color: theme.colors.textSubtle, fontWeight: "600", fontSize: 12 },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 4 },
   filterChip: {
-    backgroundColor: "#F2F7FF",
+    backgroundColor: theme.colors.backgroundAlt,
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 9,
     borderWidth: 1,
-    borderColor: "#E3ECFB",
+    borderColor: theme.colors.border,
   },
   filterChipActive: {
     backgroundColor: PRIMARY_DARK,
     borderColor: PRIMARY_DARK,
   },
   filterChipText: { color: "#475569", fontWeight: "700", fontSize: 13 },
-  filterChipTextActive: { color: "#FFF" },
+  filterChipTextActive: { color: theme.colors.surface },
   applyFiltersBtn: {
     marginTop: 14,
     backgroundColor: PRIMARY_DARK,
@@ -256,9 +257,9 @@ export const styles = StyleSheet.create({
     alignItems: "center",
     flexShrink: 0,
   },
-  applyFiltersBtnText: { color: "#FFF", fontWeight: "800", fontSize: 15 },
+  applyFiltersBtnText: { color: theme.colors.surface, fontWeight: "800", fontSize: 15 },
 
-  mapModalContainer: { flex: 1, backgroundColor: "#E3ECFB" },
+  mapModalContainer: { flex: 1, backgroundColor: theme.colors.border },
   mapModalHeader: {
     position: "absolute",
     top: Platform.OS === "ios" ? 56 : 44,
@@ -272,7 +273,7 @@ export const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 16,
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     justifyContent: "center",
     alignItems: "center",
     elevation: 4,
@@ -286,7 +287,7 @@ export const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     paddingHorizontal: 24,
     paddingTop: 18,
     paddingBottom: Platform.OS === "ios" ? 34 : 22,
@@ -296,7 +297,7 @@ export const styles = StyleSheet.create({
   },
   mapFooterHint: {
     textAlign: "center",
-    color: "#64748B",
+    color: theme.colors.textMuted,
     fontWeight: "600",
     fontSize: 14,
   },
@@ -305,37 +306,37 @@ export const styles = StyleSheet.create({
     left: 14,
     right: 14,
     bottom: Platform.OS === "ios" ? 28 : 18,
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     borderRadius: 22,
     padding: 12,
     flexDirection: "row",
     gap: 12,
     elevation: 14,
-    shadowColor: "#0F2A4A",
+    shadowColor: theme.colors.text,
     shadowOpacity: 0.18,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 8 },
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: theme.colors.border,
   },
   mapPreviewImage: {
     width: 86,
     height: 86,
     borderRadius: 16,
-    backgroundColor: "#E3ECFB",
+    backgroundColor: theme.colors.border,
   },
   mapPreviewBody: { flex: 1, justifyContent: "center" },
   mapPreviewTitle: { fontSize: 16, fontWeight: "900", color: INK },
   mapPreviewMeta: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#64748B",
+    color: theme.colors.textMuted,
     marginTop: 4,
   },
   mapPreviewActions: { flexDirection: "row", gap: 8, marginTop: 10 },
   mapPreviewSecondary: {
     flex: 1,
-    backgroundColor: "#EEF3FB",
+    backgroundColor: theme.colors.surfaceSubtle,
     borderRadius: 12,
     paddingVertical: 10,
     alignItems: "center",
@@ -352,5 +353,5 @@ export const styles = StyleSheet.create({
     paddingVertical: 10,
     alignItems: "center",
   },
-  mapPreviewPrimaryText: { color: "#FFF", fontWeight: "800", fontSize: 12 },
+  mapPreviewPrimaryText: { color: theme.colors.surface, fontWeight: "800", fontSize: 12 },
 });

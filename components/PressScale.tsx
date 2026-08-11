@@ -1,11 +1,12 @@
 import { type ReactNode } from 'react';
-import { Pressable, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
     useAnimatedStyle,
     useSharedValue,
     withSpring,
 } from 'react-native-reanimated';
 import { hapticSoft } from '../lib/haptics';
+import { theme } from '../theme';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -39,6 +40,7 @@ export function PressScale({
         <AnimatedPressable
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
+            accessibilityState={{ disabled }}
             disabled={disabled}
             onPress={onPress}
             onPressIn={() => {
@@ -48,9 +50,16 @@ export function PressScale({
             onPressOut={() => {
                 scale.value = withSpring(1, { damping: 16, stiffness: 380 });
             }}
-            style={[style, animatedStyle]}
+            style={[style, styles.minimumTarget, animatedStyle]}
         >
             {children}
         </AnimatedPressable>
     );
 }
+
+const styles = StyleSheet.create({
+    minimumTarget: {
+        minWidth: theme.accessibility.minimumTouchTarget,
+        minHeight: theme.accessibility.minimumTouchTarget,
+    },
+});

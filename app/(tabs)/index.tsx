@@ -1084,7 +1084,7 @@ export default function HomeScreen() {
             <View style={styles.searchWrapper}>
                 <View style={styles.searchContainer}>
                     <Ionicons name="search" size={20} color={PRIMARY_DARK} />
-                    <TextInput placeholder={t('feed.searchPlaceholder')} placeholderTextColor=theme.colors.textSubtle style={styles.searchInput} value={search} onChangeText={setSearch} />
+                    <TextInput placeholder={t('feed.searchPlaceholder')} placeholderTextColor={theme.colors.textSubtle} style={styles.searchInput} value={search} onChangeText={setSearch} />
                 </View>
             </View>
 
@@ -1142,7 +1142,7 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                     </View>
                     <TouchableOpacity style={styles.firstRunClose} onPress={() => setShowFirstRun(false)} hitSlop={10}>
-                        <Ionicons name="close" size={18} color=theme.colors.textMuted />
+                        <Ionicons name="close" size={18} color={theme.colors.textMuted} />
                     </TouchableOpacity>
                 </View>
             ) : null}
@@ -1475,7 +1475,7 @@ export default function HomeScreen() {
                                     identifier={String(p.id)}
                                     coordinate={{ latitude: lat, longitude: lng }}
                                     // Color fijo: mutar pinColor al tocar remonta el Marker nativo y crashea en Expo Go.
-                                    pinColor=theme.colors.primary
+                                    pinColor={theme.colors.primary}
                                     tracksViewChanges={false}
                                     stopPropagation
                                     onPress={(e) => {

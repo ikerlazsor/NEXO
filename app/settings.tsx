@@ -215,7 +215,7 @@ export default function SettingsScreen() {
                                     void handleNotificationsToggle(v);
                                 }}
                                 trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
-                                thumbColor=theme.colors.surface
+                                thumbColor={theme.colors.surface}
                             />
                         }
                     />

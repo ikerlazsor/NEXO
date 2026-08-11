@@ -50,6 +50,7 @@ set search_path = public, pg_temp
 as $$
 declare
     v_project_url text;
+    v_function_base_url text;
     v_publishable_key text;
     v_dispatch_secret text;
 begin
@@ -78,8 +79,52 @@ begin
         return;
     end if;
 
+    -- Data API puede mostrar la URL con /rest/v1. Normalizamos cualquier
+    -- endpoint de Supabase a la raíz del proyecto antes de llamar a Functions.
+    v_function_base_url := regexp_replace(
+        rtrim(trim(v_project_url), '/'),
+        '/(rest|auth|storage|functions)/v1(/.*)?
+        headers := jsonb_build_object(
+            'Content-Type', 'application/json',
+            'apikey', v_publishable_key,
+            'x-nexo-dispatch-secret', v_dispatch_secret
+        ),
+        body := '{}'::jsonb,
+        timeout_milliseconds := 30000
+    );
+end;
+$$;
+
+revoke all on function public.invoke_push_outbox_dispatcher()
+    from public, anon, authenticated;
+
+do $$
+declare
+    v_job_id bigint;
+begin
+    for v_job_id in
+        select jobid
+          from cron.job
+         where jobname = 'dispatch-push-outbox'
+    loop
+        perform cron.unschedule(v_job_id);
+    end loop;
+end;
+$$;
+
+select cron.schedule(
+    'dispatch-push-outbox',
+    '* * * * *',
+    'select public.invoke_push_outbox_dispatcher();'
+);
+
+commit;
+,
+        ''
+    );
+
     perform net.http_post(
-        url := rtrim(v_project_url, '/') || '/functions/v1/dispatch-push-outbox',
+        url := v_function_base_url || '/functions/v1/dispatch-push-outbox',
         headers := jsonb_build_object(
             'Content-Type', 'application/json',
             'apikey', v_publishable_key,

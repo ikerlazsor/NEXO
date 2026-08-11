@@ -83,43 +83,7 @@ begin
     -- endpoint de Supabase a la raíz del proyecto antes de llamar a Functions.
     v_function_base_url := regexp_replace(
         rtrim(trim(v_project_url), '/'),
-        '/(rest|auth|storage|functions)/v1(/.*)?
-        headers := jsonb_build_object(
-            'Content-Type', 'application/json',
-            'apikey', v_publishable_key,
-            'x-nexo-dispatch-secret', v_dispatch_secret
-        ),
-        body := '{}'::jsonb,
-        timeout_milliseconds := 30000
-    );
-end;
-$$;
-
-revoke all on function public.invoke_push_outbox_dispatcher()
-    from public, anon, authenticated;
-
-do $$
-declare
-    v_job_id bigint;
-begin
-    for v_job_id in
-        select jobid
-          from cron.job
-         where jobname = 'dispatch-push-outbox'
-    loop
-        perform cron.unschedule(v_job_id);
-    end loop;
-end;
-$$;
-
-select cron.schedule(
-    'dispatch-push-outbox',
-    '* * * * *',
-    'select public.invoke_push_outbox_dispatcher();'
-);
-
-commit;
-,
+        '/(rest|auth|storage|functions)/v1(/.*)?$',
         ''
     );
 

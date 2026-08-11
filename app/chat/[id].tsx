@@ -29,6 +29,7 @@ import {
     View,
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
+import { theme } from '../../theme';
 import { styles } from '../../features/chat/chatStyles';
 import { ChatMediaModals } from '../../features/chat/ChatMediaModals';
 import {
@@ -85,10 +86,10 @@ import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
 import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
-const PRIMARY = '#4DA6FF';
-const FRIEND = '#10B981';
-const ACQUAINTANCE = '#7C3AED';
-const DANGER = '#EF4444';
+const PRIMARY = theme.colors.brand;
+const FRIEND = theme.colors.successStrong;
+const ACQUAINTANCE = theme.colors.accent;
+const DANGER = theme.colors.danger;
 export default function ChatScreen() {
     const { id } = useLocalSearchParams<{ id: string | string[] }>();
     const planId = Array.isArray(id) ? id[0] : id;
@@ -1376,9 +1377,9 @@ export default function ChatScreen() {
                     {canEditGroupPhoto && (
                         <View style={styles.groupPhotoBadge}>
                             {uploadingGroupPhoto ? (
-                                <ActivityIndicator size="small" color="#FFF" />
+                                <ActivityIndicator size="small" color=theme.colors.surface />
                             ) : (
-                                <Ionicons name="camera" size={14} color="#FFF" />
+                                <Ionicons name="camera" size={14} color=theme.colors.surface />
                             )}
                         </View>
                     )}
@@ -1420,7 +1421,7 @@ export default function ChatScreen() {
                     <Ionicons
                         name={chatMuted ? 'notifications-off' : 'notifications-outline'}
                         size={20}
-                        color={chatMuted ? '#94A3B8' : PRIMARY}
+                        color={chatMuted ? theme.colors.textSubtle : PRIMARY}
                     />
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setShowMembers(true)} style={styles.membersBtn}>
@@ -1448,7 +1449,7 @@ export default function ChatScreen() {
                     </View>
                 ) : accessDenied ? (
                     <View style={styles.accessDenied}>
-                        <Ionicons name="lock-closed-outline" size={48} color="#94A3B8" />
+                        <Ionicons name="lock-closed-outline" size={48} color=theme.colors.textSubtle />
                         <Text style={styles.accessDeniedTitle}>{t('chat.accessDenied')}</Text>
                         <Text style={styles.accessDeniedText}>
                             {t('chat.accessDeniedSub')}
@@ -1497,7 +1498,7 @@ export default function ChatScreen() {
                             </Text>
                         </View>
                         <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={8}>
-                            <Ionicons name="close" size={20} color="#64748B" />
+                            <Ionicons name="close" size={20} color=theme.colors.textMuted />
                         </TouchableOpacity>
                     </View>
                 ) : null}
@@ -1511,7 +1512,7 @@ export default function ChatScreen() {
                         <Ionicons
                             name="add"
                             size={26}
-                            color={inputDisabled ? '#CBD5E1' : '#64748B'}
+                            color={inputDisabled ? '#CBD5E1' : theme.colors.textMuted}
                         />
                     </TouchableOpacity>
 
@@ -1524,7 +1525,7 @@ export default function ChatScreen() {
                                       ? t('chat.cannotWrite')
                                       : t('chat.writeMessage')
                             }
-                            placeholderTextColor="#64748B"
+                            placeholderTextColor=theme.colors.textMuted
                             style={styles.textInput}
                             value={messageText}
                             onChangeText={onMessageTextChange}
@@ -1697,7 +1698,7 @@ export default function ChatScreen() {
                                                 }, 250);
                                             }}
                                         >
-                                            <Ionicons name="ban-outline" size={20} color="#EF4444" />
+                                            <Ionicons name="ban-outline" size={20} color=theme.colors.danger />
                                         </TouchableOpacity>
                                     )}
                                 </View>
@@ -1730,7 +1731,7 @@ export default function ChatScreen() {
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.leaveBtn} onPress={handleDeleteChat}>
-                            <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                            <Ionicons name="trash-outline" size={20} color=theme.colors.danger />
                             <Text style={styles.leaveBtnText}>
                                 {creatorId === currentUserId
                                     ? t('chat.deletePlanHost')

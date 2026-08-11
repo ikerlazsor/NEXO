@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { discardChatOutbox } from './chatOutbox';
 import { resetNotificationCategoryPrefsCache } from './notificationPrefs';
 import { resetPasswordRecoveryMemory } from './passwordRecovery';
-import { clearScreenState } from './screenState';
+import { clearAllScreenState } from './screenState';
 import { cacheClearAll } from './ttlCache';
 
 const ACTIVE_USER_KEY = '@nexo_active_user_v1';
@@ -64,7 +64,7 @@ export async function clearLocalUserData(): Promise<void> {
   await discardChatOutbox();
   await removePersonalStorage();
   cacheClearAll();
-  clearScreenState();
+  clearAllScreenState();
   resetNotificationCategoryPrefsCache();
   resetPasswordRecoveryMemory();
 }
@@ -95,6 +95,6 @@ export async function reconcileLocalUserData(userId: string | null): Promise<voi
   await discardChatOutbox();
   await removePersonalStorage(true);
   cacheClearAll();
-  clearScreenState();
+  clearAllScreenState();
   resetNotificationCategoryPrefsCache();
 }

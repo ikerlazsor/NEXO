@@ -11,24 +11,46 @@ export type OnboardingData = {
     ambientes_preferidos: string[];
 };
 
-export async function fetchOnboardingStatus(userId: string): Promise<boolean> {
+export async function fetchOnboardingStatus(
+    userId: string,
+    options: { signal?: AbortSignal; throwOnError?: boolean } = {},
+): Promise<boolean> {
     const maxAttempts = 2;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const { data, error } = await supabase
+        let query = supabase
             .from('perfiles')
             .select('registro_completado')
-            .eq('id', userId)
-            .maybeSingle();
+            .eq('id', userId);
+        if (options.signal) query = query.abortSignal(options.signal);
+        const { data, error } = await query.maybeSingle();
 
         if (error) {
+            if (options.signal?.aborted) {
+                const abortError = new Error('Onboarding request aborted');
+                abortError.name = 'AbortError';
+                throw abortError;
+            }
             console.warn('fetchOnboardingStatus:', error.message);
+            if (options.throwOnError) throw new Error(error.message);
             return false;
         }
 
         if (!data) {
             if (attempt < maxAttempts - 1) {
-                await new Promise((resolve) => setTimeout(resolve, 180));
+                await new Promise<void>((resolve, reject) => {
+                    const timer = setTimeout(resolve, 180);
+                    options.signal?.addEventListener(
+                        'abort',
+                        () => {
+                            clearTimeout(timer);
+                            const abortError = new Error('Onboarding request aborted');
+                            abortError.name = 'AbortError';
+                            reject(abortError);
+                        },
+                        { once: true },
+                    );
+                });
                 continue;
             }
             return false;

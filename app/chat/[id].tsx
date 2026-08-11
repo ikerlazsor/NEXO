@@ -1518,6 +1518,7 @@ export default function ChatScreen() {
 
                     <View style={styles.inputContainer}>
                         <TextInput
+                            testID="group-chat-message-input"
                             placeholder={
                                 recording
                                     ? `${t('chat.recording')} ${formatDuration(recordingDuration)}...`
@@ -1535,6 +1536,8 @@ export default function ChatScreen() {
                     </View>
 
                     <TouchableOpacity
+                        testID="group-chat-send"
+                        accessibilityLabel="Enviar mensaje"
                         onPress={handleActionPress}
                         style={[
                             styles.sendCircle,

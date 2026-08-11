@@ -1,0 +1,24 @@
+appId: com.ikerlazsor.nexo
+name: Register a disposable account
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: auth-mode-register
+- tapOn:
+    id: auth-display-name
+- inputText: ${MAESTRO_SIGNUP_NAME}
+- tapOn:
+    id: auth-username
+- inputText: ${MAESTRO_SIGNUP_USERNAME}
+- tapOn:
+    id: auth-email
+- inputText: ${MAESTRO_SIGNUP_EMAIL}
+- tapOn:
+    id: auth-password
+- inputText: ${MAESTRO_SIGNUP_PASSWORD}
+- tapOn:
+    id: auth-submit
+- extendedWaitUntil:
+    visible: 'Confirma tu email'
+    timeout: 20000

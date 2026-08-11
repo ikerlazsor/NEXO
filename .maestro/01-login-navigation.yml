@@ -1,0 +1,24 @@
+appId: com.ikerlazsor.nexo
+name: Login and Profile to Settings to Feed
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: auth-email
+- inputText: ${MAESTRO_TEST_EMAIL}
+- tapOn:
+    id: auth-password
+- inputText: ${MAESTRO_TEST_PASSWORD}
+- tapOn:
+    id: auth-submit
+- extendedWaitUntil:
+    visible: 'Descubre planes'
+    timeout: 20000
+- tapOn: 'Usuario'
+- assertVisible: 'Mi Perfil'
+- tapOn:
+    id: profile-open-settings
+- assertVisible: 'Ajustes'
+- back
+- tapOn: 'Descubre planes'
+- assertVisible: 'Encuentra tu próxima quedada'

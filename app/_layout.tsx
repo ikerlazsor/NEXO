@@ -13,7 +13,7 @@ import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
@@ -24,6 +24,7 @@ import { NexoAlertHost } from '../components/NexoAlertHost';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { PushBootstrap } from '../components/PushBootstrap';
 import { NexoButton } from '../components/ui/NexoButton';
+import { NexoLoadingState } from '../components/ui/NexoState';
 import { scheduleCoverPrefetch } from '../lib/prefetchCovers';
 import { hydrateFeedFromDisk, hydrateChatsFromDisk, hydrateMyPlansFromDisk } from '../lib/prefetchHome';
 import {
@@ -34,8 +35,15 @@ import {
 import { fetchOnboardingStatus } from '../lib/onboarding';
 import { reconcileLocalUserData } from '../lib/localDataPrivacy';
 import { I18nProvider } from '../lib/i18n';
+import { getIsOnline } from '../lib/network';
 import { isPasswordRecoveryPending, setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { fetchAccountAccess } from '../lib/roles';
+import {
+  STARTUP_TIMEOUT_MS,
+  StartupCoordinator,
+  throwIfAborted,
+  type StartupFailure,
+} from '../lib/startupControl';
 import { supabase } from '../lib/supabase';
 import { navigationTheme, theme } from '../theme';
 
@@ -73,137 +81,145 @@ function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const [banned, setBanned] = useState(false);
-  const [accessUnavailable, setAccessUnavailable] = useState(false);
-  const [accessRetry, setAccessRetry] = useState(0);
-  const [ready, setReady] = useState(false);
+  const [startupPhase, setStartupPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [startupFailure, setStartupFailure] = useState<StartupFailure | null>(null);
+  const coordinatorRef = useRef(new StartupCoordinator());
+  const latestSessionRef = useRef<Session | null>(null);
+  const sessionKnownRef = useRef(false);
+  const retryRef = useRef<() => void>(() => {});
+  const splashReleasedRef = useRef(false);
   const segments = useSegments();
   const router = useRouter();
+  const ready = startupPhase === 'ready';
 
   useEffect(() => {
     let mounted = true;
+    const coordinator = coordinatorRef.current;
 
-    const sync = async (s: Session | null, opts?: { hideSplash?: boolean }) => {
-      if (!mounted) return;
-      const nextUserId = s?.user.id ?? null;
-      await reconcileLocalUserData(nextUserId);
-      if (!mounted) return;
-      if (nextUserId) {
-        await Promise.all([
-          hydrateFeedFromDisk(nextUserId),
-          hydrateChatsFromDisk(nextUserId),
-          hydrateMyPlansFromDisk(nextUserId),
-        ]);
-      }
-      if (!mounted) return;
-      setSession(s);
-
-      if (!s) {
-        setOnboardingDone(null);
-        setBanned(false);
-        setAccessUnavailable(false);
-        if (opts?.hideSplash) {
-          setReady(true);
-          await SplashScreen.hideAsync().catch(() => {});
-        }
-        return;
-      }
-
-      // Sin email verificado: no mirar onboarding todavía
-      if (!isEmailVerified(s.user)) {
-        setOnboardingDone(null);
-        setBanned(false);
-        setAccessUnavailable(false);
-        if (s.user.email) {
-          void setPendingVerifyEmail(s.user.email);
-        }
-        if (opts?.hideSplash) {
-          setReady(true);
-          await SplashScreen.hideAsync().catch(() => {});
-        }
-        return;
-      }
-
-      const access = await fetchAccountAccess(s.user.id);
-      if (!mounted) return;
-      if (!access.verified) {
-        setAccessUnavailable(true);
-        setOnboardingDone(null);
-        setBanned(false);
-        if (opts?.hideSplash) {
-          setReady(true);
-          await SplashScreen.hideAsync().catch(() => {});
-        }
-        return;
-      }
-      setAccessUnavailable(false);
-      if (access.banned) {
-        setBanned(true);
-        setOnboardingDone(true);
-        if (opts?.hideSplash) {
-          setReady(true);
-          await SplashScreen.hideAsync().catch(() => {});
-        }
-        return;
-      }
-      setBanned(false);
-
-      // Metadata primero: login → feed sin pantalla intermedia
-      if (metaOnboardingDone(s.user)) {
-        setOnboardingDone(true);
-        if (opts?.hideSplash) {
-          setReady(true);
-          await SplashScreen.hideAsync().catch(() => {});
-        }
-        // Confirmar en background (no bloquea UI)
-        void fetchOnboardingStatus(s.user.id).then((dbDone) => {
-          if (mounted && !dbDone && !metaOnboardingDone(s.user)) {
-            setOnboardingDone(false);
-          }
-        });
-        return;
-      }
-
-      const dbDone = await fetchOnboardingStatus(s.user.id);
-      if (!mounted) return;
-      const done = dbDone || metaOnboardingDone(s.user);
-      setOnboardingDone(done);
-      // Cache en metadata para próximos logins sin esperar a la DB
-      if (dbDone && !metaOnboardingDone(s.user)) {
-        void supabase.auth.updateUser({
-          data: { registro_completado: true, onboarding_completed: true },
-        });
-      }
-      if (opts?.hideSplash) {
-        setReady(true);
-        await SplashScreen.hideAsync().catch(() => {});
-      }
+    const releaseSplash = async () => {
+      if (splashReleasedRef.current) return;
+      splashReleasedRef.current = true;
+      await SplashScreen.hideAsync().catch(() => {});
     };
 
-    supabase.auth.getSession().then(async ({ data: { session: s } }) => {
-      await sync(s, { hideSplash: true });
-      if (mounted) {
-        setReady(true);
-        await SplashScreen.hideAsync().catch(() => {});
+    type StartupSnapshot = {
+      session: Session | null;
+      onboardingDone: boolean | null;
+      banned: boolean;
+    };
+
+    const runStartup = async (providedSession?: Session | null) => {
+      if (!mounted) return;
+      setStartupFailure(null);
+      setStartupPhase('loading');
+
+      const result = await coordinator.run<StartupSnapshot>(
+        async (signal) => {
+          let nextSession = providedSession;
+          if (providedSession === undefined) {
+            const { data, error } = await supabase.auth.getSession();
+            if (error) throw error;
+            nextSession = data.session;
+          }
+          throwIfAborted(signal);
+
+          const nextUserId = nextSession?.user.id ?? null;
+          await reconcileLocalUserData(nextUserId);
+          throwIfAborted(signal);
+
+          if (nextUserId) {
+            await Promise.all([
+              hydrateFeedFromDisk(nextUserId),
+              hydrateChatsFromDisk(nextUserId),
+              hydrateMyPlansFromDisk(nextUserId),
+            ]);
+            throwIfAborted(signal);
+          }
+
+          if (!nextSession) {
+            return { session: null, onboardingDone: null, banned: false };
+          }
+
+          if (!isEmailVerified(nextSession.user)) {
+            if (nextSession.user.email) {
+              await setPendingVerifyEmail(nextSession.user.email);
+              throwIfAborted(signal);
+            }
+            return { session: nextSession, onboardingDone: null, banned: false };
+          }
+
+          const access = await fetchAccountAccess(nextSession.user.id, {
+            signal,
+            throwOnError: true,
+          });
+          throwIfAborted(signal);
+          if (!access.verified) throw new Error('Account access could not be verified');
+          if (access.banned) {
+            return { session: nextSession, onboardingDone: true, banned: true };
+          }
+
+          if (metaOnboardingDone(nextSession.user)) {
+            return { session: nextSession, onboardingDone: true, banned: false };
+          }
+
+          const dbDone = await fetchOnboardingStatus(nextSession.user.id, {
+            signal,
+            throwOnError: true,
+          });
+          throwIfAborted(signal);
+          if (dbDone) {
+            void supabase.auth.updateUser({
+              data: { registro_completado: true, onboarding_completed: true },
+            });
+          }
+          return { session: nextSession, onboardingDone: dbDone, banned: false };
+        },
+        { timeoutMs: STARTUP_TIMEOUT_MS, isOnline: getIsOnline },
+      );
+
+      if (!mounted || result.status === 'stale') return;
+      await releaseSplash();
+      if (!mounted) return;
+
+      if (result.status === 'failure') {
+        setStartupFailure(result.failure);
+        setStartupPhase('error');
+        return;
       }
-    });
+
+      sessionKnownRef.current = true;
+      latestSessionRef.current = result.value.session;
+      setSession(result.value.session);
+      setOnboardingDone(result.value.onboardingDone);
+      setBanned(result.value.banned);
+      setStartupPhase('ready');
+    };
+
+    retryRef.current = () => {
+      void runStartup(sessionKnownRef.current ? latestSessionRef.current : undefined);
+    };
+
+    void runStartup();
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, s) => {
+      sessionKnownRef.current = true;
+      latestSessionRef.current = s;
       if (event === 'PASSWORD_RECOVERY') {
         void (async () => {
           await setPasswordRecoveryPending(true);
           router.replace('/reset-password');
         })();
       }
-      void sync(s);
+      void runStartup(s);
     });
 
     return () => {
       mounted = false;
+      retryRef.current = () => {};
+      coordinator.cancel();
       authListener.subscription.unsubscribe();
     };
-    // Recreate the auth check only when the user explicitly retries.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessRetry]);
+  }, [router]);
 
   const rootSegment = segments[0];
   const inLogin = rootSegment === 'login';
@@ -291,20 +307,33 @@ function AuthGate({ children }: { children: ReactNode }) {
     router,
   ]);
 
-  // Mantener splash nativo hasta ready; sin segunda pantalla azul
-  if (!ready) return null;
+  if (startupPhase === 'loading') {
+    if (!splashReleasedRef.current) return null;
+    return <NexoLoadingState label="Verificando tu cuenta…" />;
+  }
 
-  if (accessUnavailable) {
+  if (startupPhase === 'error') {
+    const isOffline = startupFailure?.kind === 'offline';
+    const isTimeout = startupFailure?.kind === 'timeout';
     return (
       <View style={styles.accessUnavailable}>
-        <Text style={styles.accessUnavailableTitle}>No se pudo verificar tu cuenta</Text>
+        <Text style={styles.accessUnavailableTitle}>
+          {isOffline
+            ? 'Sin conexión'
+            : isTimeout
+              ? 'La comprobación está tardando demasiado'
+              : 'No se pudo iniciar NEXO'}
+        </Text>
         <Text style={styles.accessUnavailableBody}>
-          Comprueba tu conexión e inténtalo de nuevo. Por seguridad, NEXO no permite el acceso
-          mientras no pueda confirmar el estado de la cuenta.
+          {isOffline
+            ? 'Conéctate a Internet y vuelve a intentarlo. NEXO no abrirá datos de otra cuenta mientras no pueda verificar la sesión.'
+            : isTimeout
+              ? 'La verificación superó el tiempo máximo de espera. Puedes reintentarlo sin cerrar la aplicación.'
+              : 'No se ha podido comprobar la sesión de forma segura. Inténtalo de nuevo.'}
         </Text>
         <NexoButton
           label="Reintentar"
-          onPress={() => setAccessRetry((value) => value + 1)}
+          onPress={() => retryRef.current()}
           style={styles.accessRetryButton}
         />
       </View>
@@ -444,10 +473,5 @@ const styles = StyleSheet.create({
     marginTop: 22,
     paddingHorizontal: 24,
     paddingVertical: 13,
-  },
-  accessRetryText: {
-    color: theme.colors.surface,
-    fontSize: 15,
-    fontWeight: '800',
   },
 });

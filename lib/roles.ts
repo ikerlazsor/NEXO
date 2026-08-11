@@ -48,7 +48,10 @@ function mapAccess(row: {
 }
 
 /** Carga rol/ban del usuario autenticado. */
-export async function fetchAccountAccess(userId?: string): Promise<AccountAccess> {
+export async function fetchAccountAccess(
+    userId?: string,
+    options: { signal?: AbortSignal; throwOnError?: boolean } = {},
+): Promise<AccountAccess> {
     let uid = userId;
     if (!uid) {
         const session = await getAuthSession();
@@ -56,15 +59,22 @@ export async function fetchAccountAccess(userId?: string): Promise<AccountAccess
     }
     if (!uid) return DEFAULT_ACCESS;
 
-    const { data, error } = await supabase
+    let query = supabase
         .from('perfiles')
         .select('rol, baneado, baneado_motivo')
-        .eq('id', uid)
-        .maybeSingle();
+        .eq('id', uid);
+    if (options.signal) query = query.abortSignal(options.signal);
+    const { data, error } = await query.maybeSingle();
 
     if (error) {
+        if (options.signal?.aborted) {
+            const abortError = new Error('Account access request aborted');
+            abortError.name = 'AbortError';
+            throw abortError;
+        }
         console.warn('fetchAccountAccess:', error.message);
-        return UNVERIFIED_ACCESS;
+        if (options.throwOnError) throw new Error(error.message);
+        return { ...UNVERIFIED_ACCESS };
     }
     if (!data) {
         console.warn('fetchAccountAccess: perfil no encontrado');

@@ -1015,6 +1015,7 @@ export default function DirectChatScreen() {
 
                     <View style={styles.inputContainer}>
                         <TextInput
+                            testID="direct-chat-message-input"
                             placeholder={
                                 recording
                                     ? `${t('chat.recording')} ${formatDuration(recordingDuration)}...`
@@ -1030,6 +1031,8 @@ export default function DirectChatScreen() {
                     </View>
 
                     <TouchableOpacity
+                        testID="direct-chat-send"
+                        accessibilityLabel="Enviar mensaje"
                         onPress={handleActionPress}
                         style={[
                             styles.sendCircle,

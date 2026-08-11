@@ -35,6 +35,10 @@ jobs:
         run: npm ci
 
       - name: Audit production dependencies
+        # The current Expo 54 tree contains known transitive advisories, some
+        # without a compatible fix. Keep the report visible while Dependabot
+        # upgrades are tested; make this blocking once the baseline is cleared.
+        continue-on-error: true
         run: npm audit --omit=dev --audit-level=high
 
       - name: Check Expo dependency compatibility

@@ -14,7 +14,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
@@ -73,6 +73,8 @@ function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const [banned, setBanned] = useState(false);
+  const [accessUnavailable, setAccessUnavailable] = useState(false);
+  const [accessRetry, setAccessRetry] = useState(0);
   const [ready, setReady] = useState(false);
   const segments = useSegments();
   const router = useRouter();
@@ -87,6 +89,7 @@ function AuthGate({ children }: { children: ReactNode }) {
       if (!s) {
         setOnboardingDone(null);
         setBanned(false);
+        setAccessUnavailable(false);
         if (opts?.hideSplash) {
           setReady(true);
           await SplashScreen.hideAsync().catch(() => {});
@@ -98,6 +101,7 @@ function AuthGate({ children }: { children: ReactNode }) {
       if (!isEmailVerified(s.user)) {
         setOnboardingDone(null);
         setBanned(false);
+        setAccessUnavailable(false);
         if (s.user.email) {
           void setPendingVerifyEmail(s.user.email);
         }
@@ -110,6 +114,17 @@ function AuthGate({ children }: { children: ReactNode }) {
 
       const access = await fetchAccountAccess(s.user.id);
       if (!mounted) return;
+      if (!access.verified) {
+        setAccessUnavailable(true);
+        setOnboardingDone(null);
+        setBanned(false);
+        if (opts?.hideSplash) {
+          setReady(true);
+          await SplashScreen.hideAsync().catch(() => {});
+        }
+        return;
+      }
+      setAccessUnavailable(false);
       if (access.banned) {
         setBanned(true);
         setOnboardingDone(true);
@@ -175,8 +190,9 @@ function AuthGate({ children }: { children: ReactNode }) {
       mounted = false;
       authListener.subscription.unsubscribe();
     };
+    // Recreate the auth check only when the user explicitly retries.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [accessRetry]);
 
   const rootSegment = segments[0];
   const inLogin = rootSegment === 'login';
@@ -266,6 +282,25 @@ function AuthGate({ children }: { children: ReactNode }) {
 
   // Mantener splash nativo hasta ready; sin segunda pantalla azul
   if (!ready) return null;
+
+  if (accessUnavailable) {
+    return (
+      <View style={styles.accessUnavailable}>
+        <Text style={styles.accessUnavailableTitle}>No se pudo verificar tu cuenta</Text>
+        <Text style={styles.accessUnavailableBody}>
+          Comprueba tu conexión e inténtalo de nuevo. Por seguridad, NEXO no permite el acceso
+          mientras no pueda confirmar el estado de la cuenta.
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          style={styles.accessRetryButton}
+          onPress={() => setAccessRetry((value) => value + 1)}
+        >
+          <Text style={styles.accessRetryText}>Reintentar</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
     <>
@@ -373,4 +408,37 @@ export default Sentry.wrap(RootLayout);
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  accessUnavailable: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F2F7FF',
+    paddingHorizontal: 28,
+  },
+  accessUnavailableTitle: {
+    color: '#0F2A4A',
+    fontSize: 21,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  accessUnavailableBody: {
+    color: '#64748B',
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: 10,
+    maxWidth: 420,
+    textAlign: 'center',
+  },
+  accessRetryButton: {
+    backgroundColor: '#2563EB',
+    borderRadius: 14,
+    marginTop: 22,
+    paddingHorizontal: 24,
+    paddingVertical: 13,
+  },
+  accessRetryText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
 });

@@ -17,9 +17,9 @@ concurrency:
 
 jobs:
   validate:
-    name: Lint, TypeScript and tests
+    name: Lint, TypeScript, tests and bundles
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -34,6 +34,12 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Check Expo dependency compatibility
+        run: npx expo install --check
+
       - name: Run lint
         run: npm run lint
 
@@ -42,3 +48,6 @@ jobs:
 
       - name: Run automated tests
         run: npm test
+
+      - name: Bundle Android and iPhone JavaScript
+        run: npm run bundle:check

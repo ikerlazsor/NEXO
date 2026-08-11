@@ -22,6 +22,10 @@ export const ScreenKeys = {
 
 export type ScreenKey = (typeof ScreenKeys)[keyof typeof ScreenKeys] | string;
 
+export function clearScreenState(): void {
+    store.clear();
+}
+
 export function getScreenState(key: ScreenKey): ScreenState | undefined {
     return store.get(key);
 }

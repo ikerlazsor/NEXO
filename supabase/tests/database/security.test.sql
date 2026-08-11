@@ -141,7 +141,12 @@ select is(
         'plan_images_insert_owner',
         'plan_images_update_owner'
       )
-      and coalesce(qual, '') || coalesce(with_check, '') ilike '%owner_id = auth.uid()%'
+      and regexp_replace(
+        coalesce(qual, '') || coalesce(with_check, ''),
+        '[[:space:]()]',
+        '',
+        'g'
+      ) ilike '%owner_id=auth.uid::text%'
   ),
   4::bigint,
   'avatar and plan-image writes enforce object ownership'

@@ -27,6 +27,7 @@ import {
     View,
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
+import { theme } from '../../theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
 import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
@@ -48,8 +49,8 @@ import { getIsOnline } from '../../lib/network';
 import { cacheGetStale, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
-const PRIMARY = '#4DA6FF';
-const DANGER = '#EF4444';
+const PRIMARY = theme.colors.brand;
+const DANGER = theme.colors.danger;
 const PAGE_SIZE = 50;
 const DIRECT_CHAT_TTL_MS = 15 * 60 * 1000;
 const directChatKey = (a: string, b: string) => {
@@ -994,7 +995,7 @@ export default function DirectChatScreen() {
                             </Text>
                         </View>
                         <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={8}>
-                            <Ionicons name="close" size={20} color="#64748B" />
+                            <Ionicons name="close" size={20} color=theme.colors.textMuted />
                         </TouchableOpacity>
                     </View>
                 ) : null}
@@ -1008,7 +1009,7 @@ export default function DirectChatScreen() {
                         <Ionicons
                             name="add"
                             size={26}
-                            color={inputDisabled ? '#CBD5E1' : '#64748B'}
+                            color={inputDisabled ? '#CBD5E1' : theme.colors.textMuted}
                         />
                     </TouchableOpacity>
 
@@ -1019,7 +1020,7 @@ export default function DirectChatScreen() {
                                     ? `${t('chat.recording')} ${formatDuration(recordingDuration)}...`
                                     : t('chat.writeMessage')
                             }
-                            placeholderTextColor="#64748B"
+                            placeholderTextColor=theme.colors.textMuted
                             style={styles.textInput}
                             value={messageText}
                             onChangeText={onMessageTextChange}
@@ -1076,7 +1077,7 @@ export default function DirectChatScreen() {
                         resizeMode="contain"
                     />
                     <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalImage(null)}>
-                        <Ionicons name="close" size={32} color="#FFF" />
+                        <Ionicons name="close" size={32} color=theme.colors.surface />
                     </TouchableOpacity>
                 </TouchableOpacity>
             </Modal>
@@ -1088,7 +1089,7 @@ export default function DirectChatScreen() {
             >
                 <View style={styles.videoModal}>
                     <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalVideo(null)}>
-                        <Ionicons name="close" size={32} color="#FFF" />
+                        <Ionicons name="close" size={32} color=theme.colors.surface />
                     </TouchableOpacity>
                     {modalVideo && (
                         <Video
@@ -1109,7 +1110,7 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#F2F2F2' },
     header: {
         minHeight: 56,
-        backgroundColor: '#FFF',
+        backgroundColor: theme.colors.surface,
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 10,
@@ -1125,11 +1126,11 @@ const styles = StyleSheet.create({
         height: 40,
         borderRadius: 20,
         marginLeft: 5,
-        backgroundColor: '#F1F5F9',
+        backgroundColor: theme.colors.surfaceSubtle,
     },
     headerTitleContainer: { marginLeft: 10, flex: 1, minWidth: 0 },
-    headerTitle: { fontSize: 17, fontWeight: '700', color: '#1E293B' },
-    headerSubtitle: { fontSize: 12, color: '#64748B' },
+    headerTitle: { fontSize: 17, fontWeight: '700', color: theme.colors.text },
+    headerSubtitle: { fontSize: 12, color: theme.colors.textMuted },
     loading: { flex: 1, justifyContent: 'center' },
     emptyChatOverlay: {
         ...StyleSheet.absoluteFillObject,
@@ -1137,7 +1138,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 40,
     },
-    emptyChatText: { color: '#94A3B8', fontSize: 14, textAlign: 'center', lineHeight: 20 },
+    emptyChatText: { color: theme.colors.textSubtle, fontSize: 14, textAlign: 'center', lineHeight: 20 },
     loadMore: { paddingVertical: 16, alignItems: 'center' },
     listContent: { paddingHorizontal: 10, paddingVertical: 20, flexGrow: 1 },
     msgContainer: {
@@ -1171,16 +1172,16 @@ const styles = StyleSheet.create({
         borderBottomRightRadius: 4,
     },
     otherBubble: {
-        backgroundColor: '#FFF',
+        backgroundColor: theme.colors.surface,
         borderBottomLeftRadius: 4,
     },
-    senderName: { fontSize: 11, fontWeight: '700', color: '#64748B', marginBottom: 2 },
-    msgText: { fontSize: 15, color: '#1E293B', lineHeight: 20 },
-    myMsgText: { color: '#FFF' },
-    otherMsgText: { color: '#1E293B' },
+    senderName: { fontSize: 11, fontWeight: '700', color: theme.colors.textMuted, marginBottom: 2 },
+    msgText: { fontSize: 15, color: theme.colors.text, lineHeight: 20 },
+    myMsgText: { color: theme.colors.surface },
+    otherMsgText: { color: theme.colors.text },
     timeText: { fontSize: 10, marginTop: 4 },
     myTime: { color: 'rgba(255,255,255,0.8)', textAlign: 'right' },
-    otherTime: { color: '#94A3B8' },
+    otherTime: { color: theme.colors.textSubtle },
     mediaImage: { width: 200, height: 200, borderRadius: 12 },
     videoContainer: { width: 200, height: 150, borderRadius: 12, overflow: 'hidden' },
     videoPlaceholder: {
@@ -1189,7 +1190,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    videoLabel: { color: '#FFF', marginTop: 8, fontWeight: '600' },
+    videoLabel: { color: theme.colors.surface, marginTop: 8, fontWeight: '600' },
     audioContainer: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1205,7 +1206,7 @@ const styles = StyleSheet.create({
         paddingBottom: 4,
         fontSize: 12,
         fontWeight: '600',
-        color: '#64748B',
+        color: theme.colors.textMuted,
     },
     replyChip: {
         flexDirection: 'row',
@@ -1215,20 +1216,20 @@ const styles = StyleSheet.create({
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 12,
-        backgroundColor: '#EFF6FF',
+        backgroundColor: theme.colors.primarySoft,
         borderLeftWidth: 3,
         borderLeftColor: PRIMARY,
         gap: 8,
     },
     replyChipBody: { flex: 1 },
     replyChipName: { fontSize: 12, fontWeight: '800', color: PRIMARY },
-    replyChipPreview: { fontSize: 13, color: '#64748B', marginTop: 1 },
+    replyChipPreview: { fontSize: 13, color: theme.colors.textMuted, marginTop: 1 },
     inputBar: {
         flexDirection: 'row',
         alignItems: 'flex-end',
         paddingHorizontal: 12,
         paddingVertical: 8,
-        backgroundColor: '#FFF',
+        backgroundColor: theme.colors.surface,
         borderTopWidth: 1,
         borderTopColor: '#EEE',
     },
@@ -1236,7 +1237,7 @@ const styles = StyleSheet.create({
     inputContainer: {
         flex: 1,
         marginRight: 8,
-        backgroundColor: '#F1F5F9',
+        backgroundColor: theme.colors.surfaceSubtle,
         borderRadius: 20,
         paddingHorizontal: 14,
         paddingVertical: 8,
@@ -1247,7 +1248,7 @@ const styles = StyleSheet.create({
     textInput: {
         fontSize: 16,
         lineHeight: 22,
-        color: '#1E293B',
+        color: theme.colors.text,
         maxHeight: 66,
         padding: 0,
         textAlignVertical: 'top',
@@ -1268,11 +1269,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 8,
         paddingHorizontal: 12,
-        backgroundColor: '#FFF',
+        backgroundColor: theme.colors.surface,
         borderTopWidth: 1,
         borderTopColor: '#EEE',
     },
-    uploadBannerText: { marginLeft: 8, fontSize: 13, color: '#64748B' },
+    uploadBannerText: { marginLeft: 8, fontSize: 13, color: theme.colors.textMuted },
     modalOverlay: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.9)',

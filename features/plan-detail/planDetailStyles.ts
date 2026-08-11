@@ -1,36 +1,37 @@
 import { Dimensions, Platform, StyleSheet } from "react-native";
+import { theme } from "../../theme";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 const HERO_H = Math.min(380, SCREEN_W * 0.92);
-const PRIMARY_DARK = "#2563EB";
-const INK = "#0F2A4A";
-const MUTED = "#64748B";
-const SURFACE = "#FFFFFF";
-const BORDER = "#E2E8F0";
-const SUCCESS = "#22C55E";
-const DANGER = "#EF4444";
-const FRIEND = "#10B981";
-const FRIEND_BG = "#ECFDF5";
+const PRIMARY_DARK = theme.colors.primary;
+const INK = theme.colors.text;
+const MUTED = theme.colors.textMuted;
+const SURFACE = theme.colors.surface;
+const BORDER = theme.colors.border;
+const SUCCESS = theme.colors.success;
+const DANGER = theme.colors.danger;
+const FRIEND = theme.colors.successStrong;
+const FRIEND_BG = theme.colors.successSoft;
 const FRIEND_BORDER = "#6EE7B7";
-const ACQUAINTANCE = "#7C3AED";
+const ACQUAINTANCE = theme.colors.accent;
 const ACQUAINTANCE_BG = "#F5F3FF";
 const ACQUAINTANCE_BORDER = "#C4B5FD";
-const GOLD = "#F59E0B";
-const WAITLIST = "#7C3AED";
+const GOLD = theme.colors.warning;
+const WAITLIST = theme.colors.accent;
 
 export const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#F1F5F9" },
+  root: { flex: 1, backgroundColor: theme.colors.surfaceSubtle },
   loadingWrap: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F1F5F9",
+    backgroundColor: theme.colors.surfaceSubtle,
   },
   notFoundWrap: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F1F5F9",
+    backgroundColor: theme.colors.surfaceSubtle,
     padding: 24,
   },
   notFoundTitle: {
@@ -43,7 +44,7 @@ export const styles = StyleSheet.create({
   backLink: { marginTop: 20, paddingHorizontal: 20, paddingVertical: 10 },
   backLinkText: { color: PRIMARY_DARK, fontWeight: "700", fontSize: 16 },
 
-  heroWrap: { height: HERO_H, backgroundColor: "#E2E8F0" },
+  heroWrap: { height: HERO_H, backgroundColor: theme.colors.border },
   heroImage: { width: "100%", height: "100%" },
   heroTopBar: {
     position: "absolute",
@@ -58,9 +59,9 @@ export const styles = StyleSheet.create({
   },
   heroTopRight: { flexDirection: "row", gap: 8 },
   glassBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: theme.accessibility.minimumTouchTarget,
+    height: theme.accessibility.minimumTouchTarget,
+    borderRadius: theme.radii.md,
     backgroundColor: "rgba(15,42,74,0.45)",
     alignItems: "center",
     justifyContent: "center",
@@ -79,7 +80,7 @@ export const styles = StyleSheet.create({
     marginTop: -16,
     ...Platform.select({
       ios: {
-        shadowColor: "#0F2A4A",
+        shadowColor: theme.colors.text,
         shadowOffset: { width: 0, height: -4 },
         shadowOpacity: 0.08,
         shadowRadius: 12,
@@ -90,7 +91,7 @@ export const styles = StyleSheet.create({
   titleBlock: { marginBottom: 20 },
   categoryChipLight: {
     alignSelf: "flex-start",
-    backgroundColor: "#EFF6FF",
+    backgroundColor: theme.colors.primarySoft,
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 20,
@@ -117,7 +118,7 @@ export const styles = StyleSheet.create({
     gap: 6,
     marginTop: 12,
     alignSelf: "flex-start",
-    backgroundColor: "#F8FAFC",
+    backgroundColor: theme.colors.background,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 14,
@@ -132,7 +133,7 @@ export const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: theme.colors.background,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
@@ -165,7 +166,7 @@ export const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "#EFF6FF",
+    backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
     borderColor: "#BFDBFE",
     borderRadius: 14,
@@ -215,7 +216,7 @@ export const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 20,
   },
-  mapExpandText: { color: "#FFF", fontSize: 13, fontWeight: "700" },
+  mapExpandText: { color: theme.colors.surface, fontSize: 13, fontWeight: "700" },
   mapBottomSpacer: { height: 14, backgroundColor: SURFACE },
 
   fullMapRoot: { flex: 1, backgroundColor: "#000" },
@@ -281,7 +282,7 @@ export const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  directionsBtnText: { color: "#FFF", fontSize: 13, fontWeight: "800" },
+  directionsBtnText: { color: theme.colors.surface, fontSize: 13, fontWeight: "800" },
 
   creatorCard: {
     marginTop: 12,
@@ -333,7 +334,7 @@ export const styles = StyleSheet.create({
     marginTop: 8,
   },
   personalityChip: {
-    backgroundColor: "#EFF6FF",
+    backgroundColor: theme.colors.primarySoft,
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -349,7 +350,7 @@ export const styles = StyleSheet.create({
     position: "absolute",
     top: -4,
     right: -4,
-    backgroundColor: "#FFF",
+    backgroundColor: theme.colors.surface,
     borderRadius: 12,
   },
   personBubble: { width: 80, alignItems: "center" },
@@ -421,7 +422,7 @@ export const styles = StyleSheet.create({
   emptyParticipants: {
     alignItems: "center",
     paddingVertical: 24,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: theme.colors.background,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: BORDER,
@@ -488,7 +489,7 @@ export const styles = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: 24,
   },
-  joinBtnText: { color: "#FFF", fontSize: 17, fontWeight: "800" },
+  joinBtnText: { color: theme.colors.surface, fontSize: 17, fontWeight: "800" },
   inviteDecisionWrap: { gap: 12 },
   inviteDecisionHeader: {
     flexDirection: "row",
@@ -515,14 +516,14 @@ export const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 12,
   },
-  inviteDecisionJoinText: { color: "#FFF", fontSize: 16, fontWeight: "800" },
+  inviteDecisionJoinText: { color: theme.colors.surface, fontSize: 16, fontWeight: "800" },
   inviteDecisionReject: {
     flex: 1,
     minHeight: 50,
     borderRadius: 14,
-    backgroundColor: "#FEF2F2",
+    backgroundColor: theme.colors.dangerSoft,
     borderWidth: 1.5,
-    borderColor: "#FECACA",
+    borderColor: theme.colors.dangerBorder,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 12,
@@ -538,18 +539,18 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 24,
     borderRadius: 16,
   },
-  waitlistJoinText: { color: "#FFF", fontSize: 17, fontWeight: "800" },
+  waitlistJoinText: { color: theme.colors.surface, fontSize: 17, fontWeight: "800" },
   fullClosedBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
-    backgroundColor: "#FEF2F2",
+    backgroundColor: theme.colors.dangerSoft,
     paddingVertical: 18,
     paddingHorizontal: 24,
     borderRadius: 16,
     borderWidth: 1.5,
-    borderColor: "#FECACA",
+    borderColor: theme.colors.dangerBorder,
   },
   fullClosedBtnText: { color: DANGER, fontSize: 16, fontWeight: "800" },
   genderBlockedBtn: {
@@ -606,7 +607,7 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   chatBtnText: {
-    color: "#FFF",
+    color: theme.colors.surface,
     fontSize: 17,
     fontWeight: "800",
     letterSpacing: 0.2,
@@ -641,9 +642,9 @@ export const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 22,
     borderRadius: 16,
-    backgroundColor: "#FEF2F2",
+    backgroundColor: theme.colors.dangerSoft,
     borderWidth: 1.5,
-    borderColor: "#FECACA",
+    borderColor: theme.colors.dangerBorder,
   },
   hideFromListText: {
     color: DANGER,
@@ -656,7 +657,7 @@ export const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 16,
-    backgroundColor: "#EFF6FF",
+    backgroundColor: theme.colors.primarySoft,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,

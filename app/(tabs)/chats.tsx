@@ -542,7 +542,7 @@ export default function MyChatsScreen() {
                         <Text style={styles.exploreBtnText}>{t('chats.explore')}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={styles.createGroupBtnEmpty} onPress={openCreateGroup}>
-                        <Ionicons name="people" size={18} color=theme.colors.surface />
+                        <Ionicons name="people" size={18} color={theme.colors.surface} />
                         <Text style={styles.createGroupBtnText}>{t('chats.createGroup')}</Text>
                     </TouchableOpacity>
                 </>
@@ -603,7 +603,7 @@ export default function MyChatsScreen() {
                                         activeOpacity={0.9}
                                         onPress={() => confirmDeleteChat(item)}
                                     >
-                                        <Ionicons name="trash" size={22} color=theme.colors.surface />
+                                        <Ionicons name="trash" size={22} color={theme.colors.surface} />
                                         <Text style={styles.deleteActionText}>{t('chat.deleteChat')}</Text>
                                     </TouchableOpacity>
                                 )}
@@ -711,7 +711,7 @@ export default function MyChatsScreen() {
                                         <TextInput
                                             style={styles.modalInput}
                                             placeholder={t('chats.groupNamePlaceholder')}
-                                            placeholderTextColor=theme.colors.textSubtle
+                                            placeholderTextColor={theme.colors.textSubtle}
                                             value={groupName}
                                             onChangeText={setGroupName}
                                             returnKeyType="done"
@@ -771,7 +771,7 @@ export default function MyChatsScreen() {
                                     disabled={creatingGroup}
                                 >
                                     {creatingGroup ? (
-                                        <ActivityIndicator color=theme.colors.surface />
+                                        <ActivityIndicator color={theme.colors.surface} />
                                     ) : (
                                         <Text style={styles.createGroupConfirmText}>
                                             {selectedFriends.size <= 1

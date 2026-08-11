@@ -199,7 +199,7 @@ for insert
 to authenticated
 with check (
   bucket_id = 'chat-files'
-  and owner_id = auth.uid()
+  and owner_id = auth.uid()::text
   and public.can_access_chat_file(name)
 );
 
@@ -230,7 +230,7 @@ for insert
 to authenticated
 with check (
   bucket_id = 'avatars'
-  and owner_id = auth.uid()
+  and owner_id = auth.uid()::text
   and public.can_manage_avatar_object(name)
 );
 
@@ -241,12 +241,12 @@ for update
 to authenticated
 using (
   bucket_id = 'avatars'
-  and owner_id = auth.uid()
+  and owner_id = auth.uid()::text
   and public.can_manage_avatar_object(name)
 )
 with check (
   bucket_id = 'avatars'
-  and owner_id = auth.uid()
+  and owner_id = auth.uid()::text
   and public.can_manage_avatar_object(name)
 );
 
@@ -262,7 +262,7 @@ for insert
 to authenticated
 with check (
   bucket_id = 'imagenes-planes'
-  and owner_id = auth.uid()
+  and owner_id = auth.uid()::text
 );
 
 create policy plan_images_update_owner
@@ -272,11 +272,11 @@ for update
 to authenticated
 using (
   bucket_id = 'imagenes-planes'
-  and owner_id = auth.uid()
+  and owner_id = auth.uid()::text
 )
 with check (
   bucket_id = 'imagenes-planes'
-  and owner_id = auth.uid()
+  and owner_id = auth.uid()::text
 );
 
 -- Participation rows must not enumerate members of plans the requester cannot

@@ -995,7 +995,7 @@ export default function DirectChatScreen() {
                             </Text>
                         </View>
                         <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={8}>
-                            <Ionicons name="close" size={20} color=theme.colors.textMuted />
+                            <Ionicons name="close" size={20} color={theme.colors.textMuted} />
                         </TouchableOpacity>
                     </View>
                 ) : null}
@@ -1020,7 +1020,7 @@ export default function DirectChatScreen() {
                                     ? `${t('chat.recording')} ${formatDuration(recordingDuration)}...`
                                     : t('chat.writeMessage')
                             }
-                            placeholderTextColor=theme.colors.textMuted
+                            placeholderTextColor={theme.colors.textMuted}
                             style={styles.textInput}
                             value={messageText}
                             onChangeText={onMessageTextChange}
@@ -1077,7 +1077,7 @@ export default function DirectChatScreen() {
                         resizeMode="contain"
                     />
                     <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalImage(null)}>
-                        <Ionicons name="close" size={32} color=theme.colors.surface />
+                        <Ionicons name="close" size={32} color={theme.colors.surface} />
                     </TouchableOpacity>
                 </TouchableOpacity>
             </Modal>
@@ -1089,7 +1089,7 @@ export default function DirectChatScreen() {
             >
                 <View style={styles.videoModal}>
                     <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalVideo(null)}>
-                        <Ionicons name="close" size={32} color=theme.colors.surface />
+                        <Ionicons name="close" size={32} color={theme.colors.surface} />
                     </TouchableOpacity>
                     {modalVideo && (
                         <Video

@@ -36,13 +36,15 @@ import {
 import { hapticLight, hapticToggle, hapticWarning } from '../lib/haptics';
 import { fetchAccountAccess } from '../lib/roles';
 import { supabase } from '../lib/supabase';
+import { signOutAndClearLocalData } from '../lib/session';
+import { theme } from '../theme';
 
-const PRIMARY = '#4DA6FF';
-const PRIMARY_DARK = '#2563EB';
-const INK = '#0F2A4A';
-const DANGER = '#EF4444';
+const PRIMARY = theme.colors.brand;
+const PRIMARY_DARK = theme.colors.primary;
+const INK = theme.colors.text;
+const DANGER = theme.colors.danger;
 const BG_TOP = '#DCEBFF';
-const BG_BOTTOM = '#F2F7FF';
+const BG_BOTTOM = theme.colors.backgroundAlt;
 
 type RowProps = {
     icon: keyof typeof Ionicons.glyphMap;
@@ -55,7 +57,7 @@ type RowProps = {
 
 const Row = ({ icon, label, color = INK, onPress, right, subtitle }: RowProps) => (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
-        <View style={[styles.rowIcon, { backgroundColor: color === DANGER ? '#FEE2E2' : '#EFF6FF' }]}>
+        <View style={[styles.rowIcon, { backgroundColor: color === DANGER ? '#FEE2E2' : theme.colors.primarySoft }]}>
             <Ionicons name={icon} size={20} color={color === DANGER ? DANGER : PRIMARY_DARK} />
         </View>
         <View style={styles.rowTextCol}>
@@ -143,7 +145,7 @@ export default function SettingsScreen() {
                 style: 'destructive',
                 onPress: async () => {
                     await unregisterPushToken(userId ?? undefined);
-                    await supabase.auth.signOut();
+                    await signOutAndClearLocalData();
                     router.replace('/login');
                 },
             },
@@ -213,7 +215,7 @@ export default function SettingsScreen() {
                                     void handleNotificationsToggle(v);
                                 }}
                                 trackColor={{ true: PRIMARY, false: '#CBD5E1' }}
-                                thumbColor="#FFF"
+                                thumbColor=theme.colors.surface
                             />
                         }
                     />
@@ -277,15 +279,15 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: BG_BOTTOM },
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: Platform.OS === 'ios' ? 60 : 44, paddingBottom: 14 },
-    backButton: { width: 45, height: 45, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 15, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+    backButton: { width: 45, height: 45, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: 15, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
     headerTitle: { fontSize: 22, fontWeight: '900', color: INK },
     content: { paddingHorizontal: 20, paddingBottom: 40 },
     loadingCard: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },
-    card: { backgroundColor: '#FFF', borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#1E3A8A', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
+    card: { backgroundColor: theme.colors.surface, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#1E3A8A', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
     row: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
     rowIcon: { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     rowTextCol: { flex: 1 },
     rowLabel: { fontSize: 16, fontWeight: '600' },
-    rowSub: { marginTop: 3, fontSize: 12, fontWeight: '500', color: '#94A3B8', lineHeight: 16 },
-    divider: { height: 1, backgroundColor: '#F1F5F9', marginLeft: 68 },
+    rowSub: { marginTop: 3, fontSize: 12, fontWeight: '500', color: theme.colors.textSubtle, lineHeight: 16 },
+    divider: { height: 1, backgroundColor: theme.colors.surfaceSubtle, marginLeft: 68 },
 });

@@ -178,10 +178,17 @@ as $$
         where hidden.peer_id is null
            or latest.creado_en > hidden.oculto_en
     )
-    select * from plan_rows
-    union all
-    select * from direct_rows
-    order by coalesce(last_at, created_at, '1970-01-01 00:00:00+00'::timestamptz) desc;
+    select combined.*
+    from (
+        select * from plan_rows
+        union all
+        select * from direct_rows
+    ) combined
+    order by coalesce(
+        combined.last_at,
+        combined.created_at,
+        '1970-01-01 00:00:00+00'::timestamptz
+    ) desc;
 $$;
 
 revoke all on function public.get_chat_summaries(jsonb, jsonb) from public, anon;

@@ -25,6 +25,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Alert } from '../../lib/nexoAlert';
+import { theme } from '../../theme';
 import { PlanImage } from '../../components/PlanImage';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { ChatSkeletonList } from '../../components/SkeletonShimmer';
@@ -48,9 +49,9 @@ import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from '
 import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
-const PRIMARY = '#4DA6FF';
-const PRIMARY_DARK = '#2563EB';
-const INK = '#0F2A4A';
+const PRIMARY = theme.colors.brand;
+const PRIMARY_DARK = theme.colors.primary;
+const INK = theme.colors.text;
 
 type ChatRow = {
     id: string;
@@ -541,7 +542,7 @@ export default function MyChatsScreen() {
                         <Text style={styles.exploreBtnText}>{t('chats.explore')}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={styles.createGroupBtnEmpty} onPress={openCreateGroup}>
-                        <Ionicons name="people" size={18} color="#FFF" />
+                        <Ionicons name="people" size={18} color=theme.colors.surface />
                         <Text style={styles.createGroupBtnText}>{t('chats.createGroup')}</Text>
                     </TouchableOpacity>
                 </>
@@ -602,7 +603,7 @@ export default function MyChatsScreen() {
                                         activeOpacity={0.9}
                                         onPress={() => confirmDeleteChat(item)}
                                     >
-                                        <Ionicons name="trash" size={22} color="#FFF" />
+                                        <Ionicons name="trash" size={22} color=theme.colors.surface />
                                         <Text style={styles.deleteActionText}>{t('chat.deleteChat')}</Text>
                                     </TouchableOpacity>
                                 )}
@@ -710,7 +711,7 @@ export default function MyChatsScreen() {
                                         <TextInput
                                             style={styles.modalInput}
                                             placeholder={t('chats.groupNamePlaceholder')}
-                                            placeholderTextColor="#94A3B8"
+                                            placeholderTextColor=theme.colors.textSubtle
                                             value={groupName}
                                             onChangeText={setGroupName}
                                             returnKeyType="done"
@@ -770,7 +771,7 @@ export default function MyChatsScreen() {
                                     disabled={creatingGroup}
                                 >
                                     {creatingGroup ? (
-                                        <ActivityIndicator color="#FFF" />
+                                        <ActivityIndicator color=theme.colors.surface />
                                     ) : (
                                         <Text style={styles.createGroupConfirmText}>
                                             {selectedFriends.size <= 1
@@ -797,14 +798,14 @@ const styles = StyleSheet.create({
         paddingBottom: 14,
     },
     pageTitle: { fontSize: 22, fontWeight: '900', color: INK },
-    addBtn: { width: 45, height: 45, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 15, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+    addBtn: { width: 45, height: 45, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: 15, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
     loading: { flex: 1, justifyContent: 'center' },
     listContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 130 },
     swipeRow: { marginBottom: 12 },
     chatCard: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#FFF',
+        backgroundColor: theme.colors.surface,
         borderRadius: 20,
         padding: 12,
         elevation: 4,
@@ -817,52 +818,52 @@ const styles = StyleSheet.create({
         width: 92,
         marginLeft: 10,
         borderRadius: 20,
-        backgroundColor: '#EF4444',
+        backgroundColor: theme.colors.danger,
         justifyContent: 'center',
         alignItems: 'center',
         gap: 4,
     },
-    deleteActionText: { color: '#FFF', fontWeight: '800', fontSize: 12 },
-    chatImage: { width: 58, height: 58, borderRadius: 20, backgroundColor: '#E3ECFB' },
-    groupIconWrap: { width: 58, height: 58, borderRadius: 20, backgroundColor: '#E3ECFB', justifyContent: 'center', alignItems: 'center' },
+    deleteActionText: { color: theme.colors.surface, fontWeight: '800', fontSize: 12 },
+    chatImage: { width: 58, height: 58, borderRadius: 20, backgroundColor: theme.colors.border },
+    groupIconWrap: { width: 58, height: 58, borderRadius: 20, backgroundColor: theme.colors.border, justifyContent: 'center', alignItems: 'center' },
     chatInfo: { flex: 1, marginLeft: 14 },
     chatTitle: { fontSize: 16, fontWeight: '800', color: INK, marginBottom: 3 },
-    lastMsg: { fontSize: 14, color: '#94A3B8' },
+    lastMsg: { fontSize: 14, color: theme.colors.textSubtle },
     unreadBadge: {
         minWidth: 22,
         height: 22,
         borderRadius: 11,
-        backgroundColor: '#EF4444',
+        backgroundColor: theme.colors.danger,
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: 6,
     },
-    unreadText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
-    chevronWrap: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EEF3FB', justifyContent: 'center', alignItems: 'center' },
+    unreadText: { color: theme.colors.surface, fontSize: 11, fontWeight: '800' },
+    chevronWrap: { width: 30, height: 30, borderRadius: 15, backgroundColor: theme.colors.surfaceSubtle, justifyContent: 'center', alignItems: 'center' },
     emptyContainer: {
         alignItems: 'center',
         marginTop: 60,
         paddingHorizontal: 40,
     },
-    emptyIconBg: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center', marginBottom: 20, elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
+    emptyIconBg: { width: 120, height: 120, borderRadius: 60, backgroundColor: theme.colors.surface, justifyContent: 'center', alignItems: 'center', marginBottom: 20, elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
     emptyTitle: { fontSize: 20, fontWeight: '800', color: INK, marginBottom: 10 },
-    emptySubtitle: { fontSize: 15, color: '#64748B', textAlign: 'center', lineHeight: 22, marginBottom: 24 },
+    emptySubtitle: { fontSize: 15, color: theme.colors.textMuted, textAlign: 'center', lineHeight: 22, marginBottom: 24 },
     exploreBtn: { backgroundColor: PRIMARY_DARK, paddingHorizontal: 30, paddingVertical: 15, borderRadius: 18, marginBottom: 12 },
-    exploreBtnText: { color: '#FFF', fontWeight: '700', fontSize: 16 },
+    exploreBtnText: { color: theme.colors.surface, fontWeight: '700', fontSize: 16 },
     createGroupBtnEmpty: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: PRIMARY, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 18 },
-    createGroupBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
+    createGroupBtnText: { color: theme.colors.surface, fontWeight: '800', fontSize: 15 },
     modalOverlay: { flex: 1, backgroundColor: 'rgba(15,42,74,0.45)', justifyContent: 'flex-end' },
-    modalSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 22, maxHeight: '85%' },
+    modalSheet: { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 22, maxHeight: '85%' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
     modalTitle: { fontSize: 20, fontWeight: '900', color: INK },
-    modalLabel: { fontSize: 13, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 8 },
-    modalInput: { backgroundColor: '#F1F5F9', borderRadius: 14, padding: 14, fontSize: 16, color: INK, borderWidth: 1, borderColor: '#E2E8F0' },
+    modalLabel: { fontSize: 13, fontWeight: '800', color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 8 },
+    modalInput: { backgroundColor: theme.colors.surfaceSubtle, borderRadius: 14, padding: 14, fontSize: 16, color: INK, borderWidth: 1, borderColor: theme.colors.border },
     friendsScroll: { maxHeight: 220, marginBottom: 16 },
     friendPickRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 8, borderRadius: 14, marginBottom: 6 },
-    friendPickSelected: { backgroundColor: '#EFF6FF' },
-    friendPickAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: '#E3ECFB' },
+    friendPickSelected: { backgroundColor: theme.colors.primarySoft },
+    friendPickAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: theme.colors.border },
     friendPickName: { flex: 1, fontSize: 16, fontWeight: '700', color: INK },
-    noFriendsHint: { color: '#94A3B8', textAlign: 'center', marginVertical: 16, fontWeight: '600' },
+    noFriendsHint: { color: theme.colors.textSubtle, textAlign: 'center', marginVertical: 16, fontWeight: '600' },
     createGroupConfirm: { backgroundColor: PRIMARY_DARK, paddingVertical: 16, borderRadius: 16, alignItems: 'center' },
-    createGroupConfirmText: { color: '#FFF', fontWeight: '800', fontSize: 16 },
+    createGroupConfirmText: { color: theme.colors.surface, fontWeight: '800', fontSize: 16 },
 });

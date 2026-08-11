@@ -77,16 +77,18 @@ import {
     type ProfilePrivacy,
 } from '../lib/profileFields';
 import { supabase } from '../lib/supabase';
+import { signOutAndClearLocalData } from '../lib/session';
+import { theme } from '../theme';
 import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../lib/screenState';
 
-const PRIMARY = '#4DA6FF';
-const PRIMARY_DARK = '#2563EB';
-const INK = '#0F2A4A';
-const MUTED = '#64748B';
-const BG = '#F8FAFC';
-const SURFACE = '#FFFFFF';
-const BORDER = '#E2E8F0';
+const PRIMARY = theme.colors.brand;
+const PRIMARY_DARK = theme.colors.primary;
+const INK = theme.colors.text;
+const MUTED = theme.colors.textMuted;
+const BG = theme.colors.background;
+const SURFACE = theme.colors.surface;
+const BORDER = theme.colors.border;
 
 const PERSONALITY_MAX = 3;
 
@@ -472,8 +474,8 @@ export default function ProfileScreen() {
     };
 
     const quickActions: QuickAction[] = [
-        { key: 'friends', icon: 'people', labelKey: 'profile.friends', route: '/friends', color: INK, bg: '#F1F5F9', badge: friendsNotifCount },
-        { key: 'saved', icon: 'heart', labelKey: 'profile.saved', route: '/saved-plans', color: INK, bg: '#F1F5F9' },
+        { key: 'friends', icon: 'people', labelKey: 'profile.friends', route: '/friends', color: INK, bg: theme.colors.surfaceSubtle, badge: friendsNotifCount },
+        { key: 'saved', icon: 'heart', labelKey: 'profile.saved', route: '/saved-plans', color: INK, bg: theme.colors.surfaceSubtle },
     ];
 
     const displayName = nombre.trim() || (user ? resolveDisplayName(user, t('profile.user')) : t('profile.user'));
@@ -510,7 +512,7 @@ export default function ProfileScreen() {
     return (
         <View style={styles.safe}>
             <LinearGradient
-                colors={['#DBEAFE', '#EFF6FF', BG]}
+                colors={[theme.colors.primaryBorder, theme.colors.primarySoft, BG]}
                 locations={[0, 0.35, 0.7]}
                 style={StyleSheet.absoluteFill}
             />
@@ -537,7 +539,7 @@ export default function ProfileScreen() {
                 <Pressable style={styles.scrollPressable} onPress={cancelEditUsername}>
                 <View style={styles.heroCard}>
                     <LinearGradient
-                        colors={['#FFFFFF', '#F8FBFF']}
+                        colors={[theme.colors.surface, '#F8FBFF']}
                         style={styles.heroGlow}
                     />
                     <View style={styles.avatarBlock}>
@@ -545,7 +547,7 @@ export default function ProfileScreen() {
                             <ProfileAvatar uri={avatarUrl} name={displayName} size={104} recyclingKey={user?.id} />
                         </TouchableOpacity>
                         <TouchableOpacity onPress={showPhotoMenu} style={styles.cameraBtn} activeOpacity={0.85}>
-                            <Ionicons name="camera" size={15} color="#FFF" />
+                            <Ionicons name="camera" size={15} color=theme.colors.surface />
                         </TouchableOpacity>
                     </View>
 
@@ -564,7 +566,7 @@ export default function ProfileScreen() {
                                     onPress={saveName}
                                     style={styles.nameSaveBtn}
                                 >
-                                    <Ionicons name="checkmark" size={20} color="#FFF" />
+                                    <Ionicons name="checkmark" size={20} color=theme.colors.surface />
                                 </TouchableOpacity>
                             </View>
                         ) : (
@@ -590,7 +592,7 @@ export default function ProfileScreen() {
                                     maxLength={USERNAME_MAX_LENGTH}
                                 />
                                 <TouchableOpacity onPress={saveUsername} style={styles.nameSaveBtn}>
-                                    <Ionicons name="checkmark" size={18} color="#FFF" />
+                                    <Ionicons name="checkmark" size={18} color=theme.colors.surface />
                                 </TouchableOpacity>
                             </Pressable>
                         ) : (
@@ -668,7 +670,7 @@ export default function ProfileScreen() {
                                             <Ionicons
                                                 name={waiting ? 'hourglass-outline' : 'star'}
                                                 size={18}
-                                                color={waiting ? '#B45309' : '#FFF'}
+                                                color={waiting ? '#B45309' : theme.colors.surface}
                                             />
                                         </View>
                                         <View style={{ flex: 1 }}>
@@ -763,7 +765,7 @@ export default function ProfileScreen() {
                                 value={aboutMe}
                                 onChangeText={(text) => { if (text.length <= 400) setAboutMe(text); }}
                                 placeholder={t('profile.aboutPlaceholder')}
-                                placeholderTextColor="#94A3B8"
+                                placeholderTextColor=theme.colors.textSubtle
                                 multiline
                                 autoFocus
                             />
@@ -782,7 +784,7 @@ export default function ProfileScreen() {
                             <Text style={aboutMe ? styles.aboutText : styles.aboutPlaceholder}>
                                 {aboutMe || t('profile.aboutEmpty')}
                             </Text>
-                            <Ionicons name="create-outline" size={18} color="#94A3B8" />
+                            <Ionicons name="create-outline" size={18} color=theme.colors.textSubtle />
                         </Pressable>
                     )}
                 </View>
@@ -796,8 +798,8 @@ export default function ProfileScreen() {
                             <Switch
                                 value={privacy.mostrar_aficiones}
                                 onValueChange={(v) => savePrivacy({ ...privacy, mostrar_aficiones: v })}
-                                trackColor={{ false: '#E2E8F0', true: '#BFDBFE' }}
-                                thumbColor={privacy.mostrar_aficiones ? PRIMARY_DARK : '#94A3B8'}
+                                trackColor={{ false: theme.colors.border, true: '#BFDBFE' }}
+                                thumbColor={privacy.mostrar_aficiones ? PRIMARY_DARK : theme.colors.textSubtle}
                             />
                         </View>
                     </View>
@@ -856,12 +858,12 @@ export default function ProfileScreen() {
                 <TouchableOpacity
                     style={styles.logoutBtn}
                     onPress={async () => {
-                        await supabase.auth.signOut();
+                        await signOutAndClearLocalData();
                         router.replace('/login');
                     }}
                     activeOpacity={0.85}
                 >
-                    <Ionicons name="log-out-outline" size={20} color="#DC2626" />
+                    <Ionicons name="log-out-outline" size={20} color=theme.colors.danger />
                     <Text style={styles.logoutText}>{t('profile.logout')}</Text>
                 </TouchableOpacity>
 
@@ -872,10 +874,10 @@ export default function ProfileScreen() {
                     activeOpacity={0.85}
                 >
                     {deletingAccount ? (
-                        <ActivityIndicator color="#991B1B" />
+                        <ActivityIndicator color=theme.colors.dangerDark />
                     ) : (
                         <>
-                            <Ionicons name="trash-outline" size={20} color="#991B1B" />
+                            <Ionicons name="trash-outline" size={20} color=theme.colors.dangerDark />
                             <Text style={styles.deleteAccountText}>{t('profile.deleteAccount')}</Text>
                         </>
                     )}

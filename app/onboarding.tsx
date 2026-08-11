@@ -48,7 +48,6 @@ import {
 } from '../lib/profileFields';
 import { deleteAccount, readNombreFromUser } from '../lib/profile';
 import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../lib/haptics';
-import { supabase } from '../lib/supabase';
 import { signOutAndClearLocalData } from '../lib/session';
 import { OnboardingReadyReveal } from '../components/OnboardingReadyReveal';
 

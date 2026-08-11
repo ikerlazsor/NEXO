@@ -12,6 +12,22 @@ export type StartupRunResult<T> =
   | { status: 'stale' }
   | { status: 'failure'; failure: StartupFailure };
 
+/**
+ * Los refrescos de token y las actualizaciones de metadatos conservan la misma
+ * identidad. Si la cuenta ya fue verificada, no deben desmontar la navegación
+ * ni volver a ejecutar todo el arranque.
+ */
+export function shouldRunStartupForAuthEvent(
+  event: string,
+  previousUserId: string | null,
+  nextUserId: string | null,
+  startupReady: boolean,
+): boolean {
+  if (!startupReady) return true;
+  if (event === 'PASSWORD_RECOVERY') return true;
+  return previousUserId !== nextUserId;
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;

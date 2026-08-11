@@ -17,6 +17,10 @@ const DEFAULTS: NotificationCategoryPrefs = {
 
 let memory: NotificationCategoryPrefs | null = null;
 
+export function resetNotificationCategoryPrefsCache(): void {
+    memory = null;
+}
+
 export function peekNotificationCategoryPrefs(): NotificationCategoryPrefs {
     return memory ?? { ...DEFAULTS };
 }

@@ -6,7 +6,7 @@ Sesión + onboarding hecho → (tabs)
  */
 
 import 'react-native-gesture-handler';
-import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { ThemeProvider } from '@react-navigation/native';
 import * as Sentry from '@sentry/react-native';
 import { Session } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
@@ -14,7 +14,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
@@ -23,6 +23,7 @@ import { AndroidSwipeBack } from '../components/AndroidSwipeBack';
 import { NexoAlertHost } from '../components/NexoAlertHost';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { PushBootstrap } from '../components/PushBootstrap';
+import { NexoButton } from '../components/ui/NexoButton';
 import { scheduleCoverPrefetch } from '../lib/prefetchCovers';
 import { hydrateFeedFromDisk, hydrateChatsFromDisk, hydrateMyPlansFromDisk } from '../lib/prefetchHome';
 import {
@@ -31,10 +32,12 @@ import {
   setPendingVerifyEmail,
 } from '../lib/emailVerification';
 import { fetchOnboardingStatus } from '../lib/onboarding';
+import { reconcileLocalUserData } from '../lib/localDataPrivacy';
 import { I18nProvider } from '../lib/i18n';
 import { isPasswordRecoveryPending, setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { fetchAccountAccess } from '../lib/roles';
 import { supabase } from '../lib/supabase';
+import { navigationTheme, theme } from '../theme';
 
 const sentryDsn =
   process.env.EXPO_PUBLIC_SENTRY_DSN ||
@@ -51,11 +54,8 @@ if (sentryDsn) {
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 // Precarga logo UI para login/registro (aparece al instante)
 void Asset.fromModule(require('../assets/images/nexo-logo-ui.png')).downloadAsync().catch(() => {});
-// Arranque: portadas + feed en disco (si hay) mientras AuthGate decide.
+// Solo se precargan recursos públicos hasta conocer la identidad de la sesión.
 scheduleCoverPrefetch();
-void hydrateFeedFromDisk();
-void hydrateChatsFromDisk();
-void hydrateMyPlansFromDisk();
 
 /** iOS only: thin left-edge native pop. Android uses system back (no overlay / no RN gesture). */
 const BACK_GESTURE_END = 20;
@@ -83,6 +83,17 @@ function AuthGate({ children }: { children: ReactNode }) {
     let mounted = true;
 
     const sync = async (s: Session | null, opts?: { hideSplash?: boolean }) => {
+      if (!mounted) return;
+      const nextUserId = s?.user.id ?? null;
+      await reconcileLocalUserData(nextUserId);
+      if (!mounted) return;
+      if (nextUserId) {
+        await Promise.all([
+          hydrateFeedFromDisk(nextUserId),
+          hydrateChatsFromDisk(nextUserId),
+          hydrateMyPlansFromDisk(nextUserId),
+        ]);
+      }
       if (!mounted) return;
       setSession(s);
 
@@ -291,13 +302,11 @@ function AuthGate({ children }: { children: ReactNode }) {
           Comprueba tu conexión e inténtalo de nuevo. Por seguridad, NEXO no permite el acceso
           mientras no pueda confirmar el estado de la cuenta.
         </Text>
-        <Pressable
-          accessibilityRole="button"
-          style={styles.accessRetryButton}
+        <NexoButton
+          label="Reintentar"
           onPress={() => setAccessRetry((value) => value + 1)}
-        >
-          <Text style={styles.accessRetryText}>Reintentar</Text>
-        </Pressable>
+          style={styles.accessRetryButton}
+        />
       </View>
     );
   }
@@ -315,7 +324,7 @@ function RootLayout() {
     <I18nProvider>
       <GestureHandlerRootView style={styles.root}>
         <NexoAlertHost>
-          <ThemeProvider value={DefaultTheme}>
+          <ThemeProvider value={navigationTheme}>
             <AuthGate>
               <Stack
                 screenOptions={{
@@ -326,7 +335,7 @@ function RootLayout() {
                   gestureEnabled: Platform.OS === 'ios',
                   fullScreenGestureEnabled: false,
                   animationMatchesGesture: Platform.OS === 'ios',
-                  contentStyle: { backgroundColor: '#F2F7FF' },
+                  contentStyle: { backgroundColor: theme.colors.backgroundAlt },
                   ...(Platform.OS === 'ios'
                     ? { gestureResponseDistance: { end: BACK_GESTURE_END } }
                     : {}),
@@ -349,7 +358,7 @@ function RootLayout() {
                     gestureEnabled: Platform.OS === 'ios',
                     fullScreenGestureEnabled: false,
                     freezeOnBlur: false,
-                    contentStyle: { backgroundColor: '#FFF' },
+                    contentStyle: { backgroundColor: theme.colors.surface },
                   }}
                 />
                 <Stack.Screen
@@ -370,7 +379,7 @@ function RootLayout() {
                     gestureEnabled: Platform.OS === 'ios',
                     fullScreenGestureEnabled: false,
                     freezeOnBlur: false,
-                    contentStyle: { backgroundColor: '#FFF' },
+                    contentStyle: { backgroundColor: theme.colors.surface },
                   }}
                 />
                 <Stack.Screen
@@ -412,17 +421,17 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F2F7FF',
+    backgroundColor: theme.colors.backgroundAlt,
     paddingHorizontal: 28,
   },
   accessUnavailableTitle: {
-    color: '#0F2A4A',
+    color: theme.colors.text,
     fontSize: 21,
     fontWeight: '800',
     textAlign: 'center',
   },
   accessUnavailableBody: {
-    color: '#64748B',
+    color: theme.colors.textMuted,
     fontSize: 15,
     lineHeight: 22,
     marginTop: 10,
@@ -430,14 +439,14 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   accessRetryButton: {
-    backgroundColor: '#2563EB',
+    backgroundColor: theme.colors.primary,
     borderRadius: 14,
     marginTop: 22,
     paddingHorizontal: 24,
     paddingVertical: 13,
   },
   accessRetryText: {
-    color: '#FFF',
+    color: theme.colors.surface,
     fontSize: 15,
     fontWeight: '800',
   },

@@ -30,6 +30,7 @@ import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { ChatSkeletonList } from '../../components/SkeletonShimmer';
 import { useListScrollRestore } from '../../hooks/useListScrollRestore';
 import { getDirectConversations, hideDirectChat, ensureDirectConversation } from '../../lib/directChat';
+import { getChatSummaries } from '../../lib/chatSummaries';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { isGroupChatPlan } from '../../lib/feedPlans';
 import { getFriends, type FriendProfile } from '../../lib/friends';
@@ -38,7 +39,7 @@ import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { ScreenKeys } from '../../lib/screenState';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
-import { getChatUnreadMap, markDirectChatRead, markPlanChatRead, subscribeChatUnread } from '../../lib/chatUnread';
+import { markDirectChatRead, markPlanChatRead, subscribeChatUnread } from '../../lib/chatUnread';
 import { hapticSelection } from '../../lib/haptics';
 import { isPlanChatAlive, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
 import { filterHiddenPlanChats, hidePlanChat } from '../../lib/planChatHide';
@@ -166,84 +167,76 @@ export default function MyChatsScreen() {
 
             void runPlanLifecycleMaintenance();
 
-            const [{ data: myParts }, directConversations, unreadMap] = await Promise.all([
-                supabase.from('participantes').select('plan_id').eq('usuario_id', user.id).eq('estado', 'aceptado'),
-                getDirectConversations(user.id).catch(() => []),
-                getChatUnreadMap(user.id),
-            ]);
+            const summaries = await getChatSummaries(user.id, {
+                // Los INSERT en tiempo real y el pull-to-refresh deben saltarse el TTL.
+                force: !!opts?.force || !!opts?.silent,
+            });
+            const directConversations = await getDirectConversations(user.id, summaries);
 
-            const planIds = [...new Set((myParts ?? []).map((p) => p.plan_id))].filter(Boolean);
+            let planRows: ChatRow[] = summaries
+                .filter((row) => row.conversation_kind === 'plan')
+                .filter((row) =>
+                    isPlanChatAlive({
+                        fecha_evento: row.event_at,
+                        categoria: row.category,
+                        chat_eliminado_en: row.chat_deleted_at,
+                    }),
+                )
+                .map((row) => {
+                    const hasLastMessage = !!row.last_at && !!row.last_sender_id;
+                    const ultimoTexto = hasLastMessage
+                        ? formatPreview(
+                              {
+                                  tipo: row.last_type ?? 'texto',
+                                  contenido: row.last_content ?? '',
+                                  emisor_id: row.last_sender_id!,
+                              },
+                              {
+                                  [row.last_sender_id!]:
+                                      row.last_sender_id === user.id
+                                          ? t('chats.you')
+                                          : row.last_sender_name || t('chats.user'),
+                              },
+                          )
+                        : t('chats.noMessages');
 
-            let planRows: ChatRow[] = [];
-            if (planIds.length > 0) {
-                const { data: plans, error: plansError } = await supabase
-                    .from('planes')
-                    .select('id, titulo, imagen_url, categoria, creador_id, creado_en, fecha_evento, chat_eliminado_en')
-                    .in('id', planIds);
-
-                if (plansError) throw plansError;
-
-                const alivePlans = (plans ?? []).filter((p) => isPlanChatAlive(p));
-                const ids = alivePlans.map((p) => p.id);
-                const msgLimit = Math.min(Math.max(ids.length * 4, 40), 300);
-
-                let lastMsgs: any[] = [];
-                if (ids.length > 0) {
-                    const { data } = await supabase
-                        .from('mensajes')
-                        .select('plan_id, contenido, tipo, creado_en, emisor_id')
-                        .in('plan_id', ids)
-                        .order('creado_en', { ascending: false })
-                        .limit(msgLimit);
-                    lastMsgs = data ?? [];
-                }
-
-                const lastByPlan = new Map<string, any>();
-                lastMsgs.forEach((m) => {
-                    if (!lastByPlan.has(m.plan_id)) lastByPlan.set(m.plan_id, m);
-                });
-
-                const nameIds = new Set<string>(lastMsgs.map((m) => m.emisor_id));
-                const names: Record<string, string> = {};
-                if (nameIds.size > 0) {
-                    const { data: profiles } = await supabase
-                        .from('perfiles')
-                        .select('id, nombre')
-                        .in('id', Array.from(nameIds));
-                    (profiles ?? []).forEach((pr) => { names[pr.id] = pr.nombre; });
-                }
-
-                planRows = alivePlans.map((p) => {
-                    const ult = lastByPlan.get(p.id);
                     return {
-                        id: p.id,
-                        title: p.titulo,
-                        image_url: p.imagen_url,
-                        kind: isGroupChatPlan(p) ? 'group' as const : 'plan' as const,
-                        creadorId: p.creador_id ? String(p.creador_id) : undefined,
-                        fechaEvento: p.fecha_evento ?? null,
-                        ultimoTexto: ult ? formatPreview(ult, names) : t('chats.noMessages'),
-                        lastAt: ult?.creado_en ?? p.creado_en ?? '',
-                        unread: unreadMap.plans[p.id] ?? 0,
+                        id: row.conversation_id,
+                        title: row.title,
+                        image_url: row.image_url,
+                        kind: isGroupChatPlan({ categoria: row.category })
+                            ? 'group' as const
+                            : 'plan' as const,
+                        creadorId: row.creator_id ?? undefined,
+                        fechaEvento: row.event_at,
+                        ultimoTexto,
+                        lastAt: row.last_at ?? row.created_at ?? '',
+                        unread: row.unread_count,
                     };
                 });
-                planRows = await filterHiddenPlanChats(user.id, planRows);
-            }
+            planRows = await filterHiddenPlanChats(user.id, planRows);
 
-            const directRows: ChatRow[] = directConversations.map((c) => ({
-                id: `direct-${c.peerId}`,
-                peerId: c.peerId,
-                title: c.nombre,
-                image_url: c.avatarUri,
+            const directRows: ChatRow[] = directConversations.map((conversation) => ({
+                id: `direct-${conversation.peerId}`,
+                peerId: conversation.peerId,
+                title: conversation.nombre,
+                image_url: conversation.avatarUri,
                 kind: 'direct' as const,
-                ultimoTexto: c.lastMessage
+                ultimoTexto: conversation.lastMessage
                     ? formatPreview(
-                          { tipo: c.lastMessage.tipo, contenido: c.lastMessage.contenido, emisor_id: c.lastMessage.emisor_id },
-                          { [c.peerId]: c.nombre, [user.id]: t('chats.you') }
+                          {
+                              tipo: conversation.lastMessage.tipo,
+                              contenido: conversation.lastMessage.contenido,
+                              emisor_id: conversation.lastMessage.emisor_id,
+                          },
+                          {
+                              [conversation.peerId]: conversation.nombre,
+                              [user.id]: t('chats.you'),
+                          },
                       )
                     : t('chats.noMessages'),
-                lastAt: c.lastMessage?.creado_en ?? c.openedAt ?? '',
-                unread: unreadMap.directs[c.peerId] ?? 0,
+                lastAt: conversation.lastMessage?.creado_en ?? conversation.openedAt ?? '',
+                unread: conversation.unread,
             }));
 
             const rows = [...planRows, ...directRows].sort(

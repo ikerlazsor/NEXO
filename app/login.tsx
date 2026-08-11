@@ -48,6 +48,7 @@ import {
 } from '../lib/profile';
 import { resolveOnboardingDone } from '../lib/onboarding';
 import { supabase } from '../lib/supabase';
+import { signOutAndClearLocalData } from '../lib/session';
 
 const LOGO = require('../assets/images/nexo-logo-ui.png');
 void Asset.fromModule(LOGO).downloadAsync().catch(() => {});
@@ -79,14 +80,14 @@ async function tryReclaimIncompleteEmail(email: string, password: string): Promi
         (data.user.user_metadata ?? null) as Record<string, unknown> | null,
     );
     if (done) {
-        await supabase.auth.signOut({ scope: 'local' });
+        await signOutAndClearLocalData({ scope: 'local' });
         return false;
     }
 
     const { error: delError } = await deleteAccount();
     if (delError) {
         // Este flujo auxiliar no debe dejar iniciada una cuenta incompleta.
-        await supabase.auth.signOut({ scope: 'local' });
+        await signOutAndClearLocalData({ scope: 'local' });
         return false;
     }
     return true;
@@ -349,7 +350,7 @@ export default function LoginScreen() {
                         nombreUsuario: handle,
                     });
                     if (profileError) {
-                        await supabase.auth.signOut({ scope: 'local' });
+                        await signOutAndClearLocalData({ scope: 'local' });
                         Alert.alert(
                             t('login.authError'),
                             profileError === 'username_taken' || /unique|duplicate/i.test(profileError)

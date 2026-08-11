@@ -1,491 +1,534 @@
+import { Ionicons } from "@expo/vector-icons";
+import { useHeaderHeight } from "@react-navigation/elements";
+import React from "react";
+import { Audio } from "expo-av";
+import * as ImagePicker from "expo-image-picker";
+import { useFocusEffect } from "@react-navigation/native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FlashList } from "@shopify/flash-list";
 import {
-    Ionicons } from '@expo/vector-icons';
-import { useHeaderHeight } from '@react-navigation/elements';
-import React from 'react';
-import { Audio,
-    ResizeMode,
-    Video } from 'expo-av';
-import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect } from '@react-navigation/native';
-import { useLocalSearchParams,
-    useRouter } from 'expo-router';
-import { useCallback,
-    useEffect,
-    useMemo,
-    useRef,
-    useState } from 'react';
-import { FlashList } from '@shopify/flash-list';
+  ActivityIndicator,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  Share,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { Alert } from "../../lib/nexoAlert";
+import { styles } from "../../features/chat/chatStyles";
+import { ChatMediaModals } from "../../features/chat/ChatMediaModals";
 import {
-    ActivityIndicator,
-    FlatList,
-    Image,
-    KeyboardAvoidingView,
-    Linking,
-    Modal,
-    Platform,
-    Share,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
-} from 'react-native';
-import { Alert } from '../../lib/nexoAlert';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
-import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
-import { PlanImage } from '../../components/PlanImage';
-import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
-import { uploadChatFile } from '../../lib/chatUpload';
-import { markPlanChatRead } from '../../lib/chatUnread';
-import { getCoincidedUserIds } from '../../lib/coincidences';
-import { getAvatarUri, getFriends, type FriendProfile } from '../../lib/friends';
-import { kickParticipant } from '../../lib/kickParticipant';
-import { isUserCreatedGroupChat, updateGroupChatPhoto, uploadGroupChatPhoto } from '../../lib/groupChat';
+  PAGE_SIZE,
+  PLAN_CHAT_TTL_MS,
+  planChatKey,
+  normalizeProfile,
+  formatDuration,
+  parseStoredDuration,
+  mapMessageRow,
+  mergeMessages,
+  type Message,
+  type PlanChatSnapshot,
+} from "../../features/chat/chatModel";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-    enqueueChatOutbox,
-    flushChatOutbox,
-    subscribeOutboxFlush,
-} from '../../lib/chatOutbox';
-import { encodeReplyContent, previewForReply, type ReplyQuote } from '../../lib/chatReply';
-import { isPlanChatMuted, setPlanChatMuted } from '../../lib/chatMute';
-import { hapticLight, hapticMedium, hapticToggle } from '../../lib/haptics';
-import { useT } from '../../lib/i18n';
-import { deletePlanCompletely } from '../../lib/deletePlan';
-import { getIsOnline } from '../../lib/network';
-import { hidePlanChat } from '../../lib/planChatHide';
-import { setActiveConversation } from '../../lib/activeConversation';
-import { cancelPlanLifecycleReminders } from '../../lib/push';
-import { trackFunnel } from '../../lib/analytics';
-import { sendPlanInvite } from '../../lib/planInvites';
+  ChatMessageRow,
+  chatMessageItemType,
+} from "../../components/ChatMessageRow";
 import {
-    formatCountdown,
-    getChatExpiryMs,
-    isGroupOrChatPlan,
-    isPlanActiveForSaved,
-    isPlanChatAlive,
-    runPlanLifecycleMaintenance,
-} from '../../lib/planLifecycle';
-import { buildPlanShareMessage } from '../../lib/shareLinks';
-import { resolvePlanImageSource } from '../../lib/sports';
-import { getAuthUser } from '../../lib/auth';
-import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
-import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
-import { supabase } from '../../lib/supabase';
+  ReactionEmojiPicker,
+  applyMessageReaction,
+  useMessageReactions,
+} from "../../components/MessageReactionsBar";
+import { PlanImage } from "../../components/PlanImage";
+import { FLASH_LIST_DRAW_DISTANCE } from "../../lib/listConfig";
+import { uploadChatFile } from "../../lib/chatUpload";
+import { markPlanChatRead } from "../../lib/chatUnread";
+import { getCoincidedUserIds } from "../../lib/coincidences";
+import {
+  getAvatarUri,
+  getFriends,
+  type FriendProfile,
+} from "../../lib/friends";
+import { kickParticipant } from "../../lib/kickParticipant";
+import {
+  isUserCreatedGroupChat,
+  updateGroupChatPhoto,
+  uploadGroupChatPhoto,
+} from "../../lib/groupChat";
+import {
+  enqueueChatOutbox,
+  flushChatOutbox,
+  subscribeOutboxFlush,
+} from "../../lib/chatOutbox";
+import {
+  encodeReplyContent,
+  previewForReply,
+  type ReplyQuote,
+} from "../../lib/chatReply";
+import { isPlanChatMuted, setPlanChatMuted } from "../../lib/chatMute";
+import { hapticLight, hapticMedium, hapticToggle } from "../../lib/haptics";
+import { useT } from "../../lib/i18n";
+import { deletePlanCompletely } from "../../lib/deletePlan";
+import { getIsOnline } from "../../lib/network";
+import { hidePlanChat } from "../../lib/planChatHide";
+import { setActiveConversation } from "../../lib/activeConversation";
+import { cancelPlanLifecycleReminders } from "../../lib/push";
+import { trackFunnel } from "../../lib/analytics";
+import { sendPlanInvite } from "../../lib/planInvites";
+import {
+  formatCountdown,
+  getChatExpiryMs,
+  isGroupOrChatPlan,
+  isPlanActiveForSaved,
+  isPlanChatAlive,
+  runPlanLifecycleMaintenance,
+} from "../../lib/planLifecycle";
+import { buildPlanShareMessage } from "../../lib/shareLinks";
+import { resolvePlanImageSource } from "../../lib/sports";
+import { getAuthUser } from "../../lib/auth";
+import { invalidatePlanMembershipCaches } from "../../lib/screenCaches";
+import { cacheGetStale, cacheSet } from "../../lib/ttlCache";
+import { supabase } from "../../lib/supabase";
 
-const PRIMARY = '#4DA6FF';
-const FRIEND = '#10B981';
-const ACQUAINTANCE = '#7C3AED';
-const DANGER = '#EF4444';
-const PAGE_SIZE = 50;
-const PLAN_CHAT_TTL_MS = 15 * 60 * 1000;
-const planChatKey = (planId: string) => `planChat:${planId}`;
-
-interface MessageProfile {
-    nombre: string;
-    avatar_url: string | null;
-}
-
-interface Message {
-    id: string;
-    contenido: string;
-    emisor_id: string;
-    creado_en: string;
-    tipo: 'texto' | 'imagen' | 'video' | 'audio';
-    archivo_url: string | null;
-    perfiles: MessageProfile | MessageProfile[] | null;
-    pending?: boolean;
-}
-
-function normalizeProfile(
-    perfiles: Message['perfiles']
-): MessageProfile | null {
-    if (!perfiles) return null;
-    if (Array.isArray(perfiles)) return perfiles[0] ?? null;
-    return perfiles;
-}
-
-function formatDuration(totalSeconds: number): string {
-    const seconds = Math.max(0, totalSeconds);
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function parseStoredDuration(contenido: string): number | null {
-    if (!contenido || !/^\d+$/.test(contenido.trim())) return null;
-    const value = parseInt(contenido, 10);
-    return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function mapMessageRow(row: Record<string, unknown>): Message {
-    return {
-        id: row.id as string,
-        contenido: (row.contenido as string) ?? '',
-        emisor_id: row.emisor_id as string,
-        creado_en: row.creado_en as string,
-        tipo: (row.tipo as Message['tipo']) ?? 'texto',
-        archivo_url: (row.archivo_url as string | null) ?? null,
-        perfiles: row.perfiles as Message['perfiles'],
-    };
-}
-
-function mergeMessages(a: Message[], b: Message[]): Message[] {
-    const map = new Map<string, Message>();
-    for (const m of [...a, ...b]) map.set(m.id, m);
-    return Array.from(map.values()).sort(
-        (x, y) => new Date(y.creado_en).getTime() - new Date(x.creado_en).getTime(),
-    );
-}
-
-type PlanChatSnapshot = {
-    messages: Message[];
-    planName: string;
-    planImage: string | null;
-    participantNames: string;
-    isGroupChat: boolean;
-    planCategory: string | null;
-    planOwnerId: string | null;
-    members: { id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }[];
-    creatorId: string | null;
-    planFechaEvento: string | null;
-    modoPrivado: boolean;
-    accessDenied: boolean;
-    hasMore: boolean;
-};
-
+const PRIMARY = "#4DA6FF";
+const FRIEND = "#10B981";
+const ACQUAINTANCE = "#7C3AED";
+const DANGER = "#EF4444";
 export default function ChatScreen() {
-    const { id } = useLocalSearchParams<{ id: string | string[] }>();
-    const planId = Array.isArray(id) ? id[0] : id;
-    const router = useRouter();
-    const { t, lang } = useT();
-    const headerHeight = useHeaderHeight();
-    const insets = useSafeAreaInsets();
+  const { id } = useLocalSearchParams<{ id: string | string[] }>();
+  const planId = Array.isArray(id) ? id[0] : id;
+  const router = useRouter();
+  const { t, lang } = useT();
+  const headerHeight = useHeaderHeight();
+  const insets = useSafeAreaInsets();
 
-    const cachedChat = planId ? cacheGetStale<PlanChatSnapshot>(planChatKey(planId)) : null;
+  const cachedChat = planId
+    ? cacheGetStale<PlanChatSnapshot>(planChatKey(planId))
+    : null;
 
-    const [planName, setPlanName] = useState(() => cachedChat?.planName ?? '');
-    const [planImage, setPlanImage] = useState<string | null>(() => cachedChat?.planImage ?? null);
-    const [participantNames, setParticipantNames] = useState(() => cachedChat?.participantNames ?? '');
-    const [isGroupChat, setIsGroupChat] = useState(() => cachedChat?.isGroupChat ?? false);
-    const [planCategory, setPlanCategory] = useState<string | null>(() => cachedChat?.planCategory ?? null);
-    const [planOwnerId, setPlanOwnerId] = useState<string | null>(() => cachedChat?.planOwnerId ?? null);
-    const [uploadingGroupPhoto, setUploadingGroupPhoto] = useState(false);
-    const [members, setMembers] = useState<{ id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }[]>(
-        () => cachedChat?.members ?? [],
-    );
-    const [showInviteFriends, setShowInviteFriends] = useState(false);
-    const [inviteFriends, setInviteFriends] = useState<(FriendProfile & { friendshipId: string })[]>([]);
-    const [loadingInviteFriends, setLoadingInviteFriends] = useState(false);
-    const [invitingFriendId, setInvitingFriendId] = useState<string | null>(null);
-    const [creatorId, setCreatorId] = useState<string | null>(() => cachedChat?.creatorId ?? null);
-    const [modoPrivado, setModoPrivado] = useState(() => cachedChat?.modoPrivado ?? false);
-    const [showMembers, setShowMembers] = useState(false);
-    const [messageText, setMessageText] = useState('');
-    const [replyTo, setReplyTo] = useState<ReplyQuote | null>(null);
-    const [chatMuted, setChatMuted] = useState(false);
-    const [typingNames, setTypingNames] = useState<string[]>([]);
-    const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const [messages, setMessages] = useState<Message[]>(() => cachedChat?.messages ?? []);
-    const [loading, setLoading] = useState(() => !(cachedChat?.messages?.length));
-    const [loadingMore, setLoadingMore] = useState(false);
-    const [hasMore, setHasMore] = useState(() => cachedChat?.hasMore ?? true);
-    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-    const [accessDenied, setAccessDenied] = useState(() => cachedChat?.accessDenied ?? false);
-    const [planFechaEvento, setPlanFechaEvento] = useState<string | null>(() => cachedChat?.planFechaEvento ?? null);
-    const [planLocationName, setPlanLocationName] = useState<string | null>(null);
-    const [chatExpiryLabel, setChatExpiryLabel] = useState<string | null>(null);
-    const [friendIds, setFriendIds] = useState<Set<string>>(() => new Set());
-    const [coincidedIds, setCoincidedIds] = useState<Set<string>>(() => new Set());
-    const [isSaved, setIsSaved] = useState(false);
+  const [planName, setPlanName] = useState(() => cachedChat?.planName ?? "");
+  const [planImage, setPlanImage] = useState<string | null>(
+    () => cachedChat?.planImage ?? null,
+  );
+  const [participantNames, setParticipantNames] = useState(
+    () => cachedChat?.participantNames ?? "",
+  );
+  const [isGroupChat, setIsGroupChat] = useState(
+    () => cachedChat?.isGroupChat ?? false,
+  );
+  const [planCategory, setPlanCategory] = useState<string | null>(
+    () => cachedChat?.planCategory ?? null,
+  );
+  const [planOwnerId, setPlanOwnerId] = useState<string | null>(
+    () => cachedChat?.planOwnerId ?? null,
+  );
+  const [uploadingGroupPhoto, setUploadingGroupPhoto] = useState(false);
+  const [members, setMembers] = useState<
+    {
+      id: string;
+      nombre: string;
+      avatar_url: string | null;
+      isCreator: boolean;
+      genero?: string | null;
+    }[]
+  >(() => cachedChat?.members ?? []);
+  const [showInviteFriends, setShowInviteFriends] = useState(false);
+  const [inviteFriends, setInviteFriends] = useState<
+    (FriendProfile & { friendshipId: string })[]
+  >([]);
+  const [loadingInviteFriends, setLoadingInviteFriends] = useState(false);
+  const [invitingFriendId, setInvitingFriendId] = useState<string | null>(null);
+  const [creatorId, setCreatorId] = useState<string | null>(
+    () => cachedChat?.creatorId ?? null,
+  );
+  const [modoPrivado, setModoPrivado] = useState(
+    () => cachedChat?.modoPrivado ?? false,
+  );
+  const [showMembers, setShowMembers] = useState(false);
+  const [messageText, setMessageText] = useState("");
+  const [replyTo, setReplyTo] = useState<ReplyQuote | null>(null);
+  const [chatMuted, setChatMuted] = useState(false);
+  const [typingNames, setTypingNames] = useState<string[]>([]);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [messages, setMessages] = useState<Message[]>(
+    () => cachedChat?.messages ?? [],
+  );
+  const [loading, setLoading] = useState(() => !cachedChat?.messages?.length);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(() => cachedChat?.hasMore ?? true);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [accessDenied, setAccessDenied] = useState(
+    () => cachedChat?.accessDenied ?? false,
+  );
+  const [planFechaEvento, setPlanFechaEvento] = useState<string | null>(
+    () => cachedChat?.planFechaEvento ?? null,
+  );
+  const [planLocationName, setPlanLocationName] = useState<string | null>(null);
+  const [chatExpiryLabel, setChatExpiryLabel] = useState<string | null>(null);
+  const [friendIds, setFriendIds] = useState<Set<string>>(() => new Set());
+  const [coincidedIds, setCoincidedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [isSaved, setIsSaved] = useState(false);
 
-    const [recording, setRecording] = useState<Audio.Recording | null>(null);
-    const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
-    const [modalImage, setModalImage] = useState<string | null>(null);
-    const [modalVideo, setModalVideo] = useState<string | null>(null);
-    const [isUploading, setIsUploading] = useState(false);
-    const [isSending, setIsSending] = useState(false);
-    const [audioDurations, setAudioDurations] = useState<Record<string, number>>({});
-    const [recordingDuration, setRecordingDuration] = useState(0);
-    const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [modalImage, setModalImage] = useState<string | null>(null);
+  const [modalVideo, setModalVideo] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [audioDurations, setAudioDurations] = useState<Record<string, number>>(
+    {},
+  );
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
 
-    const soundRef = useRef<Audio.Sound | null>(null);
-    const isMountedRef = useRef(true);
-    const loadingDurationsRef = useRef<Set<string>>(new Set());
-    const messagesRef = useRef(messages);
-    messagesRef.current = messages;
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const isMountedRef = useRef(true);
+  const loadingDurationsRef = useRef<Set<string>>(new Set());
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
-    const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
-    const { reactions, setReactions } = useMessageReactions(messageIds);
+  const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
+  const { reactions, setReactions } = useMessageReactions(messageIds);
 
-    const myProfile = useMemo(() => {
-        const me = members.find((m) => m.id === currentUserId);
-        return {
-            nombre: me?.nombre || t('chats.you'),
-            avatar_url: me?.avatar_url ?? null,
-        };
-    }, [members, currentUserId, t]);
+  const myProfile = useMemo(() => {
+    const me = members.find((m) => m.id === currentUserId);
+    return {
+      nombre: me?.nombre || t("chats.you"),
+      avatar_url: me?.avatar_url ?? null,
+    };
+  }, [members, currentUserId, t]);
 
-    const stopAudio = useCallback(async () => {
-        if (soundRef.current) {
-            await soundRef.current.unloadAsync();
-            soundRef.current = null;
+  const stopAudio = useCallback(async () => {
+    if (soundRef.current) {
+      await soundRef.current.unloadAsync();
+      soundRef.current = null;
+    }
+    setPlayingMessageId(null);
+  }, []);
+
+  const fetchParticipants = useCallback(
+    async (pid: string) => {
+      const { data: planData } = await supabase
+        .from("planes")
+        .select("creador_id, perfiles:creador_id(nombre, avatar_url, genero)")
+        .eq("id", pid)
+        .single();
+
+      const { data: parts } = await supabase
+        .from("participantes")
+        .select(
+          "usuario_id, estado, perfiles:usuario_id(nombre, avatar_url, genero)",
+        )
+        .eq("plan_id", pid);
+
+      const ownerId = (planData?.creador_id as string) ?? null;
+      setCreatorId(ownerId);
+
+      const byId = new Map<
+        string,
+        {
+          id: string;
+          nombre: string;
+          avatar_url: string | null;
+          isCreator: boolean;
+          genero?: string | null;
         }
-        setPlayingMessageId(null);
-    }, []);
+      >();
 
-    const fetchParticipants = useCallback(async (pid: string) => {
-        const { data: planData } = await supabase
-            .from('planes')
-            .select('creador_id, perfiles:creador_id(nombre, avatar_url, genero)')
-            .eq('id', pid)
-            .single();
-
-        const { data: parts } = await supabase
-            .from('participantes')
-            .select('usuario_id, estado, perfiles:usuario_id(nombre, avatar_url, genero)')
-            .eq('plan_id', pid);
-
-        const ownerId = (planData?.creador_id as string) ?? null;
-        setCreatorId(ownerId);
-
-        const byId = new Map<string, { id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }>();
-
-        const creator = normalizeProfile(planData?.perfiles as Message['perfiles']);
-        const creatorGenero =
-            (Array.isArray(planData?.perfiles)
-                ? (planData?.perfiles as any[])[0]?.genero
-                : (planData?.perfiles as any)?.genero) as string | null | undefined;
-        if (ownerId) {
-            byId.set(ownerId, {
-                id: ownerId,
-                nombre: creator?.nombre || t('chat.host'),
-                avatar_url: creator?.avatar_url ?? null,
-                isCreator: true,
-                genero: creatorGenero ?? null,
-            });
-        }
-
-        (parts ?? []).forEach((p: any) => {
-            if (p.estado !== 'aceptado') return;
-            const uid = p.usuario_id as string;
-            if (!uid || byId.has(uid)) return;
-            const profile = normalizeProfile(p.perfiles as Message['perfiles']);
-            const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
-            byId.set(uid, {
-                id: uid,
-                nombre: profile?.nombre || t('profile.user'),
-                avatar_url: profile?.avatar_url ?? null,
-                isCreator: uid === ownerId,
-                genero: (prof?.genero as string | null | undefined) ?? null,
-            });
+      const creator = normalizeProfile(
+        planData?.perfiles as Message["perfiles"],
+      );
+      const creatorGenero = (
+        Array.isArray(planData?.perfiles)
+          ? (planData?.perfiles as any[])[0]?.genero
+          : (planData?.perfiles as any)?.genero
+      ) as string | null | undefined;
+      if (ownerId) {
+        byId.set(ownerId, {
+          id: ownerId,
+          nombre: creator?.nombre || t("chat.host"),
+          avatar_url: creator?.avatar_url ?? null,
+          isCreator: true,
+          genero: creatorGenero ?? null,
         });
+      }
 
-        const list = Array.from(byId.values());
-        setMembers(list);
+      (parts ?? []).forEach((p: any) => {
+        if (p.estado !== "aceptado") return;
+        const uid = p.usuario_id as string;
+        if (!uid || byId.has(uid)) return;
+        const profile = normalizeProfile(p.perfiles as Message["perfiles"]);
+        const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
+        byId.set(uid, {
+          id: uid,
+          nombre: profile?.nombre || t("profile.user"),
+          avatar_url: profile?.avatar_url ?? null,
+          isCreator: uid === ownerId,
+          genero: (prof?.genero as string | null | undefined) ?? null,
+        });
+      });
 
-        const names = list.length === 0
-            ? t('chat.noParticipants')
-            : list.map((m) => m.nombre).join(', ');
-        setParticipantNames(names);
-        return { members: list, participantNames: names, creatorId: ownerId };
-    }, [t]);
+      const list = Array.from(byId.values());
+      setMembers(list);
 
-    const persistPlanChatCache = useCallback((
-        pid: string,
-        patch: Partial<PlanChatSnapshot> & { messages: Message[] },
+      const names =
+        list.length === 0
+          ? t("chat.noParticipants")
+          : list.map((m) => m.nombre).join(", ");
+      setParticipantNames(names);
+      return { members: list, participantNames: names, creatorId: ownerId };
+    },
+    [t],
+  );
+
+  const persistPlanChatCache = useCallback(
+    (
+      pid: string,
+      patch: Partial<PlanChatSnapshot> & { messages: Message[] },
     ) => {
-        const prev = cacheGetStale<PlanChatSnapshot>(planChatKey(pid));
-        cacheSet(planChatKey(pid), {
-            messages: patch.messages,
-            planName: patch.planName ?? prev?.planName ?? '',
-            planImage: patch.planImage !== undefined ? patch.planImage : (prev?.planImage ?? null),
-            participantNames: patch.participantNames ?? prev?.participantNames ?? '',
-            isGroupChat: patch.isGroupChat ?? prev?.isGroupChat ?? false,
-            planCategory: patch.planCategory !== undefined ? patch.planCategory : (prev?.planCategory ?? null),
-            planOwnerId: patch.planOwnerId !== undefined ? patch.planOwnerId : (prev?.planOwnerId ?? null),
-            members: patch.members ?? prev?.members ?? [],
-            creatorId: patch.creatorId !== undefined ? patch.creatorId : (prev?.creatorId ?? null),
-            planFechaEvento: patch.planFechaEvento !== undefined ? patch.planFechaEvento : (prev?.planFechaEvento ?? null),
-            modoPrivado: patch.modoPrivado ?? prev?.modoPrivado ?? false,
-            accessDenied: patch.accessDenied ?? prev?.accessDenied ?? false,
-            hasMore: patch.hasMore ?? prev?.hasMore ?? true,
-        }, PLAN_CHAT_TTL_MS);
-    }, []);
-
-    const canInvitePeople =
-        !accessDenied &&
-        !!currentUserId &&
-        !!creatorId &&
-        (creatorId === currentUserId || !modoPrivado);
-
-    const openInviteFriends = useCallback(async () => {
-        if (!currentUserId || !canInvitePeople) return;
-        setShowInviteFriends(true);
-        setLoadingInviteFriends(true);
-        try {
-            const list = await getFriends(currentUserId);
-            const memberIds = new Set(members.map((m) => m.id));
-            setInviteFriends(list.filter((f) => !memberIds.has(f.id)));
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setLoadingInviteFriends(false);
-        }
-    }, [currentUserId, members, canInvitePeople]);
-
-    const handleInviteFriend = useCallback(
-        async (friendId: string) => {
-            if (!planId || !currentUserId || !canInvitePeople) return;
-            setInvitingFriendId(friendId);
-            const tipo = isGroupChat ? 'grupo' : 'plan';
-            const { error } = await sendPlanInvite(planId, currentUserId, friendId, tipo);
-            setInvitingFriendId(null);
-            if (error === 'already_member' || error === 'already_invited') {
-                Alert.alert(t('login.notice'), t('friends.inviteAlready'));
-                return;
-            }
-            if (error) {
-                Alert.alert(t('profile.error'), error.includes('plan_invitaciones') ? t('friends.invitesSqlHint') : t('chat.inviteError'));
-                return;
-            }
-            Alert.alert(t('login.notice'), t('chat.inviteSent'));
+      const prev = cacheGetStale<PlanChatSnapshot>(planChatKey(pid));
+      cacheSet(
+        planChatKey(pid),
+        {
+          messages: patch.messages,
+          planName: patch.planName ?? prev?.planName ?? "",
+          planImage:
+            patch.planImage !== undefined
+              ? patch.planImage
+              : (prev?.planImage ?? null),
+          participantNames:
+            patch.participantNames ?? prev?.participantNames ?? "",
+          isGroupChat: patch.isGroupChat ?? prev?.isGroupChat ?? false,
+          planCategory:
+            patch.planCategory !== undefined
+              ? patch.planCategory
+              : (prev?.planCategory ?? null),
+          planOwnerId:
+            patch.planOwnerId !== undefined
+              ? patch.planOwnerId
+              : (prev?.planOwnerId ?? null),
+          members: patch.members ?? prev?.members ?? [],
+          creatorId:
+            patch.creatorId !== undefined
+              ? patch.creatorId
+              : (prev?.creatorId ?? null),
+          planFechaEvento:
+            patch.planFechaEvento !== undefined
+              ? patch.planFechaEvento
+              : (prev?.planFechaEvento ?? null),
+          modoPrivado: patch.modoPrivado ?? prev?.modoPrivado ?? false,
+          accessDenied: patch.accessDenied ?? prev?.accessDenied ?? false,
+          hasMore: patch.hasMore ?? prev?.hasMore ?? true,
         },
-        [planId, currentUserId, isGroupChat, canInvitePeople, t]
-    );
+        PLAN_CHAT_TTL_MS,
+      );
+    },
+    [],
+  );
 
-    const isCreatedGroupChat = isUserCreatedGroupChat({ categoria: planCategory });
+  const canInvitePeople =
+    !accessDenied &&
+    !!currentUserId &&
+    !!creatorId &&
+    (creatorId === currentUserId || !modoPrivado);
 
-    const canEditGroupPhoto =
-        !!planId &&
-        !!currentUserId &&
-        !accessDenied &&
-        isCreatedGroupChat &&
-        !!planOwnerId &&
-        planOwnerId === currentUserId;
+  const openInviteFriends = useCallback(async () => {
+    if (!currentUserId || !canInvitePeople) return;
+    setShowInviteFriends(true);
+    setLoadingInviteFriends(true);
+    try {
+      const list = await getFriends(currentUserId);
+      const memberIds = new Set(members.map((m) => m.id));
+      setInviteFriends(list.filter((f) => !memberIds.has(f.id)));
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingInviteFriends(false);
+    }
+  }, [currentUserId, members, canInvitePeople]);
 
-    const handleGroupPhotoPicked = useCallback(
-        async (uri: string) => {
-            if (!planId) return;
-            setUploadingGroupPhoto(true);
-            const url = await uploadGroupChatPhoto(planId, uri);
-            if (!url) {
-                Alert.alert(t('profile.error'), t('chat.groupPhotoError'));
-                setUploadingGroupPhoto(false);
-                return;
-            }
-            const { error } = await updateGroupChatPhoto(planId, url);
-            setUploadingGroupPhoto(false);
-            if (error) {
-                Alert.alert(
-                    t('profile.error'),
-                    error === 'rls_planes_update'
-                        ? t('chat.groupPhotoRlsHint')
-                        : error
-                );
-                return;
-            }
-            setPlanImage(url);
+  const handleInviteFriend = useCallback(
+    async (friendId: string) => {
+      if (!planId || !currentUserId || !canInvitePeople) return;
+      setInvitingFriendId(friendId);
+      const tipo = isGroupChat ? "grupo" : "plan";
+      const { error } = await sendPlanInvite(
+        planId,
+        currentUserId,
+        friendId,
+        tipo,
+      );
+      setInvitingFriendId(null);
+      if (error === "already_member" || error === "already_invited") {
+        Alert.alert(t("login.notice"), t("friends.inviteAlready"));
+        return;
+      }
+      if (error) {
+        Alert.alert(
+          t("profile.error"),
+          error.includes("plan_invitaciones")
+            ? t("friends.invitesSqlHint")
+            : t("chat.inviteError"),
+        );
+        return;
+      }
+      Alert.alert(t("login.notice"), t("chat.inviteSent"));
+    },
+    [planId, currentUserId, isGroupChat, canInvitePeople, t],
+  );
+
+  const isCreatedGroupChat = isUserCreatedGroupChat({
+    categoria: planCategory,
+  });
+
+  const canEditGroupPhoto =
+    !!planId &&
+    !!currentUserId &&
+    !accessDenied &&
+    isCreatedGroupChat &&
+    !!planOwnerId &&
+    planOwnerId === currentUserId;
+
+  const handleGroupPhotoPicked = useCallback(
+    async (uri: string) => {
+      if (!planId) return;
+      setUploadingGroupPhoto(true);
+      const url = await uploadGroupChatPhoto(planId, uri);
+      if (!url) {
+        Alert.alert(t("profile.error"), t("chat.groupPhotoError"));
+        setUploadingGroupPhoto(false);
+        return;
+      }
+      const { error } = await updateGroupChatPhoto(planId, url);
+      setUploadingGroupPhoto(false);
+      if (error) {
+        Alert.alert(
+          t("profile.error"),
+          error === "rls_planes_update" ? t("chat.groupPhotoRlsHint") : error,
+        );
+        return;
+      }
+      setPlanImage(url);
+    },
+    [planId, t],
+  );
+
+  const showGroupPhotoMenu = useCallback(() => {
+    if (!canEditGroupPhoto || uploadingGroupPhoto) return;
+    Alert.alert(t("chat.groupPhotoTitle"), t("chat.groupPhotoChoice"), [
+      {
+        text: t("profile.camera"),
+        onPress: async () => {
+          const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.5,
+          });
+          if (!result.canceled && result.assets[0]?.uri)
+            handleGroupPhotoPicked(result.assets[0].uri);
         },
-        [planId, t]
-    );
+      },
+      {
+        text: t("profile.gallery"),
+        onPress: async () => {
+          const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"],
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.5,
+          });
+          if (!result.canceled && result.assets[0]?.uri)
+            handleGroupPhotoPicked(result.assets[0].uri);
+        },
+      },
+      { text: t("common.cancel"), style: "cancel" },
+    ]);
+  }, [canEditGroupPhoto, uploadingGroupPhoto, handleGroupPhotoPicked, t]);
 
-    const showGroupPhotoMenu = useCallback(() => {
-        if (!canEditGroupPhoto || uploadingGroupPhoto) return;
-        Alert.alert(t('chat.groupPhotoTitle'), t('chat.groupPhotoChoice'), [
-            { text: t('profile.camera'), onPress: async () => {
-                const result = await ImagePicker.launchCameraAsync({
-                    mediaTypes: ['images'],
-                    allowsEditing: true,
-                    aspect: [1, 1],
-                    quality: 0.5,
-                });
-                if (!result.canceled && result.assets[0]?.uri) handleGroupPhotoPicked(result.assets[0].uri);
-            }},
-            { text: t('profile.gallery'), onPress: async () => {
-                const result = await ImagePicker.launchImageLibraryAsync({
-                    mediaTypes: ['images'],
-                    allowsEditing: true,
-                    aspect: [1, 1],
-                    quality: 0.5,
-                });
-                if (!result.canceled && result.assets[0]?.uri) handleGroupPhotoPicked(result.assets[0].uri);
-            }},
-            { text: t('common.cancel'), style: 'cancel' },
-        ]);
-    }, [canEditGroupPhoto, uploadingGroupPhoto, handleGroupPhotoPicked, t]);
+  const handleDeleteChat = useCallback(() => {
+    if (!planId || !currentUserId) return;
+    const isHost = creatorId === currentUserId;
+    const planStarted =
+      !!planFechaEvento &&
+      Number.isFinite(new Date(planFechaEvento).getTime()) &&
+      Date.now() >= new Date(planFechaEvento).getTime();
+    // Tras el evento: solo ocultar chat (no salir del plan). Antes: salir del plan.
+    const leavePlan = !isHost && !planStarted;
 
-    const handleDeleteChat = useCallback(() => {
-        if (!planId || !currentUserId) return;
-        const isHost = creatorId === currentUserId;
-        const planStarted =
-            !!planFechaEvento &&
-            Number.isFinite(new Date(planFechaEvento).getTime()) &&
-            Date.now() >= new Date(planFechaEvento).getTime();
-        // Tras el evento: solo ocultar chat (no salir del plan). Antes: salir del plan.
-        const leavePlan = !isHost && !planStarted;
+    const title = isHost
+      ? t("chat.deletePlanHost")
+      : leavePlan
+        ? t("chat.deleteChatAndLeave")
+        : t("chat.deleteChat");
+    const message = isHost
+      ? t("chat.deletePlanHostConfirm")
+      : leavePlan
+        ? t("chat.deleteChatConfirm")
+        : t("chat.deleteChatOnlyConfirm");
+    const actionLabel = isHost
+      ? t("chat.deletePlanHost")
+      : leavePlan
+        ? t("chat.deleteChatAndLeave")
+        : t("chat.deleteChat");
 
-        const title = isHost
-            ? t('chat.deletePlanHost')
-            : leavePlan
-              ? t('chat.deleteChatAndLeave')
-              : t('chat.deleteChat');
-        const message = isHost
-            ? t('chat.deletePlanHostConfirm')
-            : leavePlan
-              ? t('chat.deleteChatConfirm')
-              : t('chat.deleteChatOnlyConfirm');
-        const actionLabel = isHost
-            ? t('chat.deletePlanHost')
-            : leavePlan
-              ? t('chat.deleteChatAndLeave')
-              : t('chat.deleteChat');
+    setShowMembers(false);
+    setTimeout(() => {
+      Alert.alert(title, message, [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: actionLabel,
+          style: "destructive",
+          // No async aquí: en Android el Alert espera el Promise y se queda abierto.
+          onPress: () => {
+            void (async () => {
+              if (isHost) {
+                const { error } = await deletePlanCompletely(planId);
+                if (error) {
+                  Alert.alert(
+                    t("profile.error"),
+                    t("chat.deletePlanError") + ": " + error,
+                  );
+                  return;
+                }
+                void cancelPlanLifecycleReminders(planId);
+              } else if (leavePlan) {
+                const { error } = await supabase
+                  .from("participantes")
+                  .delete()
+                  .eq("plan_id", planId)
+                  .eq("usuario_id", currentUserId);
+                if (error) {
+                  Alert.alert(t("profile.error"), error.message);
+                  return;
+                }
+                void cancelPlanLifecycleReminders(planId);
+              } else {
+                await hidePlanChat(currentUserId, planId);
+              }
+              invalidatePlanMembershipCaches(currentUserId);
+              router.back();
+            })();
+          },
+        },
+      ]);
+    }, 250);
+  }, [planId, currentUserId, creatorId, planFechaEvento, t, router]);
 
-        setShowMembers(false);
-        setTimeout(() => {
-            Alert.alert(title, message, [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: actionLabel,
-                    style: 'destructive',
-                    // No async aquí: en Android el Alert espera el Promise y se queda abierto.
-                    onPress: () => {
-                        void (async () => {
-                            if (isHost) {
-                                const { error } = await deletePlanCompletely(planId);
-                                if (error) {
-                                    Alert.alert(t('profile.error'), t('chat.deletePlanError') + ': ' + error);
-                                    return;
-                                }
-                                void cancelPlanLifecycleReminders(planId);
-                            } else if (leavePlan) {
-                                const { error } = await supabase
-                                    .from('participantes')
-                                    .delete()
-                                    .eq('plan_id', planId)
-                                    .eq('usuario_id', currentUserId);
-                                if (error) {
-                                    Alert.alert(t('profile.error'), error.message);
-                                    return;
-                                }
-                                void cancelPlanLifecycleReminders(planId);
-                            } else {
-                                await hidePlanChat(currentUserId, planId);
-                            }
-                            invalidatePlanMembershipCaches(currentUserId);
-                            router.back();
-                        })();
-                    },
-                },
-            ]);
-        }, 250);
-    }, [planId, currentUserId, creatorId, planFechaEvento, t, router]);
-
-    const fetchMessages = useCallback(
-        async (pid: string, before?: string) => {
-            let query = supabase
-                .from('mensajes')
-                .select(`
+  const fetchMessages = useCallback(async (pid: string, before?: string) => {
+    let query = supabase
+      .from("mensajes")
+      .select(
+        `
                     id,
                     contenido,
                     emisor_id,
@@ -496,1644 +539,1498 @@ export default function ChatScreen() {
                         nombre,
                         avatar_url
                     )
-                `)
-                .eq('plan_id', pid)
-                .order('creado_en', { ascending: false })
-                .limit(PAGE_SIZE);
+                `,
+      )
+      .eq("plan_id", pid)
+      .order("creado_en", { ascending: false })
+      .limit(PAGE_SIZE);
 
-            if (before) {
-                query = query.lt('creado_en', before);
-            }
+    if (before) {
+      query = query.lt("creado_en", before);
+    }
 
-            const { data, error } = await query;
-            if (error) throw error;
+    const { data, error } = await query;
+    if (error) throw error;
 
-            const rows = (data ?? []).map((row) => mapMessageRow(row as Record<string, unknown>));
-            return rows;
-        },
-        []
+    const rows = (data ?? []).map((row) =>
+      mapMessageRow(row as Record<string, unknown>),
     );
-
-    const loadMoreMessages = useCallback(async () => {
-        const current = messagesRef.current;
-        if (!planId || loadingMore || !hasMore || current.length === 0) return;
-
-        setLoadingMore(true);
-        try {
-            const oldest = current[current.length - 1];
-            const older = await fetchMessages(planId, oldest.creado_en);
-
-            const nextHasMore = older.length >= PAGE_SIZE;
-            if (!nextHasMore) setHasMore(false);
-
-            setMessages((prev) => {
-                const existingIds = new Set(prev.map((m) => m.id));
-                const unique = older.filter((m) => !existingIds.has(m.id));
-                const next = [...prev, ...unique];
-                if (planId) persistPlanChatCache(planId, { messages: next, hasMore: nextHasMore });
-                return next;
-            });
-        } catch (error) {
-            if (__DEV__) console.error('Error cargando más mensajes:', error);
-        } finally {
-            setLoadingMore(false);
-        }
-    }, [planId, loadingMore, hasMore, fetchMessages, persistPlanChatCache]);
-
-    useEffect(() => {
-        isMountedRef.current = true;
-
-        return () => {
-            isMountedRef.current = false;
-            soundRef.current?.unloadAsync();
-        };
-    }, []);
-
-    const loadAudioDuration = useCallback(async (messageId: string, audioUrl: string) => {
-        if (loadingDurationsRef.current.has(messageId)) return;
-        loadingDurationsRef.current.add(messageId);
-
-        try {
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: false,
-                playsInSilentModeIOS: true,
-            });
-            const { sound } = await Audio.Sound.createAsync({ uri: audioUrl }, { shouldPlay: false });
-            const status = await sound.getStatusAsync();
-            await sound.unloadAsync();
-
-            if (status.isLoaded && status.durationMillis) {
-                const seconds = Math.max(1, Math.round(status.durationMillis / 1000));
-                setAudioDurations((prev) => ({ ...prev, [messageId]: seconds }));
-            }
-        } catch {
-            /* duración opcional */
-        } finally {
-            loadingDurationsRef.current.delete(messageId);
-        }
-    }, []);
-
-    useEffect(() => {
-        messages.forEach((message) => {
-            if (message.tipo !== 'audio' || !message.archivo_url) return;
-            if (parseStoredDuration(message.contenido)) return;
-            if (audioDurations[message.id]) return;
-            loadAudioDuration(message.id, message.archivo_url);
-        });
-    }, [messages, audioDurations, loadAudioDuration]);
-
-    useEffect(() => {
-        if (!recording) {
-            setRecordingDuration(0);
-            return;
-        }
-
-        const interval = setInterval(async () => {
-            try {
-                const status = await recording.getStatusAsync();
-                if (status.isRecording && status.durationMillis) {
-                    setRecordingDuration(Math.floor(status.durationMillis / 1000));
-                }
-            } catch {
-                // ignore polling errors while recording
-            }
-        }, 500);
-
-        return () => clearInterval(interval);
-    }, [recording]);
-
-    useEffect(() => {
-        if (!planId) return;
-
-        let channel: ReturnType<typeof supabase.channel> | null = null;
-
-        const initChat = async () => {
-            const stale = cacheGetStale<PlanChatSnapshot>(planChatKey(planId));
-            if (stale?.messages?.length) {
-                setMessages(stale.messages);
-                setPlanName(stale.planName);
-                setPlanImage(stale.planImage);
-                setParticipantNames(stale.participantNames);
-                setIsGroupChat(stale.isGroupChat);
-                setPlanCategory(stale.planCategory);
-                setPlanOwnerId(stale.planOwnerId);
-                setMembers(stale.members);
-                setCreatorId(stale.creatorId);
-                setPlanFechaEvento(stale.planFechaEvento);
-                setModoPrivado(stale.modoPrivado ?? false);
-                setAccessDenied(stale.accessDenied);
-                setHasMore(stale.hasMore);
-                setLoading(false);
-            } else {
-                setLoading(true);
-                setAccessDenied(false);
-                setHasMore(true);
-            }
-
-            try {
-                const user = await getAuthUser();
-                if (!isMountedRef.current) return;
-
-                if (!user) {
-                    router.replace('/login');
-                    return;
-                }
-
-                setCurrentUserId(user.id);
-
-                void runPlanLifecycleMaintenance();
-
-                void Promise.all([
-                    getFriends(user.id),
-                    getCoincidedUserIds(user.id),
-                    supabase
-                        .from('planes_guardados')
-                        .select('plan_id')
-                        .eq('plan_id', planId)
-                        .eq('usuario_id', user.id)
-                        .maybeSingle(),
-                ]).then(([friends, coincided, savedRes]) => {
-                    if (!isMountedRef.current) return;
-                    setFriendIds(new Set(friends.map((f) => f.id)));
-                    setCoincidedIds(coincided);
-                    setIsSaved(!!savedRes.data);
-                });
-
-                const { data: planData, error: planError } = await supabase
-                    .from('planes')
-                    .select('titulo, imagen_url, creador_id, categoria, fecha_evento, chat_eliminado_en, modo_privado, nombre_ubicacion')
-                    .eq('id', planId)
-                    .single();
-
-                if (planError || !planData) {
-                    Alert.alert(t('chat.errorTitle'), t('chat.planNotFound'));
-                    router.back();
-                    return;
-                }
-
-                if (!isPlanChatAlive(planData)) {
-                    Alert.alert(t('chat.errorTitle'), t('chat.expired'));
-                    router.back();
-                    return;
-                }
-
-                setPlanFechaEvento(planData.fecha_evento ?? null);
-                setPlanLocationName(planData.nombre_ubicacion ?? null);
-
-                const { data: membership } = await supabase
-                    .from('participantes')
-                    .select('usuario_id, estado')
-                    .eq('plan_id', planId)
-                    .eq('usuario_id', user.id)
-                    .maybeSingle();
-
-                const isCreator = planData.creador_id === user.id;
-                const canAccessChat = isCreator || membership?.estado === 'aceptado';
-                if (!canAccessChat) {
-                    setAccessDenied(true);
-                    setPlanName(planData.titulo);
-                    setPlanImage(planData.imagen_url);
-                    persistPlanChatCache(planId, {
-                        messages: [],
-                        planName: planData.titulo,
-                        planImage: planData.imagen_url,
-                        accessDenied: true,
-                        hasMore: false,
-                    });
-                    return;
-                }
-
-                if (!isMountedRef.current) return;
-
-                setAccessDenied(false);
-                setPlanCategory(planData.categoria ?? null);
-                setPlanOwnerId(planData.creador_id ?? null);
-                setCreatorId(planData.creador_id ?? null);
-                setModoPrivado(!!planData.modo_privado);
-                setIsGroupChat(planData.categoria === 'Grupo');
-
-                setPlanName(planData.titulo);
-                setPlanImage(planData.imagen_url ?? null);
-
-                const [initialMessages, partsMeta] = await Promise.all([
-                    fetchMessages(planId),
-                    fetchParticipants(planId),
-                ]);
-
-                if (!isMountedRef.current) return;
-
-                const merged = mergeMessages(initialMessages, stale?.messages ?? []);
-                setMessages(merged);
-                const nextHasMore = initialMessages.length >= PAGE_SIZE || (stale?.hasMore ?? false);
-                setHasMore(nextHasMore);
-                void markPlanChatRead(user.id, planId);
-
-                persistPlanChatCache(planId, {
-                    messages: merged,
-                    planName: planData.titulo,
-                    planImage: planData.imagen_url ?? null,
-                    participantNames: partsMeta.participantNames,
-                    isGroupChat: planData.categoria === 'Grupo',
-                    planCategory: planData.categoria ?? null,
-                    planOwnerId: planData.creador_id ?? null,
-                    members: partsMeta.members,
-                    creatorId: partsMeta.creatorId,
-                    planFechaEvento: planData.fecha_evento ?? null,
-                    modoPrivado: !!planData.modo_privado,
-                    accessDenied: false,
-                    hasMore: nextHasMore,
-                });
-
-                channel = supabase
-                    .channel(`chat:${planId}`)
-                    .on(
-                        'postgres_changes',
-                        {
-                            event: 'INSERT',
-                            schema: 'public',
-                            table: 'mensajes',
-                            filter: `plan_id=eq.${planId}`,
-                        },
-                        async (payload) => {
-                            const newId = payload.new.id as string;
-
-                            const { data: perfil } = await supabase
-                                .from('perfiles')
-                                .select('nombre, avatar_url')
-                                .eq('id', payload.new.emisor_id)
-                                .single();
-
-                            const newMessage: Message = {
-                                id: newId,
-                                contenido: (payload.new.contenido as string) ?? '',
-                                emisor_id: payload.new.emisor_id as string,
-                                creado_en: payload.new.creado_en as string,
-                                tipo: (payload.new.tipo as Message['tipo']) ?? 'texto',
-                                archivo_url: (payload.new.archivo_url as string | null) ?? null,
-                                perfiles: perfil,
-                            };
-
-                            if (isMountedRef.current) {
-                                setMessages((prev) => {
-                                    if (prev.some((m) => m.id === newMessage.id)) return prev;
-                                    const withoutOptimistic = prev.filter(
-                                        (m) =>
-                                            !(
-                                                m.id.startsWith('local-') &&
-                                                m.emisor_id === newMessage.emisor_id &&
-                                                m.tipo === newMessage.tipo &&
-                                                m.contenido === newMessage.contenido &&
-                                                m.archivo_url === newMessage.archivo_url
-                                            ),
-                                    );
-                                    const next = [newMessage, ...withoutOptimistic];
-                                    persistPlanChatCache(planId, { messages: next });
-                                    return next;
-                                });
-                            }
-                        }
-                    )
-                    .subscribe();
-            } catch (error) {
-                console.error('Error en initChat:', error);
-                if (!stale?.messages?.length) {
-                    Alert.alert(t('chat.errorTitle'), t('chat.loadError'));
-                }
-            } finally {
-                if (isMountedRef.current) setLoading(false);
-            }
-        };
-
-        initChat();
-
-        return () => {
-            if (channel) supabase.removeChannel(channel);
-        };
-    }, [planId, router, fetchMessages, fetchParticipants, persistPlanChatCache, t]);
-
-    const refreshChatHeader = useCallback(async () => {
-        if (!planId || !currentUserId || accessDenied) return;
-        const { data } = await supabase
-            .from('planes')
-            .select('titulo, imagen_url')
-            .eq('id', planId)
-            .single();
-        if (data) {
-            if (data.titulo) setPlanName(data.titulo);
-            if (data.imagen_url) setPlanImage(data.imagen_url);
-        }
-    }, [planId, currentUserId, accessDenied]);
-
-    useEffect(() => {
-        if (!planFechaEvento || isGroupOrChatPlan({ categoria: planCategory })) {
-            setChatExpiryLabel(null);
-            return;
-        }
-        const end = new Date(planFechaEvento).getTime();
-        if (!Number.isFinite(end) || Date.now() < end) {
-            setChatExpiryLabel(null);
-            return;
-        }
-        const tick = () => {
-            const expiry = getChatExpiryMs(planFechaEvento);
-            if (!expiry) {
-                setChatExpiryLabel(null);
-                return;
-            }
-            const remaining = expiry - Date.now();
-            if (remaining <= 0) {
-                setChatExpiryLabel('0:00');
-                void runPlanLifecycleMaintenance();
-                Alert.alert(t('chat.errorTitle'), t('chat.expired'));
-                router.back();
-                return;
-            }
-            setChatExpiryLabel(formatCountdown(remaining));
-        };
-        tick();
-        const id = setInterval(tick, 1000);
-        return () => clearInterval(id);
-    }, [planFechaEvento, planCategory, router, t]);
-
-    useEffect(() => {
-        if (!planId) return;
-        const unsub = subscribeOutboxFlush((ev) => {
-            if (ev.kind !== 'plan' || ev.planId !== planId) return;
-            setMessages((prev) => {
-                const next = prev.map((m) =>
-                    m.id === ev.tempId
-                        ? { ...m, id: ev.serverId, creado_en: ev.creadoEn, pending: false }
-                        : m,
-                );
-                persistPlanChatCache(planId, { messages: next });
-                return next;
-            });
-        });
-        if (getIsOnline()) void flushChatOutbox();
-        return unsub;
-    }, [planId]);
-
-    useEffect(() => {
-        if (!planId || !currentUserId) return;
-        void isPlanChatMuted(planId).then(setChatMuted);
-        trackFunnel('chat_open', { userId: currentUserId, props: { planId } });
-    }, [planId, currentUserId]);
-
-    const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-
-    useEffect(() => {
-        if (!planId || !currentUserId || accessDenied) return;
-        const channel = supabase.channel(`typing:plan:${planId}`);
-        typingChannelRef.current = channel;
-        const typingMap = new Map<string, { name: string; at: number }>();
-
-        const refreshTyping = () => {
-            const now = Date.now();
-            const names: string[] = [];
-            typingMap.forEach((v, id) => {
-                if (id === currentUserId) return;
-                if (now - v.at > 3500) typingMap.delete(id);
-                else if (v.name) names.push(v.name);
-            });
-            setTypingNames(names.slice(0, 3));
-        };
-
-        channel
-            .on('broadcast', { event: 'typing' }, ({ payload }) => {
-                const uid = String(payload?.userId ?? '');
-                const name = String(payload?.name ?? '');
-                if (!uid || uid === currentUserId) return;
-                typingMap.set(uid, { name: name || 'Alguien', at: Date.now() });
-                refreshTyping();
-            })
-            .subscribe();
-
-        const tick = setInterval(refreshTyping, 1000);
-        return () => {
-            clearInterval(tick);
-            typingChannelRef.current = null;
-            void supabase.removeChannel(channel);
-        };
-    }, [planId, currentUserId, accessDenied]);
-
-    const emitTyping = useCallback(() => {
-        if (!currentUserId || accessDenied) return;
-        const name = myProfile?.nombre || 'Alguien';
-        void typingChannelRef.current?.send({
-            type: 'broadcast',
-            event: 'typing',
-            payload: { userId: currentUserId, name },
-        });
-    }, [currentUserId, accessDenied, myProfile?.nombre]);
-
-    const onMessageTextChange = useCallback(
-        (text: string) => {
-            setMessageText(text);
-            if (!text.trim()) return;
-            if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-            typingTimerRef.current = setTimeout(() => emitTyping(), 350);
-        },
-        [emitTyping],
-    );
-
-    const toggleMuteChat = useCallback(async () => {
-        if (!planId) return;
-        const next = !chatMuted;
-        hapticToggle(!next);
-        setChatMuted(next);
-        await setPlanChatMuted(planId, next);
-    }, [planId, chatMuted]);
-
-    useFocusEffect(
-        useCallback(() => {
-            refreshChatHeader();
-            if (planId) setActiveConversation({ kind: 'plan', id: planId });
-            if (currentUserId && planId && !accessDenied) {
-                void markPlanChatRead(currentUserId, planId);
-            }
-            return () => {
-                setActiveConversation(null);
-                if (currentUserId && planId) {
-                    void markPlanChatRead(currentUserId, planId);
-                }
-            };
-        }, [refreshChatHeader, currentUserId, planId, accessDenied])
-    );
-
-    const sendMessage = async (
-        tipo: 'texto' | 'imagen' | 'video' | 'audio' = 'texto',
-        archivoUrl: string | null = null,
-        audioDurationSec?: number
-    ) => {
-        if (!currentUserId || !planId || accessDenied || isSending) return;
-
-        const tempText = messageText.trim();
-        if (tipo === 'texto' && !tempText) return;
-
-        setIsSending(true);
-        hapticMedium();
-        const replySnapshot = tipo === 'texto' ? replyTo : null;
-        if (tipo === 'texto') {
-            setMessageText('');
-            setReplyTo(null);
-        }
-
-        const contenidoPayload =
-            tipo === 'texto'
-                ? (replySnapshot ? encodeReplyContent(tempText, replySnapshot) : tempText)
-                : tipo === 'audio' && audioDurationSec
-                  ? String(audioDurationSec)
-                  : '';
-
-        const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const optimistic: Message = {
-            id: tempId,
-            contenido: contenidoPayload,
-            emisor_id: currentUserId,
-            creado_en: new Date().toISOString(),
-            tipo,
-            archivo_url: archivoUrl,
-            perfiles: myProfile,
-            pending: !getIsOnline() && tipo === 'texto',
-        };
-        setMessages((prev) => {
-            const next = [optimistic, ...prev];
-            persistPlanChatCache(planId, { messages: next });
-            return next;
-        });
-
-        if (!getIsOnline()) {
-            if (tipo !== 'texto') {
-                setMessages((prev) => prev.filter((m) => m.id !== tempId));
-                setIsSending(false);
-                Alert.alert(t('chat.errorTitle'), t('chat.sendError'));
-                return;
-            }
-            await enqueueChatOutbox({
-                tempId,
-                kind: 'plan',
-                planId,
-                emisorId: currentUserId,
-                contenido: contenidoPayload,
-                tipo,
-                archivoUrl,
-                createdAt: optimistic.creado_en,
-            });
-            setIsSending(false);
-            return;
-        }
-
-        const { data, error } = await supabase
-            .from('mensajes')
-            .insert({
-                plan_id: planId,
-                contenido: contenidoPayload,
-                emisor_id: currentUserId,
-                tipo,
-                archivo_url: archivoUrl,
-            })
-            .select('id, creado_en')
-            .maybeSingle();
-
-        setIsSending(false);
-
-        if (error) {
-            if (tipo === 'texto') {
-                await enqueueChatOutbox({
-                    tempId,
-                    kind: 'plan',
-                    planId,
-                    emisorId: currentUserId,
-                    contenido: contenidoPayload,
-                    tipo,
-                    archivoUrl,
-                    createdAt: optimistic.creado_en,
-                });
-                setMessages((prev) => {
-                    const next = prev.map((m) => (m.id === tempId ? { ...m, pending: true } : m));
-                    persistPlanChatCache(planId, { messages: next });
-                    return next;
-                });
-                return;
-            }
-            setMessages((prev) => prev.filter((m) => m.id !== tempId));
-            Alert.alert(t('chat.errorTitle'), t('chat.sendError'));
-            return;
-        }
-
-        if (data?.id) {
-            setMessages((prev) => {
-                const next = prev.map((m) =>
-                    m.id === tempId
-                        ? {
-                              ...m,
-                              id: data.id as string,
-                              creado_en: (data.creado_en as string) || m.creado_en,
-                              pending: false,
-                          }
-                        : m,
-                );
-                persistPlanChatCache(planId, { messages: next });
-                return next;
-            });
-        }
-
-        if (data?.id) {
-            const { notifyPlanMessage } = await import('../../lib/push');
-            notifyPlanMessage(planId, String(data.id));
-        }
-        trackFunnel('chat_send', { userId: currentUserId, props: { planId, tipo } });
+    return rows;
+  }, []);
+
+  const loadMoreMessages = useCallback(async () => {
+    const current = messagesRef.current;
+    if (!planId || loadingMore || !hasMore || current.length === 0) return;
+
+    setLoadingMore(true);
+    try {
+      const oldest = current[current.length - 1];
+      const older = await fetchMessages(planId, oldest.creado_en);
+
+      const nextHasMore = older.length >= PAGE_SIZE;
+      if (!nextHasMore) setHasMore(false);
+
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m.id));
+        const unique = older.filter((m) => !existingIds.has(m.id));
+        const next = [...prev, ...unique];
+        if (planId)
+          persistPlanChatCache(planId, {
+            messages: next,
+            hasMore: nextHasMore,
+          });
+        return next;
+      });
+    } catch (error) {
+      if (__DEV__) console.error("Error cargando más mensajes:", error);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [planId, loadingMore, hasMore, fetchMessages, persistPlanChatCache]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      soundRef.current?.unloadAsync();
     };
+  }, []);
 
-    const pickMedia = async () => {
-        if (isUploading || accessDenied) return;
+  const loadAudioDuration = useCallback(
+    async (messageId: string, audioUrl: string) => {
+      if (loadingDurationsRef.current.has(messageId)) return;
+      loadingDurationsRef.current.add(messageId);
 
-        const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permissionResult.granted) {
-            Alert.alert(t('chat.permRequired'), t('chat.galleryPerm'));
-            return;
-        }
-
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images', 'videos'],
-            allowsEditing: false,
-            quality: 0.8,
-            videoMaxDuration: 120,
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
         });
-
-        if (result.canceled || !planId) return;
-
-        const selectedAsset = result.assets[0];
-        const fileType = selectedAsset.type === 'video' ? 'video' : 'image';
-        const messageType = fileType === 'image' ? 'imagen' : 'video';
-
-        setIsUploading(true);
-        const uploadedUrl = await uploadChatFile(selectedAsset.uri, fileType, planId);
-        setIsUploading(false);
-
-        if (uploadedUrl) {
-            await sendMessage(messageType, uploadedUrl);
-        } else {
-            Alert.alert(t('chat.errorTitle'), t('chat.uploadError'));
-        }
-    };
-
-    const startRecording = async () => {
-        if (isUploading || accessDenied) return;
-
-        try {
-            const permission = await Audio.requestPermissionsAsync();
-            if (permission.status !== 'granted') {
-                Alert.alert(t('chat.permRequired'), t('chat.micPerm'));
-                return;
-            }
-
-            await stopAudio();
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: true,
-                playsInSilentModeIOS: true,
-            });
-
-            const { recording: newRecording } = await Audio.Recording.createAsync(
-                Audio.RecordingOptionsPresets.HIGH_QUALITY
-            );
-            setRecording(newRecording);
-        } catch (err) {
-            console.error('Fallo al iniciar la grabación', err);
-            Alert.alert(t('chat.errorTitle'), t('chat.recordError'));
-        }
-    };
-
-    const stopRecording = async () => {
-        if (!recording || !planId) return;
-
-        const activeRecording = recording;
-        setRecording(null);
-
-        try {
-            const status = await activeRecording.getStatusAsync();
-            const durationSec = Math.max(
-                1,
-                Math.round((status.durationMillis ?? recordingDuration * 1000) / 1000)
-            );
-
-            const uri = activeRecording.getURI();
-            await activeRecording.stopAndUnloadAsync();
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: false,
-                playsInSilentModeIOS: true,
-            });
-
-            if (!uri) return;
-
-            setIsUploading(true);
-            const uploadedUrl = await uploadChatFile(uri, 'audio', planId);
-            setIsUploading(false);
-
-            if (uploadedUrl) {
-                await sendMessage('audio', uploadedUrl, durationSec);
-            } else {
-                Alert.alert(t('chat.errorTitle'), t('chat.voiceError'));
-            }
-        } catch (err) {
-            console.error('Fallo al detener la grabación', err);
-            setIsUploading(false);
-        }
-    };
-
-    const handleActionPress = () => {
-        if (isUploading || isSending) return;
-
-        if (messageText.trim()) {
-            sendMessage();
-        } else if (recording) {
-            stopRecording();
-        } else {
-            startRecording();
-        }
-    };
-
-    const playAudio = useCallback(async (messageId: string, audioUrl: string) => {
-        try {
-            if (playingMessageId === messageId) {
-                await stopAudio();
-                return;
-            }
-
-            await stopAudio();
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: false,
-                playsInSilentModeIOS: true,
-            });
-
-            const { sound: newSound } = await Audio.Sound.createAsync(
-                { uri: audioUrl },
-                { shouldPlay: true }
-            );
-
-            soundRef.current = newSound;
-            setPlayingMessageId(messageId);
-
-            newSound.setOnPlaybackStatusUpdate((status) => {
-                if (status.isLoaded && status.didJustFinish) {
-                    soundRef.current = null;
-                    setPlayingMessageId(null);
-                }
-            });
-        } catch (error) {
-            if (__DEV__) console.error('Error reproduciendo audio:', error);
-            setPlayingMessageId(null);
-        }
-    }, [playingMessageId, stopAudio]);
-
-    const inputDisabled = isUploading || isSending || accessDenied || loading;
-    const actionIcon = useMemo(() => {
-        if (isUploading || isSending) return 'hourglass';
-        if (messageText.trim()) return 'send';
-        if (recording) return 'stop';
-        return 'mic';
-    }, [isUploading, isSending, messageText, recording]);
-
-    const openMessageProfile = useCallback(
-        (userId: string) => {
-            router.push({
-                pathname: '/user-profile/[id]',
-                params: {
-                    id: userId,
-                    isFriend: friendIds.has(userId) ? '1' : '0',
-                },
-            });
-        },
-        [router, friendIds],
-    );
-
-    const toggleSavePlan = useCallback(async () => {
-        if (!currentUserId || !planId || creatorId === currentUserId) return;
-        const prev = isSaved;
-        hapticLight();
-        setIsSaved(!prev);
-        if (prev) {
-            const { error } = await supabase
-                .from('planes_guardados')
-                .delete()
-                .eq('plan_id', planId)
-                .eq('usuario_id', currentUserId);
-            if (error) {
-                setIsSaved(prev);
-                Alert.alert(t('feed.error'), t('feed.saveError'));
-            }
-        } else {
-            if (planFechaEvento && !isPlanActiveForSaved({ fecha_evento: planFechaEvento })) {
-                setIsSaved(prev);
-                return;
-            }
-            const { error } = await supabase
-                .from('planes_guardados')
-                .insert({ plan_id: planId, usuario_id: currentUserId });
-            if (error) {
-                setIsSaved(prev);
-                Alert.alert(t('feed.error'), t('feed.saveError'));
-            }
-        }
-    }, [currentUserId, planId, creatorId, isSaved, planFechaEvento, t]);
-
-    const handleSharePlan = useCallback(() => {
-        if (!planId) return;
-        const title = planName.trim() || 'Plan';
-        let when: string | null = null;
-        if (planFechaEvento) {
-            const d = new Date(planFechaEvento);
-            if (Number.isFinite(d.getTime())) {
-                when = d.toLocaleString(undefined, {
-                    weekday: 'short',
-                    day: 'numeric',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                });
-            }
-        }
-        const message = buildPlanShareMessage({
-            title,
-            location: planLocationName,
-            when,
-            planId,
-            hint: t('planDetail.shareHint'),
-            lang,
-        });
-        const shareViaWhatsApp = async () => {
-            const url = `whatsapp://send?text=${encodeURIComponent(message)}`;
-            try {
-                await Linking.openURL(url);
-            } catch {
-                try {
-                    await Share.share({ message });
-                } catch {
-                    // cancelado
-                }
-            }
-        };
-        const openNativeShare = async () => {
-            try {
-                await Share.share({ message });
-            } catch {
-                // cancelado
-            }
-        };
-        Alert.alert(t('card.share'), `"${title}"`, [
-            { text: t('card.shareWhats'), onPress: () => void shareViaWhatsApp() },
-            { text: t('card.shareOther'), onPress: () => void openNativeShare() },
-            { text: t('common.cancel'), style: 'cancel' },
-        ]);
-    }, [planId, planName, planFechaEvento, planLocationName, t, lang]);
-
-    const relationFor = useCallback(
-        (userId: string): 'friend' | 'acquaintance' | null => {
-            if (!userId || userId === currentUserId) return null;
-            if (friendIds.has(userId)) return 'friend';
-            if (coincidedIds.has(userId)) return 'acquaintance';
-            return null;
-        },
-        [currentUserId, friendIds, coincidedIds],
-    );
-
-    const onPickMessageReaction = useCallback(
-        (messageId: string, emoji: string) => {
-            if (!currentUserId) return;
-            if (messageId.startsWith('local-')) return;
-            void applyMessageReaction({
-                messageId,
-                userId: currentUserId,
-                emoji,
-                reactions,
-                setReactions,
-            });
-        },
-        [currentUserId, reactions, setReactions],
-    );
-
-    const renderItem = useCallback(
-        ({ item }: { item: Message }) => (
-            <ChatMessageRow
-                item={item}
-                currentUserId={currentUserId}
-                isPlaying={playingMessageId === item.id}
-                audioDurationSec={audioDurations[item.id]}
-                reactions={reactions}
-                videoLabel={t('chat.videoLabel')}
-                relation={relationFor(item.emisor_id)}
-                onOpenProfile={openMessageProfile}
-                onOpenImage={setModalImage}
-                onOpenVideo={setModalVideo}
-                onPlayAudio={playAudio}
-                onLongPressMessage={setReactionPickerId}
-                onReplyMessage={(messageId) => {
-                    const msg = messagesRef.current.find((m) => m.id === messageId);
-                    if (!msg) return;
-                    const name = Array.isArray(msg.perfiles)
-                        ? msg.perfiles[0]?.nombre
-                        : msg.perfiles?.nombre;
-                    setReplyTo({
-                        id: msg.id,
-                        name: name || 'Usuario',
-                        preview: previewForReply(msg.contenido, msg.tipo),
-                    });
-                }}
-                onPickReaction={onPickMessageReaction}
-            />
-        ),
-        [
-            currentUserId,
-            playingMessageId,
-            audioDurations,
-            reactions,
-            t,
-            relationFor,
-            openMessageProfile,
-            playAudio,
-            onPickMessageReaction,
-        ],
-    );
-
-    const renderListFooter = () => {
-        if (!loadingMore) return null;
-        return (
-            <View style={styles.loadMore}>
-                <ActivityIndicator color={PRIMARY} size="small" />
-            </View>
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: audioUrl },
+          { shouldPlay: false },
         );
+        const status = await sound.getStatusAsync();
+        await sound.unloadAsync();
+
+        if (status.isLoaded && status.durationMillis) {
+          const seconds = Math.max(1, Math.round(status.durationMillis / 1000));
+          setAudioDurations((prev) => ({ ...prev, [messageId]: seconds }));
+        }
+      } catch {
+        /* duración opcional */
+      } finally {
+        loadingDurationsRef.current.delete(messageId);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    messages.forEach((message) => {
+      if (message.tipo !== "audio" || !message.archivo_url) return;
+      if (parseStoredDuration(message.contenido)) return;
+      if (audioDurations[message.id]) return;
+      loadAudioDuration(message.id, message.archivo_url);
+    });
+  }, [messages, audioDurations, loadAudioDuration]);
+
+  useEffect(() => {
+    if (!recording) {
+      setRecordingDuration(0);
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await recording.getStatusAsync();
+        if (status.isRecording && status.durationMillis) {
+          setRecordingDuration(Math.floor(status.durationMillis / 1000));
+        }
+      } catch {
+        // ignore polling errors while recording
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [recording]);
+
+  useEffect(() => {
+    if (!planId) return;
+
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    const initChat = async () => {
+      const stale = cacheGetStale<PlanChatSnapshot>(planChatKey(planId));
+      if (stale?.messages?.length) {
+        setMessages(stale.messages);
+        setPlanName(stale.planName);
+        setPlanImage(stale.planImage);
+        setParticipantNames(stale.participantNames);
+        setIsGroupChat(stale.isGroupChat);
+        setPlanCategory(stale.planCategory);
+        setPlanOwnerId(stale.planOwnerId);
+        setMembers(stale.members);
+        setCreatorId(stale.creatorId);
+        setPlanFechaEvento(stale.planFechaEvento);
+        setModoPrivado(stale.modoPrivado ?? false);
+        setAccessDenied(stale.accessDenied);
+        setHasMore(stale.hasMore);
+        setLoading(false);
+      } else {
+        setLoading(true);
+        setAccessDenied(false);
+        setHasMore(true);
+      }
+
+      try {
+        const user = await getAuthUser();
+        if (!isMountedRef.current) return;
+
+        if (!user) {
+          router.replace("/login");
+          return;
+        }
+
+        setCurrentUserId(user.id);
+
+        void runPlanLifecycleMaintenance();
+
+        void Promise.all([
+          getFriends(user.id),
+          getCoincidedUserIds(user.id),
+          supabase
+            .from("planes_guardados")
+            .select("plan_id")
+            .eq("plan_id", planId)
+            .eq("usuario_id", user.id)
+            .maybeSingle(),
+        ]).then(([friends, coincided, savedRes]) => {
+          if (!isMountedRef.current) return;
+          setFriendIds(new Set(friends.map((f) => f.id)));
+          setCoincidedIds(coincided);
+          setIsSaved(!!savedRes.data);
+        });
+
+        const { data: planData, error: planError } = await supabase
+          .from("planes")
+          .select(
+            "titulo, imagen_url, creador_id, categoria, fecha_evento, chat_eliminado_en, modo_privado, nombre_ubicacion",
+          )
+          .eq("id", planId)
+          .single();
+
+        if (planError || !planData) {
+          Alert.alert(t("chat.errorTitle"), t("chat.planNotFound"));
+          router.back();
+          return;
+        }
+
+        if (!isPlanChatAlive(planData)) {
+          Alert.alert(t("chat.errorTitle"), t("chat.expired"));
+          router.back();
+          return;
+        }
+
+        setPlanFechaEvento(planData.fecha_evento ?? null);
+        setPlanLocationName(planData.nombre_ubicacion ?? null);
+
+        const { data: membership } = await supabase
+          .from("participantes")
+          .select("usuario_id, estado")
+          .eq("plan_id", planId)
+          .eq("usuario_id", user.id)
+          .maybeSingle();
+
+        const isCreator = planData.creador_id === user.id;
+        const canAccessChat = isCreator || membership?.estado === "aceptado";
+        if (!canAccessChat) {
+          setAccessDenied(true);
+          setPlanName(planData.titulo);
+          setPlanImage(planData.imagen_url);
+          persistPlanChatCache(planId, {
+            messages: [],
+            planName: planData.titulo,
+            planImage: planData.imagen_url,
+            accessDenied: true,
+            hasMore: false,
+          });
+          return;
+        }
+
+        if (!isMountedRef.current) return;
+
+        setAccessDenied(false);
+        setPlanCategory(planData.categoria ?? null);
+        setPlanOwnerId(planData.creador_id ?? null);
+        setCreatorId(planData.creador_id ?? null);
+        setModoPrivado(!!planData.modo_privado);
+        setIsGroupChat(planData.categoria === "Grupo");
+
+        setPlanName(planData.titulo);
+        setPlanImage(planData.imagen_url ?? null);
+
+        const [initialMessages, partsMeta] = await Promise.all([
+          fetchMessages(planId),
+          fetchParticipants(planId),
+        ]);
+
+        if (!isMountedRef.current) return;
+
+        const merged = mergeMessages(initialMessages, stale?.messages ?? []);
+        setMessages(merged);
+        const nextHasMore =
+          initialMessages.length >= PAGE_SIZE || (stale?.hasMore ?? false);
+        setHasMore(nextHasMore);
+        void markPlanChatRead(user.id, planId);
+
+        persistPlanChatCache(planId, {
+          messages: merged,
+          planName: planData.titulo,
+          planImage: planData.imagen_url ?? null,
+          participantNames: partsMeta.participantNames,
+          isGroupChat: planData.categoria === "Grupo",
+          planCategory: planData.categoria ?? null,
+          planOwnerId: planData.creador_id ?? null,
+          members: partsMeta.members,
+          creatorId: partsMeta.creatorId,
+          planFechaEvento: planData.fecha_evento ?? null,
+          modoPrivado: !!planData.modo_privado,
+          accessDenied: false,
+          hasMore: nextHasMore,
+        });
+
+        channel = supabase
+          .channel(`chat:${planId}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "INSERT",
+              schema: "public",
+              table: "mensajes",
+              filter: `plan_id=eq.${planId}`,
+            },
+            async (payload) => {
+              const newId = payload.new.id as string;
+
+              const { data: perfil } = await supabase
+                .from("perfiles")
+                .select("nombre, avatar_url")
+                .eq("id", payload.new.emisor_id)
+                .single();
+
+              const newMessage: Message = {
+                id: newId,
+                contenido: (payload.new.contenido as string) ?? "",
+                emisor_id: payload.new.emisor_id as string,
+                creado_en: payload.new.creado_en as string,
+                tipo: (payload.new.tipo as Message["tipo"]) ?? "texto",
+                archivo_url: (payload.new.archivo_url as string | null) ?? null,
+                perfiles: perfil,
+              };
+
+              if (isMountedRef.current) {
+                setMessages((prev) => {
+                  if (prev.some((m) => m.id === newMessage.id)) return prev;
+                  const withoutOptimistic = prev.filter(
+                    (m) =>
+                      !(
+                        m.id.startsWith("local-") &&
+                        m.emisor_id === newMessage.emisor_id &&
+                        m.tipo === newMessage.tipo &&
+                        m.contenido === newMessage.contenido &&
+                        m.archivo_url === newMessage.archivo_url
+                      ),
+                  );
+                  const next = [newMessage, ...withoutOptimistic];
+                  persistPlanChatCache(planId, { messages: next });
+                  return next;
+                });
+              }
+            },
+          )
+          .subscribe();
+      } catch (error) {
+        console.error("Error en initChat:", error);
+        if (!stale?.messages?.length) {
+          Alert.alert(t("chat.errorTitle"), t("chat.loadError"));
+        }
+      } finally {
+        if (isMountedRef.current) setLoading(false);
+      }
     };
 
+    initChat();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [
+    planId,
+    router,
+    fetchMessages,
+    fetchParticipants,
+    persistPlanChatCache,
+    t,
+  ]);
+
+  const refreshChatHeader = useCallback(async () => {
+    if (!planId || !currentUserId || accessDenied) return;
+    const { data } = await supabase
+      .from("planes")
+      .select("titulo, imagen_url")
+      .eq("id", planId)
+      .single();
+    if (data) {
+      if (data.titulo) setPlanName(data.titulo);
+      if (data.imagen_url) setPlanImage(data.imagen_url);
+    }
+  }, [planId, currentUserId, accessDenied]);
+
+  useEffect(() => {
+    if (!planFechaEvento || isGroupOrChatPlan({ categoria: planCategory })) {
+      setChatExpiryLabel(null);
+      return;
+    }
+    const end = new Date(planFechaEvento).getTime();
+    if (!Number.isFinite(end) || Date.now() < end) {
+      setChatExpiryLabel(null);
+      return;
+    }
+    const tick = () => {
+      const expiry = getChatExpiryMs(planFechaEvento);
+      if (!expiry) {
+        setChatExpiryLabel(null);
+        return;
+      }
+      const remaining = expiry - Date.now();
+      if (remaining <= 0) {
+        setChatExpiryLabel("0:00");
+        void runPlanLifecycleMaintenance();
+        Alert.alert(t("chat.errorTitle"), t("chat.expired"));
+        router.back();
+        return;
+      }
+      setChatExpiryLabel(formatCountdown(remaining));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [planFechaEvento, planCategory, router, t]);
+
+  useEffect(() => {
+    if (!planId) return;
+    const unsub = subscribeOutboxFlush((ev) => {
+      if (ev.kind !== "plan" || ev.planId !== planId) return;
+      setMessages((prev) => {
+        const next = prev.map((m) =>
+          m.id === ev.tempId
+            ? { ...m, id: ev.serverId, creado_en: ev.creadoEn, pending: false }
+            : m,
+        );
+        persistPlanChatCache(planId, { messages: next });
+        return next;
+      });
+    });
+    if (getIsOnline()) void flushChatOutbox();
+    return unsub;
+  }, [planId]);
+
+  useEffect(() => {
+    if (!planId || !currentUserId) return;
+    void isPlanChatMuted(planId).then(setChatMuted);
+    trackFunnel("chat_open", { userId: currentUserId, props: { planId } });
+  }, [planId, currentUserId]);
+
+  const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!planId || !currentUserId || accessDenied) return;
+    const channel = supabase.channel(`typing:plan:${planId}`);
+    typingChannelRef.current = channel;
+    const typingMap = new Map<string, { name: string; at: number }>();
+
+    const refreshTyping = () => {
+      const now = Date.now();
+      const names: string[] = [];
+      typingMap.forEach((v, id) => {
+        if (id === currentUserId) return;
+        if (now - v.at > 3500) typingMap.delete(id);
+        else if (v.name) names.push(v.name);
+      });
+      setTypingNames(names.slice(0, 3));
+    };
+
+    channel
+      .on("broadcast", { event: "typing" }, ({ payload }) => {
+        const uid = String(payload?.userId ?? "");
+        const name = String(payload?.name ?? "");
+        if (!uid || uid === currentUserId) return;
+        typingMap.set(uid, { name: name || "Alguien", at: Date.now() });
+        refreshTyping();
+      })
+      .subscribe();
+
+    const tick = setInterval(refreshTyping, 1000);
+    return () => {
+      clearInterval(tick);
+      typingChannelRef.current = null;
+      void supabase.removeChannel(channel);
+    };
+  }, [planId, currentUserId, accessDenied]);
+
+  const emitTyping = useCallback(() => {
+    if (!currentUserId || accessDenied) return;
+    const name = myProfile?.nombre || "Alguien";
+    void typingChannelRef.current?.send({
+      type: "broadcast",
+      event: "typing",
+      payload: { userId: currentUserId, name },
+    });
+  }, [currentUserId, accessDenied, myProfile?.nombre]);
+
+  const onMessageTextChange = useCallback(
+    (text: string) => {
+      setMessageText(text);
+      if (!text.trim()) return;
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = setTimeout(() => emitTyping(), 350);
+    },
+    [emitTyping],
+  );
+
+  const toggleMuteChat = useCallback(async () => {
+    if (!planId) return;
+    const next = !chatMuted;
+    hapticToggle(!next);
+    setChatMuted(next);
+    await setPlanChatMuted(planId, next);
+  }, [planId, chatMuted]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshChatHeader();
+      if (planId) setActiveConversation({ kind: "plan", id: planId });
+      if (currentUserId && planId && !accessDenied) {
+        void markPlanChatRead(currentUserId, planId);
+      }
+      return () => {
+        setActiveConversation(null);
+        if (currentUserId && planId) {
+          void markPlanChatRead(currentUserId, planId);
+        }
+      };
+    }, [refreshChatHeader, currentUserId, planId, accessDenied]),
+  );
+
+  const sendMessage = async (
+    tipo: "texto" | "imagen" | "video" | "audio" = "texto",
+    archivoUrl: string | null = null,
+    audioDurationSec?: number,
+  ) => {
+    if (!currentUserId || !planId || accessDenied || isSending) return;
+
+    const tempText = messageText.trim();
+    if (tipo === "texto" && !tempText) return;
+
+    setIsSending(true);
+    hapticMedium();
+    const replySnapshot = tipo === "texto" ? replyTo : null;
+    if (tipo === "texto") {
+      setMessageText("");
+      setReplyTo(null);
+    }
+
+    const contenidoPayload =
+      tipo === "texto"
+        ? replySnapshot
+          ? encodeReplyContent(tempText, replySnapshot)
+          : tempText
+        : tipo === "audio" && audioDurationSec
+          ? String(audioDurationSec)
+          : "";
+
+    const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const optimistic: Message = {
+      id: tempId,
+      contenido: contenidoPayload,
+      emisor_id: currentUserId,
+      creado_en: new Date().toISOString(),
+      tipo,
+      archivo_url: archivoUrl,
+      perfiles: myProfile,
+      pending: !getIsOnline() && tipo === "texto",
+    };
+    setMessages((prev) => {
+      const next = [optimistic, ...prev];
+      persistPlanChatCache(planId, { messages: next });
+      return next;
+    });
+
+    if (!getIsOnline()) {
+      if (tipo !== "texto") {
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        setIsSending(false);
+        Alert.alert(t("chat.errorTitle"), t("chat.sendError"));
+        return;
+      }
+      await enqueueChatOutbox({
+        tempId,
+        kind: "plan",
+        planId,
+        emisorId: currentUserId,
+        contenido: contenidoPayload,
+        tipo,
+        archivoUrl,
+        createdAt: optimistic.creado_en,
+      });
+      setIsSending(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("mensajes")
+      .insert({
+        plan_id: planId,
+        contenido: contenidoPayload,
+        emisor_id: currentUserId,
+        tipo,
+        archivo_url: archivoUrl,
+      })
+      .select("id, creado_en")
+      .maybeSingle();
+
+    setIsSending(false);
+
+    if (error) {
+      if (tipo === "texto") {
+        await enqueueChatOutbox({
+          tempId,
+          kind: "plan",
+          planId,
+          emisorId: currentUserId,
+          contenido: contenidoPayload,
+          tipo,
+          archivoUrl,
+          createdAt: optimistic.creado_en,
+        });
+        setMessages((prev) => {
+          const next = prev.map((m) =>
+            m.id === tempId ? { ...m, pending: true } : m,
+          );
+          persistPlanChatCache(planId, { messages: next });
+          return next;
+        });
+        return;
+      }
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      Alert.alert(t("chat.errorTitle"), t("chat.sendError"));
+      return;
+    }
+
+    if (data?.id) {
+      setMessages((prev) => {
+        const next = prev.map((m) =>
+          m.id === tempId
+            ? {
+                ...m,
+                id: data.id as string,
+                creado_en: (data.creado_en as string) || m.creado_en,
+                pending: false,
+              }
+            : m,
+        );
+        persistPlanChatCache(planId, { messages: next });
+        return next;
+      });
+    }
+
+    if (data?.id) {
+      const { notifyPlanMessage } = await import("../../lib/push");
+      notifyPlanMessage(planId, String(data.id));
+    }
+    trackFunnel("chat_send", {
+      userId: currentUserId,
+      props: { planId, tipo },
+    });
+  };
+
+  const pickMedia = async () => {
+    if (isUploading || accessDenied) return;
+
+    const permissionResult =
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permissionResult.granted) {
+      Alert.alert(t("chat.permRequired"), t("chat.galleryPerm"));
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images", "videos"],
+      allowsEditing: false,
+      quality: 0.8,
+      videoMaxDuration: 120,
+    });
+
+    if (result.canceled || !planId) return;
+
+    const selectedAsset = result.assets[0];
+    const fileType = selectedAsset.type === "video" ? "video" : "image";
+    const messageType = fileType === "image" ? "imagen" : "video";
+
+    setIsUploading(true);
+    const uploadedUrl = await uploadChatFile(
+      selectedAsset.uri,
+      fileType,
+      planId,
+    );
+    setIsUploading(false);
+
+    if (uploadedUrl) {
+      await sendMessage(messageType, uploadedUrl);
+    } else {
+      Alert.alert(t("chat.errorTitle"), t("chat.uploadError"));
+    }
+  };
+
+  const startRecording = async () => {
+    if (isUploading || accessDenied) return;
+
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (permission.status !== "granted") {
+        Alert.alert(t("chat.permRequired"), t("chat.micPerm"));
+        return;
+      }
+
+      await stopAudio();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording: newRecording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+      );
+      setRecording(newRecording);
+    } catch (err) {
+      console.error("Fallo al iniciar la grabación", err);
+      Alert.alert(t("chat.errorTitle"), t("chat.recordError"));
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!recording || !planId) return;
+
+    const activeRecording = recording;
+    setRecording(null);
+
+    try {
+      const status = await activeRecording.getStatusAsync();
+      const durationSec = Math.max(
+        1,
+        Math.round((status.durationMillis ?? recordingDuration * 1000) / 1000),
+      );
+
+      const uri = activeRecording.getURI();
+      await activeRecording.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+      });
+
+      if (!uri) return;
+
+      setIsUploading(true);
+      const uploadedUrl = await uploadChatFile(uri, "audio", planId);
+      setIsUploading(false);
+
+      if (uploadedUrl) {
+        await sendMessage("audio", uploadedUrl, durationSec);
+      } else {
+        Alert.alert(t("chat.errorTitle"), t("chat.voiceError"));
+      }
+    } catch (err) {
+      console.error("Fallo al detener la grabación", err);
+      setIsUploading(false);
+    }
+  };
+
+  const handleActionPress = () => {
+    if (isUploading || isSending) return;
+
+    if (messageText.trim()) {
+      sendMessage();
+    } else if (recording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
+  const playAudio = useCallback(
+    async (messageId: string, audioUrl: string) => {
+      try {
+        if (playingMessageId === messageId) {
+          await stopAudio();
+          return;
+        }
+
+        await stopAudio();
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+        });
+
+        const { sound: newSound } = await Audio.Sound.createAsync(
+          { uri: audioUrl },
+          { shouldPlay: true },
+        );
+
+        soundRef.current = newSound;
+        setPlayingMessageId(messageId);
+
+        newSound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            soundRef.current = null;
+            setPlayingMessageId(null);
+          }
+        });
+      } catch (error) {
+        if (__DEV__) console.error("Error reproduciendo audio:", error);
+        setPlayingMessageId(null);
+      }
+    },
+    [playingMessageId, stopAudio],
+  );
+
+  const inputDisabled = isUploading || isSending || accessDenied || loading;
+  const actionIcon = useMemo(() => {
+    if (isUploading || isSending) return "hourglass";
+    if (messageText.trim()) return "send";
+    if (recording) return "stop";
+    return "mic";
+  }, [isUploading, isSending, messageText, recording]);
+
+  const openMessageProfile = useCallback(
+    (userId: string) => {
+      router.push({
+        pathname: "/user-profile/[id]",
+        params: {
+          id: userId,
+          isFriend: friendIds.has(userId) ? "1" : "0",
+        },
+      });
+    },
+    [router, friendIds],
+  );
+
+  const toggleSavePlan = useCallback(async () => {
+    if (!currentUserId || !planId || creatorId === currentUserId) return;
+    const prev = isSaved;
+    hapticLight();
+    setIsSaved(!prev);
+    if (prev) {
+      const { error } = await supabase
+        .from("planes_guardados")
+        .delete()
+        .eq("plan_id", planId)
+        .eq("usuario_id", currentUserId);
+      if (error) {
+        setIsSaved(prev);
+        Alert.alert(t("feed.error"), t("feed.saveError"));
+      }
+    } else {
+      if (
+        planFechaEvento &&
+        !isPlanActiveForSaved({ fecha_evento: planFechaEvento })
+      ) {
+        setIsSaved(prev);
+        return;
+      }
+      const { error } = await supabase
+        .from("planes_guardados")
+        .insert({ plan_id: planId, usuario_id: currentUserId });
+      if (error) {
+        setIsSaved(prev);
+        Alert.alert(t("feed.error"), t("feed.saveError"));
+      }
+    }
+  }, [currentUserId, planId, creatorId, isSaved, planFechaEvento, t]);
+
+  const handleSharePlan = useCallback(() => {
+    if (!planId) return;
+    const title = planName.trim() || "Plan";
+    let when: string | null = null;
+    if (planFechaEvento) {
+      const d = new Date(planFechaEvento);
+      if (Number.isFinite(d.getTime())) {
+        when = d.toLocaleString(undefined, {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      }
+    }
+    const message = buildPlanShareMessage({
+      title,
+      location: planLocationName,
+      when,
+      planId,
+      hint: t("planDetail.shareHint"),
+      lang,
+    });
+    const shareViaWhatsApp = async () => {
+      const url = `whatsapp://send?text=${encodeURIComponent(message)}`;
+      try {
+        await Linking.openURL(url);
+      } catch {
+        try {
+          await Share.share({ message });
+        } catch {
+          // cancelado
+        }
+      }
+    };
+    const openNativeShare = async () => {
+      try {
+        await Share.share({ message });
+      } catch {
+        // cancelado
+      }
+    };
+    Alert.alert(t("card.share"), `"${title}"`, [
+      { text: t("card.shareWhats"), onPress: () => void shareViaWhatsApp() },
+      { text: t("card.shareOther"), onPress: () => void openNativeShare() },
+      { text: t("common.cancel"), style: "cancel" },
+    ]);
+  }, [planId, planName, planFechaEvento, planLocationName, t, lang]);
+
+  const relationFor = useCallback(
+    (userId: string): "friend" | "acquaintance" | null => {
+      if (!userId || userId === currentUserId) return null;
+      if (friendIds.has(userId)) return "friend";
+      if (coincidedIds.has(userId)) return "acquaintance";
+      return null;
+    },
+    [currentUserId, friendIds, coincidedIds],
+  );
+
+  const onPickMessageReaction = useCallback(
+    (messageId: string, emoji: string) => {
+      if (!currentUserId) return;
+      if (messageId.startsWith("local-")) return;
+      void applyMessageReaction({
+        messageId,
+        userId: currentUserId,
+        emoji,
+        reactions,
+        setReactions,
+      });
+    },
+    [currentUserId, reactions, setReactions],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: Message }) => (
+      <ChatMessageRow
+        item={item}
+        currentUserId={currentUserId}
+        isPlaying={playingMessageId === item.id}
+        audioDurationSec={audioDurations[item.id]}
+        reactions={reactions}
+        videoLabel={t("chat.videoLabel")}
+        relation={relationFor(item.emisor_id)}
+        onOpenProfile={openMessageProfile}
+        onOpenImage={setModalImage}
+        onOpenVideo={setModalVideo}
+        onPlayAudio={playAudio}
+        onLongPressMessage={setReactionPickerId}
+        onReplyMessage={(messageId) => {
+          const msg = messagesRef.current.find((m) => m.id === messageId);
+          if (!msg) return;
+          const name = Array.isArray(msg.perfiles)
+            ? msg.perfiles[0]?.nombre
+            : msg.perfiles?.nombre;
+          setReplyTo({
+            id: msg.id,
+            name: name || "Usuario",
+            preview: previewForReply(msg.contenido, msg.tipo),
+          });
+        }}
+        onPickReaction={onPickMessageReaction}
+      />
+    ),
+    [
+      currentUserId,
+      playingMessageId,
+      audioDurations,
+      reactions,
+      t,
+      relationFor,
+      openMessageProfile,
+      playAudio,
+      onPickMessageReaction,
+    ],
+  );
+
+  const renderListFooter = () => {
+    if (!loadingMore) return null;
     return (
-        <View style={styles.container}>
-            <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <Ionicons name="chevron-back" size={28} color={PRIMARY} />
-                </TouchableOpacity>
+      <View style={styles.loadMore}>
+        <ActivityIndicator color={PRIMARY} size="small" />
+      </View>
+    );
+  };
 
-                <TouchableOpacity
-                    onPress={
-                        canEditGroupPhoto
-                            ? showGroupPhotoMenu
-                            : () => {
-                                  if (!planId) return;
-                                  router.push(`/plan/${planId}`);
-                              }
-                    }
-                    activeOpacity={0.7}
-                    disabled={uploadingGroupPhoto}
-                    style={styles.planHeaderImageWrap}
-                >
-                    {isCreatedGroupChat ? (
-                        <Image
-                            source={{
-                                uri: planImage || 'https://via.placeholder.com/150/4DA6FF/FFFFFF?text=G',
-                            }}
-                            style={styles.planHeaderImage}
-                        />
-                    ) : (
-                        <PlanImage
-                            source={resolvePlanImageSource(planImage)}
-                            style={styles.planHeaderImage}
-                            recyclingKey={planId}
-                        />
-                    )}
-                    {canEditGroupPhoto && (
-                        <View style={styles.groupPhotoBadge}>
-                            {uploadingGroupPhoto ? (
-                                <ActivityIndicator size="small" color="#FFF" />
-                            ) : (
-                                <Ionicons name="camera" size={14} color="#FFF" />
-                            )}
-                        </View>
-                    )}
-                </TouchableOpacity>
+  return (
+    <View style={styles.container}>
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={28} color={PRIMARY} />
+        </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={styles.headerTitleContainer}
-                    activeOpacity={0.7}
-                    onPress={() => {
-                        if (!planId) return;
-                        router.push(`/plan/${planId}`);
-                    }}
-                >
-                    <Text style={styles.headerTitle} numberOfLines={1}>
-                        {planName || (loading ? t('chat.loading') : '')}
-                    </Text>
-                    {(participantNames || loading) ? (
-                        <Text style={styles.headerSubtitle} numberOfLines={1}>
-                            {participantNames || (loading ? t('chat.loading') : '')}
-                        </Text>
-                    ) : null}
-                </TouchableOpacity>
-
-                {!isGroupChat ? (
-                    <TouchableOpacity onPress={handleSharePlan} style={styles.membersBtn} hitSlop={6}>
-                        <Ionicons name="arrow-redo" size={20} color={PRIMARY} />
-                    </TouchableOpacity>
-                ) : null}
-                {creatorId && currentUserId && creatorId !== currentUserId && !isGroupChat ? (
-                    <TouchableOpacity onPress={() => void toggleSavePlan()} style={styles.membersBtn} hitSlop={6}>
-                        <Ionicons
-                            name={isSaved ? 'heart' : 'heart-outline'}
-                            size={20}
-                            color={isSaved ? DANGER : PRIMARY}
-                        />
-                    </TouchableOpacity>
-                ) : null}
-                <TouchableOpacity onPress={() => void toggleMuteChat()} style={styles.membersBtn} hitSlop={6}>
-                    <Ionicons
-                        name={chatMuted ? 'notifications-off' : 'notifications-outline'}
-                        size={20}
-                        color={chatMuted ? '#94A3B8' : PRIMARY}
-                    />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setShowMembers(true)} style={styles.membersBtn}>
-                    <Ionicons name="people" size={22} color={PRIMARY} />
-                </TouchableOpacity>
+        <TouchableOpacity
+          onPress={
+            canEditGroupPhoto
+              ? showGroupPhotoMenu
+              : () => {
+                  if (!planId) return;
+                  router.push(`/plan/${planId}`);
+                }
+          }
+          activeOpacity={0.7}
+          disabled={uploadingGroupPhoto}
+          style={styles.planHeaderImageWrap}
+        >
+          {isCreatedGroupChat ? (
+            <Image
+              source={{
+                uri:
+                  planImage ||
+                  "https://via.placeholder.com/150/4DA6FF/FFFFFF?text=G",
+              }}
+              style={styles.planHeaderImage}
+            />
+          ) : (
+            <PlanImage
+              source={resolvePlanImageSource(planImage)}
+              style={styles.planHeaderImage}
+              recyclingKey={planId}
+            />
+          )}
+          {canEditGroupPhoto && (
+            <View style={styles.groupPhotoBadge}>
+              {uploadingGroupPhoto ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <Ionicons name="camera" size={14} color="#FFF" />
+              )}
             </View>
+          )}
+        </TouchableOpacity>
 
-            {chatExpiryLabel ? (
-                <View style={styles.expiryBanner}>
-                    <Ionicons name="time-outline" size={16} color="#B45309" />
-                    <Text style={styles.expiryBannerText}>
-                        {t('chat.expiresIn', { time: chatExpiryLabel })}
-                    </Text>
-                </View>
+        <TouchableOpacity
+          style={styles.headerTitleContainer}
+          activeOpacity={0.7}
+          onPress={() => {
+            if (!planId) return;
+            router.push(`/plan/${planId}`);
+          }}
+        >
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {planName || (loading ? t("chat.loading") : "")}
+          </Text>
+          {participantNames || loading ? (
+            <Text style={styles.headerSubtitle} numberOfLines={1}>
+              {participantNames || (loading ? t("chat.loading") : "")}
+            </Text>
+          ) : null}
+        </TouchableOpacity>
+
+        {!isGroupChat ? (
+          <TouchableOpacity
+            onPress={handleSharePlan}
+            style={styles.membersBtn}
+            hitSlop={6}
+          >
+            <Ionicons name="arrow-redo" size={20} color={PRIMARY} />
+          </TouchableOpacity>
+        ) : null}
+        {creatorId &&
+        currentUserId &&
+        creatorId !== currentUserId &&
+        !isGroupChat ? (
+          <TouchableOpacity
+            onPress={() => void toggleSavePlan()}
+            style={styles.membersBtn}
+            hitSlop={6}
+          >
+            <Ionicons
+              name={isSaved ? "heart" : "heart-outline"}
+              size={20}
+              color={isSaved ? DANGER : PRIMARY}
+            />
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          onPress={() => void toggleMuteChat()}
+          style={styles.membersBtn}
+          hitSlop={6}
+        >
+          <Ionicons
+            name={chatMuted ? "notifications-off" : "notifications-outline"}
+            size={20}
+            color={chatMuted ? "#94A3B8" : PRIMARY}
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setShowMembers(true)}
+          style={styles.membersBtn}
+        >
+          <Ionicons name="people" size={22} color={PRIMARY} />
+        </TouchableOpacity>
+      </View>
+
+      {chatExpiryLabel ? (
+        <View style={styles.expiryBanner}>
+          <Ionicons name="time-outline" size={16} color="#B45309" />
+          <Text style={styles.expiryBannerText}>
+            {t("chat.expiresIn", { time: chatExpiryLabel })}
+          </Text>
+        </View>
+      ) : null}
+
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? headerHeight : 0}
+      >
+        {loading ? (
+          <View style={styles.loading}>
+            <ActivityIndicator color={PRIMARY} size="large" />
+          </View>
+        ) : accessDenied ? (
+          <View style={styles.accessDenied}>
+            <Ionicons name="lock-closed-outline" size={48} color="#94A3B8" />
+            <Text style={styles.accessDeniedTitle}>
+              {t("chat.accessDenied")}
+            </Text>
+            <Text style={styles.accessDeniedText}>
+              {t("chat.accessDeniedSub")}
+            </Text>
+          </View>
+        ) : (
+          <View style={{ flex: 1 }}>
+            <FlashList
+              style={{ flex: 1 }}
+              data={messages}
+              keyExtractor={(item) => item.id}
+              renderItem={renderItem}
+              getItemType={chatMessageItemType}
+              inverted
+              drawDistance={FLASH_LIST_DRAW_DISTANCE}
+              contentContainerStyle={styles.listContent}
+              keyboardShouldPersistTaps="handled"
+              onEndReached={loadMoreMessages}
+              onEndReachedThreshold={0.3}
+              ListFooterComponent={renderListFooter}
+            />
+            {messages.length === 0 ? (
+              <View style={styles.emptyChatOverlay} pointerEvents="none">
+                <Text style={styles.emptyChatText}>
+                  {t("chat.emptyThread")}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+
+        {!accessDenied && typingNames.length > 0 ? (
+          <Text style={styles.typingHint}>
+            {typingNames.length === 1
+              ? t("chat.typingOne", { name: typingNames[0] })
+              : t("chat.typingMany", { names: typingNames.join(", ") })}
+          </Text>
+        ) : null}
+
+        {replyTo ? (
+          <View style={styles.replyChip}>
+            <View style={styles.replyChipBody}>
+              <Text style={styles.replyChipName} numberOfLines={1}>
+                {t("chat.replyingTo", { name: replyTo.name })}
+              </Text>
+              <Text style={styles.replyChipPreview} numberOfLines={1}>
+                {replyTo.preview}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={8}>
+              <Ionicons name="close" size={20} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        <View
+          style={[
+            styles.inputBar,
+            {
+              paddingBottom:
+                Platform.OS === "android" ? 8 : Math.max(insets.bottom, 8),
+            },
+          ]}
+        >
+          <TouchableOpacity
+            onPress={pickMedia}
+            style={styles.attachBtn}
+            disabled={inputDisabled}
+          >
+            <Ionicons
+              name="add"
+              size={26}
+              color={inputDisabled ? "#CBD5E1" : "#64748B"}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.inputContainer}>
+            <TextInput
+              placeholder={
+                recording
+                  ? `${t("chat.recording")} ${formatDuration(recordingDuration)}...`
+                  : accessDenied
+                    ? t("chat.cannotWrite")
+                    : t("chat.writeMessage")
+              }
+              placeholderTextColor="#64748B"
+              style={styles.textInput}
+              value={messageText}
+              onChangeText={onMessageTextChange}
+              multiline
+              editable={!recording && !inputDisabled}
+            />
+          </View>
+
+          <TouchableOpacity
+            onPress={handleActionPress}
+            style={[
+              styles.sendCircle,
+              recording && styles.recordingActive,
+              inputDisabled && styles.sendCircleDisabled,
+            ]}
+            disabled={inputDisabled && !recording}
+          >
+            <Ionicons name={actionIcon} size={18} color="white" />
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+
+      <ReactionEmojiPicker
+        visible={!!reactionPickerId}
+        onClose={() => setReactionPickerId(null)}
+        onPick={(emoji) => {
+          const mid = reactionPickerId;
+          setReactionPickerId(null);
+          if (!mid || !currentUserId || mid.startsWith("local-")) return;
+          void applyMessageReaction({
+            messageId: mid,
+            userId: currentUserId,
+            emoji,
+            reactions,
+            setReactions,
+          });
+        }}
+      />
+
+      <ChatMediaModals
+        imageUrl={modalImage}
+        videoUrl={modalVideo}
+        onCloseImage={() => setModalImage(null)}
+        onCloseVideo={() => setModalVideo(null)}
+      />
+
+      <Modal
+        visible={showMembers}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowMembers(false)}
+      >
+        <TouchableOpacity
+          style={styles.membersOverlay}
+          activeOpacity={1}
+          onPress={() => setShowMembers(false)}
+        >
+          <TouchableOpacity style={styles.membersSheet} activeOpacity={1}>
+            <View style={styles.membersHandle} />
+            <Text style={styles.membersTitle}>
+              {t("chat.members")} · {members.length}
+            </Text>
+
+            {canEditGroupPhoto && (
+              <TouchableOpacity
+                style={styles.changeGroupPhotoBtn}
+                onPress={() => {
+                  setShowMembers(false);
+                  showGroupPhotoMenu();
+                }}
+                disabled={uploadingGroupPhoto}
+              >
+                <Ionicons name="camera-outline" size={20} color={PRIMARY} />
+                <Text style={styles.changeGroupPhotoText}>
+                  {t("chat.groupPhotoTitle")}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            <FlatList
+              data={members}
+              keyExtractor={(m) => m.id}
+              style={{ maxHeight: 360 }}
+              renderItem={({ item: m }) => {
+                const relation = relationFor(m.id);
+                return (
+                  <View style={styles.memberRowWrap}>
+                    <TouchableOpacity
+                      style={[styles.memberRow, { flex: 1 }]}
+                      onPress={() => {
+                        setShowMembers(false);
+                        router.push({
+                          pathname: "/user-profile/[id]",
+                          params: {
+                            id: m.id,
+                            isFriend: relation === "friend" ? "1" : "0",
+                          },
+                        });
+                      }}
+                    >
+                      <View
+                        style={[
+                          styles.memberAvatarRing,
+                          relation === "friend" &&
+                            styles.memberAvatarRingFriend,
+                          relation === "acquaintance" &&
+                            styles.memberAvatarRingAcquaintance,
+                        ]}
+                      >
+                        <Image
+                          source={{
+                            uri:
+                              m.avatar_url ||
+                              `https://ui-avatars.com/api/?name=${encodeURIComponent(m.nombre)}&background=4DA6FF&color=fff`,
+                          }}
+                          style={styles.memberAvatar}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.memberName,
+                            relation === "friend" && styles.memberNameFriend,
+                            relation === "acquaintance" &&
+                              styles.memberNameAcquaintance,
+                          ]}
+                        >
+                          {m.nombre}
+                        </Text>
+                        {m.isCreator ? (
+                          <Text style={styles.memberCreator}>
+                            {t(
+                              m.genero === "femenino"
+                                ? "chat.hostF"
+                                : "chat.host",
+                            )}
+                          </Text>
+                        ) : relation === "friend" ? (
+                          <Text style={styles.memberRelationFriend}>
+                            {t(
+                              m.genero === "femenino"
+                                ? "planDetail.friendF"
+                                : "planDetail.friend",
+                            )}
+                          </Text>
+                        ) : relation === "acquaintance" ? (
+                          <Text style={styles.memberRelationAcquaintance}>
+                            {t(
+                              m.genero === "femenino"
+                                ? "planDetail.acquaintanceF"
+                                : "planDetail.acquaintance",
+                            )}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <Ionicons
+                        name="chevron-forward"
+                        size={18}
+                        color="#CBD5E1"
+                      />
+                    </TouchableOpacity>
+                    {creatorId === currentUserId &&
+                      !m.isCreator &&
+                      currentUserId &&
+                      planId && (
+                        <TouchableOpacity
+                          style={styles.memberKickBtn}
+                          onPress={() => {
+                            const targetId = m.id;
+                            const targetName = m.nombre;
+                            setShowMembers(false);
+                            // Cerrar el sheet antes del Alert: si no, en Android se queda trabado
+                            // (modal anidado + onPress async).
+                            setTimeout(() => {
+                              Alert.alert(
+                                t("planDetail.kickTitle"),
+                                t("planDetail.kickMsg", { name: targetName }),
+                                [
+                                  { text: t("common.cancel"), style: "cancel" },
+                                  {
+                                    text: t("planDetail.kickConfirm"),
+                                    style: "destructive",
+                                    onPress: () => {
+                                      void (async () => {
+                                        const { error } = await kickParticipant(
+                                          planId,
+                                          targetId,
+                                          currentUserId,
+                                        );
+                                        if (error) {
+                                          Alert.alert(
+                                            t("chat.errorTitle"),
+                                            error,
+                                          );
+                                          return;
+                                        }
+                                        await fetchParticipants(planId);
+                                      })();
+                                    },
+                                  },
+                                ],
+                              );
+                            }, 250);
+                          }}
+                        >
+                          <Ionicons
+                            name="ban-outline"
+                            size={20}
+                            color="#EF4444"
+                          />
+                        </TouchableOpacity>
+                      )}
+                  </View>
+                );
+              }}
+            />
+
+            {canInvitePeople ? (
+              <TouchableOpacity
+                style={styles.inviteBtn}
+                onPress={() => {
+                  setShowMembers(false);
+                  openInviteFriends();
+                }}
+              >
+                <Ionicons name="person-add-outline" size={20} color={PRIMARY} />
+                <Text style={styles.inviteBtnText}>
+                  {t("chat.inviteFriend")}
+                </Text>
+              </TouchableOpacity>
             ) : null}
 
-            <KeyboardAvoidingView
-                style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
+            <TouchableOpacity
+              style={styles.muteBtn}
+              onPress={() => void toggleMuteChat()}
             >
-                {loading ? (
-                    <View style={styles.loading}>
-                        <ActivityIndicator color={PRIMARY} size="large" />
-                    </View>
-                ) : accessDenied ? (
-                    <View style={styles.accessDenied}>
-                        <Ionicons name="lock-closed-outline" size={48} color="#94A3B8" />
-                        <Text style={styles.accessDeniedTitle}>{t('chat.accessDenied')}</Text>
-                        <Text style={styles.accessDeniedText}>
-                            {t('chat.accessDeniedSub')}
-                        </Text>
-                    </View>
-                ) : (
-                    <View style={{ flex: 1 }}>
-                        <FlashList
-                            style={{ flex: 1 }}
-                            data={messages}
-                            keyExtractor={(item) => item.id}
-                            renderItem={renderItem}
-                            getItemType={chatMessageItemType}
-                            inverted
-                            drawDistance={FLASH_LIST_DRAW_DISTANCE}
-                            contentContainerStyle={styles.listContent}
-                            keyboardShouldPersistTaps="handled"
-                            onEndReached={loadMoreMessages}
-                            onEndReachedThreshold={0.3}
-                            ListFooterComponent={renderListFooter}
-                        />
-                        {messages.length === 0 ? (
-                            <View style={styles.emptyChatOverlay} pointerEvents="none">
-                                <Text style={styles.emptyChatText}>{t('chat.emptyThread')}</Text>
-                            </View>
-                        ) : null}
-                    </View>
-                )}
+              <Ionicons
+                name={chatMuted ? "notifications-off" : "notifications-outline"}
+                size={20}
+                color={PRIMARY}
+              />
+              <Text style={styles.muteBtnText}>
+                {chatMuted ? t("chat.unmute") : t("chat.mute")}
+              </Text>
+            </TouchableOpacity>
 
-                {!accessDenied && typingNames.length > 0 ? (
-                    <Text style={styles.typingHint}>
-                        {typingNames.length === 1
-                            ? t('chat.typingOne', { name: typingNames[0] })
-                            : t('chat.typingMany', { names: typingNames.join(', ') })}
-                    </Text>
-                ) : null}
+            <TouchableOpacity
+              style={styles.leaveBtn}
+              onPress={handleDeleteChat}
+            >
+              <Ionicons name="trash-outline" size={20} color="#EF4444" />
+              <Text style={styles.leaveBtnText}>
+                {creatorId === currentUserId
+                  ? t("chat.deletePlanHost")
+                  : planFechaEvento &&
+                      Number.isFinite(new Date(planFechaEvento).getTime()) &&
+                      Date.now() >= new Date(planFechaEvento).getTime()
+                    ? t("chat.deleteChat")
+                    : t("chat.deleteChatAndLeave")}
+              </Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
-                {replyTo ? (
-                    <View style={styles.replyChip}>
-                        <View style={styles.replyChipBody}>
-                            <Text style={styles.replyChipName} numberOfLines={1}>
-                                {t('chat.replyingTo', { name: replyTo.name })}
-                            </Text>
-                            <Text style={styles.replyChipPreview} numberOfLines={1}>
-                                {replyTo.preview}
-                            </Text>
-                        </View>
-                        <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={8}>
-                            <Ionicons name="close" size={20} color="#64748B" />
-                        </TouchableOpacity>
-                    </View>
-                ) : null}
-
-                <View style={[styles.inputBar, { paddingBottom: Platform.OS === 'android' ? 8 : Math.max(insets.bottom, 8) }]}>
+      <Modal
+        visible={showInviteFriends}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowInviteFriends(false)}
+      >
+        <View style={styles.membersOverlay}>
+          <View style={styles.membersSheet}>
+            <View style={styles.membersHandle} />
+            <Text style={styles.membersTitle}>{t("chat.inviteFriend")}</Text>
+            {loadingInviteFriends ? (
+              <ActivityIndicator
+                color={PRIMARY}
+                style={{ marginVertical: 24 }}
+              />
+            ) : inviteFriends.length === 0 ? (
+              <Text style={styles.inviteEmpty}>{t("friends.noFriends")}</Text>
+            ) : (
+              <FlatList
+                data={inviteFriends}
+                keyExtractor={(f) => f.id}
+                style={{ maxHeight: 360 }}
+                renderItem={({ item: f }) => {
+                  const busy = invitingFriendId === f.id;
+                  return (
                     <TouchableOpacity
-                        onPress={pickMedia}
-                        style={styles.attachBtn}
-                        disabled={inputDisabled}
+                      style={styles.memberRow}
+                      onPress={() => handleInviteFriend(f.id)}
+                      disabled={busy}
                     >
+                      <Image
+                        source={{ uri: getAvatarUri(f) }}
+                        style={styles.memberAvatar}
+                      />
+                      <Text style={[styles.memberName, { flex: 1 }]}>
+                        {f.nombre}
+                      </Text>
+                      {busy ? (
+                        <ActivityIndicator color={PRIMARY} size="small" />
+                      ) : (
                         <Ionicons
-                            name="add"
-                            size={26}
-                            color={inputDisabled ? '#CBD5E1' : '#64748B'}
+                          name="paper-plane-outline"
+                          size={20}
+                          color={PRIMARY}
                         />
+                      )}
                     </TouchableOpacity>
-
-                    <View style={styles.inputContainer}>
-                        <TextInput
-                            placeholder={
-                                recording
-                                    ? `${t('chat.recording')} ${formatDuration(recordingDuration)}...`
-                                    : accessDenied
-                                      ? t('chat.cannotWrite')
-                                      : t('chat.writeMessage')
-                            }
-                            placeholderTextColor="#64748B"
-                            style={styles.textInput}
-                            value={messageText}
-                            onChangeText={onMessageTextChange}
-                            multiline
-                            editable={!recording && !inputDisabled}
-                        />
-                    </View>
-
-                    <TouchableOpacity
-                        onPress={handleActionPress}
-                        style={[
-                            styles.sendCircle,
-                            recording && styles.recordingActive,
-                            inputDisabled && styles.sendCircleDisabled,
-                        ]}
-                        disabled={inputDisabled && !recording}
-                    >
-                        <Ionicons name={actionIcon} size={18} color="white" />
-                    </TouchableOpacity>
-                </View>
-            </KeyboardAvoidingView>
-
-            <ReactionEmojiPicker
-                visible={!!reactionPickerId}
-                onClose={() => setReactionPickerId(null)}
-                onPick={(emoji) => {
-                    const mid = reactionPickerId;
-                    setReactionPickerId(null);
-                    if (!mid || !currentUserId || mid.startsWith('local-')) return;
-                    void applyMessageReaction({
-                        messageId: mid,
-                        userId: currentUserId,
-                        emoji,
-                        reactions,
-                        setReactions,
-                    });
+                  );
                 }}
-            />
-
-            <Modal
-                visible={modalImage !== null}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setModalImage(null)}
+              />
+            )}
+            <TouchableOpacity
+              style={styles.inviteCloseBtn}
+              onPress={() => setShowInviteFriends(false)}
             >
-                <TouchableOpacity
-                    style={styles.modalOverlay}
-                    activeOpacity={1}
-                    onPress={() => setModalImage(null)}
-                >
-                    <Image
-                        source={{ uri: modalImage || '' }}
-                        style={styles.modalImage}
-                        resizeMode="contain"
-                    />
-                    <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalImage(null)}>
-                        <Ionicons name="close" size={32} color="#FFF" />
-                    </TouchableOpacity>
-                </TouchableOpacity>
-            </Modal>
-
-            <Modal
-                visible={modalVideo !== null}
-                animationType="slide"
-                onRequestClose={() => setModalVideo(null)}
-            >
-                <View style={styles.videoModal}>
-                    <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalVideo(null)}>
-                        <Ionicons name="close" size={32} color="#FFF" />
-                    </TouchableOpacity>
-                    {modalVideo && (
-                        <Video
-                            source={{ uri: modalVideo }}
-                            style={styles.fullVideo}
-                            useNativeControls
-                            shouldPlay
-                            resizeMode={ResizeMode.CONTAIN}
-                        />
-                    )}
-                </View>
-            </Modal>
-
-            <Modal
-                visible={showMembers}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setShowMembers(false)}
-            >
-                <TouchableOpacity style={styles.membersOverlay} activeOpacity={1} onPress={() => setShowMembers(false)}>
-                    <TouchableOpacity style={styles.membersSheet} activeOpacity={1}>
-                        <View style={styles.membersHandle} />
-                        <Text style={styles.membersTitle}>{t('chat.members')} · {members.length}</Text>
-
-                        {canEditGroupPhoto && (
-                            <TouchableOpacity
-                                style={styles.changeGroupPhotoBtn}
-                                onPress={() => {
-                                    setShowMembers(false);
-                                    showGroupPhotoMenu();
-                                }}
-                                disabled={uploadingGroupPhoto}
-                            >
-                                <Ionicons name="camera-outline" size={20} color={PRIMARY} />
-                                <Text style={styles.changeGroupPhotoText}>{t('chat.groupPhotoTitle')}</Text>
-                            </TouchableOpacity>
-                        )}
-
-                        <FlatList
-                            data={members}
-                            keyExtractor={(m) => m.id}
-                            style={{ maxHeight: 360 }}
-                            renderItem={({ item: m }) => {
-                                const relation = relationFor(m.id);
-                                return (
-                                <View style={styles.memberRowWrap}>
-                                    <TouchableOpacity
-                                        style={[styles.memberRow, { flex: 1 }]}
-                                        onPress={() => {
-                                            setShowMembers(false);
-                                            router.push({
-                                                pathname: '/user-profile/[id]',
-                                                params: {
-                                                    id: m.id,
-                                                    isFriend: relation === 'friend' ? '1' : '0',
-                                                },
-                                            });
-                                        }}
-                                    >
-                                        <View
-                                            style={[
-                                                styles.memberAvatarRing,
-                                                relation === 'friend' && styles.memberAvatarRingFriend,
-                                                relation === 'acquaintance' && styles.memberAvatarRingAcquaintance,
-                                            ]}
-                                        >
-                                            <Image
-                                                source={{ uri: m.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.nombre)}&background=4DA6FF&color=fff` }}
-                                                style={styles.memberAvatar}
-                                            />
-                                        </View>
-                                        <View style={{ flex: 1 }}>
-                                            <Text
-                                                style={[
-                                                    styles.memberName,
-                                                    relation === 'friend' && styles.memberNameFriend,
-                                                    relation === 'acquaintance' && styles.memberNameAcquaintance,
-                                                ]}
-                                            >
-                                                {m.nombre}
-                                            </Text>
-                                            {m.isCreator ? (
-                                                <Text style={styles.memberCreator}>
-                                                    {t(m.genero === 'femenino' ? 'chat.hostF' : 'chat.host')}
-                                                </Text>
-                                            ) : relation === 'friend' ? (
-                                                <Text style={styles.memberRelationFriend}>
-                                                    {t(m.genero === 'femenino' ? 'planDetail.friendF' : 'planDetail.friend')}
-                                                </Text>
-                                            ) : relation === 'acquaintance' ? (
-                                                <Text style={styles.memberRelationAcquaintance}>
-                                                    {t(
-                                                        m.genero === 'femenino'
-                                                            ? 'planDetail.acquaintanceF'
-                                                            : 'planDetail.acquaintance',
-                                                    )}
-                                                </Text>
-                                            ) : null}
-                                        </View>
-                                        <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
-                                    </TouchableOpacity>
-                                    {creatorId === currentUserId && !m.isCreator && currentUserId && planId && (
-                                        <TouchableOpacity
-                                            style={styles.memberKickBtn}
-                                            onPress={() => {
-                                                const targetId = m.id;
-                                                const targetName = m.nombre;
-                                                setShowMembers(false);
-                                                // Cerrar el sheet antes del Alert: si no, en Android se queda trabado
-                                                // (modal anidado + onPress async).
-                                                setTimeout(() => {
-                                                    Alert.alert(
-                                                        t('planDetail.kickTitle'),
-                                                        t('planDetail.kickMsg', { name: targetName }),
-                                                        [
-                                                            { text: t('common.cancel'), style: 'cancel' },
-                                                            {
-                                                                text: t('planDetail.kickConfirm'),
-                                                                style: 'destructive',
-                                                                onPress: () => {
-                                                                    void (async () => {
-                                                                        const { error } = await kickParticipant(
-                                                                            planId,
-                                                                            targetId,
-                                                                            currentUserId,
-                                                                        );
-                                                                        if (error) {
-                                                                            Alert.alert(t('chat.errorTitle'), error);
-                                                                            return;
-                                                                        }
-                                                                        await fetchParticipants(planId);
-                                                                    })();
-                                                                },
-                                                            },
-                                                        ],
-                                                    );
-                                                }, 250);
-                                            }}
-                                        >
-                                            <Ionicons name="ban-outline" size={20} color="#EF4444" />
-                                        </TouchableOpacity>
-                                    )}
-                                </View>
-                                );
-                            }}
-                        />
-
-                        {canInvitePeople ? (
-                            <TouchableOpacity
-                                style={styles.inviteBtn}
-                                onPress={() => {
-                                    setShowMembers(false);
-                                    openInviteFriends();
-                                }}
-                            >
-                                <Ionicons name="person-add-outline" size={20} color={PRIMARY} />
-                                <Text style={styles.inviteBtnText}>{t('chat.inviteFriend')}</Text>
-                            </TouchableOpacity>
-                        ) : null}
-
-                        <TouchableOpacity style={styles.muteBtn} onPress={() => void toggleMuteChat()}>
-                            <Ionicons
-                                name={chatMuted ? 'notifications-off' : 'notifications-outline'}
-                                size={20}
-                                color={PRIMARY}
-                            />
-                            <Text style={styles.muteBtnText}>
-                                {chatMuted ? t('chat.unmute') : t('chat.mute')}
-                            </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.leaveBtn} onPress={handleDeleteChat}>
-                            <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                            <Text style={styles.leaveBtnText}>
-                                {creatorId === currentUserId
-                                    ? t('chat.deletePlanHost')
-                                    : planFechaEvento &&
-                                        Number.isFinite(new Date(planFechaEvento).getTime()) &&
-                                        Date.now() >= new Date(planFechaEvento).getTime()
-                                      ? t('chat.deleteChat')
-                                      : t('chat.deleteChatAndLeave')}
-                            </Text>
-                        </TouchableOpacity>
-                    </TouchableOpacity>
-                </TouchableOpacity>
-            </Modal>
-
-            <Modal
-                visible={showInviteFriends}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setShowInviteFriends(false)}
-            >
-                <View style={styles.membersOverlay}>
-                    <View style={styles.membersSheet}>
-                        <View style={styles.membersHandle} />
-                        <Text style={styles.membersTitle}>{t('chat.inviteFriend')}</Text>
-                        {loadingInviteFriends ? (
-                            <ActivityIndicator color={PRIMARY} style={{ marginVertical: 24 }} />
-                        ) : inviteFriends.length === 0 ? (
-                            <Text style={styles.inviteEmpty}>{t('friends.noFriends')}</Text>
-                        ) : (
-                            <FlatList
-                                data={inviteFriends}
-                                keyExtractor={(f) => f.id}
-                                style={{ maxHeight: 360 }}
-                                renderItem={({ item: f }) => {
-                                    const busy = invitingFriendId === f.id;
-                                    return (
-                                        <TouchableOpacity
-                                            style={styles.memberRow}
-                                            onPress={() => handleInviteFriend(f.id)}
-                                            disabled={busy}
-                                        >
-                                            <Image source={{ uri: getAvatarUri(f) }} style={styles.memberAvatar} />
-                                            <Text style={[styles.memberName, { flex: 1 }]}>{f.nombre}</Text>
-                                            {busy ? (
-                                                <ActivityIndicator color={PRIMARY} size="small" />
-                                            ) : (
-                                                <Ionicons name="paper-plane-outline" size={20} color={PRIMARY} />
-                                            )}
-                                        </TouchableOpacity>
-                                    );
-                                }}
-                            />
-                        )}
-                        <TouchableOpacity style={styles.inviteCloseBtn} onPress={() => setShowInviteFriends(false)}>
-                            <Text style={styles.inviteCloseText}>{t('common.cancel')}</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </Modal>
+              <Text style={styles.inviteCloseText}>{t("common.cancel")}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-    );
+      </Modal>
+    </View>
+  );
 }
-
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F2F2F2' },
-    header: {
-        minHeight: 60,
-        backgroundColor: '#FFF',
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 10,
-        paddingBottom: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#EEE',
-    },
-    backBtn: { padding: 5 },
-    planHeaderImageWrap: { marginLeft: 5, position: 'relative' },
-    planHeaderImage: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: '#F1F5F9',
-    },
-    groupPhotoBadge: {
-        position: 'absolute',
-        right: -4,
-        bottom: -4,
-        width: 24,
-        height: 24,
-        borderRadius: 12,
-        backgroundColor: '#2563EB',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 2,
-        borderColor: '#FFF',
-    },
-    changeGroupPhotoBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: '#EFF6FF',
-        paddingVertical: 12,
-        borderRadius: 14,
-        marginBottom: 12,
-    },
-    changeGroupPhotoText: { color: '#2563EB', fontWeight: '800', fontSize: 15 },
-    headerTitleContainer: { marginLeft: 10, flex: 1 },
-    headerTitle: { fontSize: 17, fontWeight: '700', color: '#1E293B' },
-    headerSubtitle: { fontSize: 12, color: '#64748B' },
-    expiryBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: '#FEF3C7',
-        borderBottomWidth: 1,
-        borderBottomColor: '#FCD34D',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-    },
-    expiryBannerText: { flex: 1, color: '#92400E', fontWeight: '700', fontSize: 13 },
-    membersBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EEF3FB', justifyContent: 'center', alignItems: 'center', marginLeft: 6 },
-    membersOverlay: { flex: 1, backgroundColor: 'rgba(15,42,74,0.4)', justifyContent: 'flex-end' },
-    membersSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 34 },
-    membersHandle: { alignSelf: 'center', width: 44, height: 5, borderRadius: 3, backgroundColor: '#E2E8F0', marginBottom: 14 },
-    membersTitle: { fontSize: 18, fontWeight: '900', color: '#0F2A4A', marginBottom: 12 },
-    memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 0 },
-    memberAvatarRing: {
-        width: 52,
-        height: 52,
-        borderRadius: 26,
-        marginRight: 12,
-        borderWidth: 2,
-        borderColor: '#E2E8F0',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#FFF',
-    },
-    memberAvatarRingFriend: { borderColor: FRIEND, backgroundColor: '#ECFDF5' },
-    memberAvatarRingAcquaintance: { borderColor: ACQUAINTANCE, backgroundColor: '#F5F3FF' },
-    memberNameFriend: { color: '#047857' },
-    memberNameAcquaintance: { color: '#6D28D9' },
-    memberRelationFriend: { fontSize: 12, fontWeight: '700', color: FRIEND, marginTop: 2 },
-    memberRelationAcquaintance: { fontSize: 12, fontWeight: '700', color: ACQUAINTANCE, marginTop: 2 },
-    memberRowWrap: { flexDirection: 'row', alignItems: 'center' },
-    memberKickBtn: { padding: 10 },
-    memberAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#E3ECFB' },
-    memberName: { fontSize: 16, fontWeight: '700', color: '#0F2A4A' },
-    memberCreator: { fontSize: 12, color: PRIMARY, fontWeight: '700', marginTop: 1 },
-    inviteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#EFF6FF' },
-    inviteBtnText: { color: PRIMARY, fontWeight: '800', fontSize: 15 },
-    muteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#F1F5F9' },
-    muteBtnText: { color: PRIMARY, fontWeight: '800', fontSize: 15 },
-    inviteEmpty: { textAlign: 'center', color: '#94A3B8', fontWeight: '600', marginVertical: 20 },
-    inviteCloseBtn: { marginTop: 12, paddingVertical: 12, alignItems: 'center' },
-    inviteCloseText: { color: '#64748B', fontWeight: '700', fontSize: 15 },
-    leaveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, paddingVertical: 14, borderRadius: 16, backgroundColor: '#FEE2E2' },
-    leaveBtnText: { color: '#EF4444', fontWeight: '800', fontSize: 15 },
-    typingHint: {
-        paddingHorizontal: 16,
-        paddingBottom: 4,
-        fontSize: 12,
-        fontWeight: '600',
-        color: '#64748B',
-    },
-    replyChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginHorizontal: 12,
-        marginBottom: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 12,
-        backgroundColor: '#EFF6FF',
-        borderLeftWidth: 3,
-        borderLeftColor: PRIMARY,
-        gap: 8,
-    },
-    replyChipBody: { flex: 1 },
-    replyChipName: { fontSize: 12, fontWeight: '800', color: PRIMARY },
-    replyChipPreview: { fontSize: 13, color: '#64748B', marginTop: 1 },
-    loading: { flex: 1, justifyContent: 'center' },
-    accessDenied: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingHorizontal: 32,
-        gap: 12,
-    },
-    accessDeniedTitle: { fontSize: 18, fontWeight: '700', color: '#1E293B' },
-    accessDeniedText: { fontSize: 14, color: '#64748B', textAlign: 'center' },
-    emptyChatOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingHorizontal: 40,
-    },
-    emptyChatText: { color: '#94A3B8', fontSize: 14, textAlign: 'center', lineHeight: 20 },
-    loadMore: { paddingVertical: 16, alignItems: 'center' },
-    listContent: { paddingHorizontal: 10, paddingVertical: 20, flexGrow: 1 },
-    msgContainer: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        marginBottom: 10,
-        maxWidth: '85%',
-    },
-    myMsgContainer: { alignSelf: 'flex-end' },
-    otherMsgContainer: { alignSelf: 'flex-start' },
-    avatarWrap: { marginRight: 8 },
-    avatarWrapMe: { marginLeft: 8 },
-    miniAvatar: { width: 32, height: 32, borderRadius: 16 },
-    bubbleCol: { maxWidth: '78%', flexShrink: 1 },
-    bubble: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, elevation: 1, flexShrink: 1 },
-    myBubble: { backgroundColor: '#70B7FF', borderTopRightRadius: 4 },
-    otherBubble: { backgroundColor: '#FFF', borderTopLeftRadius: 4 },
-    senderName: { fontSize: 12, fontWeight: 'bold', color: PRIMARY, marginBottom: 2 },
-    msgText: { fontSize: 16, color: '#1E293B' },
-    myMsgText: { color: '#FFF' },
-    otherMsgText: { color: '#000' },
-    timeText: { fontSize: 10, marginTop: 4, alignSelf: 'flex-end', color: '#94A3B8' },
-    myTime: { color: 'rgba(255, 255, 255, 0.7)' },
-    otherTime: { color: '#94A3B8' },
-    uploadBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 6,
-        backgroundColor: '#EFF6FF',
-    },
-    uploadBannerText: { color: PRIMARY, fontSize: 13, fontWeight: '600' },
-    inputBar: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        backgroundColor: '#FFF',
-        borderTopWidth: 1,
-        borderTopColor: '#E2E8F0',
-    },
-    attachBtn: { paddingHorizontal: 4, paddingBottom: 6 },
-    inputContainer: {
-        flex: 1,
-        backgroundColor: '#F1F5F9',
-        borderRadius: 20,
-        paddingHorizontal: 15,
-        paddingVertical: 8,
-        marginHorizontal: 8,
-        minHeight: 44,
-        maxHeight: 86,
-        justifyContent: 'center',
-    },
-    textInput: {
-        fontSize: 16,
-        lineHeight: 22,
-        color: '#1E293B',
-        padding: 0,
-        maxHeight: 66,
-        textAlignVertical: 'top',
-    },
-    sendCircle: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
-        backgroundColor: PRIMARY,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 3,
-    },
-    sendCircleDisabled: { backgroundColor: '#CBD5E1' },
-    recordingActive: { backgroundColor: '#EF4444' },
-    mediaImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 5 },
-    videoContainer: { marginBottom: 5 },
-    videoPlaceholder: {
-        width: 200,
-        height: 120,
-        borderRadius: 10,
-        backgroundColor: '#1E293B',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    videoLabel: { color: '#FFF', fontSize: 12, marginTop: 4 },
-    audioContainer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, minWidth: 140 },
-    audioInfo: { flex: 1 },
-    audioText: { fontSize: 14, fontWeight: '600' },
-    audioDuration: { fontSize: 12, marginTop: 2 },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.9)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    modalImage: { width: '90%', height: '80%' },
-    videoModal: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
-    fullVideo: { width: '100%', height: '80%' },
-    modalCloseBtn: {
-        position: 'absolute',
-        top: 50,
-        right: 20,
-        zIndex: 10,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        borderRadius: 20,
-        padding: 10,
-    },
-});

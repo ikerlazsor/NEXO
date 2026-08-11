@@ -1,6 +1,6 @@
-import { withLayoutContext } from 'expo-router';
-import { MainChrome } from '../../components/MainChrome';
-import { createPagerTabNavigator } from '../../lib/createPagerTabNavigator';
+import { withLayoutContext } from "expo-router";
+import { MainChrome } from "../../components/MainChrome";
+import { createPagerTabNavigator } from "../../lib/createPagerTabNavigator";
 
 const { Navigator } = createPagerTabNavigator();
 const PagerTabs = withLayoutContext(Navigator);
@@ -10,20 +10,20 @@ const PagerTabs = withLayoutContext(Navigator);
  * PagerView enseña la pantalla de destino mientras deslizas.
  */
 export default function TabLayout() {
-    return (
-        <MainChrome>
-            <PagerTabs
-                initialRouteName="index"
-                screenOptions={{
-                    swipeEnabled: true,
-                    lazy: false,
-                }}
-            >
-                <PagerTabs.Screen name="chats" />
-                <PagerTabs.Screen name="my-plans" />
-                <PagerTabs.Screen name="index" />
-                <PagerTabs.Screen name="search-profiles" />
-            </PagerTabs>
-        </MainChrome>
-    );
+  return (
+    <MainChrome>
+      <PagerTabs
+        initialRouteName="index"
+        screenOptions={{
+          swipeEnabled: true,
+          lazy: true,
+        }}
+      >
+        <PagerTabs.Screen name="chats" />
+        <PagerTabs.Screen name="my-plans" />
+        <PagerTabs.Screen name="index" />
+        <PagerTabs.Screen name="search-profiles" />
+      </PagerTabs>
+    </MainChrome>
+  );
 }

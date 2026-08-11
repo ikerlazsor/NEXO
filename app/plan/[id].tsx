@@ -748,7 +748,7 @@ export default function PlanDetailScreen() {
                             disabled={actionBusy}
                         >
                             {actionBusy ? (
-                                <ActivityIndicator color=theme.colors.surface />
+                                <ActivityIndicator color={theme.colors.surface} />
                             ) : (
                                 <Text style={styles.inviteDecisionJoinText}>{t('planDetail.inviteJoin')}</Text>
                             )}
@@ -776,7 +776,7 @@ export default function PlanDetailScreen() {
                             onPress={() => router.push(`/chat/${plan!.id}`)}
                         >
                             <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
-                                <Ionicons name="chatbubbles" size={22} color=theme.colors.surface />
+                                <Ionicons name="chatbubbles" size={22} color={theme.colors.surface} />
                                 <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
                             </LinearGradient>
                         </TouchableOpacity>
@@ -799,7 +799,7 @@ export default function PlanDetailScreen() {
                             onPress={() => router.push(`/chat/${plan!.id}`)}
                         >
                             <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatBtnGradient}>
-                                <Ionicons name="chatbubbles" size={22} color=theme.colors.surface />
+                                <Ionicons name="chatbubbles" size={22} color={theme.colors.surface} />
                                 <Text style={styles.chatBtnText}>{t('planDetail.openChat')}</Text>
                             </LinearGradient>
                         </TouchableOpacity>
@@ -842,7 +842,7 @@ export default function PlanDetailScreen() {
                             accessibilityLabel={t('planDetail.openChat')}
                         >
                             <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatIconBtnGradient}>
-                                <Ionicons name="chatbubbles" size={22} color=theme.colors.surface />
+                                <Ionicons name="chatbubbles" size={22} color={theme.colors.surface} />
                             </LinearGradient>
                         </TouchableOpacity>
                     ) : null}
@@ -892,7 +892,7 @@ export default function PlanDetailScreen() {
             }
             return (
                 <TouchableOpacity style={styles.waitlistJoinBtn} onPress={handleJoin} activeOpacity={0.9} disabled={actionBusy}>
-                    <Ionicons name="list" size={20} color=theme.colors.surface />
+                    <Ionicons name="list" size={20} color={theme.colors.surface} />
                     <Text style={styles.waitlistJoinText}>{t('card.joinWaitlist')}</Text>
                 </TouchableOpacity>
             );
@@ -902,7 +902,7 @@ export default function PlanDetailScreen() {
             <TouchableOpacity style={styles.joinBtn} onPress={handleJoin} activeOpacity={0.9} disabled={actionBusy}>
                 <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.joinBtnGradient}>
                     <Text style={styles.joinBtnText}>{requiresApproval ? t('card.request') : t('card.join')}</Text>
-                    <Ionicons name={requiresApproval ? 'shield-checkmark' : 'arrow-forward'} size={20} color=theme.colors.surface />
+                    <Ionicons name={requiresApproval ? 'shield-checkmark' : 'arrow-forward'} size={20} color={theme.colors.surface} />
                 </LinearGradient>
             </TouchableOpacity>
         );
@@ -959,12 +959,12 @@ export default function PlanDetailScreen() {
                     />
                     <View style={[styles.heroTopBar, { paddingTop: insets.top + 10 }]}>
                         <TouchableOpacity style={styles.glassBtn} onPress={() => router.back()} activeOpacity={0.85}>
-                            <Ionicons name="chevron-back" size={24} color=theme.colors.surface />
+                            <Ionicons name="chevron-back" size={24} color={theme.colors.surface} />
                         </TouchableOpacity>
                         <View style={styles.heroTopRight}>
                             {!isPastPlan ? (
                                 <TouchableOpacity style={styles.glassBtn} onPress={handleShare} activeOpacity={0.85}>
-                                    <Ionicons name="arrow-redo" size={18} color=theme.colors.surface />
+                                    <Ionicons name="arrow-redo" size={18} color={theme.colors.surface} />
                                 </TouchableOpacity>
                             ) : null}
                             {!isPastPlan && !isCreator ? (
@@ -980,7 +980,7 @@ export default function PlanDetailScreen() {
                                     }
                                     activeOpacity={0.85}
                                 >
-                                    <Ionicons name="flag-outline" size={18} color=theme.colors.dangerBorder />
+                                    <Ionicons name="flag-outline" size={18} color={theme.colors.dangerBorder} />
                                 </TouchableOpacity>
                             ) : null}
                         </View>
@@ -1111,7 +1111,7 @@ export default function PlanDetailScreen() {
                                         ? ` ${t('invite.pendingCountParen', { n: invitees.length })}`
                                         : ''}
                                 </Text>
-                                <Ionicons name="chevron-forward" size={18} color=theme.colors.textSubtle />
+                                <Ionicons name="chevron-forward" size={18} color={theme.colors.textSubtle} />
                             </TouchableOpacity>
                         ) : null}
                         {participants.length === 0 ? (
@@ -1196,7 +1196,7 @@ export default function PlanDetailScreen() {
                             </NexoMapView>
                             <View style={styles.mapTapOverlay} pointerEvents="none">
                                 <View style={styles.mapExpandPill}>
-                                    <Ionicons name="expand" size={16} color=theme.colors.surface />
+                                    <Ionicons name="expand" size={16} color={theme.colors.surface} />
                                     <Text style={styles.mapExpandText}>{t('planDetail.expandMap')}</Text>
                                 </View>
                             </View>
@@ -1275,7 +1275,7 @@ export default function PlanDetailScreen() {
                                 activeOpacity={0.88}
                                 onPress={() => void openDirectionsTo(lat, lng, plan.nombre_ubicacion)}
                             >
-                                <Ionicons name="navigate" size={18} color=theme.colors.surface />
+                                <Ionicons name="navigate" size={18} color={theme.colors.surface} />
                                 <Text style={styles.directionsBtnText}>{t('planDetail.getDirections')}</Text>
                             </TouchableOpacity>
                         </View>

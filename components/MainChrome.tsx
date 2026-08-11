@@ -21,15 +21,16 @@ import { scheduleHomePrefetch } from '../lib/prefetchHome';
 import { emitFeedHomeRetap } from '../lib/feedReload';
 import { cacheGetStale, cacheIsFresh, cacheSet } from '../lib/ttlCache';
 import { supabase } from '../lib/supabase';
+import { theme } from '../theme';
 
 const CHROME_AVATAR_TTL_MS = 120_000;
 const chromeAvatarKey = (userId: string) => `chromeAvatar:${userId}`;
 
-const PRIMARY = '#4DA6FF';
-const PRIMARY_DARK = '#2563EB';
-const INK = '#0F2A4A';
+const PRIMARY = theme.colors.brand;
+const PRIMARY_DARK = theme.colors.primary;
+const INK = theme.colors.text;
 const BG_TOP = '#DCEBFF';
-const BG_BOTTOM = '#F2F7FF';
+const BG_BOTTOM = theme.colors.backgroundAlt;
 
 export type MainTab = 'feed' | 'chats' | 'my-plans' | 'search';
 
@@ -187,7 +188,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     accessibilityLabel={t('chats.title')}
                     haptic={false}
                 >
-                    <Ionicons name="chatbubbles" size={22} color="#fff" />
+                    <Ionicons name="chatbubbles" size={22} color=theme.colors.surface />
                     {chatUnreadCount > 0 && (
                         <View style={styles.chatNotifBadge}>
                             <Text style={styles.chatNotifText}>
@@ -203,7 +204,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     accessibilityLabel={t('myplans.title')}
                     haptic={false}
                 >
-                    <Ionicons name="albums" size={22} color="#fff" />
+                    <Ionicons name="albums" size={22} color=theme.colors.surface />
                     {openRatingsCount > 0 && (
                         <View style={styles.chatNotifBadge}>
                             <Text style={styles.chatNotifText}>
@@ -219,7 +220,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     accessibilityLabel={t('feed.greeting')}
                     haptic={false}
                 >
-                    <Ionicons name="home" size={22} color="#fff" />
+                    <Ionicons name="home" size={22} color=theme.colors.surface />
                 </PressScale>
 
                 <PressScale
@@ -228,7 +229,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     accessibilityLabel={t('feed.searchProfiles')}
                     haptic={false}
                 >
-                    <Ionicons name="search" size={22} color="#fff" />
+                    <Ionicons name="search" size={22} color=theme.colors.surface />
                 </PressScale>
 
                 <PressScale
@@ -242,7 +243,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     pressedScale={0.92}
                 >
                     <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.floatingBtnGradient}>
-                        <Ionicons name="add" size={26} color="#fff" />
+                        <Ionicons name="add" size={26} color=theme.colors.surface />
                     </LinearGradient>
                 </PressScale>
             </View>
@@ -261,7 +262,7 @@ const styles = StyleSheet.create({
     },
     headerSpacer: { flex: 1 },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    profileBtn: { padding: 2 },
+    profileBtn: { minWidth: theme.accessibility.minimumTouchTarget, minHeight: theme.accessibility.minimumTouchTarget, alignItems: 'center', justifyContent: 'center' },
     profileAvatarWrap: { position: 'relative' },
     profileNotifBadge: {
         position: 'absolute',
@@ -270,14 +271,14 @@ const styles = StyleSheet.create({
         minWidth: 18,
         height: 18,
         borderRadius: 9,
-        backgroundColor: '#EF4444',
+        backgroundColor: theme.colors.danger,
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: 4,
         borderWidth: 2,
-        borderColor: '#FFF',
+        borderColor: theme.colors.surface,
     },
-    profileNotifText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
+    profileNotifText: { color: theme.colors.surface, fontSize: 10, fontWeight: '800' },
     body: { flex: 1 },
     floatingBar: {
         position: 'absolute',
@@ -297,8 +298,8 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 6 },
     },
     floatingBtn: {
-        width: 46,
-        height: 46,
+        width: theme.accessibility.minimumTouchTarget,
+        height: theme.accessibility.minimumTouchTarget,
         borderRadius: 15,
         justifyContent: 'center',
         alignItems: 'center',
@@ -314,17 +315,17 @@ const styles = StyleSheet.create({
         minWidth: 18,
         height: 18,
         borderRadius: 9,
-        backgroundColor: '#EF4444',
+        backgroundColor: theme.colors.danger,
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: 4,
         borderWidth: 2,
         borderColor: INK,
     },
-    chatNotifText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
+    chatNotifText: { color: theme.colors.surface, fontSize: 10, fontWeight: '800' },
     floatingBtnGradient: {
-        width: 46,
-        height: 46,
+        width: theme.accessibility.minimumTouchTarget,
+        height: theme.accessibility.minimumTouchTarget,
         borderRadius: 15,
         justifyContent: 'center',
         alignItems: 'center',

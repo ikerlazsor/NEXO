@@ -83,7 +83,7 @@ begin
         headers := jsonb_build_object(
             'Content-Type', 'application/json',
             'apikey', v_publishable_key,
-            'Authorization', 'Bearer ' || v_dispatch_secret
+            'x-nexo-dispatch-secret', v_dispatch_secret
         ),
         body := '{}'::jsonb,
         timeout_milliseconds := 30000

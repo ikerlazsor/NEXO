@@ -14,6 +14,10 @@ export async function setPasswordRecoveryPending(pending: boolean): Promise<void
     }
 }
 
+export function resetPasswordRecoveryMemory(): void {
+    memoryPending = false;
+}
+
 export async function isPasswordRecoveryPending(): Promise<boolean> {
     if (memoryPending) return true;
     try {

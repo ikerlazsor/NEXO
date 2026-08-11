@@ -48,7 +48,7 @@ import {
 } from '../lib/profileFields';
 import { deleteAccount, readNombreFromUser } from '../lib/profile';
 import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../lib/haptics';
-import { supabase } from '../lib/supabase';
+import { signOutAndClearLocalData } from '../lib/session';
 import { OnboardingReadyReveal } from '../components/OnboardingReadyReveal';
 
 const PRIMARY = '#4DA6FF';
@@ -191,12 +191,12 @@ export default function OnboardingScreen() {
                                 // Borra Auth + perfil: si no, el email queda “ya registrado”.
                                 const { error } = await deleteAccount();
                                 if (error) {
-                                    await supabase.auth.signOut({ scope: 'local' });
+                                    await signOutAndClearLocalData({ scope: 'local' });
                                     Alert.alert(t('onboarding.notice'), t('onboarding.cancelRegisterFailed'));
                                 }
                                 router.replace('/login');
                             } catch {
-                                await supabase.auth.signOut({ scope: 'local' });
+                                await signOutAndClearLocalData({ scope: 'local' });
                                 Alert.alert(t('onboarding.notice'), t('onboarding.cancelRegisterFailed'));
                                 router.replace('/login');
                             } finally {

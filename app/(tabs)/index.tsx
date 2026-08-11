@@ -31,6 +31,7 @@ import {
     type ViewToken,
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
+import { theme } from '../../theme';
 import { styles } from '../../features/feed/feedStyles';
 import { EmptySearch } from '../../features/feed/EmptyFeedState';
 import {
@@ -113,10 +114,10 @@ import {
 } from '../../lib/feedCache';
 import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
 import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
-const PRIMARY = '#4DA6FF';
-const PRIMARY_DARK = '#2563EB';
-const INK = '#0F2A4A';
-const BG_BOTTOM = '#F2F7FF';
+const PRIMARY = theme.colors.brand;
+const PRIMARY_DARK = theme.colors.primary;
+const INK = theme.colors.text;
+const BG_BOTTOM = theme.colors.backgroundAlt;
 
 export default function HomeScreen() {
     const router = useRouter();
@@ -1083,7 +1084,7 @@ export default function HomeScreen() {
             <View style={styles.searchWrapper}>
                 <View style={styles.searchContainer}>
                     <Ionicons name="search" size={20} color={PRIMARY_DARK} />
-                    <TextInput placeholder={t('feed.searchPlaceholder')} placeholderTextColor="#94A3B8" style={styles.searchInput} value={search} onChangeText={setSearch} />
+                    <TextInput placeholder={t('feed.searchPlaceholder')} placeholderTextColor={theme.colors.textSubtle} style={styles.searchInput} value={search} onChangeText={setSearch} />
                 </View>
             </View>
 
@@ -1102,8 +1103,8 @@ export default function HomeScreen() {
                     style={[styles.quickFilterPill, styles.quickFilterBox, hasSheetFilters ? styles.quickFilterActive : null]}
                     onPress={() => setShowFiltersModal(true)}
                 >
-                    <Ionicons name="options" size={15} color={hasSheetFilters ? '#FFF' : PRIMARY_DARK} />
-                    <Text style={[styles.quickFilterText, hasSheetFilters ? { color: '#FFF' } : null]} numberOfLines={1}>
+                    <Ionicons name="options" size={15} color={hasSheetFilters ? theme.colors.surface : PRIMARY_DARK} />
+                    <Text style={[styles.quickFilterText, hasSheetFilters ? { color: theme.colors.surface } : null]} numberOfLines={1}>
                         {t('feed.filters')}
                     </Text>
                 </TouchableOpacity>
@@ -1141,7 +1142,7 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                     </View>
                     <TouchableOpacity style={styles.firstRunClose} onPress={() => setShowFirstRun(false)} hitSlop={10}>
-                        <Ionicons name="close" size={18} color="#64748B" />
+                        <Ionicons name="close" size={18} color={theme.colors.textMuted} />
                     </TouchableOpacity>
                 </View>
             ) : null}
@@ -1474,7 +1475,7 @@ export default function HomeScreen() {
                                     identifier={String(p.id)}
                                     coordinate={{ latitude: lat, longitude: lng }}
                                     // Color fijo: mutar pinColor al tocar remonta el Marker nativo y crashea en Expo Go.
-                                    pinColor="#2563EB"
+                                    pinColor={theme.colors.primary}
                                     tracksViewChanges={false}
                                     stopPropagation
                                     onPress={(e) => {

@@ -1,5 +1,6 @@
 import { getAuthSession, runWithTimeout } from './auth';
 import { supabase } from './supabase';
+import { signOutAndClearLocalData } from './session';
 
 const DELETE_ACCOUNT_RPC = 'delete_own_account';
 
@@ -164,7 +165,7 @@ export async function deleteAccount(): Promise<{ error: string | null }> {
         return { error: rpcError };
     }
 
-    await supabase.auth.signOut({ scope: 'local' });
+    await signOutAndClearLocalData({ scope: 'local' });
     return { error: null };
 }
 

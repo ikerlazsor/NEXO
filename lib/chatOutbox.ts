@@ -29,6 +29,7 @@ type FlushListener = (event: {
 }) => void;
 
 let flushInflight: Promise<void> | null = null;
+let outboxGeneration = 0;
 const listeners = new Set<FlushListener>();
 let networkHooked = false;
 
@@ -77,17 +78,24 @@ export async function getChatOutbox(): Promise<OutboxItem[]> {
     return readQueue();
 }
 
+export async function discardChatOutbox(): Promise<void> {
+    outboxGeneration += 1;
+    await AsyncStorage.removeItem(OUTBOX_KEY);
+}
+
 export async function flushChatOutbox(): Promise<void> {
     ensureNetworkHook();
     if (!getIsOnline()) return;
     if (flushInflight) return flushInflight;
 
     flushInflight = (async () => {
+        const generation = outboxGeneration;
         let q = await readQueue();
         if (!q.length) return;
 
         const remaining: OutboxItem[] = [];
         for (const item of q) {
+            if (generation !== outboxGeneration) return;
             // Media sin archivo no se puede enviar offline
             if (item.tipo !== 'texto' && !item.archivoUrl) {
                 remaining.push(item);
@@ -157,7 +165,7 @@ export async function flushChatOutbox(): Promise<void> {
                 remaining.push(item);
             }
         }
-        await writeQueue(remaining);
+        if (generation === outboxGeneration) await writeQueue(remaining);
     })().finally(() => {
         flushInflight = null;
     });

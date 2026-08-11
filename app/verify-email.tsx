@@ -23,6 +23,7 @@ import { useT } from '../lib/i18n';
 import { clearPendingSignup } from '../lib/pendingSignup';
 import { deleteAccount, ensureProfile } from '../lib/profile';
 import { supabase } from '../lib/supabase';
+import { signOutAndClearLocalData } from '../lib/session';
 
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
@@ -199,7 +200,7 @@ export default function VerifyEmailScreen() {
                             if (!deleted) {
                                 // No persistimos contraseñas para reautenticar. Si no hay sesión,
                                 // se limpia el registro local sin conservar credenciales sensibles.
-                                await supabase.auth.signOut({ scope: 'local' });
+                                await signOutAndClearLocalData({ scope: 'local' });
                             }
                         } finally {
                             await clearPendingVerifyEmail();

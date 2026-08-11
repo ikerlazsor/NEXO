@@ -54,6 +54,11 @@ export function cacheInvalidate(key: string): void {
     inflight.delete(key);
 }
 
+export function cacheClearAll(): void {
+    store.clear();
+    inflight.clear();
+}
+
 export function cacheInvalidatePrefix(prefix: string): void {
     for (const key of store.keys()) {
         if (key.startsWith(prefix)) store.delete(key);

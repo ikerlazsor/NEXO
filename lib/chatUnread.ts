@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getChatSummaries, invalidateChatSummaries } from './chatSummaries';
-import { cacheGetOrFetch, cacheGetStale, cacheInvalidate } from './ttlCache';
+import { cacheGetStale, cacheInvalidate, cacheSet } from './ttlCache';
 
 const PREFIX = '@nexo_chat_read:';
 const UNREAD_TTL_MS = 25_000;
@@ -89,12 +89,11 @@ export async function getChatUnreadMap(
     opts?: { force?: boolean },
 ): Promise<ChatUnreadMap> {
     if (opts?.force) invalidateChatSummaries(userId);
-    return cacheGetOrFetch(
-        unreadMapKey(userId),
-        UNREAD_TTL_MS,
-        () => fetchChatUnreadMap(userId),
-        opts,
-    );
+    // getChatSummaries ya deduplica y cachea la consulta costosa. Derivar el mapa
+    // en memoria evita mantener una segunda caché que pueda quedar desfasada.
+    const map = await fetchChatUnreadMap(userId);
+    cacheSet(unreadMapKey(userId), map, UNREAD_TTL_MS);
+    return map;
 }
 
 export async function getUnreadChatCount(userId: string, opts?: { force?: boolean }): Promise<number> {

@@ -1,4 +1,4 @@
-import { Dimensions, StyleSheet } from "react-native";
+import { Dimensions, Platform, StyleSheet } from "react-native";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 const HERO_H = Math.min(380, SCREEN_W * 0.92);

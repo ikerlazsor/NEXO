@@ -1,4 +1,4 @@
-import { StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 
 const PRIMARY = "#4DA6FF";
 const PRIMARY_DARK = "#2563EB";

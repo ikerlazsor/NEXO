@@ -3,6 +3,7 @@ import { getCoincidedUserIds } from './coincidences';
 import { getFriends } from './friends';
 import { isAcceptedParticipant, mapEstadoToMembership, type Membership } from './participants';
 import { EMPTY_STATS, getUserStats, type UserStats } from './stats';
+import { getMyProfile, getPublicProfileCards } from './profileData';
 import { cacheGetStale, cacheInvalidate, cacheIsFresh, cacheSet } from './ttlCache';
 import { supabase } from './supabase';
 
@@ -148,18 +149,13 @@ export function prefetchPlanDetail(planId: string): void {
             if (error || !planRow) return;
             if ((prefetchGen.get(planId) ?? 0) !== gen) return;
 
-            const [partsRes, creatorRes, myPartRes, savedRes, friendsData, coincidedSet, stats, myProfileRes] =
+            const [partsRes, myPartRes, savedRes, friendsData, coincidedSet, stats, myProfileRes] =
                 await Promise.all([
                     supabase
                         .from('participantes')
-                        .select('usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)')
+                        .select('usuario_id, estado')
                         .eq('plan_id', planId)
                         .eq('estado', 'aceptado'),
-                    supabase
-                        .from('perfiles')
-                        .select('id, nombre, avatar_url, ambientes_preferidos, etiquetas, genero')
-                        .eq('id', planRow.creador_id)
-                        .maybeSingle(),
                     user
                         ? supabase
                               .from('participantes')
@@ -180,7 +176,7 @@ export function prefetchPlanDetail(planId: string): void {
                     user ? getCoincidedUserIds(user.id) : Promise.resolve(new Set<string>()),
                     getUserStats(planRow.creador_id),
                     user
-                        ? supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle()
+                        ? getMyProfile()
                         : Promise.resolve({ data: null }),
                 ]);
 
@@ -189,15 +185,22 @@ export function prefetchPlanDetail(planId: string): void {
             const accepted = (partsRes.data || []).filter((p: { estado: string }) =>
                 isAcceptedParticipant(p.estado),
             );
-            const creatorProfile: PlanDetailParticipant | null = creatorRes.data
-                ? { ...creatorRes.data, isCreator: true }
+            const profileIds = [
+                planRow.creador_id,
+                ...accepted.map((p: { usuario_id: string }) => p.usuario_id),
+            ];
+            const publicProfiles = await getPublicProfileCards(profileIds);
+            const profileMap = new Map(publicProfiles.map((profile) => [profile.id, profile]));
+            const creatorData = profileMap.get(planRow.creador_id);
+            const creatorProfile: PlanDetailParticipant | null = creatorData
+                ? { ...creatorData, nombre: creatorData.nombre ?? 'Usuario', isCreator: true }
                 : null;
             const list: PlanDetailParticipant[] = [];
             if (creatorProfile) list.push(creatorProfile);
-            accepted.forEach((p: { perfiles?: PlanDetailParticipant | PlanDetailParticipant[] | null }) => {
-                const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
+            accepted.forEach((p: { usuario_id: string }) => {
+                const prof = profileMap.get(p.usuario_id);
                 if (prof && prof.id !== planRow.creador_id) {
-                    list.push({ ...prof, isCreator: false });
+                    list.push({ ...prof, nombre: prof.nombre ?? 'Usuario', isCreator: false });
                 }
             });
 

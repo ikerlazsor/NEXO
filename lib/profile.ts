@@ -1,8 +1,7 @@
 import { getAuthSession, runWithTimeout } from './auth';
+import { getMyProfile } from './profileData';
 import { supabase } from './supabase';
 import { signOutAndClearLocalData } from './session';
-
-const DELETE_ACCOUNT_RPC = 'delete_own_account';
 
 /** Límites del handle único (`nombre_usuario`), estilo Instagram. */
 export const USERNAME_MIN_LENGTH = 3;
@@ -106,13 +105,17 @@ export async function isUsernameTaken(
     const normalized = normalizeUsername(nombreUsuario);
     if (!normalized) return false;
 
-    // RPC SECURITY DEFINER: funciona también sin sesión (registro / anon).
+    if (excludeUserId) {
+        const own = await getMyProfile();
+        if (normalizeUsername(own.data?.nombre_usuario ?? '') === normalized) return false;
+    }
+
+    // RPC SECURITY DEFINER de alcance mínimo: funciona también durante el alta.
     try {
         const { data, error } = await runWithTimeout(
             () =>
-                supabase.rpc('is_username_taken', {
+                supabase.rpc('is_username_taken_public', {
                     check_name: normalized,
-                    exclude_id: excludeUserId ?? null,
                 }),
             8000,
         );
@@ -122,21 +125,7 @@ export async function isUsernameTaken(
         console.warn('isUsernameTaken rpc failed:', e);
     }
 
-    // Fallback (requiere poder leer perfiles).
-    try {
-        let query = supabase
-            .from('perfiles')
-            .select('id')
-            .eq('nombre_usuario', normalized)
-            .limit(1);
-        if (excludeUserId) query = query.neq('id', excludeUserId);
-        const { data, error } = await runWithTimeout(() => query, 8000);
-        if (!error) return (data?.length ?? 0) > 0;
-        throw new UsernameCheckError(error.message);
-    } catch (e) {
-        if (e instanceof UsernameCheckError) throw e;
-        throw new UsernameCheckError();
-    }
+    throw new UsernameCheckError();
 }
 
 export async function deleteAccount(): Promise<{ error: string | null }> {
@@ -145,24 +134,25 @@ export async function deleteAccount(): Promise<{ error: string | null }> {
         return { error: 'No hay sesión activa.' };
     }
 
-    const userId = session.user.id;
-    let rpcError: string | null = null;
+    let functionError: string | null = null;
 
     try {
-        const { error } = await runWithTimeout(
-            () => supabase.rpc(DELETE_ACCOUNT_RPC),
-            8000,
+        const { data, error } = await runWithTimeout(
+            () => supabase.functions.invoke('delete-account', { body: {} }),
+            20000,
             'Tiempo de espera agotado',
         );
-        if (error) rpcError = error.message;
+        const payload = data as { error?: string } | null;
+        if (error) functionError = error.message;
+        else if (payload?.error) functionError = payload.error;
     } catch (e) {
-        rpcError = e instanceof Error ? e.message : 'No se pudo contactar con el servidor';
+        functionError = e instanceof Error ? e.message : 'No se pudo contactar con el servidor';
     }
 
-    if (rpcError) {
+    if (functionError) {
         // Una caída temporal no debe dejar una cuenta a medias. Conservamos
         // tanto la sesión como el perfil para que el usuario pueda reintentarlo.
-        return { error: rpcError };
+        return { error: functionError };
     }
 
     await signOutAndClearLocalData({ scope: 'local' });
@@ -192,11 +182,7 @@ export async function ensureProfile(
                   : '',
           );
 
-    const { data: existing } = await supabase
-        .from('perfiles')
-        .select('nombre, nombre_usuario, registro_completado')
-        .eq('id', user.id)
-        .maybeSingle();
+    const { data: existing } = await getMyProfile();
 
     const existingName = existing?.nombre?.trim();
     const isGeneric = !existingName || existingName === 'Usuario';
@@ -218,10 +204,16 @@ export async function ensureProfile(
         payload.nombre_usuario = preferredUsername;
     }
 
-    let { error } = await supabase.from('perfiles').upsert(payload, {
-        onConflict: 'id',
-        ignoreDuplicates: false,
-    });
+    const persist = async (nextPayload: Record<string, unknown>) => {
+        if (existing) {
+            const updates = { ...nextPayload };
+            delete updates.id;
+            return supabase.from('perfiles').update(updates).eq('id', user.id);
+        }
+        return supabase.from('perfiles').insert(nextPayload);
+    };
+
+    let { error } = await persist(payload);
 
     if (error && payload.nombre_usuario) {
         const isDuplicate =
@@ -234,10 +226,7 @@ export async function ensureProfile(
         }
 
         delete payload.nombre_usuario;
-        ({ error } = await supabase.from('perfiles').upsert(payload, {
-            onConflict: 'id',
-            ignoreDuplicates: false,
-        }));
+        ({ error } = await persist(payload));
     }
 
     if (error) {
@@ -248,13 +237,11 @@ export async function ensureProfile(
 }
 
 export async function loadProfileRow(userId: string) {
-    const { data, error } = await supabase
-        .from('perfiles')
-        .select(
-            'nombre, nombre_usuario, avatar_url, descripcion, etiquetas, fecha_nacimiento, genero, habitos_consumo, ambientes_preferidos, perfil_gustos',
-        )
-        .eq('id', userId)
-        .maybeSingle();
+    const session = await getAuthSession();
+    if (session?.user.id !== userId) {
+        return { data: null, error: { message: 'profile_access_denied' } };
+    }
+    const { data, error } = await getMyProfile();
     return { data: (data as ProfileRow | null) ?? null, error };
 }
 
@@ -377,11 +364,9 @@ export async function updateUsername(
  * Límite: 2 cambios / 7 días. El @ inicial del registro no cuenta.
  */
 export async function getUsernameCooldownDaysLeft(userId: string): Promise<number> {
-    const { data, error } = await supabase
-        .from('perfiles')
-        .select('nombre_usuario_cambios, nombre_usuario_cambiado_en')
-        .eq('id', userId)
-        .maybeSingle();
+    const session = await getAuthSession();
+    if (session?.user.id !== userId) return 0;
+    const { data, error } = await getMyProfile();
 
     if (error || !data) return 0;
 
@@ -410,4 +395,3 @@ export async function getUsernameCooldownDaysLeft(userId: string): Promise<numbe
     if (leftMs <= 0) return 0;
     return Math.ceil(leftMs / (24 * 60 * 60 * 1000));
 }
-

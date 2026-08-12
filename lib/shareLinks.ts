@@ -1,21 +1,19 @@
-/**
- * Enlaces compartibles. HTTPS abre la app si hay App/Universal Links configurados;
- * el scheme nexo:// funciona si la app ya está instalada.
- */
-export const SHARE_WEB_HOST =
-    (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SHARE_HOST) || 'nexo.app';
+/** Host opcional, solo cuando Nexo controle el dominio y publique App Links. */
+const configuredHost =
+    typeof process !== 'undefined' ? process.env?.EXPO_PUBLIC_SHARE_HOST?.trim() : '';
+export const SHARE_WEB_HOST = configuredHost?.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || null;
 
-export function planHttpsUrl(planId: string): string {
-    return `https://${SHARE_WEB_HOST}/plan/${planId}`;
+export function planHttpsUrl(planId: string): string | null {
+    return SHARE_WEB_HOST ? `https://${SHARE_WEB_HOST}/plan/${planId}` : null;
 }
 
 export function planSchemeUrl(planId: string): string {
     return `nexo://plan/${planId}`;
 }
 
-/** URL preferida para compartir (https + path). */
+/** URL preferida: HTTPS solo con dominio verificado; mientras, scheme propio. */
 export function planShareUrl(planId: string): string {
-    return planHttpsUrl(planId);
+    return planHttpsUrl(planId) ?? planSchemeUrl(planId);
 }
 
 export function buildPlanShareMessage(opts: {

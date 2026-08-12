@@ -55,7 +55,6 @@ import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from '
 import { cacheGetStale, cacheInvalidate, cacheIsFresh, cacheSet } from '../lib/ttlCache';
 import { supabase } from '../lib/supabase';
 
-const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const BG_TOP = '#DCEBFF';

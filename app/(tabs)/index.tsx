@@ -17,7 +17,6 @@ import {
     InteractionManager,
     Keyboard,
     Modal,
-    Platform,
     Pressable,
     RefreshControl,
     ScrollView,
@@ -113,11 +112,10 @@ import {
     type FeedSnapshot,
 } from '../../lib/feedCache';
 import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
+import { getMyProfile, getPublicProfileCards } from '../../lib/profileData';
 import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
-const PRIMARY = theme.colors.brand;
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
-const BG_BOTTOM = theme.colors.backgroundAlt;
 
 export default function HomeScreen() {
     const router = useRouter();
@@ -180,11 +178,6 @@ export default function HomeScreen() {
     const [joiningPlanId, setJoiningPlanId] = useState<string | null>(null);
     const joiningRef = useRef(false);
     const hasDataRef = useRef(cachedFeed != null);
-    const [notifBreakdown, setNotifBreakdown] = useState(() => cachedFeed?.notifBreakdown ?? {
-        friendRequests: 0,
-        planRequests: 0,
-        planInvites: 0,
-    });
     const [friendIds, setFriendIds] = useState<Set<string>>(
         () => new Set(cachedFeed?.friendIds ?? []),
     );
@@ -302,20 +295,13 @@ export default function HomeScreen() {
             const partsPromise = planIds.length > 0
                 ? supabase
                     .from('participantes')
-                    .select('plan_id, usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)')
+                    .select('plan_id, usuario_id, estado')
                     .in('plan_id', planIds)
                     .eq('estado', 'aceptado')
                 : Promise.resolve({ data: [], error: null });
 
             const creatorIds = Array.from(new Set(safePlans.map((p) => p.creador_id).filter(Boolean)));
-            const creatorsPromise = creatorIds.length > 0
-                ? supabase
-                    .from('perfiles')
-                    .select('id, nombre, avatar_url, genero, ambientes_preferidos, etiquetas')
-                    .in('id', creatorIds)
-                : Promise.resolve({ data: [], error: null });
-
-            const [partsRes, creatorsRes] = await Promise.all([partsPromise, creatorsPromise]);
+            const partsRes = await partsPromise;
 
             let partsByPlan: Record<string, any[]> = {};
             if (partsRes.error) {
@@ -327,16 +313,21 @@ export default function HomeScreen() {
                 });
             }
 
-            const creatorMap = Object.fromEntries((creatorsRes.data || []).map((c) => [c.id, c]));
+            const profileIds = Array.from(new Set([
+                ...creatorIds,
+                ...(partsRes.data || []).map((row: any) => row.usuario_id),
+            ].filter(Boolean)));
+            const publicProfiles = await getPublicProfileCards(profileIds);
+            const profileMap = Object.fromEntries(publicProfiles.map((profile) => [profile.id, profile]));
 
             const formattedPlans = safePlans.map((plan) => {
                 const rawParticipants = partsByPlan[plan.id] || [];
                 const accepted = rawParticipants.filter((p: any) => isAcceptedParticipant(p.estado));
                 const list: any[] = [];
-                const creator = creatorMap[plan.creador_id];
+                const creator = profileMap[plan.creador_id];
                 if (creator) list.push({ ...creator, isCreator: true });
                 accepted.forEach((p: any) => {
-                    const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
+                    const prof = profileMap[p.usuario_id];
                     if (prof && prof.id !== plan.creador_id) list.push({ ...prof, isCreator: false });
                 });
                 return { ...plan, joinedCount: accepted.length, participantsList: list };
@@ -365,11 +356,7 @@ export default function HomeScreen() {
                     coincidedSet,
                     invitesRes,
                 ] = await Promise.all([
-                    supabase
-                        .from('perfiles')
-                        .select('genero, ambientes_preferidos, etiquetas')
-                        .eq('id', user.id)
-                        .maybeSingle(),
+                    getMyProfile(),
                     getProfileNotificationCount(user.id),
                     supabase.from('participantes').select('plan_id, estado').eq('usuario_id', user.id),
                     supabase.from('planes_guardados').select('plan_id').eq('usuario_id', user.id),
@@ -406,7 +393,6 @@ export default function HomeScreen() {
                 nextSaved = savedRes.data?.map((s) => s.plan_id) || [];
 
                 setCurrentUserGenero(nextGenero);
-                setNotifBreakdown(nextNotifs);
                 setFriendIds(nextFriends);
                 setCoincidedIds(nextCoincided);
                 setInvitedPlanIds(nextInvited);
@@ -416,7 +402,7 @@ export default function HomeScreen() {
                 const joinedPlanIds = (participantsRes.data || [])
                     .filter((p: any) => mapEstadoToMembership(p.estado) === 'joined')
                     .map((p: any) => p.plan_id as string);
-                let joinedHistory: Array<{ categoria?: string | null; tipo_deporte?: string | null }> = [];
+                let joinedHistory: { categoria?: string | null; tipo_deporte?: string | null }[] = [];
                 if (joinedPlanIds.length > 0) {
                     const { data: joinedPlans } = await supabase
                         .from('planes')
@@ -439,7 +425,6 @@ export default function HomeScreen() {
                 nextCoincided = new Set();
                 nextInvited = new Set();
                 nextTaste = emptyFeedTaste();
-                setNotifBreakdown(nextNotifs);
                 setFriendIds(nextFriends);
                 setCoincidedIds(nextCoincided);
                 setInvitedPlanIds(nextInvited);
@@ -482,7 +467,7 @@ export default function HomeScreen() {
                 });
             }
         }
-    }, []);
+    }, [listRef]);
 
     const fetchDataRef = useRef(fetchData);
     fetchDataRef.current = fetchData;
@@ -588,7 +573,7 @@ export default function HomeScreen() {
                 },
             );
         });
-    }, [requestFeedLoad]);
+    }, [listRef, requestFeedLoad]);
 
     const handleJoin = async (planId: string) => {
         if (!currentUserId || joiningRef.current) return;
@@ -790,8 +775,7 @@ export default function HomeScreen() {
         [userCoords, lang],
     );
 
-    const renderPlanItem = useCallback(
-        ({ item, index }: { item: any; index: number }) => (
+    const renderPlanItem = ({ item, index }: { item: any; index: number }) => (
             <PlanCard
                 item={item}
                 index={index}
@@ -823,11 +807,9 @@ export default function HomeScreen() {
                 onParticipantsChanged={() => void fetchDataRef.current()}
                 router={router}
             />
-        ),
-        [currentUserId, currentUserGenero, membershipMap, savedPlans, friendIds, coincidedIds, isOwner, router, planDistanceLabel, plans, joiningPlanId],
-    );
+        );
 
-    const matchesDate = (plan: any) => {
+    const matchesDate = useCallback((plan: any) => {
         if (dateFilter === 'all') return true;
         if (!plan.fecha_evento) return false;
         const d = new Date(plan.fecha_evento);
@@ -840,12 +822,12 @@ export default function HomeScreen() {
         const limit = new Date(startOfToday);
         limit.setDate(limit.getDate() + days);
         return d >= startOfToday && d <= limit;
-    };
+    }, [dateFilter]);
 
     const filteredPlans = useMemo(() => {
         const isMinePlan = (p: any) => {
             // Tras unirte, el botón ya dice “unido”, pero no sube al tope hasta recargar.
-            if (deferMineSortIdsRef.current.has(p.id)) return false;
+            if (mineSortEpoch >= 0 && deferMineSortIdsRef.current.has(p.id)) return false;
             return (
                 String(p.creador_id) === String(currentUserId)
                 || membershipMap[p.id] === 'joined'
@@ -926,7 +908,7 @@ export default function HomeScreen() {
         selectedProvinces,
         search,
         searchExpanded,
-        dateFilter,
+        matchesDate,
         feedTaste,
         nearbyKm,
         userCoords,

@@ -49,3 +49,9 @@ enable_confirmations = false
 
 [analytics]
 enabled = false
+
+[functions.delete-account]
+verify_jwt = true
+
+[functions.delete-plan]
+verify_jwt = true

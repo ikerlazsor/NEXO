@@ -36,6 +36,7 @@ import { resolvePlanImageSource } from '../../lib/sports';
 import { diskSet } from '../../lib/diskCache';
 import { screenCacheKey, ScreenCacheTTL } from '../../lib/screenCaches';
 import { cacheGetStale, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
+import { getMyProfile } from '../../lib/profileData';
 import { supabase } from '../../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -126,7 +127,7 @@ export default function MyPlansScreen() {
             const planCols = 'id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id';
 
             const [myProfileRes, pending, openRatings, createdRes, joinedRes] = await Promise.all([
-                supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle(),
+                getMyProfile(),
                 getPlanJoinRequestCount(user.id),
                 getOpenRatingPlanMap(user.id),
                 // Sin perfiles anidados: solo ids/estado; perfiles solo para pendientes.

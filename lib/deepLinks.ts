@@ -1,9 +1,10 @@
 import * as Linking from 'expo-linking';
+import { SHARE_WEB_HOST } from './shareLinks';
 
 export type DeepLinkTarget = { href: string } | null;
 
 /**
- * Resuelve URLs nexo://… y https://nexo.app/… (App / Universal Links) a rutas de la app.
+ * Resuelve el scheme propio y, si se configura, el único dominio web verificado.
  */
 export function resolveDeepLinkUrl(url: string | null | undefined): DeepLinkTarget {
     if (!url) return null;
@@ -14,11 +15,17 @@ export function resolveDeepLinkUrl(url: string | null | undefined): DeepLinkTarg
         return null;
     }
 
-    // https://nexo.app/plan/id → hostname=nexo.app, path=plan/id
+    // https://dominio-verificado.example/plan/id → hostname=..., path=plan/id
     // nexo://plan/id → hostname=plan, path=id
+    const scheme = (parsed.scheme || '').toLowerCase();
     const path = (parsed.path || '').replace(/^\/+/, '');
     const host = (parsed.hostname || '').replace(/^\/+/, '');
-    const isWebHost = host.includes('.') || host === 'nexo.app' || host === 'www.nexo.app';
+    const isOwnScheme = scheme === 'nexo';
+    const isWebHost =
+        (scheme === 'https' || scheme === 'http')
+        && !!SHARE_WEB_HOST
+        && host.toLowerCase() === SHARE_WEB_HOST.toLowerCase();
+    if (!isOwnScheme && !isWebHost) return null;
     const parts = (isWebHost ? path.split('/') : [host, ...path.split('/')]).filter(Boolean);
     if (parts.length === 0) return null;
 

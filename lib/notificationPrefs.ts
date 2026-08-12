@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getMyProfile } from './profileData';
 import { supabase } from './supabase';
 
 const KEY = '@nexo_notif_prefs_v1';
@@ -67,11 +68,8 @@ export async function setNotificationCategoryPrefs(
 export async function syncNotificationCategoryPrefsFromServer(
     userId: string,
 ): Promise<NotificationCategoryPrefs> {
-    const { data } = await supabase
-        .from('perfiles')
-        .select('notif_messages, notif_social, notif_reminders')
-        .eq('id', userId)
-        .maybeSingle();
+    const { data } = await getMyProfile();
+    if (data?.id !== userId) return getNotificationCategoryPrefs();
     if (!data) return getNotificationCategoryPrefs();
     const next: NotificationCategoryPrefs = {
         messages: data.notif_messages !== false,

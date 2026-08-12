@@ -11,7 +11,6 @@ import { useCallback,
     useState } from 'react';
 import {
     ActivityIndicator,
-    Dimensions,
     Modal,
     Platform,
     ScrollView,
@@ -68,9 +67,8 @@ import { cacheGetStale, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
 import { getWaitlistPosition } from '../../lib/waitlistPosition';
 import { supabase } from '../../lib/supabase';
 import { theme } from '../../theme';
+import { getMyProfile, getPublicProfileCards } from '../../lib/profileData';
 
-const { width: SCREEN_W } = Dimensions.get('window');
-const HERO_H = Math.min(380, SCREEN_W * 0.92);
 const PLAN_DETAIL_TTL_MS = 90_000;
 const planDetailKey = (id: string) => `planDetail:${id}`;
 
@@ -78,17 +76,8 @@ const PRIMARY = theme.colors.brand;
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
 const MUTED = theme.colors.textMuted;
-const SURFACE = theme.colors.surface;
-const BORDER = theme.colors.border;
 const SUCCESS = theme.colors.success;
 const DANGER = theme.colors.danger;
-const FRIEND = theme.colors.successStrong;
-const FRIEND_BG = theme.colors.successSoft;
-const FRIEND_BORDER = '#6EE7B7';
-const ACQUAINTANCE = theme.colors.accent;
-const ACQUAINTANCE_BG = '#F5F3FF';
-const ACQUAINTANCE_BORDER = '#C4B5FD';
-const GOLD = theme.colors.warning;
 const WAITLIST = theme.colors.accent;
 
 export default function PlanDetailScreen() {
@@ -202,17 +191,12 @@ export default function PlanDetailScreen() {
 
             setPlan(planRow as PlanRow);
 
-            const [partsRes, creatorRes, myPartRes, savedRes, friendsData, coincidedSet, stats, myProfileRes] = await Promise.all([
+            const [partsRes, myPartRes, savedRes, friendsData, coincidedSet, stats, myProfileRes] = await Promise.all([
                 supabase
                     .from('participantes')
-                    .select('usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)')
+                    .select('usuario_id, estado')
                     .eq('plan_id', planId)
                     .eq('estado', 'aceptado'),
-                supabase
-                    .from('perfiles')
-                    .select('id, nombre, avatar_url, ambientes_preferidos, etiquetas, genero')
-                    .eq('id', planRow.creador_id)
-                    .maybeSingle(),
                 user
                     ? supabase
                           .from('participantes')
@@ -233,7 +217,7 @@ export default function PlanDetailScreen() {
                 user ? getCoincidedUserIds(user.id) : Promise.resolve(new Set<string>()),
                 getUserStats(planRow.creador_id),
                 user
-                    ? supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle()
+                    ? getMyProfile()
                     : Promise.resolve({ data: null, error: null }),
             ]);
             if (gen !== loadGenRef.current) return;
@@ -242,16 +226,23 @@ export default function PlanDetailScreen() {
                 isAcceptedParticipant(p.estado),
             );
 
-            const creatorProfile: Participant | null = creatorRes.data
-                ? { ...creatorRes.data, isCreator: true }
+            const profileIds = [
+                planRow.creador_id,
+                ...accepted.map((p: { usuario_id: string }) => p.usuario_id),
+            ];
+            const publicProfiles = await getPublicProfileCards(profileIds);
+            const profileMap = new Map(publicProfiles.map((profile) => [profile.id, profile]));
+            const creatorData = profileMap.get(planRow.creador_id);
+            const creatorProfile: Participant | null = creatorData
+                ? { ...creatorData, nombre: creatorData.nombre ?? t('profile.user'), isCreator: true }
                 : null;
 
             const list: Participant[] = [];
             if (creatorProfile) list.push(creatorProfile);
             accepted.forEach((p: any) => {
-                const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
+                const prof = profileMap.get(p.usuario_id);
                 if (prof && prof.id !== planRow.creador_id) {
-                    list.push({ ...prof, isCreator: false });
+                    list.push({ ...prof, nombre: prof.nombre ?? t('profile.user'), isCreator: false });
                 }
             });
 
@@ -285,7 +276,7 @@ export default function PlanDetailScreen() {
         } finally {
             if (gen === loadGenRef.current) setLoading(false);
         }
-    }, [planId, applyDetailSnapshot]);
+    }, [planId, applyDetailSnapshot, t]);
 
     useFocusEffect(
         useCallback(() => {

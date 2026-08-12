@@ -224,8 +224,6 @@ export default function SettingsScreen() {
                 <View style={[styles.card, { marginTop: 16 }]}>
                     <Row icon="ban-outline" label={t('settings.blockedAccounts')} onPress={() => router.push('/blocked-accounts')} />
                     <View style={styles.divider} />
-                    <Row icon="diamond-outline" label={t('settings.nexoPlus')} onPress={() => router.push('/nexo-plus')} />
-                    <View style={styles.divider} />
                     <Row icon="lock-closed-outline" label={t('settings.privacy')} onPress={() => router.push('/privacy')} />
                     <View style={styles.divider} />
                     <Row icon="people-outline" label={t('settings.communityNorms')} onPress={() => router.push('/community-norms')} />

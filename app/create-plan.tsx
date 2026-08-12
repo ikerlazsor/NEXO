@@ -43,12 +43,12 @@ import {
     encodeCoverImageKey,
     getCoverImages,
     getPlanCategoryDisplay,
-    normalizeSubcategory,
     resolvePlanCategories,
     type MainCategoryId,
 } from '../lib/categories';
 import type { Genero } from '../lib/profileFields';
 import { supabase } from '../lib/supabase';
+import { getMyProfile } from '../lib/profileData';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -180,7 +180,7 @@ export default function CreatePlanScreen() {
         supabase.auth.getUser().then(async ({ data: { user } }) => {
             if (!user) return;
             setCurrentUserId(user.id);
-            const { data } = await supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle();
+            const { data } = await getMyProfile();
             setUserGenero((data?.genero as Genero) ?? null);
         });
     }, []);

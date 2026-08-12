@@ -29,6 +29,7 @@ import {
 } from '../../../lib/moderation';
 import { fetchAccountAccess } from '../../../lib/roles';
 import { supabase } from '../../../lib/supabase';
+import { getAdminProfileAccess } from '../../../lib/profileData';
 
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
@@ -59,14 +60,20 @@ export default function AdminReportUserScreen() {
         const { data, error } = await supabase
             .from('reportes_usuarios')
             .select(
-                'id, denunciado_id, reportador_id, motivo, mensaje, estado, notas_internas, creado_en, revisado_en, denunciado:perfiles!denunciado_id(nombre, nombre_usuario, baneado), reportador:perfiles!reportador_id(nombre, nombre_usuario)',
+                'id, denunciado_id, reportador_id, motivo, mensaje, estado, notas_internas, creado_en, revisado_en, denunciado:perfiles!denunciado_id(nombre, nombre_usuario), reportador:perfiles!reportador_id(nombre, nombre_usuario)',
             )
             .eq('id', id)
             .maybeSingle();
         if (!error && data) {
+            const targetAccess = access.isOwner
+                ? await getAdminProfileAccess(data.denunciado_id)
+                : null;
             const mapped = {
                 ...data,
-                denunciado: Array.isArray(data.denunciado) ? data.denunciado[0] : data.denunciado,
+                denunciado: {
+                    ...(Array.isArray(data.denunciado) ? data.denunciado[0] : data.denunciado),
+                    baneado: targetAccess?.baneado ?? false,
+                },
                 reportador: Array.isArray(data.reportador) ? data.reportador[0] : data.reportador,
             } as UserReportRow;
             setRow(mapped);

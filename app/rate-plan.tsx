@@ -5,7 +5,6 @@ import { useLocalSearchParams,
     useRouter } from 'expo-router';
 import { useCallback,
     useEffect,
-    useMemo,
     useRef,
     useState } from 'react';
 import {

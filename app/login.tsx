@@ -9,7 +9,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import React,
-    { useEffect,
+    { useCallback,
+    useEffect,
+    useMemo,
     useRef,
     useState } from 'react';
 import {
@@ -121,9 +123,12 @@ export default function LoginScreen() {
     const setEmail = isRegistering ? setRegisterEmail : setLoginEmail;
     const setPassword = isRegistering ? setRegisterPassword : setLoginPassword;
 
-    const fieldOrder: Exclude<FieldName, null>[] = isRegistering
-        ? ['nombre', 'username', 'email', 'password']
-        : ['email', 'password'];
+    const fieldOrder = useMemo<Exclude<FieldName, null>[]>(
+        () => isRegistering
+            ? ['nombre', 'username', 'email', 'password']
+            : ['email', 'password'],
+        [isRegistering],
+    );
 
     useEffect(() => {
         const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -141,7 +146,7 @@ export default function LoginScreen() {
     }, []);
 
     /** Deja visible el campo actual y el siguiente, para poder picarlo con el teclado abierto. */
-    const ensureFieldVisible = (name: Exclude<FieldName, null>, kbH: number) => {
+    const ensureFieldVisible = useCallback((name: Exclude<FieldName, null>, kbH: number) => {
         const idx = fieldOrder.indexOf(name);
         const nextName = idx >= 0 && idx < fieldOrder.length - 1 ? fieldOrder[idx + 1] : null;
         const current = fieldRefs.current[name];
@@ -162,7 +167,7 @@ export default function LoginScreen() {
                 animated: true,
             });
         });
-    };
+    }, [fieldOrder]);
 
     const focusNextField = (name: Exclude<FieldName, null>) => {
         const idx = fieldOrder.indexOf(name);
@@ -188,7 +193,7 @@ export default function LoginScreen() {
         if (!focusedField || keyboardHeight <= 0) return;
         const timer = setTimeout(() => ensureFieldVisible(focusedField, keyboardHeight), 40);
         return () => clearTimeout(timer);
-    }, [keyboardHeight, focusedField, isRegistering]);
+    }, [keyboardHeight, focusedField, isRegistering, ensureFieldVisible]);
 
     useEffect(() => {
         if (!isRegistering) {

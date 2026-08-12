@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "nexo",
+    "name": "NEXO",
     "slug": "nexo",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -14,12 +14,8 @@
       "backgroundColor": "#E2EBF2"
     },
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "com.ikerlazsor.nexo",
-      "associatedDomains": [
-        "applinks:nexo.app",
-        "applinks:www.nexo.app"
-      ],
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Nexo usa tu ubicación para calcular la distancia a los planes y mostrarte cómo llegar.",
         "UIBackgroundModes": [
@@ -52,38 +48,6 @@
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.VIBRATE",
         "android.permission.RECORD_AUDIO"
-      ],
-      "intentFilters": [
-        {
-          "action": "VIEW",
-          "autoVerify": true,
-          "data": [
-            {
-              "scheme": "https",
-              "host": "nexo.app",
-              "pathPrefix": "/plan"
-            },
-            {
-              "scheme": "https",
-              "host": "www.nexo.app",
-              "pathPrefix": "/plan"
-            },
-            {
-              "scheme": "https",
-              "host": "nexo.app",
-              "pathPrefix": "/user"
-            },
-            {
-              "scheme": "https",
-              "host": "nexo.app",
-              "pathPrefix": "/chat"
-            }
-          ],
-          "category": [
-            "BROWSABLE",
-            "DEFAULT"
-          ]
-        }
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,

@@ -32,7 +32,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
 import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
 import { getAuthUser } from '../../lib/auth';
-import { uploadChatFile } from '../../lib/chatUpload';
+import {
+    isSameChatFile,
+    resolveChatFileUrl,
+    resolveChatFileUrls,
+    uploadChatFile,
+} from '../../lib/chatUpload';
 import { markDirectChatRead } from '../../lib/chatUnread';
 import { hideDirectChat } from '../../lib/directChat';
 import { setActiveConversation } from '../../lib/activeConversation';
@@ -42,7 +47,7 @@ import {
     subscribeOutboxFlush,
 } from '../../lib/chatOutbox';
 import { encodeReplyContent, previewForReply, type ReplyQuote } from '../../lib/chatReply';
-import { hapticLight, hapticMedium } from '../../lib/haptics';
+import { hapticMedium } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { getIsOnline } from '../../lib/network';
@@ -199,7 +204,7 @@ export default function DirectChatScreen() {
             if (error) throw error;
 
             const rows = (data ?? []).map((row) => mapMessageRow(row as Record<string, unknown>));
-            return rows;
+            return resolveChatFileUrls(rows);
         },
         [otherUserId]
     );
@@ -404,13 +409,14 @@ export default function DirectChatScreen() {
                                 .eq('id', payload.new.emisor_id)
                                 .single();
 
+                            const rawFileUrl = (payload.new.archivo_url as string | null) ?? null;
                             const newMessage: Message = {
                                 id: newId,
                                 contenido: (payload.new.contenido as string) ?? '',
                                 emisor_id: payload.new.emisor_id as string,
                                 creado_en: payload.new.creado_en as string,
                                 tipo: (payload.new.tipo as Message['tipo']) ?? 'texto',
-                                archivo_url: (payload.new.archivo_url as string | null) ?? null,
+                                archivo_url: await resolveChatFileUrl(rawFileUrl),
                                 perfiles: perfil,
                             };
 
@@ -424,7 +430,7 @@ export default function DirectChatScreen() {
                                                 m.emisor_id === newMessage.emisor_id &&
                                                 m.tipo === newMessage.tipo &&
                                                 m.contenido === newMessage.contenido &&
-                                                m.archivo_url === newMessage.archivo_url
+                                                isSameChatFile(m.archivo_url, rawFileUrl)
                                             ),
                                     );
                                     const next = [newMessage, ...withoutOptimistic];
@@ -484,7 +490,7 @@ export default function DirectChatScreen() {
         });
         if (getIsOnline()) void flushChatOutbox();
         return unsub;
-    }, [currentUserId, otherUserId]);
+    }, [currentUserId, otherUserId, persistDirectChatCache]);
 
     useEffect(() => {
         if (!currentUserId || !otherUserId) return;
@@ -1049,6 +1055,18 @@ export default function DirectChatScreen() {
             <ReactionEmojiPicker
                 visible={!!reactionPickerId}
                 onClose={() => setReactionPickerId(null)}
+                reportLabel={t('report.messageAction')}
+                onReport={
+                    reactionPickerId
+                    && !reactionPickerId.startsWith('local-')
+                    && messages.find((message) => message.id === reactionPickerId)?.emisor_id !== currentUserId
+                        ? () => {
+                              const messageId = reactionPickerId;
+                              setReactionPickerId(null);
+                              router.push({ pathname: '/report-message', params: { messageId } });
+                          }
+                        : undefined
+                }
                 onPick={(emoji) => {
                     const mid = reactionPickerId;
                     setReactionPickerId(null);

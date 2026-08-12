@@ -46,3 +46,8 @@ app-example
 # Generated verification output
 .expo-bundle/
 .test-dist/
+
+# Local build/debug reports (never ship or commit)
+eas-build-*.json
+eas-fail*.json
+tsc-out.txt

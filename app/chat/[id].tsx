@@ -1,18 +1,17 @@
 import {
     Ionicons } from '@expo/vector-icons';
 import { useHeaderHeight } from '@react-navigation/elements';
-import React from 'react';
+import React, { useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState } from 'react';
 import { Audio,
 } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams,
     useRouter } from 'expo-router';
-import { useCallback,
-    useEffect,
-    useMemo,
-    useRef,
-    useState } from 'react';
 import { FlashList } from '@shopify/flash-list';
 import {
     ActivityIndicator,
@@ -36,7 +35,6 @@ import {
     PAGE_SIZE,
     PLAN_CHAT_TTL_MS,
     planChatKey,
-    normalizeProfile,
     formatDuration,
     parseStoredDuration,
     mapMessageRow,
@@ -49,7 +47,12 @@ import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessag
 import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
 import { PlanImage } from '../../components/PlanImage';
 import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
-import { uploadChatFile } from '../../lib/chatUpload';
+import {
+    isSameChatFile,
+    resolveChatFileUrl,
+    resolveChatFileUrls,
+    uploadChatFile,
+} from '../../lib/chatUpload';
 import { markPlanChatRead } from '../../lib/chatUnread';
 import { getCoincidedUserIds } from '../../lib/coincidences';
 import { getAvatarUri, getFriends, type FriendProfile } from '../../lib/friends';
@@ -85,10 +88,9 @@ import { getAuthUser } from '../../lib/auth';
 import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
 import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
+import { getPublicProfileCards } from '../../lib/profileData';
 
 const PRIMARY = theme.colors.brand;
-const FRIEND = theme.colors.successStrong;
-const ACQUAINTANCE = theme.colors.accent;
 const DANGER = theme.colors.danger;
 export default function ChatScreen() {
     const { id } = useLocalSearchParams<{ id: string | string[] }>();
@@ -173,13 +175,13 @@ export default function ChatScreen() {
     const fetchParticipants = useCallback(async (pid: string) => {
         const { data: planData } = await supabase
             .from('planes')
-            .select('creador_id, perfiles:creador_id(nombre, avatar_url, genero)')
+            .select('creador_id')
             .eq('id', pid)
             .single();
 
         const { data: parts } = await supabase
             .from('participantes')
-            .select('usuario_id, estado, perfiles:usuario_id(nombre, avatar_url, genero)')
+            .select('usuario_id, estado')
             .eq('plan_id', pid);
 
         const ownerId = (planData?.creador_id as string) ?? null;
@@ -187,18 +189,22 @@ export default function ChatScreen() {
 
         const byId = new Map<string, { id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }>();
 
-        const creator = normalizeProfile(planData?.perfiles as Message['perfiles']);
-        const creatorGenero =
-            (Array.isArray(planData?.perfiles)
-                ? (planData?.perfiles as any[])[0]?.genero
-                : (planData?.perfiles as any)?.genero) as string | null | undefined;
+        const profileIds = [
+            ...(ownerId ? [ownerId] : []),
+            ...(parts ?? [])
+                .filter((part) => part.estado === 'aceptado')
+                .map((part) => part.usuario_id),
+        ];
+        const publicProfiles = await getPublicProfileCards(profileIds);
+        const profileMap = new Map(publicProfiles.map((profile) => [profile.id, profile]));
+        const creator = ownerId ? profileMap.get(ownerId) : null;
         if (ownerId) {
             byId.set(ownerId, {
                 id: ownerId,
                 nombre: creator?.nombre || t('chat.host'),
                 avatar_url: creator?.avatar_url ?? null,
                 isCreator: true,
-                genero: creatorGenero ?? null,
+                genero: creator?.genero ?? null,
             });
         }
 
@@ -206,14 +212,13 @@ export default function ChatScreen() {
             if (p.estado !== 'aceptado') return;
             const uid = p.usuario_id as string;
             if (!uid || byId.has(uid)) return;
-            const profile = normalizeProfile(p.perfiles as Message['perfiles']);
-            const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
+            const profile = profileMap.get(uid);
             byId.set(uid, {
                 id: uid,
                 nombre: profile?.nombre || t('profile.user'),
                 avatar_url: profile?.avatar_url ?? null,
                 isCreator: uid === ownerId,
-                genero: (prof?.genero as string | null | undefined) ?? null,
+                genero: profile?.genero ?? null,
             });
         });
 
@@ -445,7 +450,7 @@ export default function ChatScreen() {
             if (error) throw error;
 
             const rows = (data ?? []).map((row) => mapMessageRow(row as Record<string, unknown>));
-            return rows;
+            return resolveChatFileUrls(rows);
         },
         []
     );
@@ -699,13 +704,14 @@ export default function ChatScreen() {
                                 .eq('id', payload.new.emisor_id)
                                 .single();
 
+                            const rawFileUrl = (payload.new.archivo_url as string | null) ?? null;
                             const newMessage: Message = {
                                 id: newId,
                                 contenido: (payload.new.contenido as string) ?? '',
                                 emisor_id: payload.new.emisor_id as string,
                                 creado_en: payload.new.creado_en as string,
                                 tipo: (payload.new.tipo as Message['tipo']) ?? 'texto',
-                                archivo_url: (payload.new.archivo_url as string | null) ?? null,
+                                archivo_url: await resolveChatFileUrl(rawFileUrl),
                                 perfiles: perfil,
                             };
 
@@ -719,7 +725,7 @@ export default function ChatScreen() {
                                                 m.emisor_id === newMessage.emisor_id &&
                                                 m.tipo === newMessage.tipo &&
                                                 m.contenido === newMessage.contenido &&
-                                                m.archivo_url === newMessage.archivo_url
+                                                isSameChatFile(m.archivo_url, rawFileUrl)
                                             ),
                                     );
                                     const next = [newMessage, ...withoutOptimistic];
@@ -807,7 +813,7 @@ export default function ChatScreen() {
         });
         if (getIsOnline()) void flushChatOutbox();
         return unsub;
-    }, [planId]);
+    }, [planId, persistPlanChatCache]);
 
     useEffect(() => {
         if (!planId || !currentUserId) return;
@@ -1554,6 +1560,18 @@ export default function ChatScreen() {
             <ReactionEmojiPicker
                 visible={!!reactionPickerId}
                 onClose={() => setReactionPickerId(null)}
+                reportLabel={t('report.messageAction')}
+                onReport={
+                    reactionPickerId
+                    && !reactionPickerId.startsWith('local-')
+                    && messages.find((message) => message.id === reactionPickerId)?.emisor_id !== currentUserId
+                        ? () => {
+                              const messageId = reactionPickerId;
+                              setReactionPickerId(null);
+                              router.push({ pathname: '/report-message', params: { messageId } });
+                          }
+                        : undefined
+                }
                 onPick={(emoji) => {
                     const mid = reactionPickerId;
                     setReactionPickerId(null);

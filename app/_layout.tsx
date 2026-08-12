@@ -5,7 +5,7 @@ Sesión + onboarding incompleto → onboarding
 Sesión + onboarding hecho → (tabs)
  */
 
-import 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ThemeProvider } from '@react-navigation/native';
 import { Session } from '@supabase/supabase-js';
 import * as SplashScreen from 'expo-splash-screen';
@@ -13,7 +13,6 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { Asset } from 'expo-asset';
@@ -481,3 +480,4 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
   },
 });
+

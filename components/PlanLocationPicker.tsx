@@ -18,7 +18,6 @@ import { reverseGeocodePlace, searchPlaces, type GeocodeResult } from '../lib/ge
 import { isNativeMapsAvailable } from '../lib/mapsConfig';
 import { useT } from '../lib/i18n';
 
-const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const PLACEHOLDER = '#94A3B8';

@@ -1,27 +1,18 @@
 import { supabase } from './supabase';
 
-/**
- * Elimina un plan y sus datos relacionados (chat, participantes, invitaciones,
- * guardados, historial y valoraciones). Los pasos auxiliares son "best effort":
- * si RLS impide borrar filas de otros usuarios, seguimos e intentamos borrar el plan.
- */
+/** Elimina primero los archivos físicos y después el plan completo en servidor. */
 export async function deletePlanCompletely(planId: string): Promise<{ error: string | null }> {
-    const steps: { table: string; column: string }[] = [
-        { table: 'mensajes', column: 'plan_id' },
-        { table: 'invitaciones_planes', column: 'plan_id' },
-        { table: 'participantes', column: 'plan_id' },
-        { table: 'planes_guardados', column: 'plan_id' },
-        { table: 'historial_planes', column: 'plan_id' },
-        { table: 'valoraciones', column: 'plan_id' },
-    ];
-
-    await Promise.all(
-        steps.map(async ({ table, column }) => {
-            const { error } = await supabase.from(table).delete().eq(column, planId);
-            if (error) console.warn(`deletePlanCompletely (${table}):`, error.message);
-        }),
-    );
-
-    const { error } = await supabase.from('planes').delete().eq('id', planId);
-    return { error: error?.message ?? null };
+    if (!planId) return { error: 'invalid_target' };
+    try {
+        const { data, error } = await supabase.functions.invoke('delete-plan', {
+            body: { planId },
+        });
+        if (error) return { error: error.message };
+        const payload = data as { error?: string } | null;
+        return { error: payload?.error ?? null };
+    } catch (error) {
+        return {
+            error: error instanceof Error ? error.message : 'delete_plan_failed',
+        };
+    }
 }

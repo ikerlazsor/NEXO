@@ -43,10 +43,10 @@ import { EMPTY_STATS, formatRatingScore, getUserStats, type UserStats } from '..
 import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { screenCacheKey } from '../../lib/screenCaches';
 import { ensureDirectConversation } from '../../lib/directChat';
-import { supabase } from '../../lib/supabase';
+import { getAdminProfileAccess, getMyProfile, getPublicProfile } from '../../lib/profileData';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../../lib/screenState';
-import { bothFemaleGenero, calcAge, getPersonalityLabel, parseHabitos, parsePrivacy, type ProfilePrivacy } from '../../lib/profileFields';
+import { bothFemaleGenero, getPersonalityLabel, parseHabitos, parsePrivacy, type ProfilePrivacy } from '../../lib/profileFields';
 import { deleteUserAdmin } from '../../lib/moderation';
 import { fetchAccountAccess } from '../../lib/roles';
 
@@ -68,7 +68,7 @@ type PublicProfile = {
     avatar_url: string | null;
     descripcion: string | null;
     etiquetas: string[] | null;
-    fecha_nacimiento: string | null;
+    edad: number | null;
     genero: string | null;
     nombre_usuario: string | null;
     habitos_consumo: Record<string, unknown> | null;
@@ -117,7 +117,6 @@ export default function UserProfileScreen() {
     const [privacy, setPrivacy] = useState<ProfilePrivacy | null>(() => cached?.privacy ?? null);
     const [badges, setBadges] = useState<UserBadge[]>(() => cached?.badges ?? []);
     const [selectedBadge, setSelectedBadge] = useState<UserBadge | null>(null);
-    const [badgesLoading, setBadgesLoading] = useState(() => !cached?.badges?.length);
     const [avatarOpen, setAvatarOpen] = useState(false);
     const [sharedPlans, setSharedPlans] = useState(() => cached?.sharedPlans ?? 0);
     const [currentUserGenero, setCurrentUserGenero] = useState<string | null>(
@@ -144,7 +143,6 @@ export default function UserProfileScreen() {
         setCurrentUserId(snap.currentUserId);
         setCurrentUserGenero(snap.currentUserGenero);
         setSharedPlans(snap.sharedPlans);
-        setBadgesLoading(false);
         hasDataRef.current = true;
     }, []);
 
@@ -163,7 +161,6 @@ export default function UserProfileScreen() {
                 if (!opts?.force && cacheIsFresh(profileKey)) return;
             } else if (!hasDataRef.current) {
                 setLoading(true);
-                setBadgesLoading(true);
             }
 
             const user = await getAuthUser();
@@ -175,16 +172,12 @@ export default function UserProfileScreen() {
                           isUserBlocked(user.id, profileId),
                           isBlockedEitherWay(user.id, profileId),
                           countSharedAttendedPlans(user.id, profileId),
-                          supabase.from('perfiles').select('genero').eq('id', user.id).maybeSingle(),
+                          getMyProfile(),
                       ])
                     : Promise.resolve(null);
 
-            const [{ data: profile, error }, count, userStats, badgeStats, friendData, access] = await Promise.all([
-                supabase
-                    .from('perfiles')
-                    .select('id, nombre, nombre_usuario, avatar_url, descripcion, etiquetas, fecha_nacimiento, genero, habitos_consumo, ambientes_preferidos, perfil_gustos, rol')
-                    .eq('id', profileId)
-                    .single(),
+            const [profile, count, userStats, badgeStats, friendData, access] = await Promise.all([
+                getPublicProfile(profileId),
                 getFriendsCount(profileId),
                 getUserStats(profileId),
                 getBadgeStats(profileId),
@@ -192,10 +185,13 @@ export default function UserProfileScreen() {
                 user ? fetchAccountAccess(user.id) : Promise.resolve(null),
             ]);
 
-            if (error || !profile) throw error ?? new Error('profile_missing');
+            if (!profile) throw new Error('profile_missing');
 
             setIsOwner(!!access?.isOwner);
-            const targetRol = (profile as { rol?: string | null }).rol;
+            const targetAccess = access?.isOwner
+                ? await getAdminProfileAccess(profileId)
+                : null;
+            const targetRol = targetAccess?.rol;
             setTargetIsStaff(targetRol === 'owner' || targetRol === 'admin');
 
             const nextProfile: PublicProfile = {
@@ -205,7 +201,7 @@ export default function UserProfileScreen() {
                 avatar_url: profile.avatar_url,
                 descripcion: profile.descripcion,
                 etiquetas: Array.isArray(profile.etiquetas) ? profile.etiquetas : [],
-                fecha_nacimiento: profile.fecha_nacimiento,
+                edad: profile.edad,
                 genero: profile.genero,
                 habitos_consumo: (profile.habitos_consumo as Record<string, unknown>) ?? {},
                 ambientes_preferidos: Array.isArray(profile.ambientes_preferidos) ? profile.ambientes_preferidos : [],
@@ -651,7 +647,7 @@ export default function UserProfileScreen() {
     const hobbies = userProfile?.ambientes_preferidos?.length
         ? userProfile.ambientes_preferidos
         : (userProfile?.etiquetas ?? []);
-    const age = userProfile ? calcAge(userProfile.fecha_nacimiento) : null;
+    const age = userProfile?.edad ?? null;
     const habitos = parseHabitos(userProfile?.habitos_consumo ?? null);
     const priv = privacy ?? parsePrivacy(userProfile?.perfil_gustos);
     const ready = !!userProfile;

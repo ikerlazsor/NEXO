@@ -60,9 +60,17 @@ type PickerProps = {
     visible: boolean;
     onClose: () => void;
     onPick: (emoji: string) => void;
+    onReport?: () => void;
+    reportLabel?: string;
 };
 
-export function ReactionEmojiPicker({ visible, onClose, onPick }: PickerProps) {
+export function ReactionEmojiPicker({
+    visible,
+    onClose,
+    onPick,
+    onReport,
+    reportLabel = 'Reportar mensaje',
+}: PickerProps) {
     return (
         <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
             <Pressable style={styles.backdrop} onPress={onClose}>
@@ -80,6 +88,16 @@ export function ReactionEmojiPicker({ visible, onClose, onPick }: PickerProps) {
                             <Text style={styles.pickerEmoji}>{emoji}</Text>
                         </TouchableOpacity>
                     ))}
+                    {onReport ? (
+                        <TouchableOpacity
+                            style={styles.reportBtn}
+                            onPress={onReport}
+                            activeOpacity={0.85}
+                            accessibilityRole="button"
+                        >
+                            <Text style={styles.reportText}>{reportLabel}</Text>
+                        </TouchableOpacity>
+                    ) : null}
                 </View>
             </Pressable>
         </Modal>
@@ -166,11 +184,14 @@ const styles = StyleSheet.create({
     },
     picker: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'center',
         backgroundColor: '#FFF',
         borderRadius: 28,
         paddingHorizontal: 10,
         paddingVertical: 10,
         gap: 4,
+        maxWidth: 360,
         shadowColor: '#0F172A',
         shadowOpacity: 0.18,
         shadowRadius: 16,
@@ -178,5 +199,15 @@ const styles = StyleSheet.create({
         elevation: 10,
     },
     pickerBtn: { paddingHorizontal: 8, paddingVertical: 4 },
+    reportBtn: {
+        width: '100%',
+        marginTop: 4,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: '#E2E8F0',
+        paddingTop: 10,
+        paddingBottom: 4,
+        alignItems: 'center',
+    },
+    reportText: { color: '#DC2626', fontWeight: '800', fontSize: 14 },
     pickerEmoji: { fontSize: 28 },
 });

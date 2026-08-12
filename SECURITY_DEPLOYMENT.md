@@ -13,7 +13,7 @@ supabase db reset
 supabase test db
 ```
 
-La migración `20260812000100_market_readiness_hardening.sql` añade la
+La migración `20260812042724_market_readiness_hardening.sql` añade la
 proyección de perfiles con privacidad, reserva de nombres de usuario, reportes
 de mensajes, limpieza física de Storage y permisos de mínimo privilegio.
 

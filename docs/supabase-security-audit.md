@@ -1,6 +1,6 @@
 # Supabase security audit
 
-Audit date: 2026-08-12
+Audit date: 2026-08-11  
 Project: `Nexo` (`nixeproyzxvqzyrvsxcx`, eu-west-1, PostgreSQL 17)
 
 ## Scope and method
@@ -55,7 +55,7 @@ policy mistakes more dangerous.
 | `mensajes` | 4 | Direct messages require sender/receiver; plan messages require host or accepted membership. |
 | `mensajes_soporte` | 5 | Users see their tickets; staff-only fields are trigger protected. |
 | `participantes` | 6 | Finding fixed: the previous `SELECT true` exposed membership rows for invisible plans. |
-| `perfiles` | 8 | Direct reads are limited to identity-card columns; private and preference-filtered data use reviewed RPCs. |
+| `perfiles` | 8 | Row access is authenticated-wide by design; see the column-privacy limitation below. |
 | `plan_invitaciones` | 3 | Duplicate invitation model retained and baselined; consolidation is recommended. |
 | `planes` | 6 | Visibility helper enforces public/friends/private rules and blocking. |
 | `planes_guardados` | 5 | Scoped to the owning user. |
@@ -77,11 +77,8 @@ policy mistakes more dangerous.
 | `imagenes-planes` | Yes | Public read is intentional. Insert/update now require object ownership. |
 | `chat-files` | No | Public and authenticated-wide reads are replaced with plan/direct-conversation membership checks derived from the existing file naming convention. |
 
-Malformed Storage names fail closed. Chat attachments use renewable signed
-links; legacy public-form URLs for the private bucket are repaired on load.
-Account and plan deletion remove physical objects before the relational/Auth
-delete. Staff can access a private attachment only when it is preserved in a
-message report.
+Malformed Storage names fail closed. The migration does not rename, delete or
+copy existing objects.
 
 ## Function review
 
@@ -94,25 +91,28 @@ from `PUBLIC`, `anon`, and `authenticated`. It then:
   functions unavailable as direct client APIs;
 - keeps the existing internal authorization checks on administrative RPCs.
 
-The sole anonymous privileged entry point is the narrow boolean username
-availability check required before signup. Usernames are public handles and no
-profile row is returned. The database tests fail if another anonymous
-privileged function appears or a trigger function becomes client-callable.
+The database tests fail if an anonymous privileged function reappears or a
+trigger function becomes client-callable.
 
-## Profile-column privacy remediation
+## Remaining architectural limitation
 
-The previous UI-only visibility settings are now enforced server-side:
+RLS controls rows, not individual columns. `perfiles_select` intentionally
+allows authenticated discovery of profile rows, while visibility preferences
+for age, gender and habits are stored in the same row. A client can therefore
+request columns that the UI chooses not to show.
 
-- authenticated table reads are granted only the identity-card fields;
-- `get_my_profile()` returns the account holder's complete row;
-- `get_public_profiles(uuid[])` returns age rather than birth date and redacts
-  gender, habits and interests according to each saved preference;
-- banned and mutually blocked profiles are excluded for non-staff users;
-- role, ban state and other control columns are not client-updatable;
-- client reads that need private or filtered data use the reviewed projections.
+That cannot be corrected safely by a policy-only migration without changing all
+profile reads. The durable remediation is:
 
-Role-based pgTAP tests exercise two users, hidden attributes, reverse-direction
-blocking, own-profile access and message-report authorization.
+1. expose a public-profile view or RPC containing only always-public fields plus
+   preference-filtered derived values;
+2. keep private profile fields in an owner-only table;
+3. migrate every client query to the public projection;
+4. revoke direct authenticated `SELECT` on the private columns/table;
+5. add role-based behavioral tests with two users.
+
+Until that client migration is completed, the audit does **not** claim
+column-level privacy for hidden profile attributes.
 
 ## Versioned migration workflow
 
@@ -120,13 +120,12 @@ blocking, own-profile access and message-report authorization.
   the pre-existing production database.
 - `20260811000200_security_hardening.sql` contains the reviewed, data-preserving
   permission changes.
-- `20260812042724_market_readiness_hardening.sql` coordinates the client-facing
-  privacy, deletion, registration and moderation changes.
-- `supabase/tests/database/security.test.sql` and
-  `market_readiness.test.sql` check invariants and behavior on a clean rebuild.
+- `supabase/tests/database/security.test.sql` checks the security invariants on
+  a clean local rebuild.
 - Future changes must be created with `supabase migration new <name>` and must
   pass `supabase db reset` plus `supabase test db`.
 
 Because production had no migration history, the baseline must be marked
 `applied` before the hardening migration is pushed. Always inspect
 `supabase db push --dry-run` first.
+

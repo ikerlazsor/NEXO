@@ -7,9 +7,7 @@ Sesión + onboarding hecho → (tabs)
 
 import 'react-native-gesture-handler';
 import { ThemeProvider } from '@react-navigation/native';
-import * as Sentry from '@sentry/react-native';
 import { Session } from '@supabase/supabase-js';
-import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -47,18 +45,6 @@ import {
 } from '../lib/startupControl';
 import { supabase } from '../lib/supabase';
 import { navigationTheme, theme } from '../theme';
-
-const sentryDsn =
-  process.env.EXPO_PUBLIC_SENTRY_DSN ||
-  (Constants.expoConfig?.extra as { sentryDsn?: string } | undefined)?.sentryDsn;
-
-if (sentryDsn) {
-  Sentry.init({
-    dsn: sentryDsn,
-    enabled: !__DEV__,
-    tracesSampleRate: 0.15,
-  });
-}
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 // Precarga logo UI para login/registro (aparece al instante)
@@ -462,7 +448,7 @@ function RootLayout() {
   );
 }
 
-export default Sentry.wrap(RootLayout);
+export default RootLayout;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

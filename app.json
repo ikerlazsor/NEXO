@@ -131,8 +131,7 @@
         {
           "locationWhenInUsePermission": "Nexo usa tu ubicación para mostrarte planes cerca de ti."
         }
-      ],
-      "@sentry/react-native"
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

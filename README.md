@@ -21,7 +21,7 @@ npx expo start
 ```
 
 Create a local `.env` with the public client values used by the app. Never add
-the Supabase service-role key, Sentry token or database password to the
+the Supabase service-role key or database password to the
 repository.
 
 ## Quality checks
@@ -82,15 +82,13 @@ Never run `supabase db reset --linked` against production.
 See [the security audit](docs/supabase-security-audit.md) for verified controls
 and the two client-coordinated privacy remediations still required.
 
-## Sentry
+## Error diagnostics
 
-Production EAS builds upload source maps automatically. Configure
-`SENTRY_AUTH_TOKEN` as a sensitive EAS environment variable and provide
-`SENTRY_ORG` and `SENTRY_PROJECT` for the production environment. Preview and
-E2E builds keep automatic upload disabled.
-
-After a release, verify symbolication with a controlled test error in a
-non-production account before relying on stack traces.
+NEXO does not currently send crash reports to a third-party monitoring
+provider. Production failures must be investigated with EAS build logs,
+Supabase service logs and controlled reproduction. If remote crash reporting is
+introduced later, it must be configured together with the privacy policy,
+retention rules and release validation.
 
 ## Mobile E2E
 

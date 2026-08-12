@@ -18,7 +18,7 @@ name: Privacy, blocked accounts and deep links
 - tapOn:
     id: profile-open-settings
 - tapOn: 'Privacidad'
-- assertVisible: 'Última actualización: julio 2026'
+- assertVisible: 'Última actualización: agosto 2026'
 - back
 - tapOn: 'Cuentas bloqueadas'
 - assertVisible: 'Cuentas bloqueadas'

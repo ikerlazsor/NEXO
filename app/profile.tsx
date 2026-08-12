@@ -15,7 +15,6 @@ import { useCallback,
 import {
     ActivityIndicator,
     InteractionManager,
-    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -82,13 +81,9 @@ import { theme } from '../theme';
 import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../lib/screenState';
 
-const PRIMARY = theme.colors.brand;
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
-const MUTED = theme.colors.textMuted;
 const BG = theme.colors.background;
-const SURFACE = theme.colors.surface;
-const BORDER = theme.colors.border;
 
 const PERSONALITY_MAX = 3;
 
@@ -102,11 +97,9 @@ export default function ProfileScreen() {
     const [isEditing, setIsEditing] = useState(false);
     const [isEditingUsername, setIsEditingUsername] = useState(false);
     const [usernameDraft, setUsernameDraft] = useState('');
-    const [usernameCooldownDays, setUsernameCooldownDays] = useState(0);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
     const [friendsCount, setFriendsCount] = useState(0);
     const [friendsNotifCount, setFriendsNotifCount] = useState(0);
-    const [planRequests, setPlanRequests] = useState(0);
     const [pendingRatings, setPendingRatings] = useState<PendingRatingPlan[]>([]);
     const [nowTick, setNowTick] = useState(Date.now());
     const [aboutMe, setAboutMe] = useState('');
@@ -142,20 +135,11 @@ export default function ProfileScreen() {
         setStats(snap.stats);
         setFriendsCount(snap.friendsCount);
         setFriendsNotifCount(snap.friendsNotifCount);
-        setPlanRequests(snap.planRequests);
         setPendingRatings(snap.pendingRatings);
         setBadges(snap.badges);
         setBadgesLoading(false);
         hasHydratedRef.current = true;
     }, []);
-
-    useFocusEffect(
-        useCallback(() => {
-            void fetchUserData();
-            // Precargar Amigos / Guardados mientras estás en perfil (antes de entrar).
-            warmFriendsAndSavedPlans();
-        }, [])
-    );
 
     useEffect(() => {
         if (!pendingRatings.some((p) => p.phase === 'waiting')) return;
@@ -163,7 +147,7 @@ export default function ProfileScreen() {
         return () => clearInterval(id);
     }, [pendingRatings]);
 
-    const fetchUserData = async () => {
+    const fetchUserData = useCallback(async () => {
         perfStart('profile.total');
         const authUser = await getAuthUser();
         if (!authUser) return;
@@ -259,7 +243,6 @@ export default function ProfileScreen() {
         setStats(userStats);
         setFriendsCount(friendsCountVal);
         setFriendsNotifCount(friendsNotif);
-        setPlanRequests(notifs.planRequests);
         setPendingRatings(ratings);
         setBadges(nextBadges);
         setBadgesLoading(false);
@@ -289,7 +272,15 @@ export default function ProfileScreen() {
         };
         cacheSet(screenCacheKey.profileUI(authUser.id), snap, ScreenCacheTTL.profileUI);
         perfEnd('profile.total');
-    };
+    }, [applyProfileSnapshot]);
+
+    useFocusEffect(
+        useCallback(() => {
+            void fetchUserData();
+            // Precargar Amigos / Guardados mientras estás en perfil (antes de entrar).
+            warmFriendsAndSavedPlans();
+        }, [fetchUserData])
+    );
 
     const uploadImage = async (uri: string) => {
         if (!user?.id) return;
@@ -442,7 +433,6 @@ export default function ProfileScreen() {
             setNombreUsuario(prev);
             if (error === 'username_cooldown') {
                 const days = (daysLeft ?? (await getUsernameCooldownDaysLeft(user.id))) || 1;
-                setUsernameCooldownDays(days);
                 Alert.alert(
                     t('profile.error'),
                     t('profile.usernameCooldown', { days }),
@@ -460,14 +450,11 @@ export default function ProfileScreen() {
             await fetchUserData();
             return;
         }
-        const days = await getUsernameCooldownDaysLeft(user.id);
-        setUsernameCooldownDays(days);
     };
 
     const beginEditUsername = async () => {
         if (!user?.id) return;
         const days = await getUsernameCooldownDaysLeft(user.id);
-        setUsernameCooldownDays(days);
         if (days > 0) {
             Alert.alert(t('profile.error'), t('profile.usernameCooldown', { days }));
             return;

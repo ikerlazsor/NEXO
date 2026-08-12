@@ -37,6 +37,7 @@ import type { Genero } from '../lib/profileFields';
 import { isPlanActiveForSaved, purgePastSavedPlansForUser, runPlanLifecycleMaintenance } from '../lib/planLifecycle';
 import { screenCacheKey, ScreenCacheTTL, invalidatePlanMembershipCaches } from '../lib/screenCaches';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
+import { getMyProfile, getPublicProfileCards } from '../lib/profileData';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY = '#4DA6FF';
@@ -84,11 +85,7 @@ export default function SavedPlansScreen() {
                 setLoading(true);
             }
 
-            const { data: myProfile } = await supabase
-                .from('perfiles')
-                .select('genero')
-                .eq('id', user.id)
-                .maybeSingle();
+            const { data: myProfile } = await getMyProfile();
             if (gen !== fetchGenRef.current) return;
             const nextGenero = (myProfile?.genero as Genero) ?? null;
             setCurrentUserGenero(nextGenero);
@@ -99,7 +96,7 @@ export default function SavedPlansScreen() {
 
             const { data: savedData } = await supabase
                 .from('planes_guardados')
-                .select('plan_id, planes (*, participantes(usuario_id, estado, perfiles:usuario_id(id, nombre, avatar_url, genero)))')
+                .select('plan_id, planes (*, participantes(usuario_id, estado))')
                 .eq('usuario_id', user.id);
 
             const { data: joinedData } = await supabase
@@ -114,21 +111,23 @@ export default function SavedPlansScreen() {
                 .filter(Boolean)
                 .filter((plan: any) => isPlanActiveForSaved(plan));
 
-            const creatorIds = Array.from(new Set(rawPlans.map((p: any) => p.creador_id).filter(Boolean)));
-            let creatorMap: Record<string, any> = {};
-            if (creatorIds.length > 0) {
-                const { data: creators } = await supabase.from('perfiles').select('id, nombre, avatar_url, genero').in('id', creatorIds);
-                creatorMap = Object.fromEntries((creators || []).map(c => [c.id, c]));
-            }
+            const profileIds = Array.from(new Set(rawPlans.flatMap((plan: any) => [
+                plan.creador_id,
+                ...(plan.participantes ?? [])
+                    .filter((p: any) => isAcceptedParticipant(p.estado))
+                    .map((p: any) => p.usuario_id),
+            ]).filter(Boolean)));
+            const publicProfiles = await getPublicProfileCards(profileIds);
+            const profileMap = Object.fromEntries(publicProfiles.map((profile) => [profile.id, profile]));
 
             const formatted = rawPlans.map((plan: any) => {
                 const rawParticipants = (plan.participantes || []) as any[];
                 const accepted = rawParticipants.filter((p: any) => isAcceptedParticipant(p.estado));
                 const list: any[] = [];
-                const creator = creatorMap[plan.creador_id];
+                const creator = profileMap[plan.creador_id];
                 if (creator) list.push({ ...creator, isCreator: true });
                 accepted.forEach((p: any) => {
-                    const prof = Array.isArray(p.perfiles) ? p.perfiles[0] : p.perfiles;
+                    const prof = profileMap[p.usuario_id];
                     if (prof && prof.id !== plan.creador_id) list.push({ ...prof, isCreator: false });
                 });
                 return { ...plan, joinedCount: accepted.length, participantsList: list };

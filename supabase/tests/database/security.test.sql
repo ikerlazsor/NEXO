@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(15);
+select plan(31);
 
 select is(
   (
@@ -44,8 +44,17 @@ select is(
       and p.prosecdef
       and has_function_privilege('anon', p.oid, 'execute')
   ),
-  0::bigint,
-  'anon cannot execute any public SECURITY DEFINER function'
+  1::bigint,
+  'anon can execute only the reviewed signed-out username check'
+);
+
+select ok(
+  has_function_privilege(
+    'anon',
+    'public.is_username_taken_public(text)',
+    'execute'
+  ),
+  'signed-out registration can check a public username'
 );
 
 select is(
@@ -84,12 +93,12 @@ select ok(
 );
 
 select ok(
-  has_function_privilege(
+  not has_function_privilege(
     'authenticated',
     'public.delete_own_account()',
     'execute'
   ),
-  'authenticated users can call delete_own_account'
+  'relational-only account deletion is no longer client-callable'
 );
 
 select ok(
@@ -189,6 +198,123 @@ select is(
   ),
   false,
   'chat-files remains a private bucket'
+);
+
+select ok(
+  has_function_privilege('authenticated', 'public.get_my_profile()', 'execute'),
+  'authenticated users can retrieve their own complete profile through the reviewed RPC'
+);
+
+select ok(
+  has_function_privilege('authenticated', 'public.get_public_profiles(uuid[])', 'execute'),
+  'authenticated users can retrieve redacted public profiles'
+);
+
+select ok(
+  has_function_privilege('authenticated', 'public.can_view_profile_identity(uuid)', 'execute'),
+  'profile identity visibility uses the reviewed block-aware predicate'
+);
+
+select ok(
+  has_function_privilege('authenticated', 'public.report_message(uuid,text,text)', 'execute'),
+  'authenticated users can report an accessible message through the reviewed RPC'
+);
+
+select ok(
+  not has_function_privilege(
+    'authenticated',
+    'public.get_user_storage_cleanup_paths(uuid)',
+    'execute'
+  ),
+  'clients cannot enumerate destructive Storage cleanup paths'
+);
+
+select ok(
+  has_function_privilege(
+    'service_role',
+    'public.get_user_storage_cleanup_paths(uuid)',
+    'execute'
+  ),
+  'service role can enumerate Storage paths for the deletion Edge Function'
+);
+
+select ok(
+  has_column_privilege('authenticated', 'public.perfiles', 'nombre_usuario', 'select'),
+  'identity-card profile columns remain readable to authenticated users'
+);
+
+select ok(
+  not has_column_privilege('authenticated', 'public.perfiles', 'fecha_nacimiento', 'select'),
+  'date of birth is not directly readable from the profiles table'
+);
+
+select ok(
+  not has_column_privilege('authenticated', 'public.perfiles', 'rol', 'update'),
+  'clients cannot update their authorization role column'
+);
+
+select ok(
+  (
+    select c.relrowsecurity
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relname = 'reportes_mensajes'
+  ),
+  'message reports have RLS enabled'
+);
+
+select ok(
+  not has_table_privilege('authenticated', 'public.reportes_mensajes', 'insert'),
+  'message report snapshots cannot be inserted directly by clients'
+);
+
+select is(
+  (
+    select count(*)::bigint
+    from pg_policies
+    where schemaname = 'public'
+      and tablename in ('reportes_planes', 'reportes_usuarios', 'reportes_mensajes')
+      and policyname in (
+        'reportes_select_own',
+        'reportes_usuarios_select_own',
+        'reportes_mensajes_select_own_or_staff'
+      )
+  ),
+  0::bigint,
+  'moderation queues and internal notes are readable only by staff'
+);
+
+select is(
+  (
+    select count(*)::bigint
+    from pg_policies
+    where schemaname = 'storage'
+      and tablename = 'objects'
+      and policyname = 'chat_files_delete_owner'
+      and cmd = 'DELETE'
+      and roles = array['authenticated']::name[]
+  ),
+  1::bigint,
+  'chat uploaders can remove only their own accessible objects'
+);
+
+select ok(
+  not has_function_privilege(
+    'authenticated',
+    'public.service_delete_plan(uuid,uuid)',
+    'execute'
+  ),
+  'service-side plan deletion cannot be invoked directly by clients'
+);
+
+select ok(
+  exists (
+    select 1
+    from unnest(enum_range(null::public.tipo_mensaje)) as valueset(enum_value)
+    where enum_value::text = 'video'
+  ),
+  'video messages are accepted by the database enum'
 );
 
 select * from finish();

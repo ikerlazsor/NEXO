@@ -1,6 +1,4 @@
 import { normalizeMainCategory, type MainCategoryId } from './categories';
-import { getClientOpenAiKey } from './aiConfig';
-import { supabase } from './supabase';
 
 /**
  * Grupos de conceptos relacionados (ES / EN / FR / PT / DE / IT…).
@@ -610,62 +608,6 @@ function expandPlanConcepts(title: string, description: string): string[] {
     return Array.from(out);
 }
 
-async function expandViaEdge(query: string): Promise<string[] | null> {
-    try {
-        const { data, error } = await supabase.functions.invoke('expand-search-query', {
-            body: { query },
-        });
-        if (error || !data) return null;
-        const terms = (data as { terms?: unknown }).terms;
-        if (!Array.isArray(terms)) return null;
-        return terms.map((t) => normalizeSearchText(String(t))).filter((t) => t.length >= 2);
-    } catch {
-        return null;
-    }
-}
-
-async function expandViaOpenAi(query: string): Promise<string[] | null> {
-    const apiKey = getClientOpenAiKey();
-    if (!apiKey) return null;
-
-    try {
-        const res = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: 'gpt-4o-mini',
-                temperature: 0.2,
-                max_tokens: 220,
-                messages: [
-                    {
-                        role: 'system',
-                        content:
-                            'You expand search queries for a Spanish social plans app (NEXO). '
-                            + 'Given a user query in ANY language, return related keywords/synonyms in Spanish and English '
-                            + 'that could match plan titles OR descriptions (e.g. "jiu jitsu brasileño" → open mat, bjj, grappling; '
-                            + '"fortnite" → videojuegos, gaming). '
-                            + 'Reply ONLY JSON: {"terms":["..."]}. Max 18 short terms.',
-                    },
-                    { role: 'user', content: query },
-                ],
-            }),
-        });
-        if (!res.ok) return null;
-        const json = await res.json();
-        const text = json?.choices?.[0]?.message?.content?.trim() || '';
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) return null;
-        const parsed = JSON.parse(match[0]) as { terms?: unknown };
-        if (!Array.isArray(parsed.terms)) return null;
-        return parsed.terms.map((t) => normalizeSearchText(String(t))).filter((t) => t.length >= 2);
-    } catch {
-        return null;
-    }
-}
-
 const expandCache = new Map<string, string[]>();
 
 export async function expandSearchQuery(query: string): Promise<string[]> {
@@ -674,16 +616,8 @@ export async function expandSearchQuery(query: string): Promise<string[]> {
     const cached = expandCache.get(key);
     if (cached) return cached;
 
-    // Local primero (gratis y amplio); IA opcional si está configurada.
-    const local = expandQueryLocally(query);
-    let aiTerms: string[] = [];
-    try {
-        const viaEdge = await expandViaEdge(query);
-        aiTerms = viaEdge ?? (await expandViaOpenAi(query)) ?? [];
-    } catch {
-        aiTerms = [];
-    }
-    const merged = Array.from(new Set([...local, ...aiTerms]));
+    // Expansión local determinista: sin claves en cliente, cuotas ni servicios de pago.
+    const merged = Array.from(new Set(expandQueryLocally(query)));
     expandCache.set(key, merged);
     if (expandCache.size > 80) {
         const first = expandCache.keys().next().value;

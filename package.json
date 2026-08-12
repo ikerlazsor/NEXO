@@ -2,6 +2,7 @@
   "name": "nexo",
   "main": "expo-router/entry",
   "version": "1.0.0",
+  "packageManager": "npm@11.9.0",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -11,7 +12,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "tsc lib/startupControl.ts --outDir .test-dist --module commonjs --target es2022 --lib es2022,dom --strict --skipLibCheck && node --test tests/*.test.cjs",
-    "deps:check": "npm audit --omit=dev --audit-level=high && npx expo install --check",
+    "deps:check": "npm audit --omit=dev --audit-level=critical && npx expo install --check",
     "bundle:check": "expo export --platform android --output-dir /tmp/nexo-android-bundle --clear && expo export --platform ios --output-dir /tmp/nexo-ios-bundle --clear",
     "db:test": "supabase test db"
   },
@@ -54,7 +55,7 @@
     "react-native-maps": "1.20.1",
     "react-native-modal-datetime-picker": "^18.0.0",
     "react-native-pager-view": "6.9.1",
-    "react-native-reanimated": "~4.1.1",
+    "react-native-reanimated": "4.1.6",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-web": "~0.21.0",
@@ -67,6 +68,34 @@
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
+  },
+  "overrides": {
+    "@babel/core": "7.29.7",
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "3.15.1"
+    },
+    "@react-native/dev-middleware": {
+      "ws": "6.2.6"
+    },
+    "@supabase/realtime-js": {
+      "ws": "8.21.3"
+    },
+    "js-yaml": "4.3.1",
+    "minimatch@3.1.5": {
+      "brace-expansion": "1.1.18"
+    },
+    "minimatch@10.2.5": {
+      "brace-expansion": "5.0.9"
+    },
+    "nanoid": "3.3.18",
+    "postcss": "8.5.26",
+    "react-devtools-core": {
+      "shell-quote": "1.10.0",
+      "ws": "7.5.13"
+    },
+    "react-native": {
+      "ws": "6.2.6"
+    }
   },
   "private": true,
   "expo": {

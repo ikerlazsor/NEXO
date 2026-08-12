@@ -1,5 +1,6 @@
 import { getAuthSession } from './auth';
 import { readNombreFromUser } from './profile';
+import { getMyProfile } from './profileData';
 import { supabase } from './supabase';
 import type { Genero } from './profileFields';
 
@@ -18,12 +19,14 @@ export async function fetchOnboardingStatus(
     const maxAttempts = 2;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        let query = supabase
-            .from('perfiles')
-            .select('registro_completado')
-            .eq('id', userId);
-        if (options.signal) query = query.abortSignal(options.signal);
-        const { data, error } = await query.maybeSingle();
+        if (options.signal?.aborted) {
+            const abortError = new Error('Onboarding request aborted');
+            abortError.name = 'AbortError';
+            throw abortError;
+        }
+        const session = await getAuthSession();
+        if (session?.user.id !== userId) return false;
+        const { data, error } = await getMyProfile();
 
         if (error) {
             if (options.signal?.aborted) {
@@ -89,33 +92,31 @@ export async function saveOnboardingPreferences(
     };
     if (nombre) preferencePayload.nombre = nombre;
 
-    const { data: updated, error } = await supabase
+    const { error } = await supabase
         .from('perfiles')
         .update(preferencePayload)
-        .eq('id', userId)
-        .select('registro_completado, nombre')
-        .maybeSingle();
+        .eq('id', userId);
 
     if (error) {
         return { error: error.message };
     }
 
-    if (!updated?.registro_completado) {
+    let { data: savedProfile } = await getMyProfile();
+    if (!savedProfile?.registro_completado) {
         const upsertPayload: Record<string, unknown> = {
             id: userId,
             ...preferencePayload,
         };
 
-        const { data: upserted, error: upsertError } = await supabase
+        const { error: upsertError } = await supabase
             .from('perfiles')
-            .upsert(upsertPayload, { onConflict: 'id' })
-            .select('registro_completado, nombre')
-            .maybeSingle();
+            .insert(upsertPayload);
 
         if (upsertError) {
             return { error: upsertError.message };
         }
-        if (!upserted?.registro_completado) {
+        ({ data: savedProfile } = await getMyProfile());
+        if (!savedProfile?.registro_completado) {
             return { error: 'No se pudo guardar el perfil.' };
         }
     }

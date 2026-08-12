@@ -1,7 +1,7 @@
-/** Reglas alineadas con la política típica de Supabase Auth (letras + mayúscula + número). */
+/** Política de la app: longitud razonable y mezcla básica de caracteres. */
 export function isStrongPassword(pass: string): boolean {
     return (
-        pass.length >= 6 &&
+        pass.length >= 10 &&
         /[a-z]/.test(pass) &&
         /[A-Z]/.test(pass) &&
         /\d/.test(pass)

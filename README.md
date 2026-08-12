@@ -7,7 +7,7 @@ Realtime, Storage and Edge Functions.
 
 ## Requirements
 
-- Node.js 20
+- Node.js 22
 - npm
 - Expo/EAS account access
 - Docker-compatible runtime and the Supabase CLI for database work
@@ -38,11 +38,10 @@ GitHub repeats these checks on each pull request. The bundle check compiles the
 JavaScript and assets separately for Android and iPhone; labeled EAS workflows
 run the full Maestro mobile flows.
 
-The dependency audit is initially informational because the current Expo 54
-tree contains pre-existing transitive advisories, including packages for which
-no compatible fix is published. Dependabot opens grouped update PRs; each group
-must pass Expo compatibility, bundles and mobile tests before merging. Once the
-baseline is cleared, remove `continue-on-error` from the audit step.
+Critical production advisories fail CI. Compatible overrides remove the known
+critical advisory; the remaining advisories are inherited from the Expo/Metro
+native build toolchain and require a tested Expo SDK migration rather than
+forced, incompatible package versions.
 
 ## Database workflow
 
@@ -79,8 +78,23 @@ supabase db push
 
 Never run `supabase db reset --linked` against production.
 
+Deploy the destructive-cleanup functions after the corresponding migration:
+
+```bash
+supabase functions deploy delete-account
+supabase functions deploy delete-plan
+```
+
 See [the security audit](docs/supabase-security-audit.md) for verified controls
-and the two client-coordinated privacy remediations still required.
+and [the launch checklist](docs/LAUNCH_CHECKLIST.md) for release ownership.
+
+## Cost-sensitive configuration
+
+The core app does not require OpenAI, Sentry, a subscription provider, or a
+paid map integration. Native Google Maps on Android is optional; without its
+key, address search and location-based functionality remain available with the
+documented fallback. HTTPS sharing links are enabled only after NEXO controls a
+domain and publishes valid Apple/Android association files.
 
 ## Error diagnostics
 

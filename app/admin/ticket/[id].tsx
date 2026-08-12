@@ -32,8 +32,6 @@ import { supabase } from '../../../lib/supabase';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const MUTED = '#64748B';
-const DANGER = '#DC2626';
-
 const ESTADOS: TicketEstado[] = ['abierto', 'en_revision', 'resuelto', 'descartado'];
 
 export default function AdminTicketDetailScreen() {

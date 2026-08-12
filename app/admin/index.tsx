@@ -21,12 +21,14 @@ import { useT } from '../../lib/i18n';
 import {
     deleteInboxItem,
     fetchModerationCounts,
+    fetchMessageReports,
     fetchPlanReports,
     fetchSupportTickets,
     fetchUserReports,
     planReportTitle,
     type InboxItemKind,
     type ModerationCounts,
+    type MessageReportRow,
     type PlanReportRow,
     type SupportTicket,
     type UserReportRow,
@@ -39,7 +41,7 @@ const INK = '#0F2A4A';
 const MUTED = '#64748B';
 const DANGER = '#DC2626';
 
-type TabKey = 'soporte' | 'planes' | 'usuarios';
+type TabKey = 'soporte' | 'planes' | 'usuarios' | 'mensajes';
 
 function estadoColor(estado: string) {
     if (estado === 'abierto') return DANGER;
@@ -58,6 +60,7 @@ export default function AdminInboxScreen() {
     const [tickets, setTickets] = useState<SupportTicket[]>([]);
     const [planReports, setPlanReports] = useState<PlanReportRow[]>([]);
     const [userReports, setUserReports] = useState<UserReportRow[]>([]);
+    const [messageReports, setMessageReports] = useState<MessageReportRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [showAll, setShowAll] = useState(false);
@@ -71,16 +74,18 @@ export default function AdminInboxScreen() {
         }
         setAllowed(true);
         const filter = showAll ? undefined : 'pendientes';
-        const [c, s, p, u] = await Promise.all([
+        const [c, s, p, u, m] = await Promise.all([
             fetchModerationCounts(),
             fetchSupportTickets(filter),
             fetchPlanReports(filter),
             fetchUserReports(filter),
+            fetchMessageReports(filter),
         ]);
         setCounts(c);
         setTickets(s);
         setPlanReports(p);
         setUserReports(u);
+        setMessageReports(m);
         setLoading(false);
     }, [showAll]);
 
@@ -132,6 +137,7 @@ export default function AdminInboxScreen() {
         { key: 'soporte', label: t('admin.tabSupport'), count: counts?.soporte ?? 0 },
         { key: 'planes', label: t('admin.tabPlans'), count: counts?.reportes_planes ?? 0 },
         { key: 'usuarios', label: t('admin.tabUsers'), count: counts?.reportes_usuarios ?? 0 },
+        { key: 'mensajes', label: t('admin.tabMessages'), count: counts?.reportes_mensajes ?? 0 },
     ];
 
     return (
@@ -319,6 +325,47 @@ export default function AdminInboxScreen() {
                                     <Pressable
                                         style={styles.deleteBtn}
                                         onPress={() => confirmDeleteItem('user', item.id)}
+                                        hitSlop={8}
+                                    >
+                                        <Ionicons name="trash-outline" size={18} color={DANGER} />
+                                        <Text style={styles.deleteBtnText}>{t('admin.removeFromInbox')}</Text>
+                                    </Pressable>
+                                </View>
+                            ))
+                        ))}
+
+                    {tab === 'mensajes' &&
+                        (messageReports.length === 0 ? (
+                            <Empty label={t('admin.empty')} />
+                        ) : (
+                            messageReports.map((item) => (
+                                <View key={item.id} style={styles.card}>
+                                    <Pressable
+                                        onPress={() =>
+                                            router.push({
+                                                pathname: '/admin/report-message/[id]',
+                                                params: { id: item.id },
+                                            })
+                                        }
+                                    >
+                                        <View style={styles.cardTop}>
+                                            <Text style={styles.cardType}>{t('admin.reportMessage')}</Text>
+                                            <EstadoPill estado={item.estado} label={t(`admin.estado.${item.estado}`)} />
+                                        </View>
+                                        <Text style={styles.cardTitle} numberOfLines={1}>
+                                            @{item.denunciado_usuario_snapshot || item.denunciado_nombre_snapshot || '—'}
+                                        </Text>
+                                        <Text style={styles.cardBody} numberOfLines={2}>
+                                            {item.contenido_snapshot || `[${item.tipo_snapshot}]`}
+                                        </Text>
+                                        <Text style={styles.cardMeta}>
+                                            @{item.reportador?.nombre_usuario || '—'} ·{' '}
+                                            {new Date(item.creado_en).toLocaleString()}
+                                        </Text>
+                                    </Pressable>
+                                    <Pressable
+                                        style={styles.deleteBtn}
+                                        onPress={() => confirmDeleteItem('message', item.id)}
                                         hitSlop={8}
                                     >
                                         <Ionicons name="trash-outline" size={18} color={DANGER} />

@@ -15,7 +15,6 @@ import {
 import { useT } from '../lib/i18n';
 import { MAIN_CATEGORY_ICONS } from '../lib/categories';
 
-const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 
@@ -50,7 +49,7 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
     useEffect(() => {
         const idx = Math.max(0, Math.min(images.length - 1, selectedIndex));
         listRef.current?.scrollToOffset({ offset: idx * PREVIEW_W, animated: false });
-    }, [listKey, images.length]);
+    }, [listKey, images.length, selectedIndex]);
 
     const onScrollEnd = useCallback(
         (e: NativeSyntheticEvent<NativeScrollEvent>) => {

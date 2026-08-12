@@ -1,17 +1,42 @@
-# Despliegue de seguridad
+# Despliegue de seguridad y privacidad
 
-Los cambios de esta rama eliminan el acceso por nombre de usuario, dejan de guardar contraseñas de registro en AsyncStorage, corrigen la declaración de `inviteHandled` y protegen `expand-search-query` con autenticación, longitud máxima y una cuota de 30 solicitudes por usuario y hora.
+Los cambios de seguridad son migraciones versionadas. No se deben copiar
+scripts sueltos en SQL Editor ni desplegar funciones antiguas.
 
-## 1. Base de datos
+## Base de datos
 
-En Supabase Dashboard, abre **SQL Editor**, pega todo el contenido de:
+En un entorno local limpio:
 
-`supabase/security-hardening.sql`
+```bash
+supabase start
+supabase db reset
+supabase test db
+```
 
-y pulsa **Run** una sola vez.
+La migración `20260812000100_market_readiness_hardening.sql` añade la
+proyección de perfiles con privacidad, reserva de nombres de usuario, reportes
+de mensajes, limpieza física de Storage y permisos de mínimo privilegio.
 
-Después ejecuta también `supabase/security-hardening-phase2.sql`. Este segundo script impide consultar públicamente si un correo está registrado.
+Para un proyecto enlazado, inspecciona primero el cambio y aplica únicamente
+las migraciones pendientes:
 
-## 2. Edge Function opcional
+```bash
+supabase db push --dry-run
+supabase db push
+supabase inspect db --linked
+```
 
-`expand-search-query` usa OpenAI. Como no se va a configurar una clave, no es necesario desplegarla. El resto de cambios de seguridad funciona sin esa función y sin ejecutar comandos adicionales en Bash.
+Nunca ejecutes `supabase db reset --linked` contra producción.
+
+## Edge Functions obligatorias
+
+Despliega `delete-account` y `delete-plan`. Ambas usan el `service_role`
+inyectado por Supabase para eliminar primero los objetos físicos y después los
+registros relacionados. No configures esa clave en la app cliente.
+
+```bash
+supabase functions deploy delete-account
+supabase functions deploy delete-plan
+```
+
+Este despliegue no requiere OpenAI, Sentry ni ningún servicio de pago.

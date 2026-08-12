@@ -15,6 +15,7 @@ import {
     isGroupOrChatPlan,
 } from './planLifecycle';
 import { withRetry } from './retry';
+import { getMyProfile } from './profileData';
 import { supabase } from './supabase';
 
 const PREF_KEY = '@nexo_push_enabled';
@@ -55,11 +56,8 @@ export async function getPushPreference(): Promise<boolean> {
 
 /** Preferencia local + servidor. Si el servidor dice false, gana. */
 export async function syncPushPreferenceFromServer(userId: string): Promise<boolean> {
-    const { data } = await supabase
-        .from('perfiles')
-        .select('notificaciones_push')
-        .eq('id', userId)
-        .maybeSingle();
+    const { data } = await getMyProfile();
+    if (data?.id !== userId) return getPushPreference();
     if (data && data.notificaciones_push === false) {
         await AsyncStorage.setItem(PREF_KEY, '0');
         return false;

@@ -59,12 +59,9 @@ export async function fetchAccountAccess(
     }
     if (!uid) return DEFAULT_ACCESS;
 
-    let query = supabase
-        .from('perfiles')
-        .select('rol, baneado, baneado_motivo')
-        .eq('id', uid);
+    let query = supabase.rpc('get_my_account_access');
     if (options.signal) query = query.abortSignal(options.signal);
-    const { data, error } = await query.maybeSingle();
+    const { data, error } = await query;
 
     if (error) {
         if (options.signal?.aborted) {
@@ -80,7 +77,11 @@ export async function fetchAccountAccess(
         console.warn('fetchAccountAccess: perfil no encontrado');
         return UNVERIFIED_ACCESS;
     }
-    return mapAccess(data);
+    return mapAccess(data as {
+        rol?: string | null;
+        baneado?: boolean | null;
+        baneado_motivo?: string | null;
+    } | null);
 }
 
 export function isStaffRole(role: UserRole | null | undefined): boolean {

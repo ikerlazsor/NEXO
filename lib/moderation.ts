@@ -2,12 +2,13 @@ import { supabase } from './supabase';
 
 export type TicketEstado = 'abierto' | 'en_revision' | 'resuelto' | 'descartado';
 export type SupportTipo = 'contacto' | 'problema' | 'idea' | 'denuncia_general';
-export type ReportKind = 'plan' | 'user';
+export type ReportKind = 'plan' | 'user' | 'message';
 
 export type ModerationCounts = {
     soporte: number;
     reportes_planes: number;
     reportes_usuarios: number;
+    reportes_mensajes: number;
     total: number;
 };
 
@@ -56,6 +57,25 @@ export type UserReportRow = {
     reportador?: { nombre: string | null; nombre_usuario: string | null } | null;
 };
 
+export type MessageReportRow = {
+    id: string;
+    mensaje_id: string | null;
+    reportador_id: string;
+    denunciado_id: string | null;
+    motivo: string;
+    mensaje: string | null;
+    contenido_snapshot: string;
+    tipo_snapshot: string;
+    archivo_url_snapshot: string | null;
+    denunciado_nombre_snapshot: string | null;
+    denunciado_usuario_snapshot: string | null;
+    estado: TicketEstado;
+    notas_internas: string | null;
+    creado_en: string;
+    revisado_en: string | null;
+    reportador?: { nombre: string | null; nombre_usuario: string | null } | null;
+};
+
 function rpcErr(error: { message?: string } | null): string | null {
     if (!error?.message) return null;
     const m = error.message;
@@ -73,6 +93,7 @@ export async function fetchModerationCounts(): Promise<ModerationCounts> {
         soporte: 0,
         reportes_planes: 0,
         reportes_usuarios: 0,
+        reportes_mensajes: 0,
         total: 0,
     };
     const { data, error } = await supabase.rpc('admin_moderation_counts');
@@ -85,6 +106,7 @@ export async function fetchModerationCounts(): Promise<ModerationCounts> {
         soporte: Number(row.soporte ?? 0),
         reportes_planes: Number(row.reportes_planes ?? 0),
         reportes_usuarios: Number(row.reportes_usuarios ?? 0),
+        reportes_mensajes: Number(row.reportes_mensajes ?? 0),
         total: Number(row.total ?? 0),
     };
 }
@@ -154,7 +176,7 @@ export async function fetchUserReports(estado?: TicketEstado | 'pendientes'): Pr
     let q = supabase
         .from('reportes_usuarios')
         .select(
-            'id, denunciado_id, reportador_id, motivo, mensaje, estado, notas_internas, creado_en, revisado_en, denunciado:perfiles!denunciado_id(nombre, nombre_usuario, baneado), reportador:perfiles!reportador_id(nombre, nombre_usuario)',
+            'id, denunciado_id, reportador_id, motivo, mensaje, estado, notas_internas, creado_en, revisado_en, denunciado:perfiles!denunciado_id(nombre, nombre_usuario), reportador:perfiles!reportador_id(nombre, nombre_usuario)',
         )
         .order('creado_en', { ascending: false })
         .limit(100);
@@ -180,6 +202,31 @@ export async function fetchUserReports(estado?: TicketEstado | 'pendientes'): Pr
         denunciado: Array.isArray(row.denunciado) ? row.denunciado[0] : row.denunciado,
         reportador: Array.isArray(row.reportador) ? row.reportador[0] : row.reportador,
     })) as UserReportRow[];
+}
+
+export async function fetchMessageReports(
+    estado?: TicketEstado | 'pendientes',
+): Promise<MessageReportRow[]> {
+    let query = supabase
+        .from('reportes_mensajes')
+        .select(
+            'id, mensaje_id, reportador_id, denunciado_id, motivo, mensaje, contenido_snapshot, tipo_snapshot, archivo_url_snapshot, denunciado_nombre_snapshot, denunciado_usuario_snapshot, estado, notas_internas, creado_en, revisado_en, reportador:perfiles!reportador_id(nombre, nombre_usuario)',
+        )
+        .order('creado_en', { ascending: false })
+        .limit(100);
+
+    if (estado === 'pendientes') query = query.in('estado', ['abierto', 'en_revision']);
+    else if (estado) query = query.eq('estado', estado);
+
+    const { data, error } = await query;
+    if (error) {
+        console.warn('fetchMessageReports:', error.message);
+        return [];
+    }
+    return (data ?? []).map((row) => ({
+        ...row,
+        reportador: Array.isArray(row.reportador) ? row.reportador[0] : row.reportador,
+    })) as MessageReportRow[];
 }
 
 export async function setTicketEstado(
@@ -224,16 +271,32 @@ export async function banUser(
 }
 
 export async function deleteUserAdmin(userId: string): Promise<{ error: string | null }> {
-    const { error } = await supabase.rpc('admin_delete_user', { target_id: userId });
-    return { error: rpcErr(error) };
+    try {
+        const { data, error } = await supabase.functions.invoke('delete-account', {
+            body: { targetUserId: userId },
+        });
+        if (error) return { error: rpcErr(error) };
+        const payload = data as { error?: string } | null;
+        return { error: payload?.error ?? null };
+    } catch (error) {
+        return { error: error instanceof Error ? error.message : 'delete_user_failed' };
+    }
 }
 
 export async function deletePlanAdmin(planId: string): Promise<{ error: string | null }> {
-    const { error } = await supabase.rpc('admin_delete_plan', { target_plan_id: planId });
-    return { error: rpcErr(error) };
+    try {
+        const { data, error } = await supabase.functions.invoke('delete-plan', {
+            body: { planId },
+        });
+        if (error) return { error: rpcErr(error) };
+        const payload = data as { error?: string } | null;
+        return { error: payload?.error ?? null };
+    } catch (error) {
+        return { error: error instanceof Error ? error.message : 'delete_plan_failed' };
+    }
 }
 
-export type InboxItemKind = 'soporte' | 'plan' | 'user';
+export type InboxItemKind = 'soporte' | 'plan' | 'user' | 'message';
 
 /** Elimina un elemento de la bandeja de moderación (limpieza). */
 export async function deleteInboxItem(

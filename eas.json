@@ -12,17 +12,13 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
     "e2e-test": {
       "withoutCredentials": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_E2E_MODE": "true",
-        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+        "EXPO_PUBLIC_E2E_MODE": "true"
       },
       "android": {
         "buildType": "apk",

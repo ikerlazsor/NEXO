@@ -29,7 +29,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Alert } from '../lib/nexoAlert';
-import { LangPicker } from '../components/LangPicker';
 import { setPendingVerifyEmail, isEmailVerified } from '../lib/emailVerification';
 import { useT } from '../lib/i18n';
 import { isPasswordPolicyError, isStrongPassword } from '../lib/passwordRules';
@@ -116,7 +115,7 @@ export default function LoginScreen() {
     const fieldRefs = useRef<Partial<Record<Exclude<FieldName, null>, View | null>>>({});
     const inputRefs = useRef<Partial<Record<Exclude<FieldName, null>, TextInput | null>>>({});
     const router = useRouter();
-    const { t, lang, setLang } = useT();
+    const { t } = useT();
 
     const email = isRegistering ? registerEmail : loginEmail;
     const password = isRegistering ? registerPassword : loginPassword;
@@ -509,13 +508,6 @@ export default function LoginScreen() {
                             </TouchableOpacity>
                         </View>
 
-                        <View style={styles.langBlock}>
-                            <Text style={styles.langLabel}>{t('login.language')}</Text>
-                            <View style={styles.langPickerWrap}>
-                                <LangPicker lang={lang} onChange={setLang} compact />
-                            </View>
-                        </View>
-
                         {isRegistering && (
                             <>
                                 <View
@@ -825,23 +817,6 @@ const styles = StyleSheet.create({
     },
     segmentText: { fontSize: 14, fontWeight: '700', color: MUTED },
     segmentTextActive: { color: PRIMARY_DARK },
-    langBlock: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10,
-        marginBottom: 10,
-        marginTop: -4,
-    },
-    langLabel: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: MUTED,
-        textTransform: 'uppercase',
-        letterSpacing: 0.3,
-        flexShrink: 0,
-    },
-    langPickerWrap: { flex: 1, alignItems: 'flex-end' },
     fieldBlock: { marginBottom: 16 },
     label: {
         fontSize: 13,

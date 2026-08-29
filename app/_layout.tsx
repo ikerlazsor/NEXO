@@ -1,8 +1,8 @@
-/* 
-Sin sesión → login (o verify-email si hay email pendiente)
-Sesión sin email verificado → verify-email
-Sesión + onboarding incompleto → onboarding
-Sesión + onboarding hecho → (tabs)
+﻿/* 
+Sin sesi├│n ÔåÆ login (o verify-email si hay email pendiente)
+Sesi├│n sin email verificado ÔåÆ verify-email
+Sesi├│n + onboarding incompleto ÔåÆ onboarding
+Sesi├│n + onboarding hecho ÔåÆ (tabs)
  */
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -43,12 +43,13 @@ import {
   type StartupFailure,
 } from '../lib/startupControl';
 import { supabase } from '../lib/supabase';
+import { ensureStartupAppUpdateCheck, startAppUpdateListener } from '../lib/appUpdates';
 import { navigationTheme, theme } from '../theme';
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 // Precarga logo UI para login/registro (aparece al instante)
 void Asset.fromModule(require('../assets/images/nexo-logo-ui.png')).downloadAsync().catch(() => {});
-// Solo se precargan recursos públicos hasta conocer la identidad de la sesión.
+// Solo se precargan recursos p├║blicos hasta conocer la identidad de la sesi├│n.
 scheduleCoverPrefetch();
 
 /** iOS only: thin left-edge native pop. Android uses system back (no overlay / no RN gesture). */
@@ -100,6 +101,9 @@ function AuthGate({ children }: { children: ReactNode }) {
       startupReadyRef.current = false;
       setStartupFailure(null);
       setStartupPhase('loading');
+
+      await ensureStartupAppUpdateCheck();
+      if (!mounted) return;
 
       const result = await coordinator.run<StartupSnapshot>(
         async (signal) => {
@@ -252,7 +256,7 @@ function AuthGate({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Sin sesión: verificar email pendiente o login
+      // Sin sesi├│n: verificar email pendiente o login
       if (!session) {
         const pendingEmail = await getPendingVerifyEmail();
         if (cancelled) return;
@@ -314,7 +318,7 @@ function AuthGate({ children }: { children: ReactNode }) {
 
   if (startupPhase === 'loading') {
     if (!splashReleasedRef.current) return null;
-    return <NexoLoadingState label="Verificando tu cuenta…" />;
+    return <NexoLoadingState label="Verificando tu cuentaÔÇª" />;
   }
 
   if (startupPhase === 'error') {
@@ -324,17 +328,17 @@ function AuthGate({ children }: { children: ReactNode }) {
       <View style={styles.accessUnavailable}>
         <Text style={styles.accessUnavailableTitle}>
           {isOffline
-            ? 'Sin conexión'
+            ? 'Sin conexi├│n'
             : isTimeout
-              ? 'La comprobación está tardando demasiado'
+              ? 'La comprobaci├│n est├í tardando demasiado'
               : 'No se pudo iniciar NEXO'}
         </Text>
         <Text style={styles.accessUnavailableBody}>
           {isOffline
-            ? 'Conéctate a Internet y vuelve a intentarlo. NEXO no abrirá datos de otra cuenta mientras no pueda verificar la sesión.'
+            ? 'Con├®ctate a Internet y vuelve a intentarlo. NEXO no abrir├í datos de otra cuenta mientras no pueda verificar la sesi├│n.'
             : isTimeout
-              ? 'La verificación superó el tiempo máximo de espera. Puedes reintentarlo sin cerrar la aplicación.'
-              : 'No se ha podido comprobar la sesión de forma segura. Inténtalo de nuevo.'}
+              ? 'La verificaci├│n super├│ el tiempo m├íximo de espera. Puedes reintentarlo sin cerrar la aplicaci├│n.'
+              : 'No se ha podido comprobar la sesi├│n de forma segura. Int├®ntalo de nuevo.'}
         </Text>
         <NexoButton
           label="Reintentar"
@@ -354,6 +358,8 @@ function AuthGate({ children }: { children: ReactNode }) {
 }
 
 function RootLayout() {
+  useEffect(() => startAppUpdateListener(), []);
+
   return (
     <I18nProvider>
       <GestureHandlerRootView style={styles.root}>

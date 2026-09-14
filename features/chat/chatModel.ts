@@ -1,6 +1,11 @@
 export const PAGE_SIZE = 50;
 export const PLAN_CHAT_TTL_MS = 15 * 60 * 1000;
+export const DIRECT_CHAT_TTL_MS = 15 * 60 * 1000;
 export const planChatKey = (planId: string) => `planChat:${planId}`;
+export const directChatKey = (a: string, b: string) => {
+  const [x, y] = [a, b].sort();
+  return `directChat:${x}:${y}`;
+};
 
 export interface MessageProfile {
   nombre: string;
@@ -78,5 +83,12 @@ export type PlanChatSnapshot = {
   planFechaEvento: string | null;
   modoPrivado: boolean;
   accessDenied: boolean;
+  hasMore: boolean;
+};
+
+export type DirectChatSnapshot = {
+  messages: Message[];
+  otherUserName: string;
+  otherUserAvatar: string | null;
   hasMore: boolean;
 };

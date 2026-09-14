@@ -3,9 +3,6 @@ perfil del usuario
 */
 import {
     Ionicons } from '@expo/vector-icons';
-import { decode } from 'base64-arraybuffer';
-import { LinearGradient } from 'expo-linear-gradient';
-import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect,
     useRouter } from 'expo-router';
 import { useCallback,
@@ -13,118 +10,131 @@ import { useCallback,
     useRef,
     useState } from 'react';
 import {
-    ActivityIndicator,
-    InteractionManager,
-    Pressable,
     ScrollView,
-    StyleSheet,
-    Switch,
     Text,
-    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
-import { Alert } from '../lib/nexoAlert';
-import { styles } from '../features/profile/profileStyles';
-import { PersonalityPickerModal } from '../features/profile/PersonalityPickerModal';
+import { createProfileStyles } from '../features/profile/profileStyles';
+import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import type { ProfileUiSnapshot, QuickAction } from '../features/profile/types';
+import { PeopleSearchIcon } from '../components/PeopleSearchIcon';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { ProfileReputationStats } from '../components/ProfileReputationStats';
-import { BadgeDetailModal, BadgeTile } from '../components/TrophyBadge';
-import { ProfileDetailsSection } from '../components/ProfileDetailsSection';
-import { getFriendsCount } from '../lib/friends';
-import { useT } from '../lib/i18n';
-import { getProfileNotificationCount } from '../lib/notifications';
-import { getAuthUser } from '../lib/auth';
-import { formatCountdown } from '../lib/planLifecycle';
-import { warmFriendsAndSavedPlans } from '../lib/prefetchHome';
-import { getPendingRatingPlans, type PendingRatingPlan } from '../lib/ratings';
+import { MediaLightbox } from '../components/MediaLightbox';
+import { TranslatedText } from '../components/TranslatedText';
 import {
-    deleteAccount,
-    DISPLAY_NAME_MAX_LENGTH,
-    isUsernameTaken,
-    isValidDisplayName,
-    isValidUsername,
-    normalizeDisplayName,
-    formatUsernameInput,
-    normalizeUsername,
+    AttendedPlansRow,
+    EditProfileButton,
+    FrostedIconButton,
+    GalleryThumb,
+    InterestTiles,
+    OrganizerIdentity,
+    FollowersAvatarsRow,
+    ProfileHero,
+    ProfileSection,
+    ProfileStatsCard,
+    OrganizerInsightsButton,
+    formatMembers,
+} from '../components/profile-ui/ProfileRedesign';
+import { getFriendsCount } from '../lib/friends';
+import {
+    getOrganizerFollowStats,
+    getOrganizerMembers,
+    getOrganizerPastPlans,
+    getOrganizerPlansCount,
+    getOrganizerUpcomingPlans,
+    organizerPlanCard,
+    organizerProfileCopy,
+    parseOrganizerMeta,
+    syncOrganizerAvatarFromRequest,
+    type OrganizerMeta,
+    type OrganizerUpcomingPlan,
+} from '../lib/organizer';
+import { useT } from '../lib/i18n';
+import { hapticLight } from '../lib/haptics';
+import { getProfileNotificationCount, subscribeProfileNotifications } from '../lib/notifications';
+import { getAuthUser } from '../lib/auth';
+import { useAuthSession } from '../lib/authSession';
+import { formatCountdown, resolveRatingUiPhase } from '../lib/planLifecycle';
+import { warmFriendsAndSavedPlans } from '../lib/prefetchHome';
+import { getPendingRatingPlans, mergeAttendedPlansOptimistic, subscribeRatingSession, type PendingRatingPlan } from '../lib/ratings';
+import {
+    getPublicAttendedPlans,
+    type PublicAttendedPlan,
+} from '../lib/profileSocial';
+import {
     loadProfileRow,
     resolveDisplayName,
     syncProfileFromAuth,
-    updateDisplayName,
-    updateProfileFields,
-    updateUsername,
-    getUsernameCooldownDaysLeft,
-    USERNAME_MAX_LENGTH,
 } from '../lib/profile';
 import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
+import { rememberChromeAvatar } from '../lib/chromeAvatar';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
-import { renderRatingStars } from '../lib/profileRating';
-import { EMPTY_STATS, formatRatingScore, getUserStats, type UserStats } from '../lib/stats';
-import { getUserBadges, type UserBadge } from '../lib/badges';
-import { getBadgeStats } from '../lib/badgeStats';
+import { EMPTY_STATS, getUserStats, personRepeatStat, type UserStats } from '../lib/stats';
+import { EMPTY_BADGE_STATS, getBadgeStats, type BadgeStats } from '../lib/badgeStats';
+import { getUserBadges } from '../lib/badges';
 import { perfEnd, perfStart, perfTimed } from '../lib/perfLog';
 import {
+    DEFAULT_PRIVACY,
     calcAge,
-    getPersonalityLabel,
     parseHabitos,
-    mergePerfilGustosPrivacy,
     parsePrivacy,
     type Genero,
     type HabitoConsumo,
     type ProfilePrivacy,
 } from '../lib/profileFields';
-import { supabase } from '../lib/supabase';
-import { signOutAndClearLocalData } from '../lib/session';
+import { readCoverUrl } from '../lib/profileCover';
 import { theme } from '../theme';
 import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../lib/screenState';
 
-const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
-const BG = theme.colors.background;
-
-const PERSONALITY_MAX = 3;
 
 export default function ProfileScreen() {
     const router = useRouter();
-    const { t } = useT();
-    const [avatarUploading, setAvatarUploading] = useState(false);
-    const [user, setUser] = useState<any>(null);
-    const [nombre, setNombre] = useState('');
-    const [nombreUsuario, setNombreUsuario] = useState<string | null>(null);
-    const [isEditing, setIsEditing] = useState(false);
-    const [isEditingUsername, setIsEditingUsername] = useState(false);
-    const [usernameDraft, setUsernameDraft] = useState('');
-    const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-    const [friendsCount, setFriendsCount] = useState(0);
-    const [friendsNotifCount, setFriendsNotifCount] = useState(0);
-    const [pendingRatings, setPendingRatings] = useState<PendingRatingPlan[]>([]);
+    const { t, lang } = useT();
+    const { colors } = useAppTheme();
+    const styles = useThemedStyles(createProfileStyles);
+    const { userId, session } = useAuthSession();
+    const cachedProfile = userId ? cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(userId)) : null;
+    const [user, setUser] = useState<any>(() => session?.user ?? null);
+    const [nombre, setNombre] = useState(() => cachedProfile?.nombre ?? '');
+    const [avatarUrl, setAvatarUrl] = useState<string | null>(() => cachedProfile?.avatarUrl ?? null);
+    const [coverUrl, setCoverUrl] = useState<string | null>(() => cachedProfile?.coverUrl ?? null);
+    const [attendedPlans, setAttendedPlans] = useState<PublicAttendedPlan[]>([]);
+    const [upcomingPlans, setUpcomingPlans] = useState<OrganizerUpcomingPlan[]>([]);
+    const [organizedPlans, setOrganizedPlans] = useState<OrganizerUpcomingPlan[]>([]);
+    const [friendsCount, setFriendsCount] = useState(() => cachedProfile?.friendsCount ?? 0);
+    const [isOrganizer, setIsOrganizer] = useState(() => cachedProfile?.isOrganizer === true);
+    const [organizerMeta, setOrganizerMeta] = useState<OrganizerMeta>(() => cachedProfile?.organizer ?? {});
+    const [followersCount, setFollowersCount] = useState(() => cachedProfile?.followersCount ?? 0);
+    const [followerPreviews, setFollowerPreviews] = useState<Array<{ id: string; nombre: string; avatar_url: string | null }>>([]);
+    const [organizerPlansCount, setOrganizerPlansCount] = useState(0);
+    const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+    const [friendsNotifCount, setFriendsNotifCount] = useState(() => cachedProfile?.friendsNotifCount ?? 0);
+    const [planNotifCount, setPlanNotifCount] = useState(() => cachedProfile?.planRequests ?? 0);
+    const [pendingRatings, setPendingRatings] = useState<PendingRatingPlan[]>(() => cachedProfile?.pendingRatings ?? []);
     const [nowTick, setNowTick] = useState(Date.now());
-    const [aboutMe, setAboutMe] = useState('');
-    const [isEditingAboutMe, setIsEditingAboutMe] = useState(false);
-    const [deletingAccount, setDeletingAccount] = useState(false);
-    const [stats, setStats] = useState<UserStats>(EMPTY_STATS);
-    const [age, setAge] = useState<number | null>(null);
-    const [genero, setGenero] = useState<Genero | null>(null);
-    const [habitoBebida, setHabitoBebida] = useState<HabitoConsumo>('no_especificado');
-    const [habitoTabaco, setHabitoTabaco] = useState<HabitoConsumo>('no_especificado');
-    const [aficiones, setAficiones] = useState<string[]>([]);
-    const [showAficionModal, setShowAficionModal] = useState(false);
-    const [badges, setBadges] = useState<UserBadge[]>([]);
-    const [badgesLoading, setBadgesLoading] = useState(false);
-    const [selectedBadge, setSelectedBadge] = useState<UserBadge | null>(null);
-    const [privacy, setPrivacy] = useState<ProfilePrivacy>({ mostrar_edad: true, mostrar_genero: true, mostrar_bebida: true, mostrar_tabaco: true, mostrar_aficiones: true });
-    const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>({});
-    const hasHydratedRef = useRef(false);
+    const [aboutMe, setAboutMe] = useState(() => cachedProfile?.aboutMe ?? '');
+    const [stats, setStats] = useState<UserStats>(() => cachedProfile?.stats ?? EMPTY_STATS);
+    const [badgeStats, setBadgeStats] = useState<BadgeStats>(() => cachedProfile?.badgeStats ?? EMPTY_BADGE_STATS);
+    const [age, setAge] = useState<number | null>(() => cachedProfile?.age ?? null);
+    const [genero, setGenero] = useState<Genero | null>(() => cachedProfile?.genero ?? null);
+    const [habitoBebida, setHabitoBebida] = useState<HabitoConsumo>(() => cachedProfile?.habitoBebida ?? 'no_especificado');
+    const [habitoTabaco, setHabitoTabaco] = useState<HabitoConsumo>(() => cachedProfile?.habitoTabaco ?? 'no_especificado');
+    const [aficiones, setAficiones] = useState<string[]>(() => cachedProfile?.aficiones ?? []);
+    const [privacy, setPrivacy] = useState<ProfilePrivacy>(() => cachedProfile?.privacy ?? DEFAULT_PRIVACY);
+    const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>(() => cachedProfile?.perfilGustos ?? {});
+    const hasHydratedRef = useRef(!!cachedProfile);
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(ScreenKeys.PROFILE);
 
     const applyProfileSnapshot = useCallback((snap: ProfileUiSnapshot) => {
         setNombre(snap.nombre);
-        setNombreUsuario(snap.nombreUsuario);
         setAboutMe(snap.aboutMe);
         setAvatarUrl(snap.avatarUrl);
+        setCoverUrl(snap.coverUrl ?? null);
         setAge(snap.age);
         setGenero(snap.genero);
         setHabitoBebida(snap.habitoBebida);
@@ -135,17 +145,52 @@ export default function ProfileScreen() {
         setStats(snap.stats);
         setFriendsCount(snap.friendsCount);
         setFriendsNotifCount(snap.friendsNotifCount);
+        setIsOrganizer(snap.isOrganizer === true);
+        setOrganizerMeta(snap.organizer ?? {});
+        setFollowersCount(snap.followersCount ?? 0);
         setPendingRatings(snap.pendingRatings);
-        setBadges(snap.badges);
-        setBadgesLoading(false);
+        setBadgeStats(snap.badgeStats ?? EMPTY_BADGE_STATS);
         hasHydratedRef.current = true;
     }, []);
 
     useEffect(() => {
-        if (!pendingRatings.some((p) => p.phase === 'waiting')) return;
+        if (!pendingRatings.some((p) => resolveRatingUiPhase(p, nowTick) === 'waiting')) return;
         const id = setInterval(() => setNowTick(Date.now()), 1000);
         return () => clearInterval(id);
-    }, [pendingRatings]);
+    }, [pendingRatings, nowTick]);
+
+    useEffect(() => {
+        if (!userId) return;
+        return subscribeRatingSession((evt) => {
+            if (evt.userId !== userId) return;
+            if (evt.type === 'removed') {
+                setPendingRatings((prev) => prev.filter((p) => p.planId !== evt.planId));
+                return;
+            }
+            if (evt.type === 'attended') {
+                setAttendedPlans((prev) => (prev.some((p) => p.id === evt.plan.id) ? prev : [evt.plan, ...prev]));
+                setStats((prev) => {
+                    const snap = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(userId));
+                    if (snap?.stats) return snap.stats;
+                    return {
+                        ...prev,
+                        numeroPlanesRealizados: prev.numeroPlanesRealizados + 1,
+                    };
+                });
+            }
+        });
+    }, [userId]);
+
+    // Badges de amigos / solicitudes de plan: si se atienden en Amigos o en el detalle del plan, bajan aquí también.
+    useEffect(() => {
+        if (!userId) return;
+        return subscribeProfileNotifications(() => {
+            void getProfileNotificationCount(userId, { force: true }).then((notifs) => {
+                setFriendsNotifCount(notifs.friendRequests + notifs.planInvites + notifs.planRequests);
+                setPlanNotifCount(notifs.planRequests);
+            });
+        });
+    }, [userId]);
 
     const fetchUserData = useCallback(async () => {
         perfStart('profile.total');
@@ -157,14 +202,13 @@ export default function ProfileScreen() {
         const stale = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
         if (stale && stale.userId === authUser.id) {
             applyProfileSnapshot(stale);
-        } else if (!hasHydratedRef.current) {
-            setBadgesLoading(true);
         }
 
         const applyProfileFields = (profile: {
             nombre: string;
             nombre_usuario: string | null;
             avatar_url: string | null;
+            cover_url?: string | null;
             descripcion: string;
             etiquetas: string[];
             fecha_nacimiento: string | null;
@@ -174,9 +218,9 @@ export default function ProfileScreen() {
             perfil_gustos: Record<string, unknown>;
         }) => {
             setNombre(profile.nombre);
-            setNombreUsuario(profile.nombre_usuario);
             setAboutMe(profile.descripcion);
             setAvatarUrl(profile.avatar_url);
+            setCoverUrl(profile.cover_url ?? null);
             setAge(calcAge(profile.fecha_nacimiento));
             setGenero((profile.genero as Genero) || null);
             const habitos = parseHabitos(profile.habitos_consumo);
@@ -192,6 +236,7 @@ export default function ProfileScreen() {
             nombre: string;
             nombre_usuario: string | null;
             avatar_url: string | null;
+            cover_url?: string | null;
             descripcion: string;
             etiquetas: string[];
             fecha_nacimiento: string | null;
@@ -210,6 +255,7 @@ export default function ProfileScreen() {
                     ?? (typeof authUser.user_metadata?.avatar_url === 'string'
                         ? authUser.user_metadata.avatar_url
                         : null),
+                cover_url: readCoverUrl(row.data),
                 descripcion: row.data.descripcion ?? '',
                 etiquetas: row.data.etiquetas ?? [],
                 fecha_nacimiento: row.data.fecha_nacimiento ?? null,
@@ -222,30 +268,63 @@ export default function ProfileScreen() {
             profileFields = await perfTimed('profile.syncProfile', () => syncProfileFromAuth(authUser));
         }
         applyProfileFields(profileFields);
+        const organizer = row.data?.es_organizador === true;
+        if (organizer) {
+            const syncedAvatar = await syncOrganizerAvatarFromRequest(authUser.id);
+            if (syncedAvatar && syncedAvatar !== profileFields.avatar_url) {
+                profileFields = { ...profileFields, avatar_url: syncedAvatar };
+                applyProfileFields(profileFields);
+            }
+        }
+        const orgMeta = parseOrganizerMeta(row.data?.organizador);
+        setIsOrganizer(organizer);
+        setOrganizerMeta(orgMeta);
 
-        await new Promise<void>((resolve) => {
-            InteractionManager.runAfterInteractions(() => resolve());
-        });
-
-        const [userStats, badgeStats, friendsCountVal, notifs, ratings] = await Promise.all([
+        const [userStats, friendsCountVal, notifs, ratings, followStats, attended, upcoming, organized, orgPlanCount, badgeStats, orgMembers] = await Promise.all([
             perfTimed('profile.userStats', () => getUserStats(authUser.id)),
-            perfTimed('profile.badgeStats', () =>
-                getBadgeStats(authUser.id, { userCreatedAt: authUser.created_at }),
-            ),
             perfTimed('profile.friendsCount', () => getFriendsCount(authUser.id)),
             perfTimed('profile.notifications', () => getProfileNotificationCount(authUser.id)),
             perfTimed('profile.ratings', () => getPendingRatingPlans(authUser.id)),
+            organizer
+                ? perfTimed('profile.followers', () => getOrganizerFollowStats(authUser.id))
+                : Promise.resolve({ followers: 0, following: false }),
+            organizer ? Promise.resolve([]) : getPublicAttendedPlans(authUser.id, 12),
+            organizer ? getOrganizerUpcomingPlans(authUser.id, 8) : Promise.resolve([]),
+            organizer ? getOrganizerPastPlans(authUser.id, 12) : Promise.resolve([]),
+            organizer ? getOrganizerPlansCount(authUser.id) : Promise.resolve(0),
+            organizer
+                ? Promise.resolve(null)
+                : getBadgeStats(authUser.id, { userCreatedAt: authUser.created_at }),
+            organizer ? getOrganizerMembers(authUser.id) : Promise.resolve([]),
         ]);
+        setAttendedPlans(organizer ? [] : mergeAttendedPlansOptimistic(authUser.id, attended));
+        if (!organizer) {
+            for (const p of attended.slice(0, 12)) {
+                void import('../lib/planDetailCache').then(({ prefetchPlanDetail }) => {
+                    prefetchPlanDetail(p.id);
+                });
+            }
+        }
+        setUpcomingPlans(upcoming);
+        setOrganizedPlans(organized);
+        setOrganizerPlansCount(orgPlanCount);
 
-        const nextBadges = getUserBadges(badgeStats);
-        const friendsNotif = notifs.friendRequests + notifs.planInvites;
+        const friendsNotif = notifs.friendRequests + notifs.planInvites + notifs.planRequests;
 
         setStats(userStats);
+        if (badgeStats) setBadgeStats(badgeStats);
         setFriendsCount(friendsCountVal);
         setFriendsNotifCount(friendsNotif);
+        setPlanNotifCount(notifs.planRequests);
+        setFollowersCount(followStats.followers ?? 0);
+        setFollowerPreviews(
+            orgMembers.map((row) => ({
+                id: row.id,
+                nombre: row.nombre ?? '',
+                avatar_url: row.avatar_url,
+            })),
+        );
         setPendingRatings(ratings);
-        setBadges(nextBadges);
-        setBadgesLoading(false);
         hasHydratedRef.current = true;
 
         const snap: ProfileUiSnapshot = {
@@ -254,6 +333,7 @@ export default function ProfileScreen() {
             nombreUsuario: profileFields.nombre_usuario,
             aboutMe: profileFields.descripcion,
             avatarUrl: profileFields.avatar_url,
+            coverUrl: profileFields.cover_url ?? null,
             age: calcAge(profileFields.fecha_nacimiento),
             genero: (profileFields.genero as Genero) || null,
             habitoBebida: parseHabitos(profileFields.habitos_consumo).bebida,
@@ -268,9 +348,14 @@ export default function ProfileScreen() {
             friendsNotifCount: friendsNotif,
             planRequests: notifs.planRequests,
             pendingRatings: ratings,
-            badges: nextBadges,
+            badges: badgeStats ? getUserBadges(badgeStats) : [],
+            badgeStats: badgeStats ?? undefined,
+            isOrganizer: organizer,
+            organizer: orgMeta,
+            followersCount: followStats.followers ?? 0,
         };
         cacheSet(screenCacheKey.profileUI(authUser.id), snap, ScreenCacheTTL.profileUI);
+        rememberChromeAvatar(authUser.id, profileFields.avatar_url ?? null);
         perfEnd('profile.total');
     }, [applyProfileSnapshot]);
 
@@ -282,452 +367,271 @@ export default function ProfileScreen() {
         }, [fetchUserData])
     );
 
-    const uploadImage = async (uri: string) => {
-        if (!user?.id) return;
-        const previousAvatar = avatarUrl;
-        setAvatarUrl(uri);
-        setAvatarUploading(true);
-        try {
-            const fileName = `${user.id}/avatar.jpg`;
-            const response = await fetch(uri);
-            const blob = await response.blob();
-
-            const base64data = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    const data = reader.result?.toString().split(',')[1];
-                    if (data) resolve(data);
-                    else reject(new Error('read_failed'));
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-            });
-
-            const { error: uploadError } = await supabase.storage
-                .from('avatars')
-                .upload(fileName, decode(base64data), { contentType: 'image/jpeg', upsert: true });
-
-            if (uploadError) {
-                setAvatarUrl(previousAvatar);
-                Alert.alert(t('profile.error'), t('profile.uploadError') + ': ' + uploadError.message);
-                return;
-            }
-
-            const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
-            const urlWithTimestamp = `${publicUrl}?t=${Date.now()}`;
-
-            const { error: profileError } = await supabase
-                .from('perfiles')
-                .update({ avatar_url: urlWithTimestamp })
-                .eq('id', user.id);
-            if (profileError) throw profileError;
-            void supabase.auth.updateUser({ data: { avatar_url: urlWithTimestamp } });
-            setAvatarUrl(urlWithTimestamp);
-        } catch (e: unknown) {
-            setAvatarUrl(previousAvatar);
-            const msg = e instanceof Error ? e.message : t('profile.uploadError');
-            Alert.alert(t('profile.error'), msg);
-        } finally {
-            setAvatarUploading(false);
-        }
-    };
-
-    const pickImage = async (useCamera: boolean) => {
-        const result = useCamera
-            ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.4 })
-            : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.4 });
-
-        if (!result.canceled && result.assets[0]?.uri) {
-            uploadImage(result.assets[0].uri);
-        }
-    };
-
-    const showPhotoMenu = () => {
-        if (avatarUploading) return;
-        Alert.alert(t('profile.photoTitle'), t('profile.photoChoice'), [
-            { text: t('profile.camera'), onPress: () => pickImage(true) },
-            { text: t('profile.gallery'), onPress: () => pickImage(false) },
-            { text: t('profile.cancel'), style: 'cancel' },
-        ]);
-    };
-
-    const addAficion = (tag: string) => {
-        if (aficiones.length >= PERSONALITY_MAX) {
-            Alert.alert(t('profile.tagLimitTitle'), t('profile.tagLimit'));
-            return;
-        }
-        if (!aficiones.includes(tag)) {
-            const updated = [...aficiones, tag];
-            setAficiones(updated);
-            updateProfileData({ ambientes_preferidos: updated, etiquetas: updated });
-        }
-        setShowAficionModal(false);
-    };
-
-    const removeAficion = (tagToRemove: string) => {
-        const updated = aficiones.filter((tag) => tag !== tagToRemove);
-        setAficiones(updated);
-        updateProfileData({ ambientes_preferidos: updated, etiquetas: updated });
-    };
-
-    const savePrivacy = async (next: ProfilePrivacy) => {
-        setPrivacy(next);
-        await updateProfileData({
-            perfil_gustos: mergePerfilGustosPrivacy(perfilGustos, next),
-        });
-    };
-
-    const saveHabitos = async (bebida: HabitoConsumo, tabaco: HabitoConsumo) => {
-        setHabitoBebida(bebida);
-        setHabitoTabaco(tabaco);
-        await updateProfileData({ habitos_consumo: { bebida, tabaco } });
-    };
-
-    const updateProfileData = async (data: Record<string, unknown>): Promise<{ error: string | null }> => {
-        if (!user?.id) return { error: null };
-        return updateProfileFields(user.id, data);
-    };
-
-    const saveName = async () => {
-        if (!user?.id) return;
-        const trimmed = normalizeDisplayName(nombre);
-        if (!isValidDisplayName(trimmed)) {
-            Alert.alert(t('profile.error'), t('profile.displayNameHint'));
-            return;
-        }
-        setNombre(trimmed);
-        setIsEditing(false);
-        const { error } = await updateDisplayName(user.id, trimmed);
-        if (error) {
-            Alert.alert(t('profile.error'), error);
-            await fetchUserData();
-        }
-    };
-
-    const saveUsername = async () => {
-        if (!user?.id) return;
-        const handle = normalizeUsername(usernameDraft);
-        if (!isValidUsername(handle)) {
-            Alert.alert(t('profile.error'), t('login.usernameInvalid'));
-            return;
-        }
-        if (handle === normalizeUsername(nombreUsuario ?? '')) {
-            setIsEditingUsername(false);
-            return;
-        }
-        try {
-            const taken = await isUsernameTaken(handle, user.id);
-            if (taken) {
-                Alert.alert(t('profile.error'), t('login.usernameTaken'));
-                return;
-            }
-        } catch {
-            Alert.alert(t('profile.error'), t('login.usernameCheckFailed'));
-            return;
-        }
-        const prev = nombreUsuario;
-        setNombreUsuario(handle);
-        setIsEditingUsername(false);
-        const { error, daysLeft } = await updateUsername(user.id, handle);
-        if (error) {
-            setNombreUsuario(prev);
-            if (error === 'username_cooldown') {
-                const days = (daysLeft ?? (await getUsernameCooldownDaysLeft(user.id))) || 1;
-                Alert.alert(
-                    t('profile.error'),
-                    t('profile.usernameCooldown', { days }),
-                );
-                return;
-            }
-            const isDuplicate =
-                error === 'username_taken' ||
-                error.toLowerCase().includes('unique') ||
-                error.toLowerCase().includes('duplicate');
-            Alert.alert(
-                t('profile.error'),
-                isDuplicate ? t('login.usernameTaken') : t('login.usernameInvalid'),
-            );
-            await fetchUserData();
-            return;
-        }
-    };
-
-    const beginEditUsername = async () => {
-        if (!user?.id) return;
-        const days = await getUsernameCooldownDaysLeft(user.id);
-        if (days > 0) {
-            Alert.alert(t('profile.error'), t('profile.usernameCooldown', { days }));
-            return;
-        }
-        setUsernameDraft(formatUsernameInput(nombreUsuario ?? ''));
-        setIsEditingUsername(true);
-    };
-
-    const cancelEditUsername = () => {
-        if (!isEditingUsername) return;
-        setIsEditingUsername(false);
-        setUsernameDraft(formatUsernameInput(nombreUsuario ?? ''));
-    };
-
-    const quickActions: QuickAction[] = [
-        { key: 'friends', icon: 'people', labelKey: 'profile.friends', route: '/friends', color: INK, bg: theme.colors.surfaceSubtle, badge: friendsNotifCount },
-        { key: 'saved', icon: 'heart', labelKey: 'profile.saved', route: '/saved-plans', color: INK, bg: theme.colors.surfaceSubtle },
-    ];
+    const quickActions: QuickAction[] = isOrganizer
+        ? []
+        : [
+            { key: 'friends', icon: 'people', labelKey: 'profile.friends', route: '/friends', color: INK, bg: theme.colors.surfaceSubtle, badge: friendsNotifCount },
+            { key: 'search', icon: 'search', labelKey: 'profile.searchUsers', route: '/search-profiles', color: INK, bg: theme.colors.surfaceSubtle },
+            { key: 'saved', icon: 'heart', labelKey: 'profile.saved', route: '/saved-plans', color: INK, bg: theme.colors.surfaceSubtle },
+        ];
 
     const displayName = nombre.trim() || (user ? resolveDisplayName(user, t('profile.user')) : t('profile.user'));
+    const galleryItems = isOrganizer ? (organizerMeta.galeria ?? []) : [];
+    const organizerCopy = organizerProfileCopy(aboutMe, organizerMeta);
 
-    const confirmDeleteAccount = () => {
-        Alert.alert(
-            t('profile.deleteAccountTitle'),
-            t('profile.deleteAccountMsg'),
-            [
-                { text: t('profile.cancel'), style: 'cancel' },
-                {
-                    text: t('profile.deleteAccountConfirm'),
-                    style: 'destructive',
-                    onPress: handleDeleteAccount,
-                },
-            ]
-        );
-    };
-
-    const handleDeleteAccount = async () => {
-        setDeletingAccount(true);
-        try {
-            const { error } = await deleteAccount();
-            if (error) {
-                Alert.alert(t('profile.error'), t('profile.deleteAccountError') + (error ? `\n${error}` : ''));
-                return;
-            }
-            router.replace('/login');
-        } finally {
-            setDeletingAccount(false);
-        }
-    };
+    const personRep = personRepeatStat(stats, { isSelf: true, genero, t });
+    const reviewsLabel = isOrganizer
+        ? `${stats.numeroValoraciones} ${t(
+              stats.numeroValoraciones === 1 ? 'profile.review' : 'profile.reviews',
+          )}`
+        : personRep.label;
 
     return (
-        <View style={styles.safe}>
-            <LinearGradient
-                colors={[theme.colors.primaryBorder, theme.colors.primarySoft, BG]}
-                locations={[0, 0.35, 0.7]}
-                style={StyleSheet.absoluteFill}
-            />
-            <SafeAreaView style={styles.safeInner} edges={['top', 'left', 'right']}>
-            <View style={styles.topBar}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} activeOpacity={0.8}>
-                    <Ionicons name="chevron-back" size={22} color={INK} />
-                </TouchableOpacity>
-                <Text style={styles.topTitle}>{t('profile.myProfile')}</Text>
-                <TouchableOpacity
-                    testID="profile-open-settings"
-                    accessibilityLabel={t('settings.title')}
-                    onPress={() => router.push('/settings')}
-                    style={styles.iconBtn}
-                    activeOpacity={0.8}
-                >
-                    <Ionicons name="settings-outline" size={20} color={INK} />
-                </TouchableOpacity>
-            </View>
-
+        <View style={[styles.safe, { backgroundColor: colors.background }]}>
+            <SafeAreaView style={styles.safeInner} edges={['left', 'right']}>
             <ScrollView
                 ref={scrollRef}
                 onScroll={onScroll}
                 scrollEventThrottle={scrollEventThrottle}
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.scroll}
+                contentContainerStyle={[styles.scroll, { paddingHorizontal: 0, paddingBottom: 100 }]}
                 keyboardShouldPersistTaps="handled"
-                onScrollBeginDrag={cancelEditUsername}
             >
-                <Pressable style={styles.scrollPressable} onPress={cancelEditUsername}>
-                <View style={styles.heroCard}>
-                    <LinearGradient
-                        colors={[theme.colors.surface, '#F8FBFF']}
-                        style={styles.heroGlow}
+                <View style={styles.scrollPressable}>
+                    <ProfileHero
+                        variant={isOrganizer ? 'organizer' : 'person'}
+                        coverUrl={coverUrl}
+                        avatarUrl={avatarUrl}
+                        name={displayName}
+                        verified={isOrganizer}
+                        onBack={() => router.back()}
+                        onCoverPress={undefined}
+                        coverEdit={false}
+                        backLabel={t('common.back')}
+                        topRight={
+                            <FrostedIconButton
+                                icon="settings-outline"
+                                onPress={() => router.push('/settings')}
+                                accessibilityLabel={t('settings.title')}
+                            />
+                        }
                     />
-                    <View style={styles.avatarBlock}>
-                        <TouchableOpacity onPress={showPhotoMenu} activeOpacity={0.9} disabled={avatarUploading}>
-                            <ProfileAvatar uri={avatarUrl} name={displayName} size={104} recyclingKey={user?.id} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={showPhotoMenu}
-                            style={styles.cameraBtn}
-                            activeOpacity={0.85}
-                            disabled={avatarUploading}
-                        >
-                            {avatarUploading ? (
-                                <ActivityIndicator size="small" color={theme.colors.surface} />
-                            ) : (
-                                <Ionicons name="camera" size={15} color={theme.colors.surface} />
-                            )}
-                        </TouchableOpacity>
-                    </View>
-
-                    <View style={styles.nameBlock}>
-                        {isEditing ? (
-                            <View style={styles.nameEditRow}>
-                                <TextInput
-                                    style={styles.nameInput}
-                                    value={nombre}
-                                    onChangeText={(text) => setNombre(text.slice(0, DISPLAY_NAME_MAX_LENGTH))}
-                                    autoFocus
-                                    maxLength={DISPLAY_NAME_MAX_LENGTH}
-                                    autoCapitalize="words"
-                                />
-                                <TouchableOpacity
-                                    onPress={saveName}
-                                    style={styles.nameSaveBtn}
-                                >
-                                    <Ionicons name="checkmark" size={20} color={theme.colors.surface} />
-                                </TouchableOpacity>
-                            </View>
-                        ) : (
-                            <TouchableOpacity style={styles.nameRow} onPress={() => setIsEditing(true)} activeOpacity={0.7}>
-                                <View style={styles.nameSideSlot} />
-                                <Text style={styles.displayName} numberOfLines={1}>{displayName}</Text>
-                                <View style={styles.editNameChip}>
-                                    <Ionicons name="pencil" size={12} color={PRIMARY_DARK} />
+                    {isOrganizer ? (
+                        <OrganizerIdentity
+                            name={displayName}
+                            verifiedLabel={t('profilev.verifiedCommunity')}
+                            description={organizerCopy.description || undefined}
+                            web={organizerMeta.web}
+                            instagram={organizerMeta.instagram}
+                            whatsapp={organizerMeta.whatsapp}
+                            whatsappLabel={t('organizer.whatsappGroup')}
+                            avatar={
+                                <View style={{ borderWidth: 4, borderColor: '#FFF', borderRadius: 56, backgroundColor: '#FFF' }}>
+                                    <ProfileAvatar uri={avatarUrl} name={displayName} size={104} recyclingKey={user?.id} />
                                 </View>
-                            </TouchableOpacity>
-                        )}
-                        {isEditingUsername ? (
-                            <Pressable style={styles.usernameEditRow} onPress={(e) => e.stopPropagation()}>
-                                <Text style={styles.atPrefix}>@</Text>
-                                <TextInput
-                                    style={styles.usernameInput}
-                                    value={usernameDraft}
-                                    onChangeText={(text) => setUsernameDraft(formatUsernameInput(text))}
-                                    autoFocus
-                                    autoCapitalize="none"
-                                    autoCorrect={false}
-                                    spellCheck={false}
-                                    maxLength={USERNAME_MAX_LENGTH}
-                                />
-                                <TouchableOpacity onPress={saveUsername} style={styles.nameSaveBtn}>
-                                    <Ionicons name="checkmark" size={18} color={theme.colors.surface} />
-                                </TouchableOpacity>
-                            </Pressable>
-                        ) : (
-                            <TouchableOpacity
-                                style={styles.usernameTap}
-                                onPress={beginEditUsername}
-                                activeOpacity={0.7}
-                            >
-                                <Text style={styles.username} numberOfLines={1}>
-                                    @{nombreUsuario || '—'}
-                                </Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
+                            }
+                        />
+                    ) : null}
 
-                    <View style={styles.statsRow}>
-                        <TouchableOpacity
-                            style={styles.statItem}
-                            onPress={() => router.push('/plan-history')}
-                            activeOpacity={0.8}
-                        >
-                            <Text style={styles.statValue}>{stats.numeroPlanesRealizados}</Text>
-                            <Text style={styles.statLabel}>{t('profile.plansDone')}</Text>
-                        </TouchableOpacity>
-                        <View style={styles.statDivider} />
-                        <View style={styles.statItem}>
-                            <Text style={styles.statValue}>{formatRatingScore(stats.valoracionMedia)}</Text>
-                            <View style={styles.starsRow}>{renderRatingStars(stats.valoracionMedia, 12)}</View>
-                            <Text style={styles.statMeta}>
-                                {stats.numeroValoraciones}{' '}
-                                {t(stats.numeroValoraciones === 1 ? 'profile.review' : 'profile.reviews')}
-                            </Text>
-                        </View>
-                        <View style={styles.statDivider} />
-                        <TouchableOpacity
-                            style={styles.statItem}
-                            onPress={() => router.push({ pathname: '/friends', params: { tab: 'friends' } })}
-                            onPressIn={() => warmFriendsAndSavedPlans(user?.id)}
-                            activeOpacity={0.8}
-                        >
-                            <View style={styles.statBadgeWrap}>
-                                <Text style={styles.statValue}>{friendsCount}</Text>
-                            </View>
-                            <Text style={styles.statLabel}>{t('profile.friendsLabel')}</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    <ProfileReputationStats
-                        stats={stats}
-                        isSelf
-                        displayName={displayName}
-                        genero={genero}
+                    <ProfileStatsCard
+                        leftValue={isOrganizer ? formatMembers(organizerPlansCount) : stats.numeroPlanesRealizados}
+                        leftLabel={t('profilev.statPlans')}
+                        leftBadge={isOrganizer ? 0 : planNotifCount}
+                        rating={stats.valoracionMedia}
+                        reviewsLabel={reviewsLabel}
+                        middleMode={isOrganizer ? 'stars' : 'repeat'}
+                        repeatPct={isOrganizer ? null : personRep.repeatPct}
+                        middleText={isOrganizer ? undefined : personRep.middleText}
+                        rightValue={isOrganizer ? formatMembers(followersCount) : friendsCount}
+                        rightLabel={isOrganizer ? t('profilev.statMembers') : t('profile.friendsLabel')}
+                        rightBadge={isOrganizer ? 0 : friendsNotifCount}
+                        overlapHero={!isOrganizer}
+                        onLeftPress={() => {
+                            hapticLight();
+                            router.push('/my-plans');
+                        }}
+                        onRightPress={
+                            isOrganizer
+                                ? () => {
+                                    if (!user?.id) return;
+                                    router.push({ pathname: '/organizer-members', params: { id: user.id } });
+                                }
+                                : () =>
+                                      router.push({
+                                          pathname: '/friends',
+                                          params: { tab: friendsNotifCount > 0 ? 'requests' : 'friends' },
+                                      })
+                        }
                     />
-                </View>
 
-                {pendingRatings.length > 0 ? (
-                    <>
-                        <Text style={styles.sectionHeading}>{t('ratings.section')}</Text>
-                        <View style={styles.ratingsList}>
-                            {pendingRatings.map((item) => {
-                                const waiting = item.phase === 'waiting';
-                                const remaining = Math.max(0, item.unlockAt - nowTick);
-                                const openCount = Math.max(item.pendingCount, waiting ? item.totalPeers : item.pendingCount);
-                                return (
-                                    <TouchableOpacity
-                                        key={item.planId}
-                                        style={[styles.ratingCard, waiting ? styles.ratingCardWait : styles.ratingCardOpen]}
-                                        activeOpacity={waiting ? 1 : 0.85}
-                                        disabled={waiting}
-                                        onPress={() =>
-                                            router.push({ pathname: '/rate-plan', params: { planId: item.planId } })
-                                        }
-                                    >
-                                        <View style={[styles.ratingIconWrap, waiting ? styles.ratingIconWait : styles.ratingIconOpen]}>
-                                            <Ionicons
-                                                name={waiting ? 'hourglass-outline' : 'star'}
-                                                size={18}
-                                                color={waiting ? '#B45309' : theme.colors.surface}
-                                            />
-                                        </View>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.ratingCardTitle} numberOfLines={1}>{item.titulo}</Text>
-                                            <Text style={styles.ratingCardSub}>
-                                                {waiting
-                                                    ? t('ratings.unlockIn', { time: formatCountdown(remaining) })
-                                                    : item.pendingCount === 0
-                                                      ? t('ratings.readyContinue')
-                                                      : item.pendingCount === 1
-                                                        ? t('ratings.readyToRateOne')
-                                                        : t('ratings.readyToRate', { n: item.pendingCount })}
-                                            </Text>
-                                            {!waiting && item.totalPeers > 0 ? (
-                                                <View style={styles.ratingMiniTrack}>
-                                                    <View
-                                                        style={[
-                                                            styles.ratingMiniFill,
-                                                            {
-                                                                width: `${Math.round(
-                                                                    ((item.totalPeers - item.pendingCount) / item.totalPeers) * 100,
-                                                                )}%`,
-                                                            },
-                                                        ]}
-                                                    />
-                                                </View>
-                                            ) : null}
-                                        </View>
-                                        {!waiting && openCount > 0 && (
-                                            <View style={styles.ratingReadyBadge}>
-                                                <Text style={styles.ratingReadyText}>{item.pendingCount}</Text>
-                                            </View>
-                                        )}
-                                        {!waiting && <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />}
-                                    </TouchableOpacity>
-                                );
-                            })}
+                    {isOrganizer && (followersCount > 0 || followerPreviews.length > 0) ? (
+                        <View style={{ paddingHorizontal: 20 }}>
+                            <FollowersAvatarsRow people={followerPreviews} total={followersCount} />
                         </View>
-                    </>
+                    ) : null}
+
+                    {isOrganizer ? (
+                        <OrganizerInsightsButton
+                            label={t('insights.open')}
+                            onPress={() => router.push('/organizer-insights')}
+                        />
+                    ) : null}
+
+                    <EditProfileButton
+                        label={t('settings.editProfile')}
+                        onPress={() => router.push('/edit-profile')}
+                        tone={isOrganizer ? 'purple' : 'green'}
+                    />
+
+                    {pendingRatings.length > 0 ? (
+                        <View style={styles.ratingsHighlight}>
+                            <View style={styles.ratingsHighlightHead}>
+                                <View style={styles.ratingsHighlightIcon}>
+                                    <Ionicons name="star" size={18} color={colors.onPrimary} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.ratingsHighlightTitle}>{t('ratings.section')}</Text>
+                                    <Text style={styles.ratingsHighlightSub}>
+                                        {pendingRatings.length === 1
+                                            ? t('ratings.sectionHintOne')
+                                            : t('ratings.sectionHint', { n: pendingRatings.length })}
+                                    </Text>
+                                </View>
+                                <View style={styles.ratingsHighlightBadge}>
+                                    <Text style={styles.ratingsHighlightBadgeText}>{pendingRatings.length}</Text>
+                                </View>
+                            </View>
+                            <View style={styles.ratingsList}>
+                                {pendingRatings.map((item) => {
+                                    const waiting = resolveRatingUiPhase(item, nowTick) === 'waiting';
+                                    const remaining = Math.max(0, item.unlockAt - nowTick);
+                                    return (
+                                        <TouchableOpacity
+                                            key={item.planId}
+                                            style={[styles.ratingCard, waiting ? styles.ratingCardWait : styles.ratingCardOpen]}
+                                            activeOpacity={waiting ? 1 : 0.85}
+                                            disabled={waiting}
+                                            onPress={() =>
+                                                router.push({ pathname: '/rate-plan', params: { planId: item.planId } })
+                                            }
+                                        >
+                                            <View style={[styles.ratingIconWrap, waiting ? styles.ratingIconWait : styles.ratingIconOpen]}>
+                                                <Ionicons
+                                                    name={waiting ? 'hourglass-outline' : 'star'}
+                                                    size={18}
+                                                    color={waiting ? colors.warning : colors.onPrimary}
+                                                />
+                                            </View>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={styles.ratingCardTitle} numberOfLines={1}>{item.titulo}</Text>
+                                                {waiting ? (
+                                                    <Text style={styles.ratingCardSub}>
+                                                        {t('ratings.unlockIn', { time: formatCountdown(remaining) })}
+                                                    </Text>
+                                                ) : null}
+                                            </View>
+                                            {!waiting && <Ionicons name="chevron-forward" size={16} color={colors.primary} />}
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
+                        </View>
+                    ) : null}
+
+                    {isOrganizer ? (
+                        <ProfileReputationStats
+                            stats={stats}
+                            isSelf
+                            variant="organizer"
+                        />
+                    ) : (
+                        <ProfileReputationStats
+                            stats={badgeStats}
+                            isSelf
+                            genero={genero}
+                        />
+                    )}
+
+                    {!isOrganizer ? (
+                        <>
+                            {aboutMe.trim() ? (
+                                <ProfileSection title={t('profile.aboutMe')}>
+                                    <TranslatedText
+                                        text={aboutMe.trim()}
+                                        style={{ color: colors.textMuted, fontSize: 16, lineHeight: 24, fontWeight: '500' }}
+                                    />
+                                </ProfileSection>
+                            ) : null}
+                            <ProfileSection title={t('userprofile.interests')}>
+                                <InterestTiles tags={aficiones} genero={genero} t={t} />
+                            </ProfileSection>
+                            {privacy.mostrar_planes !== false && attendedPlans.length > 0 ? (
+                            <ProfileSection title={t('profilev.attendedPlansSelf')}>
+                                <AttendedPlansRow
+                                    plans={attendedPlans}
+                                    emptyLabel={t('profilev.attendedEmpty')}
+                                    lang={lang === 'en' ? 'en' : 'es'}
+                                    onPressPlan={(id) =>
+                                        router.push({
+                                            pathname: '/plan/[id]',
+                                            params: { id, from: 'attended' },
+                                        })
+                                    }
+                                />
+                            </ProfileSection>
+                            ) : null}
+                        </>
+                    ) : (
+                        <>
+                            {organizedPlans.length > 0 ? (
+                                <ProfileSection title={t('organizer.organizedPlans')}>
+                                    <AttendedPlansRow
+                                        plans={organizedPlans.map(organizerPlanCard)}
+                                        emptyLabel=""
+                                        lang={lang === 'en' ? 'en' : 'es'}
+                                        onPressPlan={(id) => router.push({ pathname: '/plan/[id]', params: { id } })}
+                                    />
+                                </ProfileSection>
+                            ) : null}
+                            {upcomingPlans.length > 0 ? (
+                                <ProfileSection title={t('organizer.upcomingPlans')}>
+                                    <AttendedPlansRow
+                                        plans={upcomingPlans.map(organizerPlanCard)}
+                                        emptyLabel=""
+                                        lang={lang === 'en' ? 'en' : 'es'}
+                                        showWhen
+                                        onPressPlan={(id) => router.push({ pathname: '/plan/[id]', params: { id } })}
+                                    />
+                                </ProfileSection>
+                            ) : null}
+                        </>
+                    )}
+
+                {galleryItems.length > 0 ? (
+                    <ProfileSection title={t('organizer.moments')}>
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            nestedScrollEnabled
+                            contentContainerStyle={styles.badgeRow}
+                        >
+                            {galleryItems.map((item, i) => (
+                                <GalleryThumb
+                                    key={item.url}
+                                    item={item}
+                                    onPress={() => setGalleryIndex(i)}
+                                />
+                            ))}
+                        </ScrollView>
+                    </ProfileSection>
                 ) : null}
 
+                {quickActions.length > 0 ? (
                 <View style={styles.quickGrid}>
                     {quickActions.map((action) => (
                         <TouchableOpacity
                             key={action.key}
-                            style={styles.quickTile}
+                            style={[styles.quickTile, isOrganizer && styles.orgQuickTile]}
                             onPressIn={() => warmFriendsAndSavedPlans(user?.id)}
                             onPress={() => {
                                 if (action.key === 'friends' && (action.badge ?? 0) > 0) {
@@ -739,7 +643,11 @@ export default function ProfileScreen() {
                             activeOpacity={0.85}
                         >
                             <View style={[styles.quickIconWrap, { backgroundColor: action.bg }]}>
-                                <Ionicons name={action.icon} size={22} color={action.color} />
+                                {action.key === 'search' ? (
+                                    <PeopleSearchIcon size={22} color={action.color} />
+                                ) : (
+                                    <Ionicons name={action.icon} size={22} color={action.color} />
+                                )}
                                 {(action.badge ?? 0) > 0 && (
                                     <View style={styles.quickBadge}>
                                         <Text style={styles.quickBadgeText}>
@@ -748,166 +656,28 @@ export default function ProfileScreen() {
                                     </View>
                                 )}
                             </View>
-                            <Text style={styles.quickLabel} numberOfLines={2}>{t(action.labelKey)}</Text>
+                            <Text style={[styles.quickLabel, isOrganizer && styles.orgQuickLabel]} numberOfLines={2}>{t(action.labelKey)}</Text>
                         </TouchableOpacity>
                     ))}
                 </View>
+                ) : null}
 
-                <ProfileDetailsSection
-                    age={age}
-                    genero={genero}
-                    habitoBebida={habitoBebida}
-                    habitoTabaco={habitoTabaco}
-                    privacy={privacy}
-                    onSaveHabitos={saveHabitos}
-                    onPrivacyChange={savePrivacy}
-                />
-
-                {/* About me */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Text style={styles.cardTitle}>{t('profile.aboutMe')}</Text>
-                        <Text style={styles.cardMeta}>{aboutMe.length}/400</Text>
-                    </View>
-                    {isEditingAboutMe ? (
-                        <View style={styles.aboutEdit}>
-                            <TextInput
-                                style={styles.aboutInput}
-                                value={aboutMe}
-                                onChangeText={(text) => { if (text.length <= 400) setAboutMe(text); }}
-                                placeholder={t('profile.aboutPlaceholder')}
-                                placeholderTextColor={theme.colors.textSubtle}
-                                multiline
-                                autoFocus
-                            />
-                            <TouchableOpacity
-                                style={styles.aboutSave}
-                                onPress={async () => {
-                                    setIsEditingAboutMe(false);
-                                    await updateProfileData({ descripcion: aboutMe });
-                                }}
-                            >
-                                <Ionicons name="checkmark-circle" size={28} color={PRIMARY_DARK} />
-                            </TouchableOpacity>
-                        </View>
-                    ) : (
-                        <Pressable style={styles.aboutDisplay} onPress={() => setIsEditingAboutMe(true)}>
-                            <Text style={aboutMe ? styles.aboutText : styles.aboutPlaceholder}>
-                                {aboutMe || t('profile.aboutEmpty')}
-                            </Text>
-                            <Ionicons name="create-outline" size={18} color={theme.colors.textSubtle} />
-                        </Pressable>
-                    )}
+                {isOrganizer && organizerCopy.information ? (
+                    <ProfileSection title={t('organizer.fieldInfo')}>
+                        <TranslatedText
+                            text={organizerCopy.information}
+                            style={{ color: colors.textMuted, fontSize: 16, lineHeight: 24, fontWeight: '500' }}
+                        />
+                    </ProfileSection>
+                ) : null}
                 </View>
-
-                {/* Personalidad */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Text style={styles.cardTitle}>{t('profile.personality')}</Text>
-                        <View style={styles.hobbyHeaderRight}>
-                            <Text style={styles.cardMeta}>{aficiones.length}/{PERSONALITY_MAX}</Text>
-                            <Switch
-                                value={privacy.mostrar_aficiones}
-                                onValueChange={(v) => savePrivacy({ ...privacy, mostrar_aficiones: v })}
-                                trackColor={{ false: theme.colors.border, true: '#BFDBFE' }}
-                                thumbColor={privacy.mostrar_aficiones ? PRIMARY_DARK : theme.colors.textSubtle}
-                            />
-                        </View>
-                    </View>
-                    <View style={styles.tagsWrap}>
-                        {!privacy.mostrar_aficiones ? (
-                            <Text style={styles.personalityHidden}>{t('profile.hidden')}</Text>
-                        ) : (
-                            <>
-                                {aficiones.map((tag) => (
-                                    <View key={tag} style={styles.tagChip}>
-                                        <Text style={styles.tagText}>{getPersonalityLabel(tag, genero, t)}</Text>
-                                        <TouchableOpacity onPress={() => removeAficion(tag)} hitSlop={8}>
-                                            <Ionicons name="close" size={14} color={PRIMARY_DARK} />
-                                        </TouchableOpacity>
-                                    </View>
-                                ))}
-                                {aficiones.length < PERSONALITY_MAX && (
-                                    <TouchableOpacity style={styles.addTag} onPress={() => setShowAficionModal(true)} activeOpacity={0.85}>
-                                        <Ionicons name="add" size={18} color={PRIMARY_DARK} />
-                                        <Text style={styles.addTagText}>{t('profile.addPersonality')}</Text>
-                                    </TouchableOpacity>
-                                )}
-                            </>
-                        )}
-                    </View>
-                </View>
-
-                {/* Insignias */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Text style={styles.cardTitle}>{t('profile.badges')}</Text>
-                        <Text style={styles.cardMeta}>
-                            {badges.filter((b) => b.unlocked).length}/{badges.length}
-                        </Text>
-                    </View>
-                    {badgesLoading ? (
-                        <ActivityIndicator color={PRIMARY_DARK} style={{ marginVertical: 24, alignSelf: 'center' }} />
-                    ) : (
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            nestedScrollEnabled
-                            contentContainerStyle={styles.badgeRow}
-                        >
-                            {badges.map((badge) => (
-                                <BadgeTile
-                                    key={badge.family.id}
-                                    badge={badge}
-                                    onPress={() => setSelectedBadge(badge)}
-                                />
-                            ))}
-                        </ScrollView>
-                    )}
-                </View>
-
-                <TouchableOpacity
-                    style={styles.logoutBtn}
-                    onPress={async () => {
-                        await signOutAndClearLocalData();
-                        router.replace('/login');
-                    }}
-                    activeOpacity={0.85}
-                >
-                    <Ionicons name="log-out-outline" size={20} color={theme.colors.danger} />
-                    <Text style={styles.logoutText}>{t('profile.logout')}</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={styles.deleteAccountBtn}
-                    onPress={confirmDeleteAccount}
-                    disabled={deletingAccount}
-                    activeOpacity={0.85}
-                >
-                    {deletingAccount ? (
-                        <ActivityIndicator color={theme.colors.dangerDark} />
-                    ) : (
-                        <>
-                            <Ionicons name="trash-outline" size={20} color={theme.colors.dangerDark} />
-                            <Text style={styles.deleteAccountText}>{t('profile.deleteAccount')}</Text>
-                        </>
-                    )}
-                </TouchableOpacity>
-                </Pressable>
             </ScrollView>
 
-            <PersonalityPickerModal
-                visible={showAficionModal}
-                selected={aficiones}
-                genero={genero}
-                onAdd={addAficion}
-                onClose={() => setShowAficionModal(false)}
-            />
-
-            <BadgeDetailModal
-                badge={selectedBadge}
-                visible={!!selectedBadge}
-                onClose={() => setSelectedBadge(null)}
+            <MediaLightbox
+                visible={galleryIndex != null}
+                items={galleryItems}
+                initialIndex={galleryIndex ?? 0}
+                onClose={() => setGalleryIndex(null)}
             />
 
             </SafeAreaView>

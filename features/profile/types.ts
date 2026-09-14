@@ -1,7 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { PendingRatingPlan } from "../../lib/ratings";
 import type { UserBadge } from "../../lib/badges";
+import type { BadgeStats } from "../../lib/badgeStats";
 import type { UserStats } from "../../lib/stats";
+import type { OrganizerMeta } from "../../lib/organizer";
 import type {
   Genero,
   HabitoConsumo,
@@ -22,6 +24,7 @@ export type ProfileUiSnapshot = {
   userId: string;
   nombre: string;
   nombreUsuario: string | null;
+  coverUrl?: string | null;
   aboutMe: string;
   avatarUrl: string | null;
   age: number | null;
@@ -37,4 +40,8 @@ export type ProfileUiSnapshot = {
   planRequests: number;
   pendingRatings: PendingRatingPlan[];
   badges: UserBadge[];
+  badgeStats?: BadgeStats;
+  isOrganizer?: boolean;
+  organizer?: OrganizerMeta;
+  followersCount?: number;
 };

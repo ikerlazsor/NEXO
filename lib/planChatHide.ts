@@ -6,21 +6,34 @@ function hideKey(userId: string, planId: string) {
     return `${HIDE_PREFIX}${userId}:${planId}`;
 }
 
-/** Oculta el chat de un plan de la lista sin salir del plan (p. ej. tras el evento). */
+/** Oculta el chat de un plan de la lista sin salir del plan (solo para ti). */
 export async function hidePlanChat(userId: string, planId: string): Promise<void> {
-    await AsyncStorage.setItem(hideKey(userId, planId), '1');
+    await AsyncStorage.setItem(hideKey(userId, planId), new Date().toISOString());
 }
 
-export async function isPlanChatHidden(userId: string, planId: string): Promise<boolean> {
-    const v = await AsyncStorage.getItem(hideKey(userId, planId));
-    return !!v;
+export async function unhidePlanChat(userId: string, planId: string): Promise<void> {
+    await AsyncStorage.removeItem(hideKey(userId, planId));
 }
 
-export async function filterHiddenPlanChats<T extends { id: string }>(
+export async function isPlanChatHidden(
+    userId: string,
+    planId: string,
+    lastMessageAt?: string | null,
+): Promise<boolean> {
+    const raw = await AsyncStorage.getItem(hideKey(userId, planId));
+    if (!raw) return false;
+    if (raw === '1') return true;
+    if (!lastMessageAt) return true;
+    return new Date(lastMessageAt).getTime() <= new Date(raw).getTime();
+}
+
+export async function filterHiddenPlanChats<T extends { id: string; lastAt?: string }>(
     userId: string,
     rows: T[],
 ): Promise<T[]> {
     if (rows.length === 0) return rows;
-    const flags = await Promise.all(rows.map((r) => isPlanChatHidden(userId, r.id)));
+    const flags = await Promise.all(
+        rows.map((row) => isPlanChatHidden(userId, row.id, row.lastAt || null)),
+    );
     return rows.filter((_, i) => !flags[i]);
 }

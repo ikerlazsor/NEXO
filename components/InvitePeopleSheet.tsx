@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import {
     ActivityIndicator,
     FlatList,
-    Image,
     Keyboard,
     KeyboardAvoidingView,
     Modal,
@@ -19,8 +19,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getFriends } from '../lib/friends';
 import { hapticLight, hapticSelection, hapticSuccess } from '../lib/haptics';
+import { seedUserProfilePeek, prefetchUserProfile } from '../lib/userProfileCache';
 import { useT } from '../lib/i18n';
-import { searchProfilesByUsername } from '../lib/profileFields';
+import { searchProfilesByName } from '../lib/profileFields';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 
 const INVITE_FRIENDS_TTL_MS = 60_000;
@@ -171,7 +172,7 @@ export function InvitePeopleSheet({
         const timer = setTimeout(() => {
             void (async () => {
                 try {
-                    const data = await searchProfilesByUsername(q, currentUserId ?? undefined);
+                    const data = await searchProfilesByName(q, currentUserId ?? undefined);
                     if (gen !== searchGenRef.current) return;
                     const mapped = data.map((p) => ({
                         id: p.id,
@@ -211,6 +212,11 @@ export function InvitePeopleSheet({
                 if (error === 'already_member' || error === 'already_invited') {
                     setResults((prev) => (prev.some((p) => p.id === profile.id) ? prev : [profile, ...prev]));
                     setFeedback({ ok: false, text: t('friends.inviteAlready') });
+                    return;
+                }
+                if (error === 'organizer_cannot_join') {
+                    setResults((prev) => (prev.some((p) => p.id === profile.id) ? prev : [profile, ...prev]));
+                    setFeedback({ ok: false, text: t('organizer.cannotInvite') });
                     return;
                 }
                 if (error) {
@@ -262,12 +268,23 @@ export function InvitePeopleSheet({
 
     const openProfile = useCallback(
         (profileId: string) => {
+            const person =
+                results.find((r) => r.id === profileId) ||
+                friendSuggestions.find((r) => r.id === profileId) ||
+                null;
+            seedUserProfilePeek({
+                id: profileId,
+                nombre: person?.nombre,
+                nombre_usuario: person?.nombre_usuario,
+                avatar_url: person?.avatar_url,
+            });
+            prefetchUserProfile(profileId);
             onClose();
             requestAnimationFrame(() => {
                 router.push(`/user-profile/${profileId}`);
             });
         },
-        [onClose, router],
+        [onClose, router, results, friendSuggestions],
     );
 
     const bottomPad = Math.max(insets.bottom, 16) + (Platform.OS === 'android' ? keyboardH : 0);
@@ -329,10 +346,14 @@ export function InvitePeopleSheet({
                                                 <Image
                                                     source={{ uri: item.avatar_url || avatarFallback(item.nombre) }}
                                                     style={styles.selectedAvatar}
+                                                    contentFit="cover"
+                                                    cachePolicy="memory-disk"
+                                                    recyclingKey={item.id}
+                                                    transition={0}
                                                 />
                                                 <View style={styles.selectedTextCol}>
                                                     <Text style={styles.selectedName} numberOfLines={1}>
-                                                        {item.nombre_usuario ? `@${item.nombre_usuario}` : item.nombre}
+                                                        {item.nombre}
                                                     </Text>
                                                     {item.invitedByName ? (
                                                         <Text style={styles.selectedBy} numberOfLines={1}>
@@ -402,14 +423,15 @@ export function InvitePeopleSheet({
                                         <Image
                                             source={{ uri: item.avatar_url || avatarFallback(item.nombre) }}
                                             style={styles.resultAvatar}
+                                            contentFit="cover"
+                                            cachePolicy="memory-disk"
+                                            recyclingKey={item.id}
+                                            transition={0}
                                         />
                                         <View style={styles.resultInfo}>
                                             <Text style={styles.resultName} numberOfLines={1}>
                                                 {item.nombre}
                                             </Text>
-                                            {item.nombre_usuario ? (
-                                                <Text style={styles.resultUser}>@{item.nombre_usuario}</Text>
-                                            ) : null}
                                         </View>
                                     </TouchableOpacity>
                                     <TouchableOpacity

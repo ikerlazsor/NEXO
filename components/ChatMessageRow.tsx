@@ -15,12 +15,12 @@ import { MessageReactionChips } from './MessageReactionsBar';
 import { ProfileAvatar } from './ProfileAvatar';
 import { hapticMedium, hapticSelection } from '../lib/haptics';
 import { parseReplyContent } from '../lib/chatReply';
+import { parseSystemContent } from '../lib/chatSystem';
+import { useT } from '../lib/i18n';
 import type { MessageReaction } from '../lib/messageReactions';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
-const FRIEND = '#10B981';
-const ACQUAINTANCE = '#7C3AED';
 const REPLY_THRESHOLD = 44;
 const MAX_DRAG = 64;
 
@@ -61,8 +61,6 @@ type Props = {
     audioDurationSec?: number;
     reactions: MessageReaction[];
     videoLabel: string;
-    /** Amigo (verde) o conocido (morado) en el avatar. */
-    relation?: 'friend' | 'acquaintance' | null;
     onOpenProfile: (userId: string) => void;
     onOpenImage: (uri: string) => void;
     onOpenVideo: (uri: string) => void;
@@ -81,7 +79,6 @@ function ChatMessageRowInner({
     audioDurationSec,
     reactions,
     videoLabel,
-    relation,
     onOpenProfile,
     onOpenImage,
     onOpenVideo,
@@ -90,9 +87,11 @@ function ChatMessageRowInner({
     onReplyMessage,
     onPickReaction,
 }: Props) {
+    const { t } = useT();
     const isMe = item.emisor_id === currentUserId;
     const profile = normalizeProfile(item.perfiles);
     const nombreMostrar = profile?.nombre || 'Usuario';
+    const systemKind = item.tipo === 'texto' ? parseSystemContent(item.contenido) : null;
     const translateX = useSharedValue(0);
     const replyTriggered = useSharedValue(false);
     const rowReactions = useMemo(
@@ -103,6 +102,19 @@ function ChatMessageRowInner({
         () => (item.tipo === 'texto' ? parseReplyContent(item.contenido) : { reply: null, text: item.contenido }),
         [item.contenido, item.tipo],
     );
+
+    if (systemKind) {
+        const label = isMe
+            ? (systemKind === 'join_group' ? t('chat.systemJoinedGroupSelf') : t('chat.systemJoinedPlanSelf'))
+            : systemKind === 'join_group'
+                ? t('chat.systemJoinedGroup', { name: nombreMostrar })
+                : t('chat.systemJoinedPlan', { name: nombreMostrar });
+        return (
+            <View style={styles.systemWrap}>
+                <Text style={styles.systemText}>{label}</Text>
+            </View>
+        );
+    }
 
     const fireReply = () => {
         hapticMedium();
@@ -224,20 +236,12 @@ function ChatMessageRowInner({
                     <View style={[styles.msgContainer, isMe ? styles.myMsgContainer : styles.otherMsgContainer]}>
                         {!isMe ? (
                             <TouchableOpacity style={styles.avatarWrap} onPress={() => onOpenProfile(item.emisor_id)}>
-                                <View
-                                    style={[
-                                        styles.avatarRing,
-                                        relation === 'friend' && styles.avatarRingFriend,
-                                        relation === 'acquaintance' && styles.avatarRingAcquaintance,
-                                    ]}
-                                >
-                                    <ProfileAvatar
-                                        uri={profile?.avatar_url}
-                                        name={nombreMostrar}
-                                        size={30}
-                                        recyclingKey={item.emisor_id}
-                                    />
-                                </View>
+                                <ProfileAvatar
+                                    uri={profile?.avatar_url}
+                                    name={nombreMostrar}
+                                    size={30}
+                                    recyclingKey={item.emisor_id}
+                                />
                             </TouchableOpacity>
                         ) : null}
                         <View style={styles.bubbleCol}>
@@ -251,15 +255,7 @@ function ChatMessageRowInner({
                                 style={[styles.bubble, isMe ? styles.myBubble : styles.otherBubble]}
                             >
                                 {!isMe ? (
-                                    <Text
-                                        style={[
-                                            styles.senderName,
-                                            relation === 'friend' && styles.senderNameFriend,
-                                            relation === 'acquaintance' && styles.senderNameAcquaintance,
-                                        ]}
-                                    >
-                                        {nombreMostrar}
-                                    </Text>
+                                    <Text style={styles.senderName}>{nombreMostrar}</Text>
                                 ) : null}
                                 {content}
                                 <View style={styles.timeRow}>
@@ -328,10 +324,24 @@ export const ChatMessageRow = memo(ChatMessageRowInner, (prev, next) => {
 });
 
 export function chatMessageItemType(item: ChatMessage): string {
+    if (item.tipo === 'texto' && parseSystemContent(item.contenido)) return 'system';
     return item.tipo;
 }
 
 const styles = StyleSheet.create({
+    systemWrap: {
+        alignItems: 'center',
+        paddingHorizontal: 24,
+        paddingVertical: 8,
+        marginBottom: 6,
+    },
+    systemText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#64748B',
+        textAlign: 'center',
+        lineHeight: 18,
+    },
     swipeWrap: {
         width: '100%',
         justifyContent: 'center',
@@ -362,19 +372,6 @@ const styles = StyleSheet.create({
     otherMsgContainer: { alignSelf: 'flex-start' },
     avatarWrap: { marginRight: 8 },
     avatarWrapMe: { marginLeft: 8 },
-    avatarRing: {
-        width: 34,
-        height: 34,
-        borderRadius: 17,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 2,
-        borderColor: 'transparent',
-    },
-    avatarRingFriend: { borderColor: FRIEND, backgroundColor: '#ECFDF5' },
-    avatarRingAcquaintance: { borderColor: ACQUAINTANCE, backgroundColor: '#F5F3FF' },
-    senderNameFriend: { color: '#047857' },
-    senderNameAcquaintance: { color: '#6D28D9' },
     bubbleCol: { maxWidth: '80%', flexShrink: 1 },
     bubble: {
         paddingHorizontal: 12,
@@ -386,7 +383,7 @@ const styles = StyleSheet.create({
     },
     myBubble: { backgroundColor: PRIMARY, borderBottomRightRadius: 4 },
     otherBubble: {
-        backgroundColor: '#FFF',
+        backgroundColor: '#FFFFFF',
         borderBottomLeftRadius: 4,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: '#E2E8F0',

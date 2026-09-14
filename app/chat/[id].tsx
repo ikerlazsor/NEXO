@@ -13,10 +13,11 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams,
     useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
+import { Image } from 'expo-image';
 import {
     ActivityIndicator,
     FlatList,
-    Image,
+    Keyboard,
     KeyboardAvoidingView,
     Linking,
     Modal,
@@ -29,7 +30,8 @@ import {
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
 import { theme } from '../../theme';
-import { styles } from '../../features/chat/chatStyles';
+import { createChatStyles } from '../../features/chat/chatStyles';
+import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
 import { ChatMediaModals } from '../../features/chat/ChatMediaModals';
 import {
     PAGE_SIZE,
@@ -69,12 +71,14 @@ import { hapticLight, hapticMedium, hapticToggle } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { getIsOnline } from '../../lib/network';
-import { hidePlanChat } from '../../lib/planChatHide';
+import { hidePlanChat, unhidePlanChat } from '../../lib/planChatHide';
+import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../../lib/planDetailCache';
 import { setActiveConversation } from '../../lib/activeConversation';
 import { cancelPlanLifecycleReminders } from '../../lib/push';
 import { trackFunnel } from '../../lib/analytics';
 import { sendPlanInvite } from '../../lib/planInvites';
 import {
+    CHAT_EXPIRY_WARN_MS,
     formatCountdown,
     getChatExpiryMs,
     isGroupOrChatPlan,
@@ -85,7 +89,9 @@ import {
 import { buildPlanShareMessage } from '../../lib/shareLinks';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
+import { useAuthSession } from '../../lib/authSession';
 import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
+import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
 import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 import { getPublicProfileCards } from '../../lib/profileData';
@@ -97,8 +103,23 @@ export default function ChatScreen() {
     const planId = Array.isArray(id) ? id[0] : id;
     const router = useRouter();
     const { t, lang } = useT();
+    const { userId: sessionUserId } = useAuthSession();
+    const { scheme } = useAppTheme();
+    const styles = useThemedStyles(createChatStyles);
     const headerHeight = useHeaderHeight();
     const insets = useSafeAreaInsets();
+    const [keyboardOpen, setKeyboardOpen] = useState(false);
+
+    useEffect(() => {
+        const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+        const show = Keyboard.addListener(showEvt, () => setKeyboardOpen(true));
+        const hide = Keyboard.addListener(hideEvt, () => setKeyboardOpen(false));
+        return () => {
+            show.remove();
+            hide.remove();
+        };
+    }, []);
 
     const cachedChat = planId ? cacheGetStale<PlanChatSnapshot>(planChatKey(planId)) : null;
 
@@ -128,7 +149,7 @@ export default function ChatScreen() {
     const [loading, setLoading] = useState(() => !(cachedChat?.messages?.length));
     const [loadingMore, setLoadingMore] = useState(false);
     const [hasMore, setHasMore] = useState(() => cachedChat?.hasMore ?? true);
-    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [currentUserId, setCurrentUserId] = useState<string | null>(sessionUserId);
     const [accessDenied, setAccessDenied] = useState(() => cachedChat?.accessDenied ?? false);
     const [planFechaEvento, setPlanFechaEvento] = useState<string | null>(() => cachedChat?.planFechaEvento ?? null);
     const [planLocationName, setPlanLocationName] = useState<string | null>(null);
@@ -143,6 +164,7 @@ export default function ChatScreen() {
     const [modalVideo, setModalVideo] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [isSending, setIsSending] = useState(false);
+    const sendLockRef = useRef(false);
     const [audioDurations, setAudioDurations] = useState<Record<string, number>>({});
     const [recordingDuration, setRecordingDuration] = useState(0);
     const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
@@ -286,6 +308,10 @@ export default function ChatScreen() {
                 Alert.alert(t('login.notice'), t('friends.inviteAlready'));
                 return;
             }
+            if (error === 'organizer_cannot_join') {
+                Alert.alert(t('profile.error'), t('organizer.cannotInvite'));
+                return;
+            }
             if (error) {
                 Alert.alert(t('profile.error'), error.includes('plan_invitaciones') ? t('friends.invitesSqlHint') : t('chat.inviteError'));
                 return;
@@ -333,25 +359,54 @@ export default function ChatScreen() {
 
     const showGroupPhotoMenu = useCallback(() => {
         if (!canEditGroupPhoto || uploadingGroupPhoto) return;
+
+        const pick = async (useCamera: boolean) => {
+            try {
+                if (useCamera) {
+                    const current = await ImagePicker.getCameraPermissionsAsync();
+                    const cam = current.granted ? current : await ImagePicker.requestCameraPermissionsAsync();
+                    if (!cam.granted) {
+                        Alert.alert(t('onboarding.notice'), t('onboarding.cameraPermission'));
+                        return;
+                    }
+                } else {
+                    const current = await ImagePicker.getMediaLibraryPermissionsAsync();
+                    const lib = current.granted ? current : await ImagePicker.requestMediaLibraryPermissionsAsync();
+                    if (!lib.granted) {
+                        Alert.alert(t('onboarding.notice'), t('onboarding.galleryPermission'));
+                        return;
+                    }
+                }
+
+                // Tras cerrar el alert custom, iOS necesita un frame libre para presentar el picker.
+                await new Promise((r) => setTimeout(r, 350));
+
+                const result = useCamera
+                    ? await ImagePicker.launchCameraAsync({
+                        mediaTypes: ['images'],
+                        allowsEditing: Platform.OS === 'ios',
+                        aspect: [1, 1],
+                        quality: 0.5,
+                    })
+                    : await ImagePicker.launchImageLibraryAsync({
+                        mediaTypes: ['images'],
+                        allowsEditing: Platform.OS === 'ios',
+                        aspect: [1, 1],
+                        quality: 0.5,
+                    });
+
+                if (!result.canceled && result.assets[0]?.uri) {
+                    await handleGroupPhotoPicked(result.assets[0].uri);
+                }
+            } catch (e) {
+                if (__DEV__) console.error('group photo picker:', e);
+                Alert.alert(t('profile.error'), t('chat.groupPhotoError'));
+            }
+        };
+
         Alert.alert(t('chat.groupPhotoTitle'), t('chat.groupPhotoChoice'), [
-            { text: t('profile.camera'), onPress: async () => {
-                const result = await ImagePicker.launchCameraAsync({
-                    mediaTypes: ['images'],
-                    allowsEditing: true,
-                    aspect: [1, 1],
-                    quality: 0.5,
-                });
-                if (!result.canceled && result.assets[0]?.uri) handleGroupPhotoPicked(result.assets[0].uri);
-            }},
-            { text: t('profile.gallery'), onPress: async () => {
-                const result = await ImagePicker.launchImageLibraryAsync({
-                    mediaTypes: ['images'],
-                    allowsEditing: true,
-                    aspect: [1, 1],
-                    quality: 0.5,
-                });
-                if (!result.canceled && result.assets[0]?.uri) handleGroupPhotoPicked(result.assets[0].uri);
-            }},
+            { text: t('profile.camera'), onPress: () => { void pick(true); } },
+            { text: t('profile.gallery'), onPress: () => { void pick(false); } },
             { text: t('common.cancel'), style: 'cancel' },
         ]);
     }, [canEditGroupPhoto, uploadingGroupPhoto, handleGroupPhotoPicked, t]);
@@ -399,6 +454,7 @@ export default function ChatScreen() {
                                     return;
                                 }
                                 void cancelPlanLifecycleReminders(planId);
+                                invalidatePlanMembershipCaches(currentUserId);
                             } else if (leavePlan) {
                                 const { error } = await supabase
                                     .from('participantes')
@@ -410,10 +466,14 @@ export default function ChatScreen() {
                                     return;
                                 }
                                 void cancelPlanLifecycleReminders(planId);
+                                broadcastPlanMembership(planId, 'none', {
+                                    userId: currentUserId,
+                                    dropJoined: true,
+                                });
                             } else {
                                 await hidePlanChat(currentUserId, planId);
+                                invalidatePlanMembershipCaches(currentUserId);
                             }
-                            invalidatePlanMembershipCaches(currentUserId);
                             router.back();
                         })();
                     },
@@ -550,8 +610,8 @@ export default function ChatScreen() {
 
         const initChat = async () => {
             const stale = cacheGetStale<PlanChatSnapshot>(planChatKey(planId));
-            if (stale?.messages?.length) {
-                setMessages(stale.messages);
+            if (stale && (stale.messages?.length || stale.planName)) {
+                if (stale.messages?.length) setMessages(stale.messages);
                 setPlanName(stale.planName);
                 setPlanImage(stale.planImage);
                 setParticipantNames(stale.participantNames);
@@ -564,7 +624,8 @@ export default function ChatScreen() {
                 setModoPrivado(stale.modoPrivado ?? false);
                 setAccessDenied(stale.accessDenied);
                 setHasMore(stale.hasMore);
-                setLoading(false);
+                // Header al instante; spinner solo si aún no hay mensajes.
+                setLoading(!(stale.messages?.length));
             } else {
                 setLoading(true);
                 setAccessDenied(false);
@@ -572,26 +633,26 @@ export default function ChatScreen() {
             }
 
             try {
-                const user = await getAuthUser();
+                const userId = sessionUserId ?? (await getAuthUser())?.id ?? null;
                 if (!isMountedRef.current) return;
 
-                if (!user) {
+                if (!userId) {
                     router.replace('/login');
                     return;
                 }
 
-                setCurrentUserId(user.id);
+                setCurrentUserId(userId);
 
                 void runPlanLifecycleMaintenance();
 
                 void Promise.all([
-                    getFriends(user.id),
-                    getCoincidedUserIds(user.id),
+                    getFriends(userId),
+                    getCoincidedUserIds(userId),
                     supabase
                         .from('planes_guardados')
                         .select('plan_id')
                         .eq('plan_id', planId)
-                        .eq('usuario_id', user.id)
+                        .eq('usuario_id', userId)
                         .maybeSingle(),
                 ]).then(([friends, coincided, savedRes]) => {
                     if (!isMountedRef.current) return;
@@ -625,10 +686,10 @@ export default function ChatScreen() {
                     .from('participantes')
                     .select('usuario_id, estado')
                     .eq('plan_id', planId)
-                    .eq('usuario_id', user.id)
+                    .eq('usuario_id', userId)
                     .maybeSingle();
 
-                const isCreator = planData.creador_id === user.id;
+                const isCreator = planData.creador_id === userId;
                 const canAccessChat = isCreator || membership?.estado === 'aceptado';
                 if (!canAccessChat) {
                     setAccessDenied(true);
@@ -667,7 +728,7 @@ export default function ChatScreen() {
                 setMessages(merged);
                 const nextHasMore = initialMessages.length >= PAGE_SIZE || (stale?.hasMore ?? false);
                 setHasMore(nextHasMore);
-                void markPlanChatRead(user.id, planId);
+                void markPlanChatRead(userId, planId);
 
                 persistPlanChatCache(planId, {
                     messages: merged,
@@ -732,6 +793,10 @@ export default function ChatScreen() {
                                     persistPlanChatCache(planId, { messages: next });
                                     return next;
                                 });
+                                if (payload.new.emisor_id !== userId) {
+                                    void unhidePlanChat(userId, planId);
+                                    void markPlanChatRead(userId, planId);
+                                }
                             }
                         }
                     )
@@ -751,7 +816,7 @@ export default function ChatScreen() {
         return () => {
             if (channel) supabase.removeChannel(channel);
         };
-    }, [planId, router, fetchMessages, fetchParticipants, persistPlanChatCache, t]);
+    }, [planId, router, fetchMessages, fetchParticipants, persistPlanChatCache, sessionUserId, t]);
 
     const refreshChatHeader = useCallback(async () => {
         if (!planId || !currentUserId || accessDenied) return;
@@ -788,6 +853,10 @@ export default function ChatScreen() {
                 void runPlanLifecycleMaintenance();
                 Alert.alert(t('chat.errorTitle'), t('chat.expired'));
                 router.back();
+                return;
+            }
+            if (remaining > CHAT_EXPIRY_WARN_MS) {
+                setChatExpiryLabel(null);
                 return;
             }
             setChatExpiryLabel(formatCountdown(remaining));
@@ -907,11 +976,14 @@ export default function ChatScreen() {
         archivoUrl: string | null = null,
         audioDurationSec?: number
     ) => {
-        if (!currentUserId || !planId || accessDenied || isSending) return;
+        if (!currentUserId || !planId || accessDenied || isSending || sendLockRef.current) return;
+
+        void unhidePlanChat(currentUserId, planId);
 
         const tempText = messageText.trim();
         if (tipo === 'texto' && !tempText) return;
 
+        sendLockRef.current = true;
         setIsSending(true);
         hapticMedium();
         const replySnapshot = tipo === 'texto' ? replyTo : null;
@@ -943,12 +1015,16 @@ export default function ChatScreen() {
             persistPlanChatCache(planId, { messages: next });
             return next;
         });
+        // Liberar input al instante; el mensaje ya es optimista.
+        setIsSending(false);
+        setTimeout(() => {
+            sendLockRef.current = false;
+        }, 220);
 
         if (!getIsOnline()) {
             if (tipo !== 'texto') {
                 setMessages((prev) => prev.filter((m) => m.id !== tempId));
-                setIsSending(false);
-                Alert.alert(t('chat.errorTitle'), t('chat.sendError'));
+                Alert.alert(t('chat.errorTitle'), t('chat.mediaNeedsNetwork'));
                 return;
             }
             await enqueueChatOutbox({
@@ -961,7 +1037,6 @@ export default function ChatScreen() {
                 archivoUrl,
                 createdAt: optimistic.creado_en,
             });
-            setIsSending(false);
             return;
         }
 
@@ -976,8 +1051,6 @@ export default function ChatScreen() {
             })
             .select('id, creado_en')
             .maybeSingle();
-
-        setIsSending(false);
 
         if (error) {
             if (tipo === 'texto') {
@@ -1168,7 +1241,7 @@ export default function ChatScreen() {
         }
     }, [playingMessageId, stopAudio]);
 
-    const inputDisabled = isUploading || isSending || accessDenied || loading;
+    const inputDisabled = isUploading || isSending || accessDenied;
     const actionIcon = useMemo(() => {
         if (isUploading || isSending) return 'hourglass';
         if (messageText.trim()) return 'send';
@@ -1279,6 +1352,50 @@ export default function ChatScreen() {
         [currentUserId, friendIds, coincidedIds],
     );
 
+    const seedPlanFromChat = useCallback(() => {
+        if (!planId) return;
+        seedPlanDetailFromFeed(
+            {
+                id: planId,
+                titulo: planName,
+                imagen_url: planImage,
+                categoria: planCategory ?? '',
+                creador_id: creatorId ?? planOwnerId ?? '',
+                fecha_evento: planFechaEvento,
+                nombre_ubicacion: planLocationName,
+                modo_privado: modoPrivado,
+                participantsList: members.map((m) => ({
+                    id: m.id,
+                    nombre: m.nombre,
+                    avatar_url: m.avatar_url,
+                    isCreator: m.isCreator,
+                    genero: m.genero ?? null,
+                })),
+                joinedCount: members.length,
+                host: members.find((m) => m.isCreator) ?? members[0] ?? null,
+            },
+            { membership: 'joined' },
+        );
+        prefetchPlanDetail(planId);
+    }, [
+        planId,
+        planName,
+        planImage,
+        planCategory,
+        creatorId,
+        planOwnerId,
+        planFechaEvento,
+        planLocationName,
+        modoPrivado,
+        members,
+    ]);
+
+    const openPlanFromChat = useCallback(() => {
+        if (!planId) return;
+        seedPlanFromChat();
+        router.navigate({ pathname: '/plan/[id]', params: { id: planId } });
+    }, [planId, router, seedPlanFromChat]);
+
     const onPickMessageReaction = useCallback(
         (messageId: string, emoji: string) => {
             if (!currentUserId) return;
@@ -1303,7 +1420,6 @@ export default function ChatScreen() {
                 audioDurationSec={audioDurations[item.id]}
                 reactions={reactions}
                 videoLabel={t('chat.videoLabel')}
-                relation={relationFor(item.emisor_id)}
                 onOpenProfile={openMessageProfile}
                 onOpenImage={setModalImage}
                 onOpenVideo={setModalVideo}
@@ -1330,7 +1446,6 @@ export default function ChatScreen() {
             audioDurations,
             reactions,
             t,
-            relationFor,
             openMessageProfile,
             playAudio,
             onPickMessageReaction,
@@ -1357,11 +1472,9 @@ export default function ChatScreen() {
                     onPress={
                         canEditGroupPhoto
                             ? showGroupPhotoMenu
-                            : () => {
-                                  if (!planId) return;
-                                  router.push(`/plan/${planId}`);
-                              }
+                            : openPlanFromChat
                     }
+                    onPressIn={canEditGroupPhoto ? undefined : seedPlanFromChat}
                     activeOpacity={0.7}
                     disabled={uploadingGroupPhoto}
                     style={styles.planHeaderImageWrap}
@@ -1372,6 +1485,10 @@ export default function ChatScreen() {
                                 uri: planImage || 'https://via.placeholder.com/150/4DA6FF/FFFFFF?text=G',
                             }}
                             style={styles.planHeaderImage}
+                            contentFit="cover"
+                            cachePolicy="memory-disk"
+                            recyclingKey={planId}
+                            transition={0}
                         />
                     ) : (
                         <PlanImage
@@ -1394,10 +1511,8 @@ export default function ChatScreen() {
                 <TouchableOpacity
                     style={styles.headerTitleContainer}
                     activeOpacity={0.7}
-                    onPress={() => {
-                        if (!planId) return;
-                        router.push(`/plan/${planId}`);
-                    }}
+                    onPressIn={seedPlanFromChat}
+                    onPress={openPlanFromChat}
                 >
                     <Text style={styles.headerTitle} numberOfLines={1}>
                         {planName || (loading ? t('chat.loading') : '')}
@@ -1409,29 +1524,15 @@ export default function ChatScreen() {
                     ) : null}
                 </TouchableOpacity>
 
-                {!isGroupChat ? (
-                    <TouchableOpacity onPress={handleSharePlan} style={styles.membersBtn} hitSlop={6}>
-                        <Ionicons name="arrow-redo" size={20} color={PRIMARY} />
-                    </TouchableOpacity>
-                ) : null}
-                {creatorId && currentUserId && creatorId !== currentUserId && !isGroupChat ? (
-                    <TouchableOpacity onPress={() => void toggleSavePlan()} style={styles.membersBtn} hitSlop={6}>
-                        <Ionicons
-                            name={isSaved ? 'heart' : 'heart-outline'}
-                            size={20}
-                            color={isSaved ? DANGER : PRIMARY}
-                        />
-                    </TouchableOpacity>
-                ) : null}
+                <TouchableOpacity onPress={() => setShowMembers(true)} style={styles.membersBtn}>
+                    <Ionicons name="people" size={22} color={PRIMARY} />
+                </TouchableOpacity>
                 <TouchableOpacity onPress={() => void toggleMuteChat()} style={styles.membersBtn} hitSlop={6}>
                     <Ionicons
                         name={chatMuted ? 'notifications-off' : 'notifications-outline'}
                         size={20}
                         color={chatMuted ? theme.colors.textSubtle : PRIMARY}
                     />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setShowMembers(true)} style={styles.membersBtn}>
-                    <Ionicons name="people" size={22} color={PRIMARY} />
                 </TouchableOpacity>
             </View>
 
@@ -1446,10 +1547,10 @@ export default function ChatScreen() {
 
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
+                behavior="padding"
+                keyboardVerticalOffset={Platform.OS === 'ios' ? Math.max(0, headerHeight - 10) : 0}
             >
-                {loading ? (
+                {loading && !planName && messages.length === 0 ? (
                     <View style={styles.loading}>
                         <ActivityIndicator color={PRIMARY} size="large" />
                     </View>
@@ -1462,7 +1563,7 @@ export default function ChatScreen() {
                         </Text>
                     </View>
                 ) : (
-                    <View style={{ flex: 1 }}>
+                    <View style={styles.messagesPanel}>
                         <FlashList
                             style={{ flex: 1 }}
                             data={messages}
@@ -1477,7 +1578,11 @@ export default function ChatScreen() {
                             onEndReachedThreshold={0.3}
                             ListFooterComponent={renderListFooter}
                         />
-                        {messages.length === 0 ? (
+                        {loading && messages.length === 0 ? (
+                            <View style={styles.emptyChatOverlay} pointerEvents="none">
+                                <ActivityIndicator color={PRIMARY} size="large" />
+                            </View>
+                        ) : messages.length === 0 ? (
                             <View style={styles.emptyChatOverlay} pointerEvents="none">
                                 <Text style={styles.emptyChatText}>{t('chat.emptyThread')}</Text>
                             </View>
@@ -1509,7 +1614,7 @@ export default function ChatScreen() {
                     </View>
                 ) : null}
 
-                <View style={[styles.inputBar, { paddingBottom: Platform.OS === 'android' ? 8 : Math.max(insets.bottom, 8) }]}>
+                <View style={[styles.inputBar, { paddingBottom: keyboardOpen ? 4 : (Platform.OS === 'android' ? 12 : Math.max(insets.bottom, 10)) + 10 }]}>
                     <TouchableOpacity
                         onPress={pickMedia}
                         style={styles.attachBtn}
@@ -1530,9 +1635,10 @@ export default function ChatScreen() {
                                     ? `${t('chat.recording')} ${formatDuration(recordingDuration)}...`
                                     : accessDenied
                                       ? t('chat.cannotWrite')
-                                      : t('chat.writeMessage')
+                                      : ''
                             }
                             placeholderTextColor={theme.colors.textMuted}
+                            keyboardAppearance={scheme}
                             style={styles.textInput}
                             value={messageText}
                             onChangeText={onMessageTextChange}
@@ -1639,43 +1745,19 @@ export default function ChatScreen() {
                                             });
                                         }}
                                     >
-                                        <View
-                                            style={[
-                                                styles.memberAvatarRing,
-                                                relation === 'friend' && styles.memberAvatarRingFriend,
-                                                relation === 'acquaintance' && styles.memberAvatarRingAcquaintance,
-                                            ]}
-                                        >
-                                            <Image
-                                                source={{ uri: m.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.nombre)}&background=4DA6FF&color=fff` }}
-                                                style={styles.memberAvatar}
-                                            />
-                                        </View>
+                                        <Image
+                                            source={{ uri: m.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.nombre)}&background=4DA6FF&color=fff` }}
+                                            style={styles.memberAvatar}
+                                            contentFit="cover"
+                                            cachePolicy="memory-disk"
+                                            recyclingKey={m.id}
+                                            transition={0}
+                                        />
                                         <View style={{ flex: 1 }}>
-                                            <Text
-                                                style={[
-                                                    styles.memberName,
-                                                    relation === 'friend' && styles.memberNameFriend,
-                                                    relation === 'acquaintance' && styles.memberNameAcquaintance,
-                                                ]}
-                                            >
-                                                {m.nombre}
-                                            </Text>
+                                            <Text style={styles.memberName}>{m.nombre}</Text>
                                             {m.isCreator ? (
                                                 <Text style={styles.memberCreator}>
                                                     {t(m.genero === 'femenino' ? 'chat.hostF' : 'chat.host')}
-                                                </Text>
-                                            ) : relation === 'friend' ? (
-                                                <Text style={styles.memberRelationFriend}>
-                                                    {t(m.genero === 'femenino' ? 'planDetail.friendF' : 'planDetail.friend')}
-                                                </Text>
-                                            ) : relation === 'acquaintance' ? (
-                                                <Text style={styles.memberRelationAcquaintance}>
-                                                    {t(
-                                                        m.genero === 'femenino'
-                                                            ? 'planDetail.acquaintanceF'
-                                                            : 'planDetail.acquaintance',
-                                                    )}
                                                 </Text>
                                             ) : null}
                                         </View>
@@ -1794,7 +1876,14 @@ export default function ChatScreen() {
                                             onPress={() => handleInviteFriend(f.id)}
                                             disabled={busy}
                                         >
-                                            <Image source={{ uri: getAvatarUri(f) }} style={styles.memberAvatar} />
+                                            <Image
+                                                source={{ uri: getAvatarUri(f) }}
+                                                style={styles.memberAvatar}
+                                                contentFit="cover"
+                                                cachePolicy="memory-disk"
+                                                recyclingKey={f.id}
+                                                transition={0}
+                                            />
                                             <Text style={[styles.memberName, { flex: 1 }]}>{f.nombre}</Text>
                                             {busy ? (
                                                 <ActivityIndicator color={PRIMARY} size="small" />

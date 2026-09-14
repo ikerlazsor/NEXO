@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getIsOnline, subscribeNetwork } from './network';
 import { withRetry } from './retry';
 import { supabase } from './supabase';
+import { unhideDirectChat } from './directChat';
+import { unhidePlanChat } from './planChatHide';
 
 const OUTBOX_KEY = '@nexo_chat_outbox_v1';
 
@@ -133,6 +135,12 @@ export async function flushChatOutbox(): Promise<void> {
                 if (!data?.id) {
                     remaining.push(item);
                     continue;
+                }
+
+                if (item.kind === 'direct' && item.emisorId && item.receptorId) {
+                    void unhideDirectChat(item.emisorId, item.receptorId);
+                } else if (item.kind === 'plan' && item.emisorId && item.planId) {
+                    void unhidePlanChat(item.emisorId, item.planId);
                 }
 
                 listeners.forEach((fn) => {

@@ -8,6 +8,11 @@
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import {
+  buildPushCopy,
+  parsePushLang,
+  resolveAvatarUrl,
+} from '../_shared/pushCopy.ts';
 
 type AdminClient = ReturnType<typeof createClient>;
 
@@ -15,6 +20,7 @@ type OutboxEvent = {
   id: string;
   event_type: 'plan_join_accepted' | 'plan_join_rejected';
   recipient_id: string;
+  actor_id?: string | null;
   plan_id: string;
   plan_title: string;
 };
@@ -81,12 +87,25 @@ async function dispatchEvent(
     }
     claimedEventId = event.id;
 
-    const { data: profile, error: profileError } = await admin
+    if (event.event_type === 'plan_join_rejected') {
+      await completeEvent(admin, event.id, true, [], null);
+      return { eventId: event.id, sent: 0, skipped: true, disabled: true };
+    }
+
+    let profileQuery = await admin
       .from('perfiles')
-      .select('notificaciones_push, notif_social')
+      .select('notificaciones_push, notif_social, idioma')
       .eq('id', event.recipient_id)
       .maybeSingle();
-    if (profileError) throw new Error('profile_lookup_failed');
+    if (profileQuery.error) {
+      profileQuery = await admin
+        .from('perfiles')
+        .select('notificaciones_push, notif_social')
+        .eq('id', event.recipient_id)
+        .maybeSingle();
+    }
+    if (profileQuery.error) throw new Error('profile_lookup_failed');
+    const profile = profileQuery.data;
 
     if (profile?.notificaciones_push === false || profile?.notif_social === false) {
       await completeEvent(admin, event.id, true, [], null);
@@ -107,19 +126,41 @@ async function dispatchEvent(
       return { eventId: event.id, sent: 0, no_tokens: true };
     }
 
-    const accepted = event.event_type === 'plan_join_accepted';
+    const { data: actor } = event.actor_id
+      ? await admin
+          .from('perfiles')
+          .select('nombre, avatar_url')
+          .eq('id', event.actor_id)
+          .maybeSingle()
+      : { data: null };
+    const senderName = (actor?.nombre as string)?.trim() || 'Alguien';
+    const avatarUrl = resolveAvatarUrl(actor?.avatar_url as string | null, senderName);
+    const lang = parsePushLang((profile as { idioma?: unknown } | null)?.idioma);
+    const copy = buildPushCopy({
+      type: 'plan_join_accepted',
+      lang,
+      senderName,
+      planTitle: event.plan_title,
+      seed: `plan_join_accepted:${event.recipient_id}:${event.plan_id}`,
+    });
+
     const messages = tokens.map((to) => ({
       to,
-      title: accepted ? 'Solicitud aceptada' : 'Solicitud rechazada',
-      body: accepted
-        ? `Te han aceptado en «${event.plan_title}»`
-        : `No te han aceptado en «${event.plan_title}»`,
-      data: accepted
-        ? { type: event.event_type, screen: 'plan', planId: event.plan_id }
-        : { type: event.event_type, screen: 'feed' },
+      title: copy.title,
+      body: copy.body,
+      data: {
+        type: event.event_type,
+        screen: 'plan',
+        planId: event.plan_id,
+        otherUserId: event.actor_id ? String(event.actor_id) : '',
+        avatarUrl,
+        senderName,
+      },
       sound: 'default',
       channelId: 'social',
-      priority: 'default',
+      priority: 'high',
+      image: avatarUrl,
+      mutableContent: true,
     }));
 
     const expoResponse = await fetch('https://exp.host/--/api/v2/push/send', {

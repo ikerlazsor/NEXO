@@ -8,8 +8,16 @@ type CacheEntry<T> = {
 
 const store = new Map<string, CacheEntry<unknown>>();
 const inflight = new Map<string, Promise<unknown>>();
+/** Bumps on invalidate / force so stale in-flight fetches cannot overwrite fresh cache. */
+const generation = new Map<string, number>();
 
 const STALE_GRACE_MS = 30 * 60 * 1000;
+
+function bumpGeneration(key: string): number {
+    const next = (generation.get(key) ?? 0) + 1;
+    generation.set(key, next);
+    return next;
+}
 
 export function cacheGet<T>(key: string): T | null {
     const entry = store.get(key);
@@ -52,25 +60,32 @@ export function cacheSet<T>(key: string, value: T, ttlMs: number): void {
 export function cacheInvalidate(key: string): void {
     store.delete(key);
     inflight.delete(key);
+    bumpGeneration(key);
 }
 
 export function cacheClearAll(): void {
     store.clear();
     inflight.clear();
+    generation.clear();
 }
 
 export function cacheInvalidatePrefix(prefix: string): void {
-    for (const key of store.keys()) {
+    for (const key of [...store.keys()]) {
         if (key.startsWith(prefix)) store.delete(key);
     }
-    for (const key of inflight.keys()) {
-        if (key.startsWith(prefix)) inflight.delete(key);
+    for (const key of [...inflight.keys()]) {
+        if (key.startsWith(prefix)) {
+            inflight.delete(key);
+            bumpGeneration(key);
+        }
     }
 }
 
 /**
  * Dedupes concurrent fetches for the same key and stores the result.
  * Fresh cache hits return immediately; parallel callers share one in-flight promise.
+ * After invalidate/force, an older in-flight result must not clobber newer data
+ * (that was making chat unread badges jump back to the full message history).
  */
 export async function cacheGetOrFetch<T>(
     key: string,
@@ -85,13 +100,18 @@ export async function cacheGetOrFetch<T>(
         if (pending) return pending as Promise<T>;
     }
 
+    const gen = bumpGeneration(key);
     const promise = (async () => {
         try {
             const value = await fetcher();
-            cacheSet(key, value, ttlMs);
+            if (generation.get(key) === gen) {
+                cacheSet(key, value, ttlMs);
+            }
             return value;
         } finally {
-            inflight.delete(key);
+            if (inflight.get(key) === promise) {
+                inflight.delete(key);
+            }
         }
     })();
 

@@ -19,23 +19,29 @@ const PERSONAL_EXACT_KEYS = new Set([
   '@nexo_muted_plan_chats_v1',
   '@nexo_analytics_queue_v1',
   '@nexo_notif_prefs_v1',
+  '@nexo_pending_auth_intent',
 ]);
 
 const PERSONAL_PREFIXES = [
   '@nexo_disk:',
-  '@nexo_rating_skip:',
   '@nexo_rating_started:',
-  '@nexo_rating_done:',
   '@nexo_direct_open:',
-  '@nexo_chat_read:',
   '@nexo_plan_chat_hide:',
   '@nexo_myplan_hide:',
+];
+
+/** Memoria de “ya atendido” en este dispositivo: sobrevive a logout de la misma cuenta. */
+const SESSION_MEMORY_PREFIXES = [
+  '@nexo_chat_read:',
+  '@nexo_rating_done:',
+  '@nexo_rating_skip:',
 ];
 
 function isPersonalKey(key: string): boolean {
   return (
     PERSONAL_EXACT_KEYS.has(key) ||
-    PERSONAL_PREFIXES.some((prefix) => key.startsWith(prefix))
+    PERSONAL_PREFIXES.some((prefix) => key.startsWith(prefix)) ||
+    SESSION_MEMORY_PREFIXES.some((prefix) => key.startsWith(prefix))
   );
 }
 
@@ -45,11 +51,18 @@ const REGISTRATION_KEYS = new Set([
   '@nexo_password_recovery',
 ]);
 
-async function removePersonalStorage(preserveRegistration = false): Promise<void> {
+async function removePersonalStorage(
+  preserveRegistration = false,
+  opts?: { preserveSessionMemory?: boolean },
+): Promise<void> {
   const keys = await AsyncStorage.getAllKeys();
-  const personalKeys = keys.filter(
-    (key) => isPersonalKey(key) && !(preserveRegistration && REGISTRATION_KEYS.has(key)),
-  );
+  const personalKeys = keys.filter((key) => {
+    if (preserveRegistration && REGISTRATION_KEYS.has(key)) return false;
+    if (opts?.preserveSessionMemory && SESSION_MEMORY_PREFIXES.some((p) => key.startsWith(p))) {
+      return false;
+    }
+    return isPersonalKey(key);
+  });
   if (personalKeys.length > 0) {
     await AsyncStorage.multiRemove(personalKeys);
   }
@@ -58,11 +71,12 @@ async function removePersonalStorage(preserveRegistration = false): Promise<void
 /**
  * Purga únicamente información de cuenta. Conserva ajustes del dispositivo
  * sin datos personales, como el idioma, y no toca las claves de sesión de Supabase.
+ * @param opts.preserveSessionMemory — logout de la misma cuenta: no borrar lecturas de chat / cierres de valoración.
  */
-export async function clearLocalUserData(): Promise<void> {
+export async function clearLocalUserData(opts?: { preserveSessionMemory?: boolean }): Promise<void> {
   // Invalida primero cualquier envío offline que estuviera todavía en curso.
   await discardChatOutbox();
-  await removePersonalStorage();
+  await removePersonalStorage(false, { preserveSessionMemory: opts?.preserveSessionMemory === true });
   cacheClearAll();
   clearAllScreenState();
   resetNotificationCategoryPrefsCache();

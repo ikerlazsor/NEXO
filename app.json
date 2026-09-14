@@ -1,29 +1,39 @@
 {
   "expo": {
-    "name": "NEXO",
+    "name": "Nexo!",
     "slug": "nexo",
-    "version": "1.0.0",
+    "version": "1.0.1",
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "nexo",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/nexo-splash-full.png",
+      "image": "./assets/images/nexo-splash-logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#E2EBF2"
     },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.ikerlazsor.nexo",
+      "usesAppleSignIn": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Nexo usa tu ubicación para calcular la distancia a los planes y mostrarte cómo llegar.",
+        "NSLocationWhenInUseUsageDescription": "Nexo! usa tu ubicación para calcular la distancia a los planes y mostrarte cómo llegar.",
+        "NSMicrophoneUsageDescription": "Nexo! usa el micrófono para que puedas enviar notas de voz en el chat.",
+        "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
           "remote-notification"
         ]
       },
       "splash": {
-        "image": "./assets/images/nexo-splash-full.png",
+        "image": "./assets/images/nexo-splash-logo.png",
         "resizeMode": "contain",
         "backgroundColor": "#E2EBF2"
       }
@@ -37,7 +47,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "splash": {
-        "image": "./assets/images/nexo-splash-full.png",
+        "image": "./assets/images/nexo-splash-logo.png",
         "resizeMode": "contain",
         "backgroundColor": "#E2EBF2"
       },
@@ -59,16 +69,17 @@
     },
     "plugins": [
       "expo-router",
+      "expo-updates",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/nexo-splash-full.png",
+          "image": "./assets/images/nexo-splash-logo.png",
           "imageWidth": 300,
           "resizeMode": "contain",
           "backgroundColor": "#E2EBF2",
           "dark": {
-            "backgroundColor": "#E2EBF2",
-            "image": "./assets/images/nexo-splash-full.png"
+            "backgroundColor": "#0B1220",
+            "image": "./assets/images/nexo-splash-logo.png"
           }
         }
       ],
@@ -77,8 +88,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Nexo necesita acceso a tus fotos para tu perfil.",
-          "cameraPermission": "Nexo necesita acceso a la cámara para tu foto de perfil."
+          "photosPermission": "Nexo! necesita acceso a tus fotos para el perfil, las portadas de planes y el chat.",
+          "cameraPermission": "Nexo! necesita acceso a la cámara para el perfil, las portadas de planes y el chat."
         }
       ],
       [
@@ -93,7 +104,13 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Nexo usa tu ubicación para mostrarte planes cerca de ti."
+          "locationWhenInUsePermission": "Nexo! usa tu ubicación para mostrarte planes cerca de ti."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Nexo! usa el micrófono para que puedas enviar notas de voz en el chat."
         }
       ]
     ],

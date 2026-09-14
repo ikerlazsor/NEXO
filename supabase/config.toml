@@ -28,7 +28,7 @@ enabled = true
 port = 54323
 api_url = "http://127.0.0.1"
 
-[inbucket]
+[local_smtp]
 enabled = false
 
 [storage]
@@ -41,11 +41,12 @@ site_url = "http://127.0.0.1:3000"
 additional_redirect_urls = ["nexo://**"]
 jwt_expiry = 3600
 enable_signup = true
+minimum_password_length = 6
 
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
-enable_confirmations = false
+enable_confirmations = true
 
 [analytics]
 enabled = false
@@ -55,3 +56,9 @@ verify_jwt = true
 
 [functions.delete-plan]
 verify_jwt = true
+
+[functions.send-push]
+verify_jwt = true
+
+[functions.dispatch-push-outbox]
+verify_jwt = false

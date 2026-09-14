@@ -171,7 +171,7 @@ export default function AdminReportPlanScreen() {
                     {t('admin.reason')}: {row.motivo}
                 </Text>
                 <Text style={styles.meta}>
-                    @{row.reportador?.nombre_usuario || '—'} · {new Date(row.creado_en).toLocaleString()}
+                    {row.reportador?.nombre || '—'} · {new Date(row.creado_en).toLocaleString()}
                 </Text>
                 {row.mensaje ? (
                     <View style={styles.box}>

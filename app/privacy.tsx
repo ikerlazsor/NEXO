@@ -13,6 +13,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { SupportEmailLink } from '../components/SupportEmailLink';
+import { LegalWebLink } from '../components/LegalWebLink';
+import { NEXO_PRIVACY_URL, NEXO_SUPPORT_URL } from '../lib/brand';
 import { useT } from '../lib/i18n';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -95,7 +98,9 @@ export default function PrivacyScreen() {
 
                 <View style={styles.footerCard}>
                     <Text style={styles.footerTitle}>{t('privacy.questions')}</Text>
-                    <Text style={styles.footerDesc}>{t('privacy.questionsDesc')}</Text>
+                    <SupportEmailLink prefix={t('privacy.questionsDesc')} />
+                    <LegalWebLink url={NEXO_PRIVACY_URL} />
+                    <LegalWebLink url={NEXO_SUPPORT_URL} label={t('help.openSupportPage')} />
                 </View>
             </ScrollView>
         </View>
@@ -161,5 +166,4 @@ const styles = StyleSheet.create({
         padding: 20,
     },
     footerTitle: { fontSize: 16, fontWeight: '700', color: INK },
-    footerDesc: { marginTop: 8, fontSize: 14, lineHeight: 21, color: MUTED, fontWeight: '500' },
 });

@@ -6,9 +6,10 @@ interface Props {
     name?: string;
     size?: number;
     recyclingKey?: string;
+    priority?: 'low' | 'normal' | 'high';
 }
 
-export function ProfileAvatar({ uri, name = 'U', size = 100, recyclingKey }: Props) {
+export function ProfileAvatar({ uri, name = 'U', size = 100, recyclingKey, priority = 'high' }: Props) {
     const source = uri || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=E2E8F0&color=475569&size=${size}`;
     const radius = size / 2;
 
@@ -20,7 +21,7 @@ export function ProfileAvatar({ uri, name = 'U', size = 100, recyclingKey }: Pro
                 contentFit="cover"
                 contentPosition="center"
                 cachePolicy="memory-disk"
-                priority="high"
+                priority={priority}
                 recyclingKey={recyclingKey ?? uri ?? name}
                 transition={0}
                 placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }}

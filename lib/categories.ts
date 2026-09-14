@@ -2,12 +2,12 @@ import type { DeporteTipo } from './sportFormations';
 
 /** Identificadores de categoría principal (valor en BD: `categoria`). */
 export const MAIN_CATEGORY_IDS = [
-    'FOODIES',
     'DEPORTES',
-    'AIRE_LIBRE',
-    'SHOWTIME',
-    'DESCUBRIR',
     'VIBES',
+    'AIRE_LIBRE',
+    'FOODIES',
+    'DESCUBRIR',
+    'SHOWTIME',
 ] as const;
 
 export type MainCategoryId = (typeof MAIN_CATEGORY_IDS)[number];
@@ -22,14 +22,54 @@ export const SUBCATEGORIES: Record<MainCategoryId, readonly string[]> = {
     VIBES: ['fiesta', 'compras', 'gaming', 'juegos_mesa', 'otro'],
 };
 
+/** Máximo sugerido al crear un plan. Siempre se puede cambiar a mano. */
+const DEFAULT_MAX_PARTICIPANTS: Record<string, number> = {
+    'FOODIES:cafe': 6,
+    'FOODIES:comer': 6,
+    'FOODIES:cenar': 6,
+    'FOODIES:tapas': 8,
+    'FOODIES:otro': 6,
+    'DEPORTES:futbol': 25,
+    'DEPORTES:baloncesto': 10,
+    'DEPORTES:padel': 4,
+    'DEPORTES:running': 25,
+    'DEPORTES:otro': 8,
+    'AIRE_LIBRE:senderismo': 20,
+    'AIRE_LIBRE:playa': 8,
+    'AIRE_LIBRE:mirador': 8,
+    'AIRE_LIBRE:picnic': 10,
+    'AIRE_LIBRE:otro': 8,
+    'SHOWTIME:cine': 6,
+    'SHOWTIME:teatro': 6,
+    'SHOWTIME:concierto': 8,
+    'SHOWTIME:espectaculo': 8,
+    'SHOWTIME:otro': 6,
+    'DESCUBRIR:museo': 6,
+    'DESCUBRIR:estudio': 6,
+    'DESCUBRIR:idiomas': 6,
+    'DESCUBRIR:viajes': 8,
+    'DESCUBRIR:otro': 6,
+    'VIBES:fiesta': 20,
+    'VIBES:compras': 4,
+    'VIBES:gaming': 8,
+    'VIBES:juegos_mesa': 6,
+    'VIBES:otro': 8,
+};
+
+const FALLBACK_MAX_PARTICIPANTS = 8;
+
+export function defaultMaxParticipants(main: MainCategoryId, sub: string): number {
+    return DEFAULT_MAX_PARTICIPANTS[`${main}:${sub}`] ?? FALLBACK_MAX_PARTICIPANTS;
+}
+
 export const MAIN_CATEGORIES: MainCategoryId[] = [...MAIN_CATEGORY_IDS];
 
 export const FEED_PLAN_CATEGORIES = new Set<string>([...MAIN_CATEGORY_IDS]);
 
-const COVERS_PER_SUB = 3;
+export const COVERS_PER_SUB = 5;
 
 /** Placeholder hasta subir imágenes por subcategoría. */
-export const PLACEHOLDER_COVER_URI = 'https://via.placeholder.com/800x600/E8EEF5/94A3B8?text=NEXO';
+export const PLACEHOLDER_COVER_URI = 'https://via.placeholder.com/800x600/E8EEF5/94A3B8?text=Nexo!';
 
 export const PLACEHOLDER_COVER = { uri: PLACEHOLDER_COVER_URI };
 
@@ -37,140 +77,224 @@ export type CoverSource = string | number;
 
 /**
  * Portadas locales por `main:sub` desde `assets/images`.
- * Convención: `SUB_1.jpg` … `SUB_3.jpg`, y `{MAIN}_OTRO.jpg` para "otro".
+ * Convención: `SUB_1.jpg` … `SUB_4.jpg` + variante reciente `SUB_5_11zon.jpg`.
  */
 const COVER_ASSETS: Partial<Record<string, CoverSource[]>> = {
     'FOODIES:cafe': [
         require('../assets/images/CAFE_1.jpg'),
         require('../assets/images/CAFE_2.jpg'),
         require('../assets/images/CAFE_3.jpg'),
+        require('../assets/images/CAFE_4.jpg'),
+        require('../assets/images/CAFE_5_11zon.jpg'),
     ],
     'FOODIES:comer': [
         require('../assets/images/COMER_1.jpg'),
         require('../assets/images/COMER_2.jpg'),
         require('../assets/images/COMER_3.jpg'),
+        require('../assets/images/COMER_4.jpg'),
+        require('../assets/images/COMER_5_11zon.jpg'),
     ],
     'FOODIES:cenar': [
         require('../assets/images/CENAR_1.jpg'),
         require('../assets/images/CENAR_2.jpg'),
         require('../assets/images/CENAR_3.jpg'),
+        require('../assets/images/CENAR_4.jpg'),
+        require('../assets/images/CENAR_5_11zon.jpg'),
     ],
     'FOODIES:tapas': [
         require('../assets/images/TAPAS_1.jpg'),
         require('../assets/images/TAPAS_2.jpg'),
         require('../assets/images/TAPAS_3.jpg'),
+        require('../assets/images/TAPAS_4.jpg'),
+        require('../assets/images/TAPAS_5_11zon.jpg'),
     ],
-    'FOODIES:otro': [require('../assets/images/FOODIES_OTRO.jpg')],
+    'FOODIES:otro': [
+        require('../assets/images/PICOTEO_OTRO.jpg'),
+        require('../assets/images/PICOTEO_OTRO2.jpg'),
+        require('../assets/images/PICOTEO_OTRO3.jpg'),
+        require('../assets/images/PICOTEO_OTRO4.jpg'),
+        require('../assets/images/PICOTEO_OTRO_5_11zon.jpg'),
+    ],
 
     'DEPORTES:futbol': [
         require('../assets/images/FUTBOL_1.jpg'),
         require('../assets/images/FUTBOL_2.jpg'),
         require('../assets/images/FUTBOL_3.jpg'),
+        require('../assets/images/FUTBOL_4.jpg'),
+        require('../assets/images/FUTBOL_5_11zon.jpg'),
     ],
     'DEPORTES:baloncesto': [
         require('../assets/images/BALONCESTO_1.jpg'),
         require('../assets/images/BALONCESTO_2.jpg'),
         require('../assets/images/BALONCESTO_3.jpg'),
+        require('../assets/images/BALONCESTO_4.jpg'),
+        require('../assets/images/BALONCESTO_5_11zon.jpg'),
     ],
     'DEPORTES:padel': [
         require('../assets/images/PADEL_1.jpg'),
         require('../assets/images/PADEL_2.jpg'),
         require('../assets/images/PADEL_3.jpg'),
+        require('../assets/images/PADEL_4.jpg'),
+        require('../assets/images/PADEL_5_11zon.jpg'),
     ],
     'DEPORTES:running': [
         require('../assets/images/RUNNING_1.jpg'),
         require('../assets/images/RUNNING_2.jpg'),
         require('../assets/images/RUNNING_3.jpg'),
+        require('../assets/images/RUNNING_4.jpg'),
+        require('../assets/images/RUNNING_5_11zon.jpg'),
     ],
-    'DEPORTES:otro': [require('../assets/images/DEPORTES_OTRO.jpg')],
+    'DEPORTES:otro': [
+        require('../assets/images/DEPORTES_OTRO.jpg'),
+        require('../assets/images/DEPORTE_OTRO2.jpg'),
+        require('../assets/images/DEPORTE_OTRO3.jpg'),
+        require('../assets/images/DEPORTES_OTRO4.jpg'),
+        require('../assets/images/DEPORTE_OTRO_5_11zon.jpg'),
+    ],
 
     'AIRE_LIBRE:senderismo': [
         require('../assets/images/SENDERISMO_1.jpg'),
         require('../assets/images/SENDERISMO_2.jpg'),
         require('../assets/images/SENDERISMO_3.jpg'),
+        require('../assets/images/SENDERISMO_4.jpg'),
+        require('../assets/images/SENDERISMO_5_11zon.jpg'),
     ],
     'AIRE_LIBRE:playa': [
         require('../assets/images/PLAYA_1.jpg'),
         require('../assets/images/PLAYA_2.jpg'),
         require('../assets/images/PLAYA_3.jpg'),
+        require('../assets/images/PLAYA_4.jpg'),
+        require('../assets/images/PLAYA_5_11zon.jpg'),
     ],
     'AIRE_LIBRE:mirador': [
         require('../assets/images/MIRADOR_1.jpg'),
         require('../assets/images/MIRADOR_2.jpg'),
         require('../assets/images/MIRADOR_3.jpg'),
+        require('../assets/images/MIRADOR_4.jpg'),
+        require('../assets/images/MIRADOR_5_11zon.jpg'),
     ],
     'AIRE_LIBRE:picnic': [
         require('../assets/images/PICNIC_1.jpg'),
         require('../assets/images/PICNIC_2.jpg'),
         require('../assets/images/PICNIC_3.jpg'),
+        require('../assets/images/PICNIC_4.jpg'),
+        require('../assets/images/PICNIC_5_11zon.jpg'),
     ],
-    'AIRE_LIBRE:otro': [require('../assets/images/AIRE_LIBRE_OTRO.jpg')],
+    'AIRE_LIBRE:otro': [
+        require('../assets/images/AIRE_LIBRE_OTRO.jpg'),
+        require('../assets/images/AIRE_LIBRE_OTRO2.jpg'),
+        require('../assets/images/AIRE_LIBRE_OTRO_3.jpg'),
+        require('../assets/images/AIRE_LIBRE_OTRO4.jpg'),
+        require('../assets/images/AIRE_LIBRE_OTRO_5_11zon.jpg'),
+    ],
 
     'SHOWTIME:cine': [
         require('../assets/images/CINE_1.jpg'),
         require('../assets/images/CINE_2.jpg'),
         require('../assets/images/CINE_3.jpg'),
+        require('../assets/images/CINE_4.jpg'),
+        require('../assets/images/CINE_5_11zon.jpg'),
     ],
     'SHOWTIME:teatro': [
         require('../assets/images/TEATRO_1.jpg'),
         require('../assets/images/TEATRO_2.jpg'),
         require('../assets/images/TEATRO_3.jpg'),
+        require('../assets/images/TEATRO_4.jpg'),
+        require('../assets/images/TEATRO_5_11zon.jpg'),
     ],
     'SHOWTIME:concierto': [
         require('../assets/images/CONCIERTO_1.jpg'),
         require('../assets/images/CONCIERTO_2.jpg'),
         require('../assets/images/CONCIERTO_3.jpg'),
+        require('../assets/images/CONCIERTO_4.jpg'),
+        require('../assets/images/CONCIERTO_5_11zon.jpg'),
     ],
     'SHOWTIME:espectaculo': [
         require('../assets/images/ESPECTACULO_1.jpg'),
         require('../assets/images/ESPECTACULO_2.jpg'),
         require('../assets/images/ESPECTACULO_3.jpg'),
+        require('../assets/images/ESPECTACULO_4.jpg'),
+        require('../assets/images/ESPECTACULO_5_11zon.jpg'),
     ],
-    'SHOWTIME:otro': [require('../assets/images/SHOWTIME_OTRO.jpg')],
+    'SHOWTIME:otro': [
+        require('../assets/images/SHOWTIME_OTRO.jpg'),
+        require('../assets/images/SHOWTIME_OTRO2.jpg'),
+        require('../assets/images/SHOWTIME_OTRO3.jpg'),
+        require('../assets/images/SHOWTIME_OTRO4.jpg'),
+        require('../assets/images/SHOWTIME_OTRO_5_11zon.jpg'),
+    ],
 
     'DESCUBRIR:museo': [
         require('../assets/images/MUSEO_1.jpg'),
         require('../assets/images/MUSEO_2.jpg'),
         require('../assets/images/MUSEO_3.jpg'),
+        require('../assets/images/MUSEO_4.jpg'),
+        require('../assets/images/MUSEO_5_11zon.jpg'),
     ],
     'DESCUBRIR:estudio': [
         require('../assets/images/ESTUDIO_1.jpg'),
         require('../assets/images/ESTUDIO_2.jpg'),
         require('../assets/images/ESTUDIO_3.jpg'),
+        require('../assets/images/ESTUDIO_4.jpg'),
+        require('../assets/images/ESTUDIO_5_11zon.jpg'),
     ],
     'DESCUBRIR:idiomas': [
         require('../assets/images/IDIOMAS_1.jpg'),
         require('../assets/images/IDIOMAS_2.jpg'),
         require('../assets/images/IDIOMAS_3.jpg'),
+        require('../assets/images/IDIOMAS_4.jpg'),
+        require('../assets/images/IDIOMAS_5_11zon.jpg'),
     ],
     'DESCUBRIR:viajes': [
         require('../assets/images/VIAJES_1.jpg'),
         require('../assets/images/VIAJES_2.jpg'),
         require('../assets/images/VIAJES_3.jpg'),
+        require('../assets/images/VIAJES_4.jpg'),
+        require('../assets/images/VIAJES_5_11zon.jpg'),
     ],
-    'DESCUBRIR:otro': [require('../assets/images/DESCUBRIR_OTRO.jpg')],
+    'DESCUBRIR:otro': [
+        require('../assets/images/DESCUBRIR_OTRO.jpg'),
+        require('../assets/images/DESCUBRIR_OTRO2.jpg'),
+        require('../assets/images/DESCUBIR_OTRO3.jpg'),
+        require('../assets/images/DESCUBRIR_OTRO4.jpg'),
+        require('../assets/images/DESCUBRIR_OTRO_5_11zon.jpg'),
+    ],
 
     'VIBES:fiesta': [
         require('../assets/images/FIESTA_1.jpg'),
         require('../assets/images/FIESTA_2.jpg'),
         require('../assets/images/FIESTA_3.jpg'),
+        require('../assets/images/FIESTA_4.jpg'),
+        require('../assets/images/FIESTA_5_11zon.jpg'),
     ],
     'VIBES:compras': [
         require('../assets/images/COMPRAS_1.jpg'),
         require('../assets/images/COMPRAS_2.jpg'),
         require('../assets/images/COMPRAS_3.jpg'),
+        require('../assets/images/COMPRAS_4.jpg'),
+        require('../assets/images/COMPRAS_5_11zon.jpg'),
     ],
     'VIBES:gaming': [
         require('../assets/images/GAMING_1.jpg'),
         require('../assets/images/GAMING_2.jpg'),
         require('../assets/images/GAMING_3.jpg'),
+        require('../assets/images/GAMING_4.jpg'),
+        require('../assets/images/GAMING_5_11zon.jpg'),
     ],
     'VIBES:juegos_mesa': [
         require('../assets/images/JUEGOS_DE_MESA_1.jpg'),
         require('../assets/images/JUEGOS_DE_MESA_2.jpg'),
         require('../assets/images/JUEGOS_DE_MESA_3.jpg'),
+        require('../assets/images/JUEGOS_DE_MESA_4.jpg'),
+        require('../assets/images/JUEGOS_DE_MESA_5_11zon.jpg'),
     ],
-    'VIBES:otro': [require('../assets/images/VIBES_OTRO.jpg')],
+    'VIBES:otro': [
+        require('../assets/images/VIBES_OTRO.jpg'),
+        require('../assets/images/OCIO_OTRO2.jpg'),
+        require('../assets/images/OCIO_OTRO3.jpg'),
+        require('../assets/images/OCIO_OTRO4.jpg'),
+        require('../assets/images/OCIO_OTRO_5_11zon.jpg'),
+    ],
 };
 
 const LEGACY_MAIN_MAP: Record<string, MainCategoryId> = {
@@ -305,6 +429,46 @@ export const MAIN_CATEGORY_ICONS: Record<MainCategoryId, string> = {
     VIBES: 'sparkles',
 };
 
+/** Colores de acento por categoría: variedades de azul bien diferenciadas. */
+export const MAIN_CATEGORY_COLORS: Record<MainCategoryId, string> = {
+    FOODIES: '#1E3A8A',
+    DEPORTES: '#2563EB',
+    AIRE_LIBRE: '#0284C7',
+    SHOWTIME: '#1D4ED8',
+    DESCUBRIR: '#0EA5E9',
+    VIBES: '#6366F1',
+};
+
+/** Mismo color que la categoría padre (p. ej. pills de subcategoría en crear plan). */
+export function getSubcategoryColor(main: MainCategoryId, _sub: string): string {
+    return MAIN_CATEGORY_COLORS[main];
+}
+
+/** Resuelve el main de un slug de subcategoría (el primero que lo contenga). */
+export function findMainForSubcategory(sub: string): MainCategoryId | null {
+    for (const main of MAIN_CATEGORY_IDS) {
+        if (SUBCATEGORIES[main].includes(sub)) return main;
+    }
+    return null;
+}
+
+/** Color de pin / chip por categoría principal (mapa, tarjetas). */
+export function getCategoryColor(
+    categoria: string | null | undefined,
+    _tipoDeporte?: string | null,
+): string {
+    const main = normalizeMainCategory(categoria);
+    if (!main) return '#2563EB';
+    return MAIN_CATEGORY_COLORS[main];
+}
+
+export function getCategoryIcon(categoria: string | null | undefined): string {
+    if (categoria && MAIN_CATEGORY_IDS.includes(categoria as MainCategoryId)) {
+        return MAIN_CATEGORY_ICONS[categoria as MainCategoryId];
+    }
+    return 'sparkles';
+}
+
 export const SUBCATEGORY_ICONS: Record<string, string> = {
     cafe: 'cafe',
     comer: 'restaurant',
@@ -312,7 +476,7 @@ export const SUBCATEGORY_ICONS: Record<string, string> = {
     tapas: 'wine',
     futbol: 'football',
     baloncesto: 'basketball',
-    padel: 'tennisball',
+    padel: 'tennisball-outline',
     running: 'walk',
     senderismo: 'trail-sign',
     playa: 'umbrella',

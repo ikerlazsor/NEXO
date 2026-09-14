@@ -413,7 +413,7 @@ const styles = StyleSheet.create({
         elevation: 6,
     },
     mapCard: {
-        height: 260,
+        height: 320,
         borderRadius: 22,
         overflow: 'hidden',
         borderWidth: 1,

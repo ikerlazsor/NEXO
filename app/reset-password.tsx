@@ -16,7 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Alert } from '../lib/nexoAlert';
 import { useT } from '../lib/i18n';
-import { isStrongPassword } from '../lib/passwordRules';
+import { isPasswordPolicyError, isStrongPassword } from '../lib/passwordRules';
 import { setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { supabase } from '../lib/supabase';
 import { signOutAndClearLocalData } from '../lib/session';
@@ -127,7 +127,11 @@ export default function ResetPasswordScreen() {
             Alert.alert(t('login.resetDoneTitle'), t('login.resetDoneMsg'));
             router.replace('/login');
         } catch (e: any) {
-            Alert.alert(t('login.authError'), e?.message || t('login.resetInvalidMsg'));
+            const msg = typeof e?.message === 'string' ? e.message : '';
+            const errorMessage = isPasswordPolicyError(msg, e?.code)
+                ? t('login.weakPasswordMsg')
+                : e?.message || t('login.resetInvalidMsg');
+            Alert.alert(t('login.authError'), errorMessage);
         } finally {
             setLoading(false);
         }

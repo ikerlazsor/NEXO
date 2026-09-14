@@ -1,98 +1,127 @@
-import {
-    Ionicons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useLocalSearchParams,
-    useRouter } from 'expo-router';
-import { useCallback,
-    useEffect,
-    useRef,
-    useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
-    InteractionManager,
+    Pressable,
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
-import { Alert } from '../lib/nexoAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PlanImage } from '../components/PlanImage';
+import { PressScale } from '../components/PressScale';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { trackFunnel } from '../lib/analytics';
 import { getAuthUser } from '../lib/auth';
-import { getFriendStatus, sendFriendRequest } from '../lib/friends';
+import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { hapticLight, hapticSelection, hapticSuccess } from '../lib/haptics';
 import { useT } from '../lib/i18n';
+import { Alert } from '../lib/nexoAlert';
+import { dismissPushForRating } from '../lib/presentedPush';
+import { notifyCompliment } from '../lib/push';
+import { RatingChip } from '../components/RatingChip';
 import {
     EMPTY_RATING_DRAFT,
     MAX_ASPECTS,
+    MAX_FACE_PEERS,
+    MAX_PEOPLE_RATINGS_COMPACT,
     NEGATIVE_ASPECTS,
+    ORGANIZER_NEGATIVE_ASPECTS,
+    ORGANIZER_POSITIVE_ASPECTS,
     POSITIVE_ASPECTS,
     STAR_LABEL_KEYS,
     addPlanToHistory,
+    applyAttendanceConfirmedOptimistic,
+    applyRatingFlowCompleteOptimistic,
     dismissRatingWithoutHistory,
     ensurePlanInHistory,
+    filterPeersByQuery,
     getPendingRatingPlans,
-    hasRatingSessionStarted,
+    isOrganizerDraftComplete,
     isPersonDraftComplete,
     markRatingSessionStarted,
     submitValoracion,
+    undoAttendanceSkip,
     type PendingRatingPlan,
     type RatingDraft,
     type RatingPeer,
     type Repetiria,
 } from '../lib/ratings';
+import { resolvePlanImageSource } from '../lib/sports';
+import { type ThemeColors } from '../theme';
 
-const PRIMARY_DARK = '#2563EB';
-const INK = '#0F2A4A';
-const MUTED = '#64748B';
-const BG_TOP = '#DCEBFF';
-const BG_BOTTOM = '#F2F7FF';
-const SUCCESS = '#16A34A';
-const DANGER = '#DC2626';
 const GOLD = '#F59E0B';
+const ACTION_BLUE = '#2563EB';
+const INK = '#0F172A';
 
-type Stage = 'happened' | 'list' | 'person' | 'friends';
+type Stage = 'attendance' | 'org' | 'list' | 'person' | 'skipped';
+function draftFromRepeat(key: Repetiria): RatingDraft {
+    return {
+        asistencia: true,
+        puntuacion_general: key === 'si' ? 5 : key === 'no' ? 2 : 3,
+        repetiria_experiencia: key,
+        aspectos_positivos: key === 'no' ? [] : [],
+        aspectos_negativos: key === 'no' ? [] : [],
+    };
+}
 
-function StepDots({ active }: { active: 1 | 2 | 3 }) {
-    return (
-        <View style={styles.stepsRow}>
-            {[1, 2, 3].map((n) => (
-                <View key={n} style={styles.stepItem}>
-                    <View style={[styles.stepDot, n <= active && styles.stepDotOn, n < active && styles.stepDotDone]}>
-                        {n < active ? (
-                            <Ionicons name="checkmark" size={12} color="#FFF" />
-                        ) : (
-                            <Text style={[styles.stepDotText, n <= active && styles.stepDotTextOn]}>{n}</Text>
-                        )}
-                    </View>
-                    {n < 3 ? <View style={[styles.stepLine, n < active && styles.stepLineOn]} /> : null}
-                </View>
-            ))}
-        </View>
-    );
+function orderedSearchPeers(plan: PendingRatingPlan | null): RatingPeer[] {
+    if (!plan) return [];
+    const all = plan.searchPeers ?? [];
+    if (all.length === 0) return [];
+    const order = plan.peerRankIds ?? all.map((p) => p.id);
+    const byId = new Map(all.map((p) => [p.id, p]));
+    const sorted: RatingPeer[] = [];
+    for (const id of order) {
+        const peer = byId.get(id);
+        if (peer) sorted.push(peer);
+    }
+    for (const peer of all) {
+        if (!sorted.some((p) => p.id === peer.id)) sorted.push(peer);
+    }
+    return sorted;
 }
 
 export default function RatePlanScreen() {
     const router = useRouter();
     const { t } = useT();
     const insets = useSafeAreaInsets();
+    const { colors } = useAppTheme();
+    const styles = useThemedStyles(createRatePlanStyles);
     const scrollRef = useRef<ScrollView>(null);
+    const attendanceLockRef = useRef(false);
+    const flowStartedRef = useRef(false);
     const { planId } = useLocalSearchParams<{ planId: string }>();
 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [userId, setUserId] = useState<string | null>(null);
     const [plan, setPlan] = useState<PendingRatingPlan | null>(null);
-    const [stage, setStage] = useState<Stage>('happened');
+    const [stage, setStage] = useState<Stage>('attendance');
     const [selectedPeer, setSelectedPeer] = useState<RatingPeer | null>(null);
     const [draft, setDraft] = useState<RatingDraft>(EMPTY_RATING_DRAFT);
     const [ratedIds, setRatedIds] = useState<Set<string>>(new Set());
-    const [justSaved, setJustSaved] = useState(false);
-    const [friendCandidates, setFriendCandidates] = useState<RatingPeer[]>([]);
-    const [friendSentIds, setFriendSentIds] = useState<Set<string>>(new Set());
-    const [friendBusyId, setFriendBusyId] = useState<string | null>(null);
+    const [orgRated, setOrgRated] = useState(false);
+    const [peopleQuery, setPeopleQuery] = useState('');
+
+    const applyPlan = useCallback((found: PendingRatingPlan | null, resetFlow: boolean) => {
+        setPlan(found);
+        setRatedIds(new Set(found?.ratedIds ?? []));
+        setOrgRated(found?.organizerRated === true);
+        if (resetFlow) {
+            setPeopleQuery('');
+            setSelectedPeer(null);
+            setDraft(EMPTY_RATING_DRAFT);
+            setStage('attendance');
+            attendanceLockRef.current = false;
+            flowStartedRef.current = false;
+        }
+    }, []);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -100,168 +129,177 @@ export default function RatePlanScreen() {
             const user = await getAuthUser();
             if (!user) return;
             setUserId(user.id);
-            const plans = await getPendingRatingPlans(user.id);
-            const found = plans.find((p) => p.planId === planId && p.phase === 'open') ?? null;
-            setPlan(found);
-            const alreadyRated = new Set(found?.ratedIds ?? []);
-            setRatedIds(alreadyRated);
 
-            const started = found ? await hasRatingSessionStarted(user.id, found.planId) : false;
-            if (found && (started || alreadyRated.size > 0)) {
-                setStage('list');
-            } else {
-                setStage('happened');
+            const pick = (plans: PendingRatingPlan[]) =>
+                plans.find((p) => p.planId === planId && p.phase === 'open')
+                ?? plans.find((p) => p.planId === planId && p.phase === 'waiting')
+                ?? null;
+
+            // Cache primero → botones usables sin esperar red.
+            const cached = await getPendingRatingPlans(user.id);
+            const cachedFound = pick(cached);
+            if (cachedFound && !flowStartedRef.current) {
+                applyPlan(cachedFound, true);
+                setLoading(false);
+                trackFunnel('rating_start', { userId: user.id, props: { planId: cachedFound.planId } });
             }
-            setSelectedPeer(null);
-            setDraft(EMPTY_RATING_DRAFT);
-            if (found) {
-                trackFunnel('rating_start', { userId: user.id, props: { planId: found.planId } });
+
+            const plans = await getPendingRatingPlans(user.id, { force: true });
+            const found = pick(plans);
+            if (flowStartedRef.current) {
+                // Usuario ya avanzó: actualizar datos sin volver a "¿fuiste?".
+                if (found) {
+                    setPlan(found);
+                    setRatedIds(new Set(found.ratedIds ?? []));
+                    setOrgRated(found.organizerRated === true);
+                }
+            } else {
+                applyPlan(found, true);
+                if (found && !cachedFound) {
+                    trackFunnel('rating_start', { userId: user.id, props: { planId: found.planId } });
+                }
             }
         } finally {
             setLoading(false);
         }
-    }, [planId]);
+    }, [planId, applyPlan]);
 
-    useEffect(() => {
-        void load();
-    }, [load]);
+    useFocusEffect(
+        useCallback(() => {
+            if (planId && typeof planId === 'string') dismissPushForRating(planId);
+            attendanceLockRef.current = false;
+            flowStartedRef.current = false;
+            void load();
+        }, [planId, load]),
+    );
 
     useEffect(() => {
         scrollRef.current?.scrollTo({ y: 0, animated: false });
     }, [stage, selectedPeer?.id]);
 
+    const listPeers = useMemo(() => orderedSearchPeers(plan), [plan]);
+    const hiddenUnratedCount = useMemo(() => {
+        if (!plan) return 0;
+        const all = plan.searchPeers ?? [];
+        if (all.length <= MAX_FACE_PEERS) return 0;
+        const totalUnrated = all.filter((p) => !ratedIds.has(p.id)).length;
+        const shownUnrated = listPeers.filter((p) => !ratedIds.has(p.id)).length;
+        return Math.max(0, totalUnrated - shownUnrated);
+    }, [plan, ratedIds, listPeers]);
     const ratedCount = ratedIds.size;
-    const totalPeers = plan?.peers.length ?? 0;
-    const pendingCount = totalPeers - ratedCount;
-    const progressPct = totalPeers > 0 ? ratedCount / totalPeers : 0;
-
-    const stepActive: 1 | 2 | 3 =
-        stage === 'happened' ? 1 : stage === 'list' || stage === 'friends' ? 2 : 3;
+    const totalPeople = plan?.searchPeers?.length ?? 0;
+    const searchHits = filterPeersByQuery(plan?.searchPeers ?? [], peopleQuery);
+    const canSubmitOrg = isOrganizerDraftComplete(draft);
     const canSubmitPerson = isPersonDraftComplete(draft);
-
-    const resolveFriendCandidates = async (peers: RatingPeer[], uid: string) => {
-        const out: RatingPeer[] = [];
-        // Limitar trabajo: muchas consultas seguidas congelan la UI (sobre todo en Expo Go).
-        const slice = peers.slice(0, 12);
-        await Promise.all(
-            slice.map(async (peer) => {
-                try {
-                    const st = await getFriendStatus(uid, peer.id);
-                    if (st.status === 'none') out.push(peer);
-                } catch {
-                    /* skip */
-                }
-            }),
-        );
-        return out;
-    };
+    const showCompactSearch = totalPeople > 6;
 
     const goBackSafe = () => {
-        // Diferir el back: Alert modal + router.back() a la vez congela Expo Go.
-        requestAnimationFrame(() => {
-            InteractionManager.runAfterInteractions(() => {
-                if (router.canGoBack()) router.back();
-                else router.replace('/(tabs)/my-plans');
-            });
-        });
+        // Nunca InteractionManager aquí: tras valorar puede no dispararse y congela la app.
+        try {
+            if (router.canGoBack()) router.back();
+            else router.replace('/my-plans');
+        } catch {
+            router.replace('/my-plans');
+        }
     };
 
-    /** Nunca navegar en el mismo tick que abrir el Alert (modales anidados). */
-    const doneAndLeave = (title: string, message: string) => {
-        Alert.alert(title, message, [
-            {
-                text: t('common.ok'),
-                onPress: () => goBackSafe(),
-            },
-        ]);
+    const goAfterAttendance = () => {
+        if (plan?.organizer && !orgRated) setStage('org');
+        else setStage('list');
     };
 
-    const finishAndArchive = async () => {
+    const confirmAttendance = () => {
+        if (!userId || !plan || attendanceLockRef.current) return;
+        attendanceLockRef.current = true;
+        flowStartedRef.current = true;
+        // UI primero: nada síncrono pesado antes (congelaba / expulsaba).
+        goAfterAttendance();
+        hapticSuccess();
+        const uid = userId;
+        const pid = plan.planId;
+        const planSnap = plan;
+        try {
+            applyAttendanceConfirmedOptimistic(uid, planSnap);
+        } catch {
+            /* ya avanzó de pantalla */
+        }
+        void (async () => {
+            try {
+                await markRatingSessionStarted(uid, pid);
+                // skipBump: el contador ya subió en applyAttendanceConfirmedOptimistic.
+                const { error } = await ensurePlanInHistory(uid, pid, { skipBump: true });
+                if (error) {
+                    Alert.alert(t('profile.error'), t('ratings.saveError'));
+                }
+            } catch {
+                Alert.alert(t('profile.error'), t('ratings.saveError'));
+            }
+        })();
+    };
+
+    const finishAndArchive = () => {
         if (!userId || !plan) {
             goBackSafe();
             return;
         }
-        setSaving(true);
-        try {
-            const { error } = await addPlanToHistory(userId, plan.planId);
-            if (error) {
-                Alert.alert(t('profile.error'), t('ratings.saveError'));
-                return;
-            }
-            trackFunnel('rating_complete', {
-                userId,
-                props: { planId: plan.planId, rated: ratedIds.size },
-            });
-            const peers = (plan.peers ?? []).filter((p) => ratedIds.has(p.id));
-            // Mostrar primero la pantalla de amigos; filtrar en background (evita JS bloqueado).
-            if (peers.length === 0) {
-                doneAndLeave(t('ratings.doneTitle'), t('ratings.doneMsg'));
-                return;
-            }
-            setFriendCandidates(peers);
-            setFriendSentIds(new Set());
-            setStage('friends');
-            setSaving(false);
+        const uid = userId;
+        const pid = plan.planId;
+        const rated = ratedIds.size;
+        // Cache + flag local YA; navegar en el mismo tick. Red después.
+        applyRatingFlowCompleteOptimistic(uid, pid);
+        goBackSafe();
+        void (async () => {
             try {
-                const candidates = await Promise.race([
-                    resolveFriendCandidates(peers, userId),
-                    new Promise<RatingPeer[]>((resolve) => setTimeout(() => resolve(peers), 1500)),
-                ]);
-                if (candidates.length === 0) {
-                    doneAndLeave(t('ratings.doneTitle'), t('ratings.doneMsg'));
+                const { error } = await addPlanToHistory(uid, pid);
+                if (error) {
+                    Alert.alert(t('profile.error'), t('ratings.saveError'));
                     return;
                 }
-                setFriendCandidates(candidates);
+                trackFunnel('rating_complete', {
+                    userId: uid,
+                    props: { planId: pid, rated },
+                });
             } catch {
-                /* dejar la lista provisional */
+                Alert.alert(t('profile.error'), t('ratings.saveError'));
             }
-        } finally {
-            setSaving(false);
-        }
+        })();
     };
 
-    const sendAddFriend = async (peer: RatingPeer) => {
-        if (!userId || friendSentIds.has(peer.id)) return;
-        setFriendBusyId(peer.id);
-        try {
-            const { error } = await sendFriendRequest(userId, peer.id);
-            if (error) {
-                Alert.alert(t('profile.error'), error);
-                return;
-            }
-            setFriendSentIds((prev) => new Set(prev).add(peer.id));
-        } finally {
-            setFriendBusyId(null);
-        }
+    const skipAttendance = () => {
+        if (!userId || !plan || attendanceLockRef.current) return;
+        attendanceLockRef.current = true;
+        flowStartedRef.current = true;
+        applyRatingFlowCompleteOptimistic(userId, plan.planId, { skipped: true });
+        setStage('skipped');
+        hapticLight();
+        void dismissRatingWithoutHistory(userId, plan.planId);
     };
 
-    const onPlanHappened = async (attended: boolean) => {
-        if (!attended) {
-            hapticLight();
-            if (userId && plan) await dismissRatingWithoutHistory(userId, plan.planId);
-            doneAndLeave(t('ratings.doneTitle'), t('ratings.notAttendedMsg'));
+    const undoSkip = () => {
+        if (!userId || !plan) return;
+        attendanceLockRef.current = false;
+        flowStartedRef.current = false;
+        hapticLight();
+        setDraft(EMPTY_RATING_DRAFT);
+        setStage('attendance');
+        void undoAttendanceSkip(userId, plan.planId);
+    };
+
+    const openPeer = (peer: RatingPeer, opts?: { allowRerate?: boolean }) => {
+        if (ratedIds.has(peer.id) && !opts?.allowRerate) return;
+        if (!opts?.allowRerate && ratedCount >= MAX_PEOPLE_RATINGS_COMPACT) {
+            Alert.alert(t('ratings.peopleCapTitle'), t('ratings.peopleCapBody', { n: MAX_PEOPLE_RATINGS_COMPACT }));
             return;
         }
-        hapticSuccess();
-        if (userId && plan) {
-            await markRatingSessionStarted(userId, plan.planId);
-            // Al confirmar asistencia, suma ya a planes hechos
-            const { error } = await ensurePlanInHistory(userId, plan.planId);
-            if (error) {
-                Alert.alert(t('profile.error'), t('ratings.saveError'));
-                return;
-            }
-        }
-        setStage('list');
-    };
-
-    const openPeer = (peer: RatingPeer) => {
-        if (ratedIds.has(peer.id)) return;
         hapticSelection();
         setSelectedPeer(peer);
         setDraft(EMPTY_RATING_DRAFT);
-        setJustSaved(false);
         setStage('person');
+    };
+
+    const pickSearchPeer = (peer: RatingPeer) => {
+        setPeopleQuery('');
+        openPeer(peer, { allowRerate: true });
     };
 
     const toggleAspect = (list: 'aspectos_positivos' | 'aspectos_negativos', key: string) => {
@@ -277,47 +315,115 @@ export default function RatePlanScreen() {
         });
     };
 
-    const submitCurrent = async () => {
-        if (!userId || !plan || !selectedPeer || !canSubmitPerson) return;
-        setSaving(true);
-        try {
-            const { error } = await submitValoracion({
-                planId: plan.planId,
-                evaluadorId: userId,
-                evaluadoId: selectedPeer.id,
-                draft,
-            });
-            if (error) {
-                console.warn('[rate-plan] submit failed', error);
-                Alert.alert(
-                    t('profile.error'),
-                    `${t('ratings.saveError')}${error && error !== 'rpc_rejected' ? `\n\n${error}` : ''}`,
-                );
-                return;
+    const submitOrg = () => {
+        if (!userId || !plan?.organizer || !canSubmitOrg || saving) return;
+        const uid = userId;
+        const pid = plan.planId;
+        const orgId = plan.organizer.id;
+        const payload = { ...draft, asistencia: true as const };
+        hapticSuccess();
+        setOrgRated(true);
+        setDraft(EMPTY_RATING_DRAFT);
+        setStage('list');
+        void (async () => {
+            try {
+                await markRatingSessionStarted(uid, pid);
+                const { error: histError } = await ensurePlanInHistory(uid, pid, { skipBump: true });
+                if (histError) {
+                    Alert.alert(t('profile.error'), t('ratings.saveError'));
+                    return;
+                }
+                const { error } = await submitValoracion({
+                    planId: pid,
+                    evaluadorId: uid,
+                    evaluadoId: orgId,
+                    draft: payload,
+                    tipo: 'organizacion',
+                });
+                if (error) {
+                    Alert.alert(
+                        t('profile.error'),
+                        `${t('ratings.saveError')}${error !== 'rpc_rejected' ? `\n\n${error}` : ''}`,
+                    );
+                }
+            } catch {
+                Alert.alert(t('profile.error'), t('ratings.saveError'));
             }
-            hapticSuccess();
-            const nextRated = new Set(ratedIds);
-            nextRated.add(selectedPeer.id);
-            setRatedIds(nextRated);
-            setJustSaved(true);
+        })();
+    };
 
-            const stillPending = (plan.peers ?? []).filter((p) => !nextRated.has(p.id));
-            if (stillPending.length === 0) {
-                await finishAndArchive();
-                return;
-            }
-            setSelectedPeer(null);
-            setDraft(EMPTY_RATING_DRAFT);
-            setStage('list');
-        } finally {
-            setSaving(false);
+    const submitCurrent = () => {
+        if (!userId || !plan || !selectedPeer || !canSubmitPerson || saving) return;
+        const uid = userId;
+        const pid = plan.planId;
+        const peer = selectedPeer;
+        const payload = draft;
+        hapticSuccess();
+        const nextRated = new Set(ratedIds);
+        nextRated.add(peer.id);
+        setRatedIds(nextRated);
+        if (payload.repetiria_experiencia === 'si') {
+            notifyCompliment({
+                toUserId: peer.id,
+                planId: pid,
+                trait: payload.aspectos_positivos[0] ?? '',
+            });
         }
+        setSelectedPeer(null);
+        setDraft(EMPTY_RATING_DRAFT);
+        setStage('list');
+        void (async () => {
+            try {
+                await markRatingSessionStarted(uid, pid);
+                const { error: histError } = await ensurePlanInHistory(uid, pid, { skipBump: true });
+                if (histError) {
+                    Alert.alert(t('profile.error'), t('ratings.saveError'));
+                    return;
+                }
+                const { error } = await submitValoracion({
+                    planId: pid,
+                    evaluadorId: uid,
+                    evaluadoId: peer.id,
+                    draft: payload,
+                });
+                if (error) {
+                    Alert.alert(
+                        t('profile.error'),
+                        `${t('ratings.saveError')}${error !== 'rpc_rejected' ? `\n\n${error}` : ''}`,
+                    );
+                }
+            } catch {
+                Alert.alert(t('profile.error'), t('ratings.saveError'));
+            }
+        })();
+    };
+
+    const closePersonSheet = () => {
+        setSelectedPeer(null);
+        setDraft(EMPTY_RATING_DRAFT);
+        setStage('list');
+    };
+
+    const onHeaderBack = () => {
+        if (stage === 'skipped') {
+            void undoSkip();
+            return;
+        }
+        if (stage === 'person') {
+            closePersonSheet();
+            return;
+        }
+        if (stage === 'org' || stage === 'list') {
+            setStage('attendance');
+            return;
+        }
+        goBackSafe();
     };
 
     if (loading) {
         return (
             <View style={[styles.center, { paddingTop: insets.top }]}>
-                <ActivityIndicator color={PRIMARY_DARK} size="large" />
+                <ActivityIndicator color={ACTION_BLUE} size="large" />
                 <Text style={styles.loadingText}>{t('ratings.loading')}</Text>
             </View>
         );
@@ -327,7 +433,7 @@ export default function RatePlanScreen() {
         return (
             <View style={[styles.center, { paddingTop: insets.top }]}>
                 <View style={styles.emptyIcon}>
-                    <Ionicons name="star-outline" size={32} color={MUTED} />
+                    <Ionicons name="sparkles-outline" size={32} color={colors.textMuted} />
                 </View>
                 <Text style={styles.empty}>{t('ratings.noneOpen')}</Text>
                 <TouchableOpacity style={styles.primaryBtn} onPress={goBackSafe}>
@@ -337,31 +443,37 @@ export default function RatePlanScreen() {
         );
     }
 
+    const cover = resolvePlanImageSource(plan.imagen_url);
+
+    const renderHero = (subtitle?: string) => (
+        <View style={styles.hero}>
+            <PlanImage source={cover} style={styles.heroImg} recyclingKey={plan.planId} />
+            <LinearGradient
+                colors={['rgba(15,23,42,0.08)', 'rgba(15,23,42,0.82)']}
+                style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.heroCopy}>
+                <View style={styles.heroBadge}>
+                    <Ionicons name="star" size={12} color={GOLD} />
+                    <Text style={styles.heroBadgeText}>{t('ratings.closeKicker')}</Text>
+                </View>
+                <Text style={styles.heroTitle} numberOfLines={2}>{plan.titulo}</Text>
+                {subtitle ? <Text style={styles.heroSub}>{subtitle}</Text> : null}
+            </View>
+        </View>
+    );
+
     return (
         <View style={styles.container}>
-            <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
-            <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-                <TouchableOpacity
-                    onPress={() => {
-                        if (stage === 'person') {
-                            setStage('list');
-                            setSelectedPeer(null);
-                            setDraft(EMPTY_RATING_DRAFT);
-                            return;
-                        }
-                        router.back();
-                    }}
-                    style={styles.backBtn}
-                >
-                    <Ionicons name="chevron-back" size={24} color={INK} />
+            <LinearGradient
+                colors={['#EEF4FF', colors.backgroundAlt]}
+                style={StyleSheet.absoluteFill}
+            />
+            <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+                <TouchableOpacity onPress={onHeaderBack} style={styles.backBtn}>
+                    <Ionicons name="chevron-back" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.title} numberOfLines={1}>{t('ratings.rateTitle')}</Text>
-                    <Text style={styles.sub} numberOfLines={1}>{plan.titulo}</Text>
-                </View>
             </View>
-
-            <StepDots active={stepActive} />
 
             <ScrollView
                 ref={scrollRef}
@@ -369,328 +481,320 @@ export default function RatePlanScreen() {
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
             >
-                {stage === 'happened' && (
+                {stage === 'attendance' && (
                     <>
-                        <View style={styles.introCard}>
-                            <View style={styles.introIcon}>
-                                <Ionicons name="calendar-outline" size={28} color={PRIMARY_DARK} />
+                        {renderHero()}
+                        <View style={styles.sheetCard}>
+                            <Text style={styles.sheetTitle}>{t('ratings.attendedPlanQ')}</Text>
+                            <View style={styles.choiceRow}>
+                                <Pressable
+                                    style={({ pressed }) => [
+                                        styles.choiceBtn,
+                                        styles.choiceBtnYes,
+                                        pressed && styles.choiceBtnPressed,
+                                    ]}
+                                    onPress={confirmAttendance}
+                                    hitSlop={8}
+                                >
+                                    <Ionicons name="checkmark-circle" size={22} color="#FFF" />
+                                    <Text style={styles.choiceBtnTextOn}>{t('ratings.attendedPlanYes')}</Text>
+                                </Pressable>
+                                <Pressable
+                                    style={({ pressed }) => [
+                                        styles.choiceBtn,
+                                        styles.choiceBtnNo,
+                                        pressed && styles.choiceBtnPressed,
+                                    ]}
+                                    onPress={skipAttendance}
+                                    hitSlop={8}
+                                >
+                                    <Ionicons name="close-circle-outline" size={22} color={colors.textMuted} />
+                                    <Text style={styles.choiceBtnText}>{t('ratings.attendedPlanNo')}</Text>
+                                </Pressable>
                             </View>
-                            <Text style={styles.introTitle}>{t('ratings.attendedPlanQ')}</Text>
                         </View>
-
-                        <TouchableOpacity
-                            style={styles.bigChoiceYes}
-                            onPress={() => void onPlanHappened(true)}
-                            disabled={saving}
-                            activeOpacity={0.88}
-                        >
-                            <Ionicons name="checkmark-circle" size={22} color="#FFF" />
-                            <Text style={styles.bigChoiceText}>{t('ratings.attendedPlanYes')}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.bigChoiceNo}
-                            onPress={() => void onPlanHappened(false)}
-                            disabled={saving}
-                            activeOpacity={0.88}
-                        >
-                            <Ionicons name="close-circle" size={22} color={DANGER} />
-                            <Text style={styles.bigChoiceNoText}>{t('ratings.attendedPlanNo')}</Text>
-                        </TouchableOpacity>
                     </>
                 )}
 
-                {stage === 'friends' && (
-                    <>
-                        <View style={styles.introCard}>
-                            <View style={styles.introIcon}>
-                                <Ionicons name="people-outline" size={28} color={PRIMARY_DARK} />
-                            </View>
-                            <Text style={styles.introTitle}>{t('ratings.addFriendsTitle')}</Text>
+                {stage === 'skipped' && (
+                    <View style={styles.sheetCard}>
+                        <View style={styles.skippedIcon}>
+                            <Ionicons name="information-circle-outline" size={28} color={colors.textMuted} />
                         </View>
-                        {friendCandidates.map((peer) => {
-                            const sent = friendSentIds.has(peer.id);
-                            const busy = friendBusyId === peer.id;
-                            return (
-                                <View key={peer.id} style={styles.peerRow}>
-                                    <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={48} />
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.peerRowName}>{peer.nombre}</Text>
-                                        {sent ? (
-                                            <Text style={[styles.peerRowMeta, { color: SUCCESS }]}>
-                                                {t('ratings.friendRequestSent')}
-                                            </Text>
-                                        ) : null}
-                                    </View>
+                        <Text style={styles.sheetTitle}>{t('ratings.attendedPlanNo')}</Text>
+                        <Text style={styles.sheetHint}>{t('ratings.notAttendedMsg')}</Text>
+                        <TouchableOpacity style={styles.primaryBtn} onPress={goBackSafe} disabled={saving}>
+                            <Text style={styles.primaryBtnText}>{t('common.ok')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.skipLink} onPress={() => void undoSkip()}>
+                            <Text style={styles.undoText}>{t('ratings.undoDidNotGo')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                {stage === 'org' && (
+                    <>
+                        {renderHero(t('ratings.orgHint'))}
+                        <Text style={styles.anonPill}>{t('ratings.anonymous')}</Text>
+
+                        <View style={styles.sheetCard}>
+                            <Text style={styles.sheetTitle}>{t('ratings.orgStarsQ')}</Text>
+                            <View style={styles.starsRow}>
+                                {[1, 2, 3, 4, 5].map((n) => (
                                     <TouchableOpacity
-                                        style={[styles.ratePill, sent && styles.donePill]}
-                                        onPress={() => void sendAddFriend(peer)}
-                                        disabled={sent || busy}
+                                        key={n}
+                                        onPress={() => {
+                                            hapticSelection();
+                                            setDraft((d) => ({ ...d, asistencia: true, puntuacion_general: n }));
+                                        }}
+                                        hitSlop={8}
+                                        style={styles.starBtn}
                                     >
-                                        {busy ? (
-                                            <ActivityIndicator size="small" color={PRIMARY_DARK} />
-                                        ) : (
-                                            <Text style={[styles.ratePillText, sent && { color: SUCCESS }]}>
-                                                {sent ? t('ratings.friendSent') : t('ratings.addFriend')}
-                                            </Text>
-                                        )}
+                                        <Ionicons
+                                            name={draft.puntuacion_general >= n ? 'star' : 'star-outline'}
+                                            size={38}
+                                            color={draft.puntuacion_general >= n ? GOLD : colors.borderStrong}
+                                        />
                                     </TouchableOpacity>
+                                ))}
+                            </View>
+                            {draft.puntuacion_general > 0 ? (
+                                <Text style={styles.starLabel}>{t(STAR_LABEL_KEYS[draft.puntuacion_general - 1])}</Text>
+                            ) : null}
+                        </View>
+
+                        {draft.puntuacion_general >= 1 ? (
+                            <>
+                                <View style={styles.sheetCard}>
+                                    <Text style={styles.q}>{t('ratings.orgPositivesQ')}</Text>
+                                    <View style={styles.rowWrap}>
+                                        {ORGANIZER_POSITIVE_ASPECTS.map((key) => {
+                                            const on = draft.aspectos_positivos.includes(key);
+                                            return (
+                                                <TouchableOpacity
+                                                    key={key}
+                                                    style={[styles.chip, on && styles.chipPos]}
+                                                    onPress={() => toggleAspect('aspectos_positivos', key)}
+                                                >
+                                                    <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                                                        {t(`ratings.orgPos.${key}`)}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </View>
                                 </View>
-                            );
-                        })}
+                                <View style={styles.sheetCard}>
+                                    <Text style={styles.q}>{t('ratings.orgNegativesQ')}</Text>
+                                    <View style={styles.rowWrap}>
+                                        {ORGANIZER_NEGATIVE_ASPECTS.map((key) => {
+                                            const on = draft.aspectos_negativos.includes(key);
+                                            return (
+                                                <TouchableOpacity
+                                                    key={key}
+                                                    style={[styles.chip, on && styles.chipNeg]}
+                                                    onPress={() => toggleAspect('aspectos_negativos', key)}
+                                                >
+                                                    <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                                                        {t(`ratings.orgNeg.${key}`)}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </View>
+                                </View>
+                            </>
+                        ) : null}
+
                         <TouchableOpacity
-                            style={styles.primaryBtn}
-                            onPress={() => doneAndLeave(t('ratings.doneTitle'), t('ratings.doneMsg'))}
+                            style={[styles.primaryBtn, (!canSubmitOrg || saving) && styles.primaryBtnDisabled]}
+                            onPress={() => void submitOrg()}
+                            disabled={!canSubmitOrg || saving}
                         >
-                            <Text style={styles.primaryBtnText}>{t('ratings.finish')}</Text>
+                            {saving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.primaryBtnText}>{t('ratings.next')}</Text>}
                         </TouchableOpacity>
                     </>
                 )}
 
                 {stage === 'list' && (
                     <>
-                        {justSaved ? (
-                            <View style={styles.toastOk}>
-                                <Ionicons name="checkmark-circle" size={18} color={SUCCESS} />
-                                <Text style={styles.toastOkText}>{t('ratings.savedPerson')}</Text>
-                            </View>
-                        ) : null}
+                        {renderHero()}
+                        <View style={styles.sheetCard}>
+                            <Text style={styles.sheetTitle}>{t('ratings.highlightTitle')}</Text>
 
-                        <View style={styles.progressCard}>
-                            <View style={styles.progressTop}>
-                                <Text style={styles.progressLabel}>{t('ratings.progress')}</Text>
-                                <Text style={styles.progressCount}>
-                                    {ratedCount}/{totalPeers}
-                                </Text>
+                            <View style={styles.faceGrid}>
+                                {listPeers.map((peer) => {
+                                    const done = ratedIds.has(peer.id);
+                                    return (
+                                        <PressScale
+                                            key={peer.id}
+                                            disabled={done}
+                                            onPress={() => openPeer(peer)}
+                                            style={styles.faceCell}
+                                        >
+                                            <View style={[styles.faceRing, done && styles.faceRingOn]}>
+                                                <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={76} />
+                                                {done ? (
+                                                    <View style={styles.faceCheck}>
+                                                        <Ionicons name="checkmark" size={14} color="#FFF" />
+                                                    </View>
+                                                ) : null}
+                                            </View>
+                                            <Text style={styles.faceName} numberOfLines={2}>{peer.nombre}</Text>
+                                            <Text style={[styles.faceStatus, done && styles.faceStatusDone]}>
+                                                {done ? t('ratings.alreadyRated') : t('ratings.tapToRate')}
+                                            </Text>
+                                        </PressScale>
+                                    );
+                                })}
+                                {hiddenUnratedCount > 0 ? (
+                                    <View style={styles.faceCell}>
+                                        <View style={styles.faceMore}>
+                                            <Text style={styles.faceMoreText}>+{hiddenUnratedCount}</Text>
+                                        </View>
+                                        <Text style={styles.faceName}>{t('ratings.pickPeopleYouKnow')}</Text>
+                                    </View>
+                                ) : null}
                             </View>
-                            <View style={styles.progressTrack}>
-                                <View style={[styles.progressFill, { width: `${Math.round(progressPct * 100)}%` }]} />
-                            </View>
-                            <Text style={styles.hint}>{t('ratings.pickPeopleHint')}</Text>
                         </View>
 
-                        <Text style={styles.sectionLabel}>{t('ratings.pickPeople')}</Text>
-                        {(plan.peers ?? []).map((peer) => {
-                            const done = ratedIds.has(peer.id);
-                            return (
-                                <TouchableOpacity
-                                    key={peer.id}
-                                    style={[styles.peerRow, done && styles.peerRowDone]}
-                                    onPress={() => openPeer(peer)}
-                                    disabled={done}
-                                    activeOpacity={0.85}
-                                >
-                                    <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={48} />
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.peerRowName}>{peer.nombre}</Text>
-                                        <Text style={[styles.peerRowMeta, done && styles.peerRowMetaDone]}>
-                                            {done ? t('ratings.alreadyRated') : t('ratings.tapToRate')}
-                                        </Text>
+                        {showCompactSearch ? (
+                            <>
+                                <TextInput
+                                    style={styles.search}
+                                    value={peopleQuery}
+                                    onChangeText={setPeopleQuery}
+                                    placeholder={t('ratings.searchPeople')}
+                                    placeholderTextColor={colors.textSubtle}
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                />
+                                {searchHits.length > 0 ? (
+                                    <View style={styles.searchResults}>
+                                        {searchHits.map((peer) => (
+                                            <TouchableOpacity
+                                                key={peer.id}
+                                                style={styles.peerRow}
+                                                onPress={() => pickSearchPeer(peer)}
+                                                activeOpacity={0.85}
+                                            >
+                                                <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={44} />
+                                                <Text style={[styles.peerRowName, { flex: 1 }]}>{peer.nombre}</Text>
+                                                <Ionicons name="chevron-forward" size={16} color={colors.textSubtle} />
+                                            </TouchableOpacity>
+                                        ))}
                                     </View>
-                                    {done ? (
-                                        <View style={styles.donePill}>
-                                            <Ionicons name="checkmark" size={14} color={SUCCESS} />
-                                        </View>
-                                    ) : (
-                                        <View style={styles.ratePill}>
-                                            <Text style={styles.ratePillText}>{t('ratings.rateCta')}</Text>
-                                        </View>
-                                    )}
-                                </TouchableOpacity>
-                            );
-                        })}
+                                ) : null}
+                            </>
+                        ) : null}
 
                         <TouchableOpacity
-                            style={[styles.primaryBtn, saving && { opacity: 0.7 }]}
-                            onPress={() => void finishAndArchive()}
-                            disabled={saving}
+                            style={styles.primaryBtn}
+                            onPress={finishAndArchive}
                         >
-                            {saving ? (
-                                <ActivityIndicator color="#FFF" />
-                            ) : (
-                                <Text style={styles.primaryBtnText}>
-                                    {ratedCount === 0
-                                        ? t('ratings.finishWithoutRating')
-                                        : pendingCount > 0
-                                          ? t('ratings.finishPartial', { n: ratedCount })
-                                          : t('ratings.finish')}
-                                </Text>
-                            )}
+                            <Text style={styles.primaryBtnText}>
+                                {ratedCount === 0 ? t('ratings.finishWithoutRating') : t('ratings.finish')}
+                            </Text>
                         </TouchableOpacity>
                     </>
                 )}
 
                 {stage === 'person' && selectedPeer && (
                     <>
-                        <View style={styles.peerCard}>
-                            <ProfileAvatar uri={selectedPeer.avatar_url} name={selectedPeer.nombre} size={80} />
+                        <View style={styles.personHero}>
+                            <ProfileAvatar uri={selectedPeer.avatar_url} name={selectedPeer.nombre} size={104} />
                             <Text style={styles.peerName}>{selectedPeer.nombre}</Text>
-                            <Text style={styles.peerCardHint}>{t('ratings.personHint')}</Text>
                         </View>
 
-                        <View style={styles.questionCard}>
-                            <Text style={styles.qNum}>1</Text>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.q}>{t('ratings.attendedQ')}</Text>
-                                <View style={styles.row}>
-                                    <TouchableOpacity
-                                        style={[styles.choice, draft.asistencia === true && styles.choiceYes]}
-                                        onPress={() => setDraft({ ...EMPTY_RATING_DRAFT, asistencia: true })}
-                                    >
-                                        <Text style={[styles.choiceText, draft.asistencia === true && styles.choiceTextOn]}>
-                                            {t('ratings.yes')}
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[styles.choice, draft.asistencia === false && styles.choiceNo]}
-                                        onPress={() => setDraft({ ...EMPTY_RATING_DRAFT, asistencia: false })}
-                                    >
-                                        <Text style={[styles.choiceText, draft.asistencia === false && styles.choiceTextOn]}>
-                                            {t('ratings.no')}
-                                        </Text>
-                                    </TouchableOpacity>
-                                </View>
+                        <View style={styles.sheetCard}>
+                            <Text style={styles.sheetTitle}>{t('ratings.repeatQ')}</Text>
+                            <View style={styles.choiceRow}>
+                                {([
+                                    ['si', t('ratings.repeatYes'), colors.successStrong, 'heart'],
+                                    ['no', t('ratings.repeatNo'), colors.danger, 'close'],
+                                ] as [Repetiria, string, string, string][]).map(([key, label, color, icon]) => {
+                                    const on = draft.repetiria_experiencia === key;
+                                    return (
+                                        <TouchableOpacity
+                                            key={key}
+                                            style={[
+                                                styles.choiceBtn,
+                                                on && { backgroundColor: color, borderColor: color },
+                                            ]}
+                                            onPress={() => {
+                                                hapticSelection();
+                                                setDraft({
+                                                    ...draftFromRepeat(key),
+                                                    aspectos_positivos: [],
+                                                    aspectos_negativos: [],
+                                                });
+                                            }}
+                                        >
+                                            <Ionicons
+                                                name={icon as 'heart' | 'close'}
+                                                size={20}
+                                                color={on ? '#FFF' : colors.textMuted}
+                                            />
+                                            <Text style={[styles.choiceBtnText, on && styles.choiceBtnTextOn]}>
+                                                {label}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
                             </View>
                         </View>
 
-                        {draft.asistencia === true && (
-                            <>
-                                <View style={styles.questionCard}>
-                                    <Text style={styles.qNum}>2</Text>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.q}>{t('ratings.starsQ')}</Text>
-                                        <View style={styles.starsRow}>
-                                            {[1, 2, 3, 4, 5].map((n) => (
-                                                <TouchableOpacity
-                                                    key={n}
-                                                    onPress={() => {
-                                                        hapticSelection();
-                                                        setDraft((d) => ({ ...d, puntuacion_general: n }));
-                                                    }}
-                                                    hitSlop={8}
-                                                    style={styles.starBtn}
-                                                >
-                                                    <Ionicons
-                                                        name={draft.puntuacion_general >= n ? 'star' : 'star-outline'}
-                                                        size={34}
-                                                        color={draft.puntuacion_general >= n ? GOLD : '#CBD5E1'}
-                                                    />
-                                                </TouchableOpacity>
-                                            ))}
-                                        </View>
-                                        {draft.puntuacion_general > 0 ? (
-                                            <Text style={styles.starLabel}>
-                                                {t(STAR_LABEL_KEYS[draft.puntuacion_general - 1])}
-                                            </Text>
-                                        ) : null}
-                                    </View>
+                        {draft.repetiria_experiencia === 'si' ? (
+                            <View style={styles.sheetCard}>
+                                <Text style={styles.q}>{t('ratings.positivesQ')}</Text>
+                                <View style={styles.rowWrap}>
+                                    {POSITIVE_ASPECTS.map((key) => {
+                                        const on = draft.aspectos_positivos.includes(key);
+                                        return (
+                                            <RatingChip
+                                                key={key}
+                                                label={t(`ratings.pos.${key}`)}
+                                                selected={on}
+                                                onPress={() => toggleAspect('aspectos_positivos', key)}
+                                                selectedStyle={styles.chipPos}
+                                            />
+                                        );
+                                    })}
                                 </View>
+                            </View>
+                        ) : null}
 
-                                {draft.puntuacion_general >= 1 && (
-                                    <View style={styles.questionCard}>
-                                        <Text style={styles.qNum}>3</Text>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.q}>{t('ratings.repeatQ')}</Text>
-                                            <View style={styles.rowWrap}>
-                                                {([
-                                                    ['si', t('ratings.repeatYes'), SUCCESS],
-                                                    ['indiferente', t('ratings.repeatMaybe'), PRIMARY_DARK],
-                                                    ['no', t('ratings.repeatNo'), DANGER],
-                                                ] as [Repetiria, string, string][]).map(([key, label, color]) => {
-                                                    const on = draft.repetiria_experiencia === key;
-                                                    return (
-                                                        <TouchableOpacity
-                                                            key={key}
-                                                            style={[
-                                                                styles.chip,
-                                                                on && { backgroundColor: color, borderColor: color },
-                                                            ]}
-                                                            onPress={() =>
-                                                                setDraft((d) => ({ ...d, repetiria_experiencia: key }))
-                                                            }
-                                                        >
-                                                            <Text style={[styles.chipText, on && styles.chipTextOn]}>
-                                                                {label}
-                                                            </Text>
-                                                        </TouchableOpacity>
-                                                    );
-                                                })}
-                                            </View>
-                                        </View>
-                                    </View>
-                                )}
+                        {draft.repetiria_experiencia === 'no' ? (
+                            <View style={styles.sheetCard}>
+                                <Text style={styles.q}>{t('ratings.negativesQ')}</Text>
+                                <View style={styles.rowWrap}>
+                                    {NEGATIVE_ASPECTS.map((key) => {
+                                        const on = draft.aspectos_negativos.includes(key);
+                                        return (
+                                            <RatingChip
+                                                key={key}
+                                                label={t(`ratings.neg.${key}`)}
+                                                selected={on}
+                                                onPress={() => toggleAspect('aspectos_negativos', key)}
+                                                selectedStyle={styles.chipNeg}
+                                            />
+                                        );
+                                    })}
+                                </View>
+                            </View>
+                        ) : null}
 
-                                {draft.repetiria_experiencia && (
-                                    <>
-                                        <View style={styles.questionCard}>
-                                            <Text style={styles.qNum}>4</Text>
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={styles.q}>{t('ratings.positivesQ')}</Text>
-                                                <View style={styles.rowWrap}>
-                                                    {POSITIVE_ASPECTS.map((key) => {
-                                                        const on = draft.aspectos_positivos.includes(key);
-                                                        return (
-                                                            <TouchableOpacity
-                                                                key={key}
-                                                                style={[styles.chip, on && styles.chipPos]}
-                                                                onPress={() => toggleAspect('aspectos_positivos', key)}
-                                                            >
-                                                                <Text style={[styles.chipText, on && styles.chipTextOn]}>
-                                                                    {t(`ratings.pos.${key}`)}
-                                                                </Text>
-                                                            </TouchableOpacity>
-                                                        );
-                                                    })}
-                                                </View>
-                                            </View>
-                                        </View>
-
-                                        <View style={styles.questionCard}>
-                                            <Text style={styles.qNum}>5</Text>
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={styles.q}>{t('ratings.negativesQ')}</Text>
-                                                <View style={styles.rowWrap}>
-                                                    {NEGATIVE_ASPECTS.map((key) => {
-                                                        const on = draft.aspectos_negativos.includes(key);
-                                                        return (
-                                                            <TouchableOpacity
-                                                                key={key}
-                                                                style={[styles.chip, on && styles.chipNeg]}
-                                                                onPress={() => toggleAspect('aspectos_negativos', key)}
-                                                            >
-                                                                <Text style={[styles.chipText, on && styles.chipTextOn]}>
-                                                                    {t(`ratings.neg.${key}`)}
-                                                                </Text>
-                                                            </TouchableOpacity>
-                                                        );
-                                                    })}
-                                                </View>
-                                            </View>
-                                        </View>
-                                    </>
-                                )}
-                            </>
-                        )}
-
-                        {draft.asistencia !== null && (
-                            <TouchableOpacity
-                                style={[
-                                    styles.primaryBtn,
-                                    (!canSubmitPerson || saving) && styles.primaryBtnDisabled,
-                                ]}
-                                onPress={submitCurrent}
-                                disabled={!canSubmitPerson || saving}
-                            >
-                                {saving ? (
-                                    <ActivityIndicator color="#FFF" />
-                                ) : (
-                                    <Text style={styles.primaryBtnText}>
-                                        {draft.asistencia === false
-                                            ? t('ratings.skipPerson')
-                                            : t('ratings.submitPerson')}
-                                    </Text>
-                                )}
-                            </TouchableOpacity>
-                        )}
+                        <TouchableOpacity
+                            style={[styles.primaryBtn, (!canSubmitPerson || saving) && styles.primaryBtnDisabled]}
+                            onPress={() => void submitCurrent()}
+                            disabled={!canSubmitPerson || saving}
+                        >
+                            {saving ? (
+                                <ActivityIndicator color="#FFF" />
+                            ) : (
+                                <Text style={styles.primaryBtnText}>{t('ratings.savedPerson')}</Text>
+                            )}
+                        </TouchableOpacity>
                     </>
                 )}
             </ScrollView>
@@ -698,252 +802,284 @@ export default function RatePlanScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: BG_BOTTOM },
-    center: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 24,
-        backgroundColor: BG_BOTTOM,
-    },
-    loadingText: { marginTop: 12, color: MUTED, fontWeight: '600' },
-    emptyIcon: {
-        width: 64,
-        height: 64,
-        borderRadius: 20,
-        backgroundColor: '#FFF',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 12,
-    },
-    empty: { color: MUTED, fontWeight: '600', marginBottom: 16, textAlign: 'center' },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        paddingHorizontal: 16,
-        paddingBottom: 8,
-    },
-    backBtn: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: '#FFF',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    title: { fontSize: 18, fontWeight: '900', color: INK },
-    sub: { fontSize: 13, color: MUTED, fontWeight: '600', marginTop: 2 },
-    stepsRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 40,
-        marginBottom: 8,
-    },
-    stepItem: { flexDirection: 'row', alignItems: 'center' },
-    stepDot: {
-        width: 24,
-        height: 24,
-        borderRadius: 12,
-        backgroundColor: '#E2E8F0',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    stepDotOn: { backgroundColor: PRIMARY_DARK },
-    stepDotDone: { backgroundColor: SUCCESS },
-    stepDotText: { fontSize: 11, fontWeight: '800', color: MUTED },
-    stepDotTextOn: { color: '#FFF' },
-    stepLine: { width: 36, height: 3, backgroundColor: '#E2E8F0', marginHorizontal: 4, borderRadius: 2 },
-    stepLineOn: { backgroundColor: SUCCESS },
-    content: { padding: 20 },
-    introCard: {
-        backgroundColor: '#FFF',
-        borderRadius: 22,
-        padding: 24,
-        alignItems: 'center',
-        gap: 10,
-        marginBottom: 18,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    introIcon: {
-        width: 56,
-        height: 56,
-        borderRadius: 18,
-        backgroundColor: '#EFF6FF',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    introTitle: { fontSize: 20, fontWeight: '900', color: INK, textAlign: 'center' },
-    introSub: { fontSize: 14, color: MUTED, textAlign: 'center', lineHeight: 20 },
-    bigChoiceYes: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-        backgroundColor: SUCCESS,
-        borderRadius: 16,
-        paddingVertical: 16,
-        marginBottom: 10,
-    },
-    bigChoiceText: { color: '#FFF', fontWeight: '800', fontSize: 16 },
-    bigChoiceNo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-        backgroundColor: '#FFF',
-        borderRadius: 16,
-        paddingVertical: 16,
-        borderWidth: 1.5,
-        borderColor: '#FECACA',
-        marginBottom: 12,
-    },
-    bigChoiceNoText: { color: DANGER, fontWeight: '800', fontSize: 16 },
-    footerHint: { textAlign: 'center', color: '#94A3B8', fontSize: 12, fontWeight: '600', marginTop: 8, lineHeight: 17 },
-    toastOk: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: '#F0FDF4',
-        borderRadius: 12,
-        padding: 12,
-        marginBottom: 12,
-        borderWidth: 1,
-        borderColor: '#BBF7D0',
-    },
-    toastOkText: { color: SUCCESS, fontWeight: '700', fontSize: 13 },
-    progressCard: {
-        backgroundColor: '#FFF',
-        borderRadius: 18,
-        padding: 16,
-        marginBottom: 16,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    progressTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-    progressLabel: { fontSize: 13, fontWeight: '700', color: MUTED },
-    progressCount: { fontSize: 13, fontWeight: '900', color: PRIMARY_DARK },
-    progressTrack: { height: 8, backgroundColor: '#E2E8F0', borderRadius: 4, overflow: 'hidden', marginBottom: 10 },
-    progressFill: { height: '100%', backgroundColor: PRIMARY_DARK, borderRadius: 4 },
-    sectionLabel: { fontSize: 15, fontWeight: '900', color: INK, marginBottom: 10 },
-    hint: { fontSize: 13, color: MUTED, lineHeight: 18 },
-    peerCard: {
-        backgroundColor: '#FFF',
-        borderRadius: 22,
-        padding: 22,
-        alignItems: 'center',
-        marginBottom: 16,
-        gap: 8,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    peerName: { fontSize: 20, fontWeight: '900', color: INK },
-    peerCardHint: { fontSize: 13, color: MUTED, fontWeight: '600' },
-    peerRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        backgroundColor: '#FFF',
-        borderRadius: 16,
-        padding: 12,
-        marginBottom: 8,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    peerRowDone: { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' },
-    peerRowName: { fontSize: 15, fontWeight: '800', color: INK },
-    peerRowMeta: { fontSize: 12, color: MUTED, fontWeight: '600', marginTop: 2 },
-    peerRowMetaDone: { color: SUCCESS },
-    donePill: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: '#DCFCE7',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    ratePill: {
-        backgroundColor: '#EFF6FF',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 10,
-    },
-    ratePillText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 12 },
-    questionCard: {
-        flexDirection: 'row',
-        gap: 12,
-        backgroundColor: '#FFF',
-        borderRadius: 18,
-        padding: 16,
-        marginBottom: 12,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    qNum: {
-        width: 26,
-        height: 26,
-        borderRadius: 13,
-        backgroundColor: '#EFF6FF',
-        overflow: 'hidden',
-        textAlign: 'center',
-        lineHeight: 26,
-        fontSize: 13,
-        fontWeight: '900',
-        color: PRIMARY_DARK,
-    },
-    q: { fontSize: 15, fontWeight: '800', color: INK, marginBottom: 10 },
-    optionalHint: { fontSize: 12, color: '#94A3B8', fontWeight: '600', marginTop: -6, marginBottom: 8 },
-    row: { flexDirection: 'row', gap: 10 },
-    rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    choice: {
-        flex: 1,
-        backgroundColor: '#F8FAFC',
-        borderRadius: 14,
-        paddingVertical: 14,
-        alignItems: 'center',
-        borderWidth: 1.5,
-        borderColor: '#E2E8F0',
-    },
-    choiceYes: { backgroundColor: SUCCESS, borderColor: SUCCESS },
-    choiceNo: { backgroundColor: DANGER, borderColor: DANGER },
-    choiceText: { fontWeight: '800', color: MUTED },
-    choiceTextOn: { color: '#FFF' },
-    starsRow: { flexDirection: 'row', gap: 6, marginBottom: 6 },
-    starBtn: { padding: 2 },
-    starLabel: { fontSize: 13, fontWeight: '800', color: GOLD, marginTop: 4 },
-    starLabelMuted: { fontSize: 12, fontWeight: '600', color: '#94A3B8', marginTop: 4 },
-    chip: {
-        backgroundColor: '#F8FAFC',
-        borderRadius: 20,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    chipPos: { backgroundColor: SUCCESS, borderColor: SUCCESS },
-    chipNeg: { backgroundColor: DANGER, borderColor: DANGER },
-    chipText: { fontSize: 13, fontWeight: '700', color: '#475569' },
-    chipTextOn: { color: '#FFF' },
-    infoBanner: {
-        flexDirection: 'row',
-        gap: 8,
-        alignItems: 'flex-start',
-        backgroundColor: '#F8FAFC',
-        borderRadius: 12,
-        padding: 12,
-        marginBottom: 8,
-    },
-    infoBannerText: { flex: 1, fontSize: 13, color: MUTED, fontWeight: '600', lineHeight: 18 },
-    primaryBtn: {
-        marginTop: 16,
-        backgroundColor: PRIMARY_DARK,
-        borderRadius: 16,
-        paddingVertical: 16,
-        alignItems: 'center',
-    },
-    primaryBtnDisabled: { opacity: 0.45 },
-    primaryBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
-});
+function createRatePlanStyles(c: ThemeColors) {
+    const MUTED = c.textMuted;
+    const SURFACE = c.surface;
+    const BORDER = c.border;
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: c.backgroundAlt },
+        center: {
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            backgroundColor: c.backgroundAlt,
+        },
+        loadingText: { marginTop: 12, color: MUTED, fontWeight: '600' },
+        emptyIcon: {
+            width: 64,
+            height: 64,
+            borderRadius: 20,
+            backgroundColor: SURFACE,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 12,
+        },
+        empty: { color: MUTED, fontWeight: '600', marginBottom: 16, textAlign: 'center' },
+        header: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 16,
+            paddingBottom: 8,
+            gap: 12,
+        },
+        backBtn: {
+            width: 42,
+            height: 42,
+            borderRadius: 14,
+            backgroundColor: SURFACE,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 1,
+            borderColor: BORDER,
+        },
+        headerProgressWrap: { flex: 1, gap: 6 },
+        headerProgressLabel: { fontSize: 12, fontWeight: '800', color: MUTED, textAlign: 'right' },
+        headerProgressTrack: {
+            height: 6,
+            borderRadius: 999,
+            backgroundColor: c.surfaceSubtle,
+            overflow: 'hidden',
+        },
+        headerProgressFill: {
+            height: '100%',
+            borderRadius: 999,
+            backgroundColor: ACTION_BLUE,
+        },
+        content: { paddingHorizontal: 20, paddingTop: 4 },
+        hero: {
+            height: 220,
+            borderRadius: 24,
+            overflow: 'hidden',
+            marginBottom: 16,
+            backgroundColor: c.surfaceSubtle,
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.6)',
+        },
+        heroImg: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+        heroCopy: { flex: 1, justifyContent: 'flex-end', padding: 20 },
+        heroBadge: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            alignSelf: 'flex-start',
+            backgroundColor: 'rgba(255,255,255,0.18)',
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+            borderRadius: 999,
+            marginBottom: 10,
+        },
+        heroBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
+        heroTitle: { color: '#FFF', fontSize: 24, fontWeight: '900', lineHeight: 30 },
+        heroSub: { color: 'rgba(255,255,255,0.82)', fontSize: 13, fontWeight: '600', marginTop: 6 },
+        sheetCard: {
+            backgroundColor: SURFACE,
+            borderRadius: 22,
+            padding: 20,
+            marginBottom: 14,
+            borderWidth: 1,
+            borderColor: BORDER,
+            shadowColor: '#0F172A',
+            shadowOpacity: 0.06,
+            shadowRadius: 16,
+            shadowOffset: { width: 0, height: 8 },
+            elevation: 3,
+        },
+        sheetTitle: { fontSize: 22, fontWeight: '900', color: INK, marginBottom: 8, lineHeight: 28 },
+        sheetHint: { fontSize: 14, color: MUTED, lineHeight: 21, fontWeight: '600', marginBottom: 16 },
+        footerHint: {
+            fontSize: 12,
+            color: MUTED,
+            lineHeight: 18,
+            fontWeight: '600',
+            textAlign: 'center',
+            marginTop: 8,
+            marginBottom: 4,
+        },
+        choiceRow: { flexDirection: 'row', gap: 10 },
+        choiceBtn: {
+            flex: 1,
+            minHeight: 56,
+            borderRadius: 16,
+            borderWidth: 1.5,
+            borderColor: BORDER,
+            backgroundColor: c.surfaceSubtle,
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexDirection: 'row',
+            gap: 8,
+            paddingHorizontal: 10,
+        },
+        choiceBtnYes: { backgroundColor: ACTION_BLUE, borderColor: ACTION_BLUE },
+        choiceBtnNo: { backgroundColor: SURFACE },
+        choiceBtnPressed: { opacity: 0.86, transform: [{ scale: 0.98 }] },
+        choiceBtnText: { fontSize: 14, fontWeight: '800', color: INK },
+        choiceBtnTextOn: { fontSize: 14, fontWeight: '800', color: '#FFF' },
+        anonPill: {
+            alignSelf: 'center',
+            fontSize: 12,
+            fontWeight: '700',
+            color: MUTED,
+            marginBottom: 12,
+        },
+        anonPillInline: {
+            alignSelf: 'flex-start',
+            fontSize: 11,
+            fontWeight: '800',
+            color: ACTION_BLUE,
+            backgroundColor: c.primarySoft,
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+            borderRadius: 999,
+            overflow: 'hidden',
+            marginBottom: 14,
+        },
+        skipLink: { alignItems: 'center', paddingVertical: 16 },
+        undoText: { color: ACTION_BLUE, fontWeight: '700', fontSize: 14 },
+        skippedIcon: {
+            width: 56,
+            height: 56,
+            borderRadius: 18,
+            backgroundColor: c.surfaceSubtle,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 12,
+        },
+        search: {
+            backgroundColor: SURFACE,
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: BORDER,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            fontSize: 15,
+            fontWeight: '600',
+            color: INK,
+            marginBottom: 10,
+        },
+        searchResults: { marginBottom: 12 },
+        faceGrid: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            marginHorizontal: -8,
+        },
+        faceCell: {
+            width: '33.333%',
+            alignItems: 'center',
+            paddingHorizontal: 8,
+            marginBottom: 18,
+        },
+        faceRing: {
+            borderRadius: 999,
+            padding: 3,
+            borderWidth: 2,
+            borderColor: 'transparent',
+            position: 'relative',
+        },
+        faceRingOn: { borderColor: ACTION_BLUE },
+        faceCheck: {
+            position: 'absolute',
+            right: 2,
+            bottom: 2,
+            width: 24,
+            height: 24,
+            borderRadius: 12,
+            backgroundColor: ACTION_BLUE,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 2,
+            borderColor: SURFACE,
+        },
+        faceTapHint: {
+            position: 'absolute',
+            right: 2,
+            bottom: 2,
+            width: 24,
+            height: 24,
+            borderRadius: 12,
+            backgroundColor: INK,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 2,
+            borderColor: SURFACE,
+        },
+        faceName: { marginTop: 8, fontSize: 13, fontWeight: '800', color: INK, textAlign: 'center' },
+        faceStatus: { marginTop: 2, fontSize: 11, fontWeight: '700', color: MUTED, textAlign: 'center' },
+        faceStatusDone: { color: ACTION_BLUE },
+        faceMore: {
+            width: 76,
+            height: 76,
+            borderRadius: 38,
+            backgroundColor: c.surfaceSubtle,
+            borderWidth: 1,
+            borderColor: BORDER,
+            alignItems: 'center',
+            justifyContent: 'center',
+        },
+        faceMoreText: { fontSize: 16, fontWeight: '800', color: MUTED },
+        personHero: {
+            alignItems: 'center',
+            marginBottom: 16,
+            gap: 8,
+        },
+        peerName: { fontSize: 24, fontWeight: '900', color: INK, textAlign: 'center' },
+        peerRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            backgroundColor: SURFACE,
+            borderRadius: 16,
+            padding: 12,
+            marginBottom: 8,
+            borderWidth: 1,
+            borderColor: BORDER,
+        },
+        peerRowName: { fontSize: 15, fontWeight: '800', color: INK },
+        q: { fontSize: 15, fontWeight: '800', color: INK, marginBottom: 10 },
+        rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+        starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
+        starBtn: { padding: 2 },
+        starLabel: { fontSize: 13, fontWeight: '800', color: GOLD, marginTop: 4, textAlign: 'center' },
+        chip: {
+            backgroundColor: c.surfaceSubtle,
+            borderRadius: 20,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            borderWidth: 1,
+            borderColor: BORDER,
+        },
+        chipPos: { backgroundColor: ACTION_BLUE, borderColor: ACTION_BLUE },
+        chipNeg: { backgroundColor: c.danger, borderColor: c.danger },
+        chipText: { fontSize: 13, fontWeight: '700', color: MUTED },
+        chipTextOn: { color: '#FFF' },
+        primaryBtn: {
+            marginTop: 4,
+            borderRadius: 16,
+            paddingVertical: 16,
+            alignItems: 'center',
+            backgroundColor: ACTION_BLUE,
+        },
+        primaryBtnDisabled: { opacity: 0.45 },
+        primaryBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
+        savedBurst: {
+            width: 56,
+            height: 56,
+            borderRadius: 18,
+            backgroundColor: '#FEF3C7',
+            alignItems: 'center',
+            justifyContent: 'center',
+            alignSelf: 'center',
+            marginBottom: 12,
+        },
+    });
+}

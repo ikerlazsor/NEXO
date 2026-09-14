@@ -12,19 +12,25 @@ import { flushChatOutbox } from '../lib/chatOutbox';
 import { getMutedPlanChatIds, syncPlanChatMutesFromServer } from '../lib/chatMute';
 import { getUnreadChatCount, subscribeChatUnread } from '../lib/chatUnread';
 import { resolveDeepLinkUrl } from '../lib/deepLinks';
+import { hapticMedium } from '../lib/haptics';
+import { presentInAppToast } from '../lib/inAppToast';
 import { getIsOnline, subscribeNetwork } from '../lib/network';
 import {
     getProfileNotificationCount,
     subscribeProfileNotifications,
 } from '../lib/notifications';
+import { dismissPushFromPayload } from '../lib/presentedPush';
 import { syncNotificationCategoryPrefsFromServer } from '../lib/notificationPrefs';
 import {
+    bootstrapPushForUser,
+    normalizePushData,
     registerPushToken,
     resolvePushNavigation,
     schedulePlanLifecycleReminders,
     syncPushPreferenceFromServer,
     unregisterPushToken,
 } from '../lib/push';
+import { warmPushDestination } from '../lib/pushWarm';
 import { getPendingRatingPlans } from '../lib/ratings';
 import { supabase } from '../lib/supabase';
 
@@ -40,7 +46,8 @@ async function syncAppBadge(userId: string) {
     }
 }
 
-function shouldSuppressForeground(data: Record<string, unknown> | undefined): boolean {
+function shouldSuppressForeground(raw: Record<string, unknown> | undefined): boolean {
+    const data = normalizePushData(raw);
     if (!data) return false;
     const planId = data.planId ? String(data.planId) : '';
     const otherUserId = data.otherUserId ? String(data.otherUserId) : '';
@@ -70,8 +77,9 @@ function shouldSuppressForeground(data: Record<string, unknown> | undefined): bo
 
 /**
  * Token push, deep links, outbox, recordatorios, badge = chats + acciones pendientes.
+ * `ready` evita pedir permiso durante onboarding / email no verificado.
  */
-export function PushBootstrap({ userId }: { userId: string | null }) {
+export function PushBootstrap({ userId, ready = true }: { userId: string | null; ready?: boolean }) {
     const router = useRouter();
     const handledRef = useRef<string | null>(null);
     const handledUrlRef = useRef<string | null>(null);
@@ -107,6 +115,15 @@ export function PushBootstrap({ userId }: { userId: string | null }) {
                     }
                 }
 
+                if (AppState.currentState === 'active') {
+                    return {
+                        shouldShowBanner: false,
+                        shouldShowList: false,
+                        shouldPlaySound: false,
+                        shouldSetBadge: true,
+                    };
+                }
+
                 return {
                     shouldShowBanner: true,
                     shouldShowList: true,
@@ -124,12 +141,13 @@ export function PushBootstrap({ userId }: { userId: string | null }) {
             void Notifications.setBadgeCountAsync(0).catch(() => {});
             return;
         }
+        if (!ready) return;
 
         void (async () => {
             const enabled = await syncPushPreferenceFromServer(userId);
             await syncNotificationCategoryPrefsFromServer(userId);
             await syncPlanChatMutesFromServer(userId);
-            if (enabled) await registerPushToken(userId);
+            if (enabled) await bootstrapPushForUser(userId);
             await syncAppBadge(userId);
         })();
 
@@ -156,6 +174,7 @@ export function PushBootstrap({ userId }: { userId: string | null }) {
 
         void (async () => {
             try {
+                await new Promise<void>((r) => setTimeout(r, 80));
                 const pending = await getPendingRatingPlans(userId);
                 for (const plan of pending) {
                     await schedulePlanLifecycleReminders({
@@ -163,16 +182,21 @@ export function PushBootstrap({ userId }: { userId: string | null }) {
                         planTitle: plan.titulo,
                         fechaEvento: plan.fecha_evento,
                     });
+                    await new Promise<void>((r) => setTimeout(r, 40));
                 }
 
+                const nowIso = new Date().toISOString();
                 const { data: parts } = await supabase
                     .from('participantes')
                     .select('plan_id, planes(id, titulo, fecha_evento, categoria, nombre_ubicacion)')
                     .eq('usuario_id', userId)
-                    .eq('estado', 'aceptado');
+                    .eq('estado', 'aceptado')
+                    .limit(40);
                 for (const row of parts ?? []) {
                     const p = Array.isArray(row.planes) ? row.planes[0] : row.planes;
                     if (!p?.id) continue;
+                    const eventAt = p.fecha_evento ? new Date(p.fecha_evento).getTime() : 0;
+                    if (eventAt && eventAt < Date.parse(nowIso) - 6 * 60 * 60 * 1000) continue;
                     await schedulePlanLifecycleReminders({
                         planId: p.id,
                         planTitle: p.titulo,
@@ -180,6 +204,7 @@ export function PushBootstrap({ userId }: { userId: string | null }) {
                         categoria: p.categoria,
                         locationName: (p as { nombre_ubicacion?: string }).nombre_ubicacion,
                     });
+                    await new Promise<void>((r) => setTimeout(r, 40));
                 }
             } catch {
                 /* ignore */
@@ -192,36 +217,88 @@ export function PushBootstrap({ userId }: { userId: string | null }) {
             unsubUnread();
             unsubNotif();
         };
-    }, [userId]);
+    }, [userId, ready]);
 
     useEffect(() => {
         if (Platform.OS === 'web') return;
 
-        const go = (data: Record<string, unknown> | undefined) => {
+        const go = (raw: Record<string, unknown> | undefined) => {
+            const data = normalizePushData(raw);
             const target = resolvePushNavigation(data);
             if (!target) return;
-            // Pequeño defer: al cold-start el router a veces aún no está listo.
-            requestAnimationFrame(() => {
-                router.push(target.href as never);
-            });
+            // Navegar YA; calentar en paralelo (antes se esperaba warm → freeze / destino perdido).
+            let tries = 0;
+            const attempt = () => {
+                tries += 1;
+                try {
+                    router.push(target.href as never);
+                } catch {
+                    if (tries < 8) setTimeout(attempt, 140 * tries);
+                }
+            };
+            attempt();
+            void warmPushDestination(data);
         };
 
-        const subRecv = Notifications.addNotificationResponseReceivedListener((response) => {
-            const id = response.notification.request.identifier;
-            if (handledRef.current === id) return;
-            handledRef.current = id;
-            go(response.notification.request.content.data as Record<string, unknown>);
-        });
-
-        void Notifications.getLastNotificationResponseAsync().then((response) => {
+        const handleResponse = (response: Notifications.NotificationResponse | null | undefined) => {
             if (!response) return;
             const id = response.notification.request.identifier;
             if (handledRef.current === id) return;
             handledRef.current = id;
-            go(response.notification.request.content.data as Record<string, unknown>);
+            const data = response.notification.request.content.data as Record<string, unknown>;
+            dismissPushFromPayload(data);
+            void Notifications.dismissNotificationAsync(id).catch(() => {});
+            // Evita re-navegar en el siguiente cold start con la misma respuesta.
+            const clearLast = (
+                Notifications as typeof Notifications & {
+                    clearLastNotificationResponseAsync?: () => Promise<void>;
+                }
+            ).clearLastNotificationResponseAsync;
+            if (typeof clearLast === 'function') {
+                void clearLast().catch(() => {});
+            }
+            go(data);
+        };
+
+        const subRecv = Notifications.addNotificationResponseReceivedListener(handleResponse);
+
+        const subShown = Notifications.addNotificationReceivedListener((notification) => {
+            const content = notification.request.content;
+            const data = normalizePushData(
+                content.data as Record<string, unknown> | undefined,
+            );
+            // Calentar destino en cuanto llega la noti (antes de que el usuario pulse).
+            if (data) void warmPushDestination(data);
+            if (AppState.currentState !== 'active') return;
+            if (shouldSuppressForeground(data)) return;
+            const planId = data?.planId ? String(data.planId) : '';
+            const screen = String(data?.screen ?? '');
+            const type = String(data?.type ?? '');
+            const title = String(content.title ?? '').trim();
+            const body = String(content.body ?? '').trim();
+            if (!title && !body) return;
+            void (async () => {
+                if (planId && (screen === 'chat' || type === 'plan_message')) {
+                    const muted = await getMutedPlanChatIds();
+                    if (muted.includes(planId)) return;
+                }
+                hapticMedium();
+                presentInAppToast({
+                    id: notification.request.identifier,
+                    title: title || 'Nexo!',
+                    body,
+                    avatarUrl: data?.avatarUrl ? String(data.avatarUrl) : undefined,
+                    data,
+                });
+            })();
         });
 
-        return () => subRecv.remove();
+        void Notifications.getLastNotificationResponseAsync().then(handleResponse);
+
+        return () => {
+            subRecv.remove();
+            subShown.remove();
+        };
     }, [router]);
 
     useEffect(() => {

@@ -2,11 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { Text, TouchableOpacity, View } from "react-native";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { useT } from "../../lib/i18n";
-import { styles } from "./planDetailStyles";
+import { createPlanDetailStyles } from "./planDetailStyles";
+import { useThemedStyles } from "../../lib/appTheme";
 import type { Participant } from "./types";
 
 const FRIEND = "#10B981";
-const ACQUAINTANCE = "#7C3AED";
+const ACQUAINTANCE = "#2563EB";
 
 export function PersonBubble({
   person,
@@ -24,6 +25,7 @@ export function PersonBubble({
   size?: number;
 }) {
   const { t, lang } = useT();
+  const styles = useThemedStyles(createPlanDetailStyles);
   const showAcquaintance = !!isAcquaintance && !isFriend;
   return (
     <TouchableOpacity

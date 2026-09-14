@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const PREFIX = '@nexo_disk:';
-const MAX_PERSISTED_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_PERSISTED_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Persiste JSON para sobrevivir a un cold start (p. ej. feed offline). */
 export async function diskSet(key: string, value: unknown): Promise<void> {

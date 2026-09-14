@@ -1,12 +1,21 @@
 import {
-    Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams,
-    useRouter } from 'expo-router';
-import { useEffect,
+    Ionicons
+} from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import {
+    useLocalSearchParams,
+    useRouter
+} from 'expo-router';
+import {
+    useEffect,
     useRef,
-    useState } from 'react';
+    useState
+} from 'react';
 import {
     ActivityIndicator,
+    Dimensions,
+    Image,
+    Keyboard,
     KeyboardAvoidingView,
     Platform,
     Pressable,
@@ -18,37 +27,47 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { Alert } from '../lib/nexoAlert';
-import DateTimePickerModal from "react-native-modal-datetime-picker";
 import type MapView from 'react-native-maps';
+import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { InvitePeopleSheet, type InviteProfile } from '../components/InvitePeopleSheet';
 import { PlanCoverPicker } from '../components/PlanCoverPicker';
 import { PlanLocationPicker } from '../components/PlanLocationPicker';
-import { InvitePeopleSheet, type InviteProfile } from '../components/InvitePeopleSheet';
-import { isLocationInEurope } from '../lib/geo';
-import { useT } from '../lib/i18n';
+import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { getAuthUser } from '../lib/auth';
-import { FEED_CACHE_KEY } from '../lib/feedCache';
-import { markFeedNeedsRefresh } from '../lib/feedReload';
-import { hapticError, hapticMedium, hapticSelection, hapticSuccess, hapticToggle } from '../lib/haptics';
-import { canCreateMorePlans, MAX_ACTIVE_PLANS } from '../lib/planLimits';
-import { invalidatePlanMembershipCaches } from '../lib/screenCaches';
-import { cacheInvalidate } from '../lib/ttlCache';
-import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../lib/planInvites';
-import { moderatePlanTitle, type TitleModerationReason } from '../lib/titleModeration';
+import { useAuthSession } from '../lib/authSession';
 import {
+    COVERS_PER_SUB,
     MAIN_CATEGORIES,
+    MAIN_CATEGORY_COLORS,
     SUBCATEGORIES,
     SUBCATEGORY_ICONS,
+    defaultMaxParticipants,
     encodeCoverImageKey,
     getCoverImages,
     getPlanCategoryDisplay,
     resolvePlanCategories,
     type MainCategoryId,
 } from '../lib/categories';
-import type { Genero } from '../lib/profileFields';
-import { supabase } from '../lib/supabase';
+import { FEED_CACHE_KEY } from '../lib/feedCache';
+import { injectOptimisticFeedPlan, markFeedNeedsRefresh } from '../lib/feedReload';
+import { hapticError, hapticMedium, hapticSelection, hapticSuccess, hapticToggle } from '../lib/haptics';
+import { useT } from '../lib/i18n';
+import { broadcastPlanMembership } from '../lib/membershipBroadcast';
+import { Alert } from '../lib/nexoAlert';
+import { MAX_ORGANIZER_COVERS, uploadOrganizerCover } from '../lib/planCovers';
+import { cancelPlanInvite, getPlanPendingInvitees, sendPlanInvite } from '../lib/planInvites';
+import { canCreateMorePlans, maxActivePlansFor } from '../lib/planLimits';
+import { scheduleCoverPrefetch } from '../lib/prefetchCovers';
 import { getMyProfile } from '../lib/profileData';
+import type { Genero } from '../lib/profileFields';
+import { PLAN_DESCRIPTION_MAX } from '../lib/profileSocial';
+import { notifyPlanUpdated, schedulePlanLifecycleReminders } from '../lib/push';
+import { invalidatePlanMembershipCaches } from '../lib/screenCaches';
+import { supabase } from '../lib/supabase';
+import { moderatePlanTitle, type TitleModerationReason } from '../lib/titleModeration';
+import { cacheInvalidate } from '../lib/ttlCache';
+import { type ThemeColors } from '../theme';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -58,9 +77,12 @@ const SOLO_PINK = '#DB2777';
 const SOLO_PINK_LIGHT = '#FDF2F8';
 
 const MAX_PEOPLE = 25;
+const MAX_PEOPLE_ORGANIZER = 800;
 const MIN_PEOPLE = 2;
 /** No se puede crear un plan con menos de 30 minutos de margen. */
 const MIN_LEAD_MS = 30 * 60 * 1000;
+/** Hora por defecto al abrir el timer (+1 h). El mínimo sigue siendo 30 min. */
+const DEFAULT_LEAD_MS = 60 * 60 * 1000;
 
 type PlanVisibility = 'public' | 'friends' | 'private';
 
@@ -68,14 +90,37 @@ function minPlanDate(): Date {
     return new Date(Date.now() + MIN_LEAD_MS);
 }
 
+function defaultPlanDate(): Date {
+    return new Date(Date.now() + DEFAULT_LEAD_MS);
+}
+
 export default function CreatePlanScreen() {
     const router = useRouter();
-    const { t } = useT();
+    const { t, lang } = useT();
+    const { colors, scheme } = useAppTheme();
+    const styles = useThemedStyles(createPlanFormStyles);
+    const { isGuest, requireAccount } = useAuthSession();
+
+    useEffect(() => {
+        if (!isGuest) return;
+        requireAccount({ type: 'create-plan' });
+        if (router.canGoBack()) router.back();
+        else router.replace('/(tabs)');
+    }, [isGuest, requireAccount, router]);
+
+    useEffect(() => {
+        scheduleCoverPrefetch();
+    }, []);
     const { editId, duplicateId } = useLocalSearchParams<{ editId?: string; duplicateId?: string }>();
     const sourcePlanId = editId ? String(editId) : duplicateId ? String(duplicateId) : null;
     const isDuplicate = !!duplicateId && !editId;
     const mapRef = useRef<MapView>(null);
     const scrollRef = useRef<ScrollView>(null);
+    const titleFieldRef = useRef<View>(null);
+    const descFieldRef = useRef<View>(null);
+    const focusedFieldRef = useRef<'title' | 'desc' | null>(null);
+    const scrollYRef = useRef(0);
+    const keyboardHeightRef = useRef(0);
     const publishingRef = useRef(false);
     const mountedRef = useRef(true);
     const [loading, setLoading] = useState(false);
@@ -83,12 +128,57 @@ export default function CreatePlanScreen() {
     const [formBanner, setFormBanner] = useState<string | null>(null);
     const [limitBlocked, setLimitBlocked] = useState(false);
     const [limitChecking, setLimitChecking] = useState(() => !editId);
+    const [isOrganizer, setIsOrganizer] = useState(false);
+    const [customCovers, setCustomCovers] = useState<string[]>([]);
+    const [coverMode, setCoverMode] = useState<'preset' | 'custom'>('preset');
+    const holdDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const holdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const holdingPeopleRef = useRef(false);
+    const peopleTouchRef = useRef({ x: 0, y: 0 });
 
     useEffect(() => {
         mountedRef.current = true;
         return () => {
             mountedRef.current = false;
             publishingRef.current = false;
+            if (holdDelayRef.current) clearTimeout(holdDelayRef.current);
+            if (holdTimerRef.current) clearInterval(holdTimerRef.current);
+        };
+    }, []);
+
+    const revealFocusedField = () => {
+        const field = focusedFieldRef.current;
+        const node = field === 'title'
+            ? titleFieldRef.current
+            : field === 'desc'
+                ? descFieldRef.current
+                : null;
+        if (!node || !scrollRef.current) return;
+        node.measureInWindow((_x, winY, _w, h) => {
+            const screenH = Dimensions.get('window').height;
+            const footerH = 96;
+            const kb = Platform.OS === 'ios' ? keyboardHeightRef.current : 0;
+            const visibleBottom = screenH - kb - footerH;
+            const overflow = winY + h - visibleBottom;
+            if (overflow <= 8 && winY >= 72) return;
+            scrollRef.current?.scrollTo({
+                y: Math.max(0, scrollYRef.current + overflow + 20),
+                animated: true,
+            });
+        });
+    };
+
+    useEffect(() => {
+        const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+            keyboardHeightRef.current = e.endCoordinates.height;
+            revealFocusedField();
+        });
+        const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+            keyboardHeightRef.current = 0;
+        });
+        return () => {
+            showSub.remove();
+            hideSub.remove();
         };
     }, []);
 
@@ -105,7 +195,10 @@ export default function CreatePlanScreen() {
             try {
                 const user = await getAuthUser();
                 if (!user || cancelled) return;
-                const check = await canCreateMorePlans(user.id);
+                const profile = await getMyProfile();
+                const organizer = profile.data?.es_organizador === true;
+                if (!cancelled && mountedRef.current) setIsOrganizer(organizer);
+                const check = await canCreateMorePlans(user.id, maxActivePlansFor(organizer));
                 if (cancelled || !mountedRef.current) return;
                 if (!check.allowed) {
                     setLimitBlocked(true);
@@ -131,6 +224,20 @@ export default function CreatePlanScreen() {
         };
     }, [editId, t]);
 
+    useEffect(() => {
+        let cancelled = false;
+        void getMyProfile().then((profile) => {
+            if (!cancelled) setIsOrganizer(profile.data?.es_organizador === true);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (isOrganizer) setVisibility('public');
+    }, [isOrganizer]);
+
     const [title, setTitle] = useState('');
     /** Resultado de moderación del título (mientras rellena el resto del formulario). */
     const [titleCheck, setTitleCheck] = useState<{
@@ -141,9 +248,11 @@ export default function CreatePlanScreen() {
     const titleCheckGen = useRef(0);
     const [category, setCategory] = useState<MainCategoryId>(MAIN_CATEGORIES[0]);
     const [subcategory, setSubcategory] = useState<string>(SUBCATEGORIES[MAIN_CATEGORIES[0]][0]);
-    const [coverIndex, setCoverIndex] = useState(0);
+    const [coverIndex, setCoverIndex] = useState(() => Math.floor(Math.random() * COVERS_PER_SUB));
     const categoryImages = getCoverImages(category, subcategory);
-    const [maxPeople, setMaxPeople] = useState(5);
+    const [maxPeople, setMaxPeople] = useState(() =>
+        defaultMaxParticipants(MAIN_CATEGORIES[0], SUBCATEGORIES[MAIN_CATEGORIES[0]][0]),
+    );
     const [description, setDescription] = useState('');
     const [requiereAprobacion, setRequiereAprobacion] = useState(false);
     const [soloChicas, setSoloChicas] = useState(false);
@@ -154,8 +263,13 @@ export default function CreatePlanScreen() {
     const [userGenero, setUserGenero] = useState<Genero | null>(null);
     const [joinedCount, setJoinedCount] = useState(0);
     const [originalEventMs, setOriginalEventMs] = useState<number | null>(null);
+    const [originalPlace, setOriginalPlace] = useState<{
+        address: string;
+        latitude: number;
+        longitude: number;
+    } | null>(null);
 
-    const [date, setDate] = useState(() => minPlanDate());
+    const [date, setDate] = useState(() => defaultPlanDate());
     const [isPickerVisible, setPickerVisible] = useState(false); 
     const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
 
@@ -175,9 +289,10 @@ export default function CreatePlanScreen() {
     });
     /** El pin de Madrid es solo vista inicial; hay que elegir ubicación de verdad. */
     const [locationPicked, setLocationPicked] = useState(false);
+    const [showAdvanced, setShowAdvanced] = useState(() => !!editId);
 
     useEffect(() => {
-        supabase.auth.getUser().then(async ({ data: { user } }) => {
+        void getAuthUser().then(async (user) => {
             if (!user) return;
             setCurrentUserId(user.id);
             const { data } = await getMyProfile();
@@ -209,7 +324,7 @@ export default function CreatePlanScreen() {
                 const joined = editId ? (partsRes.data?.length ?? 0) : 0;
                 setJoinedCount(joined);
                 const loadedMax = Math.min(
-                    MAX_PEOPLE,
+                    isOrganizer ? MAX_PEOPLE_ORGANIZER : MAX_PEOPLE,
                     Math.max(Math.max(MIN_PEOPLE, joined || MIN_PEOPLE), data.maximo_participantes ?? 5),
                 );
                 setMaxPeople(loadedMax);
@@ -238,7 +353,7 @@ export default function CreatePlanScreen() {
                 }
                 const eventDate = new Date(data.fecha_evento);
                 if (isDuplicate || eventDate.getTime() < Date.now() + MIN_LEAD_MS) {
-                    setDate(minPlanDate());
+                    setDate(defaultPlanDate());
                     setOriginalEventMs(null);
                 } else {
                     setDate(eventDate);
@@ -249,12 +364,38 @@ export default function CreatePlanScreen() {
                     longitude: data.longitud || -3.703790,
                     address: data.nombre_ubicacion ?? '',
                 });
-                setLocationPicked(true);
+                if (editId) {
+                    setOriginalPlace({
+                        address: String(data.nombre_ubicacion ?? '').trim(),
+                        latitude: Number(data.latitud) || 40.416775,
+                        longitude: Number(data.longitud) || -3.703790,
+                    });
+                } else {
+                    setOriginalPlace(null);
+                }
+                setLocationPicked(
+                    Number.isFinite(Number(data.latitud))
+                    && Number.isFinite(Number(data.longitud))
+                    && String(data.nombre_ubicacion || '').trim().length > 0,
+                );
 
+                const extras = Array.isArray(data.imagenes_url)
+                    ? (data.imagenes_url as string[]).filter((u): u is string => typeof u === 'string' && u.trim().length > 0)
+                    : [];
                 const img = String(data.imagen_url || '');
                 if (img.startsWith('nexo_cover:')) {
                     const idx = parseInt(img.split(':')[3] || '0', 10);
                     setCoverIndex(Number.isFinite(idx) ? idx : 0);
+                }
+                const custom = extras.filter((u) => u.startsWith('http'));
+                if (custom.length > 0) {
+                    setCustomCovers(custom);
+                    setCoverMode('custom');
+                } else if (img.startsWith('http')) {
+                    setCustomCovers([img]);
+                    setCoverMode('custom');
+                } else {
+                    setCoverMode('preset');
                 }
             }
         };
@@ -263,8 +404,18 @@ export default function CreatePlanScreen() {
 
     useEffect(() => {
         if (!editId && !isDuplicate) {
-            setCoverIndex(0);
+            const covers = getCoverImages(category, subcategory);
+            const n = Math.max(1, covers.length);
+            setCoverIndex(Math.floor(Math.random() * n));
         }
+    }, [category, subcategory, editId, isDuplicate]);
+
+    const peopleCap = isOrganizer ? MAX_PEOPLE_ORGANIZER : MAX_PEOPLE;
+    const minEditableMax = Math.max(MIN_PEOPLE, joinedCount || 0);
+
+    useEffect(() => {
+        if (editId || isDuplicate) return;
+        setMaxPeople(Math.max(MIN_PEOPLE, defaultMaxParticipants(category, subcategory)));
     }, [category, subcategory, editId, isDuplicate]);
 
     // Revisar título 3 s después de dejar de escribir (nunca al instante)
@@ -308,31 +459,50 @@ export default function CreatePlanScreen() {
         hapticSelection();
         setCategory(main);
         setSubcategory(SUBCATEGORIES[main][0]);
-        setCoverIndex(0);
     };
 
     const selectSubcategory = (sub: string) => {
         if (nearStartLock) return;
         hapticSelection();
         setSubcategory(sub);
-        setCoverIndex(0);
     };
 
     const categoryLabel = getPlanCategoryDisplay({ categoria: category, tipo_deporte: subcategory }, t);
 
-    const minEditableMax = Math.max(MIN_PEOPLE, joinedCount || 0);
+    const applyPeopleDelta = (dir: 1 | -1, step = 1) => {
+        setMaxPeople((n) => {
+            if (dir === 1) return Math.min(peopleCap, n + step);
+            return Math.max(minEditableMax, n - step);
+        });
+    };
 
-    const incrementMax = () => {
-        if (maxPeople < MAX_PEOPLE) {
-            hapticSelection();
-            setMaxPeople(maxPeople + 1);
+    const stopHoldPeople = () => {
+        holdingPeopleRef.current = false;
+        if (holdDelayRef.current) {
+            clearTimeout(holdDelayRef.current);
+            holdDelayRef.current = null;
+        }
+        if (holdTimerRef.current) {
+            clearInterval(holdTimerRef.current);
+            holdTimerRef.current = null;
         }
     };
-    const decrementMax = () => {
-        if (maxPeople > minEditableMax) {
-            hapticSelection();
-            setMaxPeople(maxPeople - 1);
-        }
+
+    const startHoldPeople = (dir: 1 | -1) => {
+        if (dir === 1 && maxPeople >= peopleCap) return;
+        if (dir === -1 && maxPeople <= minEditableMax) return;
+        stopHoldPeople();
+        holdingPeopleRef.current = true;
+        hapticSelection();
+        applyPeopleDelta(dir);
+        holdDelayRef.current = setTimeout(() => {
+            if (!holdingPeopleRef.current) return;
+            let ticks = 0;
+            holdTimerRef.current = setInterval(() => {
+                ticks += 1;
+                applyPeopleDelta(dir, ticks > 10 ? 2 : 1);
+            }, 170);
+        }, 480);
     };
 
     const spotsHint = t('createplan.spotsHintMax', { max: maxPeople });
@@ -357,6 +527,25 @@ export default function CreatePlanScreen() {
     // Guardar clave estable del asset (no URI local)
     const getCoverImageKey = () => encodeCoverImageKey(category, subcategory, coverIndex);
 
+    const addCustomCover = async () => {
+        if (customCovers.length >= MAX_ORGANIZER_COVERS) return;
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) return;
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            quality: 0.7,
+            allowsMultipleSelection: true,
+            selectionLimit: MAX_ORGANIZER_COVERS - customCovers.length,
+        });
+        if (result.canceled) return;
+        const next = result.assets.map((a) => a.uri).filter(Boolean);
+        setCustomCovers((prev) => [...prev, ...next].slice(0, MAX_ORGANIZER_COVERS));
+    };
+
+    const removeCustomCover = (uri: string) => {
+        setCustomCovers((prev) => prev.filter((item) => item !== uri));
+    };
+
     const showFormError = (message: string) => {
         hapticError();
         setFormBanner(message);
@@ -369,12 +558,16 @@ export default function CreatePlanScreen() {
         hapticMedium();
 
         if (!editId && limitBlocked) {
-            showFormError(t('createplan.planLimitReached', { max: MAX_ACTIVE_PLANS }));
+            showFormError(t('createplan.planLimitReached', { max: maxActivePlansFor(isOrganizer) }));
             return;
         }
 
         if (!title.trim() || !description.trim()) {
             showFormError(t('createplan.incompleteMsg'));
+            return;
+        }
+        if (description.trim().length > PLAN_DESCRIPTION_MAX) {
+            showFormError(t('createplan.descTooLong', { max: PLAN_DESCRIPTION_MAX }));
             return;
         }
         if (date.getTime() < minPlanDate().getTime()) {
@@ -387,10 +580,6 @@ export default function CreatePlanScreen() {
         }
         if (editId && maxPeople < joinedCount) {
             showFormError(t('createplan.maxBelowJoined', { n: joinedCount }));
-            return;
-        }
-        if (!isLocationInEurope(location.latitude, location.longitude)) {
-            showFormError(t('createplan.locationEuropeOnly'));
             return;
         }
         const locationAddress = location.address.trim();
@@ -406,6 +595,10 @@ export default function CreatePlanScreen() {
         }
         if (visibility === 'private' && pendingInvites.length < 1) {
             showFormError(t('createplan.needInvite'));
+            return;
+        }
+        if (isOrganizer && coverMode === 'custom' && customCovers.length < 1) {
+            showFormError(t('createplan.coverNeedPhoto'));
             return;
         }
 
@@ -435,7 +628,7 @@ export default function CreatePlanScreen() {
 
             // Límite ANTES de insertar (si falla el conteo, no publica a ciegas).
             if (!editId) {
-                const limitCheck = await canCreateMorePlans(user.id);
+                const limitCheck = await canCreateMorePlans(user.id, maxActivePlansFor(isOrganizer));
                 if (!mountedRef.current) return;
                 if (limitCheck.error) {
                     setLimitBlocked(true);
@@ -449,20 +642,49 @@ export default function CreatePlanScreen() {
                 }
             }
 
-            const imageKey = getCoverImageKey();
+            let imageKey = getCoverImageKey();
+            let uploadedCovers: string[] = [];
+            if (isOrganizer && coverMode === 'custom' && customCovers.length > 0) {
+                const selected = customCovers.slice(0, MAX_ORGANIZER_COVERS);
+                for (const uri of selected) {
+                    if (uri.startsWith('http')) {
+                        uploadedCovers.push(uri);
+                        continue;
+                    }
+                    const url = await uploadOrganizerCover(user.id, uri);
+                    if (url) uploadedCovers.push(url);
+                }
+                if (uploadedCovers.length === 0) {
+                    showFormError(t('createplan.uploadError'));
+                    return;
+                }
+                if (uploadedCovers.length < selected.length) {
+                    showFormError(
+                        t('createplan.uploadPartialError', {
+                            ok: uploadedCovers.length,
+                            total: selected.length,
+                        }),
+                    );
+                    return;
+                }
+                imageKey = uploadedCovers[0];
+            }
+
+            const visibilityForSave = isOrganizer ? 'public' : visibility;
 
             const planPayload: Record<string, unknown> = {
                 descripcion: description.trim(),
                 nombre_ubicacion: locationAddress,
                 maximo_participantes: maxPeople,
                 imagen_url: imageKey,
+                imagenes_url: isOrganizer && coverMode === 'custom' ? uploadedCovers : [],
                 fecha_evento: date.toISOString(),
                 latitud: location.latitude,
                 longitud: location.longitude,
                 requiere_aprobacion: requiereAprobacion,
                 solo_chicas: soloChicas,
-                solo_amigos: visibility === 'friends',
-                modo_privado: visibility === 'private',
+                solo_amigos: visibilityForSave === 'friends',
+                modo_privado: visibilityForSave === 'private',
             };
 
             if (!nearStartLock) {
@@ -486,16 +708,73 @@ export default function CreatePlanScreen() {
                 if (!mountedRef.current) return;
                 if (updateError) throw updateError;
 
-                if (visibility === 'private' && pendingInvites.length > 0) {
-                    await Promise.all(
-                        pendingInvites.map((p) => sendPlanInvite(String(editId), user.id, p.id, 'plan')),
-                    );
+                const invitees =
+                    visibility === 'private' && pendingInvites.length > 0 ? [...pendingInvites] : [];
+
+                const dateChanged =
+                    originalEventMs != null &&
+                    Math.abs(date.getTime() - originalEventMs) >= 60_000;
+                const placeChanged = !!(
+                    originalPlace &&
+                    (originalPlace.address.trim() !== locationAddress.trim() ||
+                        Math.abs(originalPlace.latitude - location.latitude) > 0.0002 ||
+                        Math.abs(originalPlace.longitude - location.longitude) > 0.0002)
+                );
+                if (dateChanged || placeChanged) {
+                    const timeLabel = date.toLocaleString(lang === 'en' ? 'en-GB' : 'es-ES', {
+                        weekday: 'short',
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                    });
+                    notifyPlanUpdated({
+                        planId: String(editId),
+                        changedDate: dateChanged,
+                        changedPlace: placeChanged,
+                        time: timeLabel,
+                        place: locationAddress,
+                    });
                 }
-                cacheInvalidate(FEED_CACHE_KEY);
-                invalidatePlanMembershipCaches(user.id);
-                markFeedNeedsRefresh();
+
                 hapticSuccess();
-                if (mountedRef.current) router.back();
+                setPickerVisible(false);
+                publishingRef.current = false;
+                if (mountedRef.current) setLoading(false);
+
+                const editedId = String(editId);
+                const editedTitle = title.trim();
+                const editedFecha = date.toISOString();
+                const editedCategory = category;
+                const editedPlace = locationAddress;
+                const uid = user.id;
+                const shouldReschedule = dateChanged || placeChanged;
+
+                try {
+                    if (router.canGoBack()) router.back();
+                    else router.replace('/(tabs)');
+                } catch {
+                    router.replace('/(tabs)');
+                }
+
+                setTimeout(() => {
+                    markFeedNeedsRefresh({ urgent: true });
+                    invalidatePlanMembershipCaches(uid);
+                    if (invitees.length > 0) {
+                        void Promise.all(
+                            invitees.map((p) => sendPlanInvite(editedId, uid, p.id, 'plan')),
+                        );
+                    }
+                    if (shouldReschedule) {
+                        void schedulePlanLifecycleReminders({
+                            planId: editedId,
+                            planTitle: editedTitle,
+                            fechaEvento: editedFecha,
+                            categoria: editedCategory,
+                            locationName: editedPlace,
+                        });
+                    }
+                }, 500);
                 return;
             }
 
@@ -507,27 +786,92 @@ export default function CreatePlanScreen() {
             if (createError) throw createError;
             if (!planData?.id) throw new Error('plan_insert_failed');
 
-            if (visibility === 'private' && pendingInvites.length > 0) {
-                await Promise.all(
-                    pendingInvites.map((p) => sendPlanInvite(planData.id, user.id, p.id, 'plan')),
-                );
-            }
+            const createdPlanId = String(planData.id);
+            const createdTitle = title.trim();
+            const createdFecha = date.toISOString();
+            const createdCategory = category;
+            const createdSub = subcategory;
+            const createdPlace = locationAddress;
+            const createdImage = imageKey;
+            const createdCovers =
+                isOrganizer && coverMode === 'custom' && uploadedCovers.length > 0
+                    ? uploadedCovers
+                    : [];
+            const createdMax = maxPeople;
+            const createdVisibility = visibilityForSave;
+            const uid = user.id;
+            const invitees =
+                visibility === 'private' && pendingInvites.length > 0 ? [...pendingInvites] : [];
 
-            void supabase.from('mensajes').insert({
-                plan_id: planData.id,
-                emisor_id: user.id,
-                contenido: t('chat.planCreated'),
-                tipo: 'texto',
+            // UI al instante: nada de awaits ni InteractionManager aquí (congelaban el modal).
+            hapticSuccess();
+            setPickerVisible(false);
+            publishingRef.current = false;
+            if (mountedRef.current) setLoading(false);
+
+            injectOptimisticFeedPlan({
+                id: createdPlanId,
+                titulo: createdTitle,
+                descripcion: description.trim(),
+                imagen_url: createdImage,
+                imagenes_url: createdCovers,
+                categoria: createdCategory,
+                tipo_deporte: createdSub,
+                fecha_evento: createdFecha,
+                nombre_ubicacion: createdPlace,
+                latitud: location.latitude,
+                longitud: location.longitude,
+                maximo_participantes: createdMax,
+                creador_id: uid,
+                requiere_aprobacion: requiereAprobacion,
+                solo_chicas: soloChicas,
+                solo_amigos: createdVisibility === 'friends',
+                modo_privado: createdVisibility === 'private',
+                joinedCount: isOrganizer ? 0 : 1,
+                participantsList: [],
+                host: null,
+                es_organizador: isOrganizer,
+            });
+            cacheInvalidate(FEED_CACHE_KEY);
+            broadcastPlanMembership(createdPlanId, isOrganizer ? 'none' : 'joined', {
+                userId: uid,
+                bumpJoined: !isOrganizer,
             });
 
-            cacheInvalidate(FEED_CACHE_KEY);
-            invalidatePlanMembershipCaches(user.id);
-            markFeedNeedsRefresh();
-            hapticSuccess();
-            if (mountedRef.current) {
-                // Siempre al feed (también si se abrió desde Mis planes).
-                router.replace('/');
+            // Salir al feed (replace evita el dismiss del modal + trabajo JS a la vez).
+            try {
+                router.replace('/(tabs)');
+            } catch {
+                if (router.canGoBack()) router.back();
+                else router.replace('/(tabs)');
             }
+
+            // Todo lo pesado DESPUÉS, con margen para que el modal ya esté cerrado.
+            setTimeout(() => {
+                markFeedNeedsRefresh({ urgent: true });
+                void (async () => {
+                    try {
+                        if (invitees.length > 0) {
+                            await Promise.all(
+                                invitees.map((p) => sendPlanInvite(createdPlanId, uid, p.id, 'plan')),
+                            );
+                        }
+                    } catch {
+                        /* best-effort */
+                    }
+                })();
+            }, 500);
+
+            setTimeout(() => {
+                void schedulePlanLifecycleReminders({
+                    planId: createdPlanId,
+                    planTitle: createdTitle,
+                    fechaEvento: createdFecha,
+                    categoria: createdCategory,
+                    locationName: createdPlace,
+                });
+            }, 1800);
+            return;
         } catch (error: unknown) {
             if (__DEV__) console.error(error);
             if (!mountedRef.current) return;
@@ -542,7 +886,11 @@ export default function CreatePlanScreen() {
 
     return (
         <SafeAreaView style={styles.safe} edges={['top', 'left', 'right', 'bottom']}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+            <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+                style={{ flex: 1 }}
+            >
                 <View style={styles.header}>
                     <Pressable
                         onPress={() => {
@@ -552,7 +900,7 @@ export default function CreatePlanScreen() {
                         }}
                         style={styles.closeBtn}
                     >
-                        <Ionicons name="close" size={28} color="#1E293B" />
+                        <Ionicons name="close" size={28} color={colors.text} />
                     </Pressable>
                     <Text style={styles.headerTitle}>
                         {editId
@@ -577,57 +925,73 @@ export default function CreatePlanScreen() {
                     ref={scrollRef}
                     contentContainerStyle={styles.scrollContent}
                     keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                    automaticallyAdjustKeyboardInsets
+                    onScroll={(e) => {
+                        scrollYRef.current = e.nativeEvent.contentOffset.y;
+                    }}
+                    scrollEventThrottle={16}
                 >
                     {nearStartLock ? (
                         <Text style={styles.lockHint}>{t('createplan.nearStartLock')}</Text>
                     ) : null}
 
-                    <PlanCoverPicker
-                        category={category}
-                        coverKey={`${category}-${subcategory}`}
-                        categoryLabel={categoryLabel}
-                        images={categoryImages}
-                        selectedIndex={coverIndex}
-                        onSelectIndex={setCoverIndex}
-                    />
-
                     {!nearStartLock ? (
                     <View style={styles.categorySection}>
                         <Text style={styles.sectionTitle}>{t('createplan.category')}</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catList}>
-                            {MAIN_CATEGORIES.map((cat) => (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catList} contentContainerStyle={styles.catListContent}>
+                            {MAIN_CATEGORIES.map((cat) => {
+                                const active = category === cat;
+                                const accent = MAIN_CATEGORY_COLORS[cat];
+                                return (
                                 <TouchableOpacity
                                     key={cat}
                                     onPress={() => selectMainCategory(cat)}
-                                    style={[styles.catBtn, category === cat && styles.catBtnActive]}
+                                    style={[
+                                        styles.catBtn,
+                                        active && { backgroundColor: accent, borderColor: accent },
+                                    ]}
+                                    activeOpacity={0.85}
                                 >
-                                    <Text style={[styles.catText, category === cat && styles.catTextActive]}>
+                                    <Text style={[styles.catText, active && styles.catTextActive]}>
                                         {t(`cat.main.${cat}`)}
                                     </Text>
                                 </TouchableOpacity>
-                            ))}
+                                );
+                            })}
                         </ScrollView>
 
-                        <Text style={[styles.label, { marginTop: 16, marginBottom: 10 }]}>
+                        <Text style={styles.subSectionLabel}>
                             {t('createplan.pickSubcategory')}
                         </Text>
                         <View style={styles.subGrid}>
-                            {SUBCATEGORIES[category].map((sub) => (
+                            {SUBCATEGORIES[category].map((sub) => {
+                                const accent = MAIN_CATEGORY_COLORS[category];
+                                const active = subcategory === sub;
+                                return (
                                 <TouchableOpacity
                                     key={sub}
                                     onPress={() => selectSubcategory(sub)}
-                                    style={[styles.subBtn, subcategory === sub && styles.subBtnActive]}
+                                    style={[
+                                        styles.subBtn,
+                                        { borderColor: active ? accent : `${accent}66` },
+                                        active && { backgroundColor: accent },
+                                    ]}
+                                    activeOpacity={0.85}
                                 >
-                                    <Ionicons
-                                        name={(SUBCATEGORY_ICONS[sub] ?? 'ellipse') as keyof typeof Ionicons.glyphMap}
-                                        size={18}
-                                        color={subcategory === sub ? '#FFF' : PRIMARY}
-                                    />
-                                    <Text style={[styles.subText, subcategory === sub && styles.subTextActive]}>
+                                    <View style={[styles.subIconWrap, active && styles.subIconWrapActive]}>
+                                        <Ionicons
+                                            name={(SUBCATEGORY_ICONS[sub] ?? 'ellipse') as keyof typeof Ionicons.glyphMap}
+                                            size={18}
+                                            color={active ? '#FFF' : accent}
+                                        />
+                                    </View>
+                                    <Text style={[styles.subText, { color: active ? '#FFF' : accent }, active && styles.subTextActive]}>
                                         {t(`cat.sub.${sub}`)}
                                     </Text>
                                 </TouchableOpacity>
-                            ))}
+                                );
+                            })}
                         </View>
                     </View>
                     ) : (
@@ -637,9 +1001,74 @@ export default function CreatePlanScreen() {
                         </View>
                     )}
 
-                    <View style={styles.section}>
-                        <View style={styles.labelRow}>
-                            <Text style={styles.label}>{t('createplan.planTitle')}</Text>
+                    {isOrganizer ? (
+                        <View style={styles.coverModeWrap}>
+                            <View style={styles.coverModeRow}>
+                                <TouchableOpacity
+                                    style={[styles.coverModeBtn, coverMode === 'preset' && styles.coverModeBtnOn]}
+                                    onPress={() => {
+                                        hapticSelection();
+                                        setCoverMode('preset');
+                                    }}
+                                    activeOpacity={0.85}
+                                >
+                                    <Text style={[styles.coverModeText, coverMode === 'preset' && styles.coverModeTextOn]}>
+                                        {t('createplan.coverModePick')}
+                                    </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.coverModeBtn, coverMode === 'custom' && styles.coverModeBtnOn]}
+                                    onPress={() => {
+                                        hapticSelection();
+                                        setCoverMode('custom');
+                                    }}
+                                    activeOpacity={0.85}
+                                >
+                                    <Text style={[styles.coverModeText, coverMode === 'custom' && styles.coverModeTextOn]}>
+                                        {t('createplan.coverModeUpload')}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    ) : null}
+
+                    {!isOrganizer || coverMode === 'preset' ? (
+                    <PlanCoverPicker
+                        category={category}
+                        coverKey={`${category}-${subcategory}`}
+                        categoryLabel={categoryLabel}
+                        images={categoryImages}
+                        selectedIndex={coverIndex}
+                        onSelectIndex={setCoverIndex}
+                        hideTitle={isOrganizer}
+                    />
+                    ) : (
+                        <View style={styles.orgCoverSection}>
+                            {customCovers.length > 0 ? (
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.orgCoverRow}>
+                                    {customCovers.map((uri, i) => (
+                                        <View key={`${uri}-${i}`} style={styles.orgCoverThumbWrap}>
+                                            <Image source={{ uri }} style={styles.orgCoverThumb} />
+                                            <Pressable style={styles.orgCoverRemove} onPress={() => removeCustomCover(uri)}>
+                                                <Ionicons name="close" size={14} color="#FFF" />
+                                            </Pressable>
+                                        </View>
+                                    ))}
+                                </ScrollView>
+                            ) : null}
+                            {customCovers.length < MAX_ORGANIZER_COVERS ? (
+                                <Pressable style={styles.orgCoverGalleryBtn} onPress={() => void addCustomCover()}>
+                                    <Ionicons name="images" size={22} color={PRIMARY_DARK} />
+                                    <Text style={styles.orgCoverGalleryText}>{t('createplan.coverGallery')}</Text>
+                                </Pressable>
+                            ) : null}
+                        </View>
+                    )}
+
+                    <View style={[styles.section, styles.copySection]}>
+                        <View ref={titleFieldRef} collapsable={false} style={styles.copyBlock}>
+                        <View style={styles.copyLabelRow}>
+                            <Text style={styles.fieldTitle}>{t('createplan.planTitle')}</Text>
                             {!nearStartLock ? (
                                 <Text style={[styles.charCount, title.length > 30 && {color: DANGER}]}>{title.length}/30</Text>
                             ) : null}
@@ -652,13 +1081,28 @@ export default function CreatePlanScreen() {
                             placeholder={t('createplan.titlePlaceholder')} 
                             placeholderTextColor={PLACEHOLDER_COLOR}
                             style={[
-                                styles.input,
+                                styles.fieldInput,
+                                styles.titleInput,
+                                !title.trim() && styles.titleInputEmpty,
                                 title.length > 30 && styles.inputError,
                                 titleCheck.status === 'bad' &&
                                     titleCheck.title === title.trim() &&
                                     styles.inputError,
                             ]} 
-                            value={title} onChangeText={setTitle} 
+                            value={title} onChangeText={setTitle}
+                            autoCapitalize="sentences"
+                            autoCorrect={false}
+                            autoComplete="off"
+                            textContentType="none"
+                            importantForAutofill="no"
+                            spellCheck={false}
+                            onFocus={() => {
+                                focusedFieldRef.current = 'title';
+                                requestAnimationFrame(() => revealFocusedField());
+                            }}
+                            onBlur={() => {
+                                if (focusedFieldRef.current === 'title') focusedFieldRef.current = null;
+                            }}
                         />
                         )}
                         {!nearStartLock &&
@@ -666,33 +1110,52 @@ export default function CreatePlanScreen() {
                         titleCheck.title === title.trim() ? (
                             <Text style={styles.titleBadHint}>{t('createplan.titleBadHint')}</Text>
                         ) : null}
+                        </View>
 
-                        <View style={styles.labelRow}>
-                            <Text style={styles.label}>{t('createplan.description')}</Text>
-                            <Text style={[styles.charCount, description.length > 250 && {color: DANGER}]}>{description.length}/250</Text>
+                        <View ref={descFieldRef} collapsable={false} style={[styles.copyBlock, styles.copyBlockLast]}>
+                        <View style={styles.copyLabelRow}>
+                            <Text style={styles.fieldTitle}>{t('createplan.description')}</Text>
+                            <Text style={[styles.charCount, description.length > PLAN_DESCRIPTION_MAX && {color: DANGER}]}>{description.length}/{PLAN_DESCRIPTION_MAX}</Text>
                         </View>
                         <TextInput 
                             placeholder={t('createplan.descPlaceholder')} 
                             placeholderTextColor={PLACEHOLDER_COLOR}
-                            style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }, description.length > 250 && styles.inputError]} 
-                            multiline value={description} onChangeText={setDescription} 
+                            style={[styles.fieldInput, styles.descInput, description.length > PLAN_DESCRIPTION_MAX && styles.inputError]} 
+                            multiline value={description} onChangeText={(text) => setDescription(text.slice(0, PLAN_DESCRIPTION_MAX))} 
+                            maxLength={PLAN_DESCRIPTION_MAX}
+                            onFocus={() => {
+                                focusedFieldRef.current = 'desc';
+                                requestAnimationFrame(() => revealFocusedField());
+                            }}
+                            onBlur={() => {
+                                if (focusedFieldRef.current === 'desc') focusedFieldRef.current = null;
+                            }}
                         />
+                        </View>
                     </View>
 
-                    <View style={styles.section}>
+                    <View style={[styles.section, styles.whenSection]}>
                         <Text style={styles.sectionTitle}>{t('createplan.when')}</Text>
+                        <View style={styles.whenCard}>
                         <View style={styles.dateTimeContainer}>
                             <TouchableOpacity style={styles.dateTimeBtn} onPress={() => showMode('date')}>
-                                <Ionicons name="calendar-outline" size={20} color={PRIMARY} />
-                                <Text style={styles.dateTimeText}>{date.toLocaleDateString()}</Text>
+                                <View style={styles.dateTimeIconWrap}>
+                                    <Ionicons name="calendar-outline" size={22} color={PRIMARY} />
+                                </View>
+                                <Text style={styles.dateTimeDateText} numberOfLines={1}>
+                                    {`${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`}
+                                </Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity style={styles.dateTimeBtn} onPress={() => showMode('time')}>
-                                <Ionicons name="time-outline" size={20} color={PRIMARY} />
-                                <Text style={styles.dateTimeText}>
+                                <View style={styles.dateTimeIconWrap}>
+                                    <Ionicons name="time-outline" size={22} color={PRIMARY} />
+                                </View>
+                                <Text style={styles.dateTimeTimeText}>
                                     {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </Text>
                             </TouchableOpacity>
+                        </View>
                         </View>
 
                         <DateTimePickerModal
@@ -702,11 +1165,12 @@ export default function CreatePlanScreen() {
                             onCancel={() => setPickerVisible(false)}
                             date={date}
                             is24Hour={true}
-                            isDarkModeEnabled={false}
-                            themeVariant="light"
-                            textColor="#0F172A"
+                            locale={lang === 'en' ? 'en-GB' : 'es-ES'}
+                            isDarkModeEnabled={scheme === 'dark'}
+                            themeVariant={scheme}
+                            textColor={colors.text}
                             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                            pickerContainerStyleIOS={{ backgroundColor: '#FFFFFF' }}
+                            pickerContainerStyleIOS={{ backgroundColor: colors.surface }}
                             minimumDate={minPlanDate()}
                             maximumDate={maxDate}
                             confirmTextIOS={t('createplan.confirmDate')}
@@ -724,24 +1188,61 @@ export default function CreatePlanScreen() {
                         mapRef={mapRef}
                     />
 
+                    {showAdvanced ? (
+                    <>
                     <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>{t('createplan.advancedTitle')}</Text>
                         <Text style={styles.spotsSubLabel}>{t('createplan.maxSpots')}</Text>
                         <View style={styles.peopleSelector}>
-                            <TouchableOpacity
-                                onPress={decrementMax}
-                                style={[styles.stepBtn, maxPeople <= MIN_PEOPLE && styles.stepBtnDisabled]}
-                                disabled={maxPeople <= MIN_PEOPLE}
+                            <Pressable
+                                onPressIn={(e) => {
+                                    peopleTouchRef.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY };
+                                    startHoldPeople(-1);
+                                }}
+                                onTouchMove={(e) => {
+                                    if (
+                                        Math.abs(e.nativeEvent.pageX - peopleTouchRef.current.x) > 14
+                                        || Math.abs(e.nativeEvent.pageY - peopleTouchRef.current.y) > 14
+                                    ) {
+                                        stopHoldPeople();
+                                    }
+                                }}
+                                onPressOut={stopHoldPeople}
+                                hitSlop={12}
+                                android_ripple={{ color: '#BFDBFE', borderless: true, radius: 28 }}
+                                style={({ pressed }) => [
+                                    styles.stepBtn,
+                                    pressed && styles.stepBtnPressed,
+                                    maxPeople <= minEditableMax && styles.stepBtnDisabled,
+                                ]}
                             >
-                                <Ionicons name="remove" size={24} color={maxPeople <= MIN_PEOPLE ? '#CBD5E1' : PRIMARY} />
-                            </TouchableOpacity>
+                                <Ionicons name="remove" size={26} color={maxPeople <= minEditableMax ? '#CBD5E1' : PRIMARY} />
+                            </Pressable>
                             <Text style={styles.peopleNum}>{maxPeople}</Text>
-                            <TouchableOpacity
-                                onPress={incrementMax}
-                                style={[styles.stepBtn, maxPeople >= MAX_PEOPLE && styles.stepBtnDisabled]}
-                                disabled={maxPeople >= MAX_PEOPLE}
+                            <Pressable
+                                onPressIn={(e) => {
+                                    peopleTouchRef.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY };
+                                    startHoldPeople(1);
+                                }}
+                                onTouchMove={(e) => {
+                                    if (
+                                        Math.abs(e.nativeEvent.pageX - peopleTouchRef.current.x) > 14
+                                        || Math.abs(e.nativeEvent.pageY - peopleTouchRef.current.y) > 14
+                                    ) {
+                                        stopHoldPeople();
+                                    }
+                                }}
+                                onPressOut={stopHoldPeople}
+                                hitSlop={12}
+                                android_ripple={{ color: '#BFDBFE', borderless: true, radius: 28 }}
+                                style={({ pressed }) => [
+                                    styles.stepBtn,
+                                    pressed && styles.stepBtnPressed,
+                                    maxPeople >= peopleCap && styles.stepBtnDisabled,
+                                ]}
                             >
-                                <Ionicons name="add" size={24} color={maxPeople >= MAX_PEOPLE ? '#CBD5E1' : PRIMARY} />
-                            </TouchableOpacity>
+                                <Ionicons name="add" size={26} color={maxPeople >= peopleCap ? '#CBD5E1' : PRIMARY} />
+                            </Pressable>
                         </View>
                         <Text style={styles.limitsHint}>{spotsHint}</Text>
                     </View>
@@ -798,6 +1299,8 @@ export default function CreatePlanScreen() {
                             </TouchableOpacity>
                         </View>
 
+                        {!isOrganizer ? (
+                        <>
                         <Text style={[styles.sectionTitle, { marginTop: 18 }]}>{t('createplan.whoCanSee')}</Text>
                         <View style={styles.visibilityList}>
                             {(
@@ -872,14 +1375,46 @@ export default function CreatePlanScreen() {
                                 <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.7)" />
                             </TouchableOpacity>
                         ) : null}
+                        </>
+                        ) : null}
                     </View>
+                    </>
+                    ) : null}
                 </ScrollView>
 
                 <View style={styles.footer}>
+                    {!editId ? (
+                        <TouchableOpacity
+                            style={styles.adjustBtn}
+                            onPress={() => {
+                                hapticSelection();
+                                setShowAdvanced((open) => {
+                                    const next = !open;
+                                    if (next) {
+                                        requestAnimationFrame(() => {
+                                            setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+                                        });
+                                    }
+                                    return next;
+                                });
+                            }}
+                            activeOpacity={0.88}
+                        >
+                            <Ionicons
+                                name={showAdvanced ? 'chevron-up' : 'options-outline'}
+                                size={18}
+                                color={PRIMARY_DARK}
+                            />
+                            <Text style={styles.adjustBtnText} numberOfLines={1}>
+                                {showAdvanced ? t('createplan.hideAdjust') : t('createplan.adjust')}
+                            </Text>
+                        </TouchableOpacity>
+                    ) : null}
                     <TouchableOpacity
                         testID="plan-publish"
                         style={[
                             styles.createBtn,
+                            !editId && styles.createBtnFlex,
                             (loading || limitBlocked || limitChecking) && { opacity: 0.7 },
                             limitBlocked && styles.createBtnBlocked,
                         ]}
@@ -927,30 +1462,54 @@ export default function CreatePlanScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: '#FFF' },
-    header: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderColor: '#F1F5F9', alignItems: 'center' },
+function createPlanFormStyles(c: ThemeColors) {
+    return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: c.surface },
+    header: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border, alignItems: 'center' },
     closeBtn: { padding: 8, marginLeft: 2, zIndex: 2 },
-    headerTitle: { fontSize: 18, fontWeight: '800', color: '#1E293B' },
+    headerTitle: { fontSize: 18, fontWeight: '800', color: c.text },
     scrollContent: { paddingBottom: 120 },
     categorySection: {
         paddingHorizontal: 20,
         paddingTop: 22,
-        paddingBottom: 20,
-        backgroundColor: '#FFF',
+        paddingBottom: 22,
+        backgroundColor: c.backgroundAlt,
         borderBottomWidth: 4,
-        borderColor: '#F8FAFC',
+        borderColor: c.background,
     },
-    section: { padding: 20, borderBottomWidth: 4, borderColor: '#F8FAFC' },
-    sectionTitle: { fontSize: 16, fontWeight: '700', marginBottom: 12, color: '#1E293B' },
+    section: { padding: 20, borderBottomWidth: 4, borderColor: c.background },
+    copySection: { paddingTop: 18, paddingBottom: 22, gap: 14 },
+    copyBlock: {
+        backgroundColor: c.surface,
+        borderRadius: 18,
+        borderWidth: 1.5,
+        borderColor: c.border,
+        padding: 16,
+        shadowColor: '#0F2A4A',
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 3,
+    },
+    copyBlockLast: { marginBottom: 0 },
+    sectionTitle: { fontSize: 17, fontWeight: '800', marginBottom: 14, color: c.text },
+    subSectionLabel: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: c.textMuted,
+        marginTop: 18,
+        marginBottom: 12,
+    },
+    fieldTitle: { fontSize: 14, fontWeight: '800', color: c.text, letterSpacing: 0.1 },
+    copyLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
     labelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-    label: { fontSize: 11, color: '#64748B', fontWeight: '800', textTransform: 'uppercase' },
-    charCount: { fontSize: 10, color: '#94A3B8', fontWeight: '600' },
+    label: { fontSize: 11, color: c.textMuted, fontWeight: '800', textTransform: 'uppercase' },
+    charCount: { fontSize: 10, color: c.textSubtle, fontWeight: '600' },
     lockHint: {
         fontSize: 13,
         fontWeight: '600',
         color: '#92400E',
-        backgroundColor: '#FFFBEB',
+        backgroundColor: c.warningSoft,
         borderRadius: 12,
         borderWidth: 1,
         borderColor: '#FDE68A',
@@ -958,50 +1517,130 @@ const styles = StyleSheet.create({
         marginBottom: 14,
         lineHeight: 19,
     },
-    lockedValue: { fontSize: 15, fontWeight: '700', color: '#1E293B', marginTop: 4 },
+    lockedValue: { fontSize: 15, fontWeight: '700', color: c.text, marginTop: 4 },
     lockedTitle: {
         fontSize: 17,
         fontWeight: '800',
-        color: '#1E293B',
+        color: c.text,
         marginBottom: 20,
         paddingVertical: 10,
     },
-    input: { fontSize: 16, borderBottomWidth: 1, borderColor: '#E2E8F0', paddingVertical: 12, marginBottom: 20, color: '#1E293B', fontWeight: '500' },
+    input: {
+        fontSize: 16,
+        borderBottomWidth: 1,
+        borderColor: c.border,
+        paddingVertical: 12,
+        marginBottom: 20,
+        color: c.text,
+        fontWeight: '500',
+        textTransform: 'none',
+        letterSpacing: 0,
+        ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+    },
+    fieldInput: {
+        fontSize: 16,
+        borderWidth: 1.5,
+        borderColor: c.border,
+        borderRadius: 14,
+        backgroundColor: c.surfaceSubtle,
+        paddingHorizontal: 14,
+        paddingVertical: 14,
+        color: c.text,
+        fontWeight: '600',
+        textTransform: 'none',
+        letterSpacing: 0,
+        ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+    },
+    titleInput: {
+        fontSize: 17,
+        fontWeight: '700',
+        letterSpacing: 0,
+        ...(Platform.OS === 'ios' ? { lineHeight: 22 } : null),
+    },
+    /** iOS estira el placeholder si el TextInput va en negrita vacío. */
+    titleInputEmpty: {
+        fontWeight: '400',
+        letterSpacing: 0,
+        ...(Platform.OS === 'ios' ? { lineHeight: 22 } : null),
+    },
+    descInput: { minHeight: 108, textAlignVertical: 'top', marginBottom: 0 },
+    whenSection: { paddingTop: 22, paddingBottom: 24 },
+    whenCard: {
+        backgroundColor: c.surface,
+        borderRadius: 18,
+        borderWidth: 1.5,
+        borderColor: c.border,
+        padding: 14,
+        shadowColor: '#0F2A4A',
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 3,
+    },
     inputError: { borderColor: DANGER, color: DANGER },
     titleBadHint: {
-        marginTop: -8,
-        marginBottom: 10,
+        marginTop: 8,
         fontSize: 13,
         fontWeight: '600',
         color: DANGER,
+        lineHeight: 18,
     },
-    catList: { flexDirection: 'row', paddingBottom: 5 },
-    catBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#F1F5F9', marginRight: 8, borderWidth: 1, borderColor: '#E2E8F0' },
-    catBtnActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-    catText: { color: '#64748B', fontWeight: '700', fontSize: 13 },
+    catList: { flexDirection: 'row' },
+    catListContent: { paddingRight: 8, gap: 10 },
+    catBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 11,
+        borderRadius: 999,
+        backgroundColor: c.surface,
+        marginRight: 0,
+        borderWidth: 1.5,
+        borderColor: c.border,
+        shadowColor: '#0F2A4A',
+        shadowOpacity: 0.05,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 2,
+    },
+    catText: { color: c.textMuted, fontWeight: '800', fontSize: 14 },
     catTextActive: { color: '#FFF' },
     formatRow: { flexDirection: 'row', gap: 10 },
-    formatBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 14, backgroundColor: '#F1F5F9', borderWidth: 1.5, borderColor: '#E2E8F0' },
+    formatBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 14, backgroundColor: c.surfaceSubtle, borderWidth: 1.5, borderColor: c.border },
     formatBtnActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-    formatText: { color: '#64748B', fontWeight: '800', fontSize: 15 },
+    formatText: { color: c.textMuted, fontWeight: '800', fontSize: 15 },
     formatTextActive: { color: '#FFF' },
     sportGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    subGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    subGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
     subBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderRadius: 14,
-        backgroundColor: '#F1F5F9',
+        gap: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        borderRadius: 16,
+        backgroundColor: c.surface,
         borderWidth: 1.5,
-        borderColor: '#E2E8F0',
+        borderColor: c.border,
         minWidth: '47%',
         flexGrow: 1,
+        shadowColor: '#0F2A4A',
+        shadowOpacity: 0.04,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 1,
     },
-    subBtnActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-    subText: { color: '#64748B', fontWeight: '800', fontSize: 13, flex: 1 },
+    subIconWrap: {
+        width: 34,
+        height: 34,
+        borderRadius: 11,
+        backgroundColor: c.surfaceSubtle,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    subIconWrapActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
+    subText: { color: c.text, fontWeight: '700', fontSize: 14, flex: 1 },
     subTextActive: { color: '#FFF' },
     sportBtn: {
         flexDirection: 'row',
@@ -1010,24 +1649,60 @@ const styles = StyleSheet.create({
         paddingHorizontal: 12,
         paddingVertical: 10,
         borderRadius: 14,
-        backgroundColor: '#F1F5F9',
+        backgroundColor: c.surfaceSubtle,
         borderWidth: 1.5,
-        borderColor: '#E2E8F0',
+        borderColor: c.border,
     },
     sportBtnActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-    sportText: { color: '#64748B', fontWeight: '800', fontSize: 13 },
+    sportText: { color: c.textMuted, fontWeight: '800', fontSize: 13 },
     sportTextActive: { color: '#FFF' },
     dateTimeContainer: { flexDirection: 'row', gap: 12 },
-    dateTimeBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F1F5F9', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E2E8F0' },
-    dateTimeText: { fontSize: 15, fontWeight: '600', color: '#1E293B' },
+    dateTimeBtn: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        backgroundColor: c.surfaceSubtle,
+        paddingHorizontal: 12,
+        paddingVertical: 14,
+        borderRadius: 16,
+        borderWidth: 1.5,
+        borderColor: c.border,
+        minHeight: 68,
+    },
+    dateTimeIconWrap: {
+        width: 38,
+        height: 38,
+        borderRadius: 12,
+        backgroundColor: c.surface,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: c.border,
+    },
+    dateTimeDateText: {
+        flex: 1,
+        fontSize: 16,
+        fontWeight: '800',
+        color: c.text,
+        letterSpacing: 0.2,
+    },
+    dateTimeTimeText: {
+        flex: 1,
+        fontSize: 16,
+        fontWeight: '800',
+        color: c.text,
+        letterSpacing: 0.2,
+    },
     peopleSelector: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 10 },
-    stepBtn: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: PRIMARY, justifyContent: 'center', alignItems: 'center' },
-    stepBtnDisabled: { borderColor: '#E2E8F0', backgroundColor: '#F8FAFC' },
-    peopleNum: { fontSize: 28, fontWeight: '900', marginHorizontal: 35, color: '#1E293B' },
-    spotsSubLabel: { fontSize: 12, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },
-    limitsHint: { textAlign: 'center', fontSize: 11, color: '#94A3B8', marginTop: 8 },
+    stepBtn: { width: 52, height: 52, borderRadius: 26, borderWidth: 2, borderColor: PRIMARY, justifyContent: 'center', alignItems: 'center', backgroundColor: c.surface },
+    stepBtnPressed: { backgroundColor: c.primarySoft, transform: [{ scale: 0.94 }] },
+    stepBtnDisabled: { borderColor: c.border, backgroundColor: c.background },
+    peopleNum: { fontSize: 28, fontWeight: '900', marginHorizontal: 35, color: c.text },
+    spotsSubLabel: { fontSize: 12, fontWeight: '800', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },
+    limitsHint: { textAlign: 'center', fontSize: 11, color: c.textSubtle, marginTop: 8 },
     joinTypeRow: { flexDirection: 'row', gap: 12 },
-    joinTypeBtn: { flex: 1, alignItems: 'center', paddingVertical: 16, paddingHorizontal: 8, borderRadius: 16, backgroundColor: '#F8FAFC', borderWidth: 2, borderColor: '#E2E8F0' },
+    joinTypeBtn: { flex: 1, alignItems: 'center', paddingVertical: 16, paddingHorizontal: 8, borderRadius: 16, backgroundColor: c.background, borderWidth: 2, borderColor: c.border },
     joinTypeBtnActive: { borderColor: PRIMARY, backgroundColor: '#EFF6FF' },
     joinTypeTitle: { fontSize: 14, fontWeight: '800', color: '#64748B', marginTop: 8 },
     joinTypeDesc: { fontSize: 11, color: '#94A3B8', marginTop: 2, textAlign: 'center' },
@@ -1102,7 +1777,19 @@ const styles = StyleSheet.create({
     },
     inviteOpenBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
     inviteOpenBtnSub: { color: '#94A3B8', fontWeight: '600', fontSize: 12, marginTop: 2 },
-    footer: { position: 'absolute', bottom: 0, width: '100%', padding: 20, backgroundColor: '#FFF', borderTopWidth: 1, borderColor: '#F1F5F9' },
+    footer: {
+        position: 'absolute',
+        bottom: 0,
+        width: '100%',
+        padding: 16,
+        paddingBottom: 20,
+        backgroundColor: c.surface,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderColor: c.border,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
     formBannerSticky: {
         paddingHorizontal: 20,
         paddingTop: 4,
@@ -1121,7 +1808,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: 10,
-        backgroundColor: '#FFFBEB',
+        backgroundColor: c.warningSoft,
         borderWidth: 1,
         borderColor: '#FCD34D',
         borderRadius: 14,
@@ -1130,7 +1817,108 @@ const styles = StyleSheet.create({
         marginBottom: 0,
     },
     formBannerText: { flex: 1, fontSize: 13, fontWeight: '700', color: '#92400E', lineHeight: 18 },
-    createBtn: { backgroundColor: '#2563EB', padding: 18, borderRadius: 20, alignItems: 'center', elevation: 5, shadowColor: '#2563EB', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
+    createBtn: { backgroundColor: '#2563EB', padding: 18, borderRadius: 20, alignItems: 'center', elevation: 5, shadowColor: '#2563EB', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, flex: 1 },
+    createBtnFlex: { flex: 1.35 },
     createBtnBlocked: { backgroundColor: '#94A3B8', shadowOpacity: 0 },
-    createBtnText: { color: '#FFF', fontWeight: '800', fontSize: 16, textTransform: 'uppercase', letterSpacing: 1 }
-});
+    createBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15, textTransform: 'uppercase', letterSpacing: 0.4 },
+    adjustBtn: {
+        flex: 1,
+        minHeight: 56,
+        borderRadius: 20,
+        borderWidth: 2,
+        borderColor: PRIMARY,
+        backgroundColor: c.surface,
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: 6,
+        paddingHorizontal: 10,
+    },
+    adjustBtnText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 13 },
+    adjustTeaser: {
+        marginHorizontal: 20,
+        marginTop: 8,
+        marginBottom: 16,
+        padding: 14,
+        borderRadius: 16,
+        backgroundColor: c.background,
+        borderWidth: 1,
+        borderColor: c.border,
+    },
+    adjustTeaserTitle: { fontSize: 14, fontWeight: '700', color: c.text, marginBottom: 4 },
+    adjustTeaserSub: { fontSize: 13, color: c.textMuted, lineHeight: 18 },
+    coverModeWrap: { marginBottom: 8, marginTop: 4, paddingHorizontal: 20 },
+    orgCoverSection: { marginTop: 4, marginBottom: 14, gap: 10, paddingHorizontal: 20 },
+    coverModeRow: {
+        flexDirection: 'row',
+        backgroundColor: '#F1F5F9',
+        borderRadius: 14,
+        padding: 4,
+        gap: 4,
+    },
+    coverModeBtn: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 10,
+        borderRadius: 11,
+    },
+    coverModeBtnOn: { backgroundColor: c.surface },
+    coverModeText: { fontSize: 13, fontWeight: '800', color: '#64748B' },
+    coverModeTextOn: { color: '#1E293B' },
+    orgCoverGalleryBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#EFF6FF',
+        borderWidth: 1.5,
+        borderColor: '#93C5FD',
+        borderRadius: 16,
+        paddingVertical: 14,
+    },
+    orgCoverGalleryText: { fontSize: 15, fontWeight: '800', color: PRIMARY_DARK },
+    orgCoverLabel: { fontSize: 14, fontWeight: '800', color: '#1E293B' },
+    orgCoverHint: { fontSize: 12, fontWeight: '600', color: '#64748B', lineHeight: 17, marginTop: -2 },
+    orgCoverRow: { gap: 10, paddingVertical: 2, paddingRight: 8 },
+    orgCoverThumbWrap: { width: 112, height: 148, borderRadius: 18, overflow: 'hidden', backgroundColor: '#E2E8F0' },
+    orgCoverAdd: {
+        width: 112,
+        height: 148,
+        borderRadius: 18,
+        borderWidth: 1.5,
+        borderColor: '#93C5FD',
+        borderStyle: 'dashed',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#EFF6FF',
+        gap: 8,
+        paddingHorizontal: 10,
+    },
+    orgCoverThumb: { width: '100%', height: '100%' },
+    orgCoverFirst: {
+        position: 'absolute',
+        left: 6,
+        bottom: 6,
+        backgroundColor: 'rgba(15,23,42,0.82)',
+        borderRadius: 8,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+    },
+    orgCoverFirstText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
+    orgCoverRemove: {
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: 'rgba(15,23,42,0.75)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    orgCoverAddText: { fontSize: 12, fontWeight: '800', color: PRIMARY_DARK, textAlign: 'center' },
+    orgRecurrence: { gap: 8 },
+    orgRepeatHint: { fontSize: 12, fontWeight: '600', color: c.textMuted, marginTop: 4, lineHeight: 16 },
+    });
+}

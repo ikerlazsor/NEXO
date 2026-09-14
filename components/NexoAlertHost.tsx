@@ -17,18 +17,13 @@ import {
     type NexoAlertButton,
     type NexoAlertRequest,
 } from '../lib/nexoAlert';
+import { useAppTheme } from '../lib/appTheme';
 import { hapticAlert, hapticSelection, hapticSoft, hapticWarning } from '../lib/haptics';
-
-const INK = '#0F2A4A';
-const MUTED = '#64748B';
-const PRIMARY_DARK = '#2563EB';
-const DANGER = '#EF4444';
-const CARD = '#FFFFFF';
-const BACKDROP = 'rgba(15, 42, 74, 0.45)';
 
 type Props = { children: React.ReactNode };
 
 export function NexoAlertHost({ children }: Props) {
+    const { colors } = useAppTheme();
     const [queue, setQueue] = useState<NexoAlertRequest[]>([]);
     const [busy, setBusy] = useState(false);
     const closingRef = useRef(false);
@@ -51,19 +46,18 @@ export function NexoAlertHost({ children }: Props) {
     }, []);
 
     const runButton = useCallback(
-        async (btn: NexoAlertButton) => {
+        (btn: NexoAlertButton) => {
             if (closingRef.current || busy) return;
             closingRef.current = true;
             if (btn.style === 'destructive') hapticWarning();
             else if (btn.style === 'cancel') hapticSoft();
             else hapticSelection();
-            try {
-                if (btn.onPress) {
-                    setBusy(true);
-                    await btn.onPress();
-                }
-            } finally {
-                dismiss();
+            const press = btn.onPress;
+            dismiss();
+            if (press) {
+                setTimeout(() => {
+                    void press();
+                }, 280);
             }
         },
         [busy, dismiss],
@@ -95,13 +89,13 @@ export function NexoAlertHost({ children }: Props) {
                 statusBarTranslucent
                 onRequestClose={onBackdrop}
             >
-                <Pressable style={styles.backdrop} onPress={onBackdrop}>
-                    <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+                <Pressable style={[styles.backdrop, { backgroundColor: colors.overlay }]} onPress={onBackdrop}>
+                    <Pressable style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={(e) => e.stopPropagation()}>
                         {current ? (
                             <>
-                                <Text style={styles.title}>{current.title}</Text>
+                                <Text style={[styles.title, { color: colors.text }]}>{current.title}</Text>
                                 {current.message ? (
-                                    <Text style={styles.message}>{current.message}</Text>
+                                    <Text style={[styles.message, { color: colors.textMuted }]}>{current.message}</Text>
                                 ) : null}
 
                                 <View style={[styles.actions, stacked && styles.actionsStacked]}>
@@ -116,9 +110,9 @@ export function NexoAlertHost({ children }: Props) {
                                                 style={[
                                                     styles.btn,
                                                     stacked && styles.btnFull,
-                                                    isPrimary && styles.btnPrimary,
-                                                    isCancel && styles.btnCancel,
-                                                    isDestructive && styles.btnDestructive,
+                                                    isPrimary && { backgroundColor: colors.primary },
+                                                    isCancel && { backgroundColor: colors.surfaceSubtle },
+                                                    isDestructive && { backgroundColor: colors.dangerSoft },
                                                     busy && styles.btnDisabled,
                                                 ]}
                                                 activeOpacity={0.85}
@@ -127,16 +121,16 @@ export function NexoAlertHost({ children }: Props) {
                                             >
                                                 {busy ? (
                                                     <ActivityIndicator
-                                                        color={isDestructive ? DANGER : isPrimary ? '#FFF' : INK}
+                                                        color={isDestructive ? colors.danger : isPrimary ? colors.onPrimary : colors.text}
                                                         size="small"
                                                     />
                                                 ) : (
                                                     <Text
                                                         style={[
                                                             styles.btnText,
-                                                            isPrimary && styles.btnTextPrimary,
-                                                            isCancel && styles.btnTextCancel,
-                                                            isDestructive && styles.btnTextDestructive,
+                                                            isPrimary && { color: colors.onPrimary },
+                                                            isCancel && { color: colors.text },
+                                                            isDestructive && { color: colors.danger },
                                                         ]}
                                                     >
                                                         {btn.text}
@@ -158,7 +152,7 @@ export function NexoAlertHost({ children }: Props) {
 const styles = StyleSheet.create({
     backdrop: {
         flex: 1,
-        backgroundColor: BACKDROP,
+        backgroundColor: 'transparent',
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: 28,
@@ -166,14 +160,14 @@ const styles = StyleSheet.create({
     card: {
         width: '100%',
         maxWidth: 340,
-        backgroundColor: CARD,
+        backgroundColor: '#FFFFFF',
         borderRadius: 22,
         paddingTop: 22,
         paddingHorizontal: 20,
         paddingBottom: 16,
         borderWidth: 1,
         borderColor: '#E8EEF5',
-        shadowColor: '#0F2A4A',
+        shadowColor: '#000',
         shadowOpacity: 0.18,
         shadowRadius: 24,
         shadowOffset: { width: 0, height: 12 },
@@ -182,7 +176,6 @@ const styles = StyleSheet.create({
     title: {
         fontSize: 18,
         fontWeight: '900',
-        color: INK,
         textAlign: 'center',
         letterSpacing: -0.2,
     },
@@ -190,7 +183,6 @@ const styles = StyleSheet.create({
         marginTop: 10,
         fontSize: 14,
         fontWeight: '600',
-        color: MUTED,
         textAlign: 'center',
         lineHeight: 20,
     },
@@ -214,29 +206,11 @@ const styles = StyleSheet.create({
         flex: 0,
         width: '100%',
     },
-    btnPrimary: {
-        backgroundColor: PRIMARY_DARK,
-    },
-    btnCancel: {
-        backgroundColor: '#F1F5F9',
-    },
-    btnDestructive: {
-        backgroundColor: '#FEE2E2',
-    },
     btnDisabled: {
         opacity: 0.7,
     },
     btnText: {
         fontSize: 15,
         fontWeight: '800',
-    },
-    btnTextPrimary: {
-        color: '#FFF',
-    },
-    btnTextCancel: {
-        color: INK,
-    },
-    btnTextDestructive: {
-        color: DANGER,
     },
 });

@@ -1,12 +1,15 @@
 import { isFeedPlan } from './feedPlans';
+import { materializeOrganizerRecurrence } from './recurrence';
 import { supabase } from './supabase';
 
-/** Chat de plan se elimina 24h después de fecha_evento. */
-export const CHAT_TTL_MS = 24 * 60 * 60 * 1000;
-/** Valoraciones se desbloquean 2h después de fecha_evento. */
-export const RATINGS_DELAY_MS = 2 * 60 * 60 * 1000;
-/** Ventana para valorar tras el plan (7 días). */
-export const RATINGS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** Chat de plan se elimina 48h después de fecha_evento. */
+export const CHAT_TTL_MS = 48 * 60 * 60 * 1000;
+/** El countdown del chat solo se muestra en esta ventana final. */
+export const CHAT_EXPIRY_WARN_MS = 12 * 60 * 60 * 1000;
+/** Cierre del plan se desbloquea 1h después de fecha_evento. */
+export const RATINGS_DELAY_MS = 60 * 60 * 1000;
+/** Ventana para valorar tras el plan (20 días). */
+export const RATINGS_WINDOW_MS = 20 * 24 * 60 * 60 * 1000;
 
 export function isGroupOrChatPlan(plan: { categoria?: string | null }): boolean {
     const cat = plan.categoria ?? '';
@@ -27,7 +30,7 @@ export function isPlanActiveForFeed(plan: { fecha_evento?: string | null; catego
     return end > Date.now();
 }
 
-/** Chat de plan sigue disponible: no grupo y dentro de fecha + 24h. */
+/** Chat de plan sigue disponible: no grupo y dentro de fecha + 48h. */
 export function isPlanChatAlive(plan: {
     fecha_evento?: string | null;
     categoria?: string | null;
@@ -70,6 +73,15 @@ export function getRatingPhase(fechaEvento?: string | null): RatingPhase {
     return 'closed';
 }
 
+/** Fase efectiva en UI (el countdown local puede pasar de waiting → open sin refetch). */
+export function resolveRatingUiPhase(
+    plan: { phase: 'waiting' | 'open'; unlockAt: number },
+    now = Date.now(),
+): 'waiting' | 'open' {
+    if (plan.phase === 'open' || plan.unlockAt <= now) return 'open';
+    return 'waiting';
+}
+
 export function formatCountdown(msRemaining: number): string {
     const ms = Math.max(0, msRemaining);
     const totalSec = Math.floor(ms / 1000);
@@ -101,6 +113,7 @@ export async function runPlanLifecycleMaintenance(): Promise<void> {
             supabase.rpc('archive_all_ended_plans'),
             supabase.rpc('purge_expired_plan_chats'),
             supabase.rpc('purge_past_saved_plans'),
+            materializeOrganizerRecurrence(),
         ]);
     } catch {
         // RPC puede no existir hasta ejecutar plan-lifecycle.sql

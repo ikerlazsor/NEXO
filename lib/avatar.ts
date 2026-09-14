@@ -1,4 +1,5 @@
-import { decode } from 'base64-arraybuffer';
+import { compressImageForUpload } from './imageCompress';
+import { uploadLocalUriToStorage } from './storageUpload';
 import { supabase } from './supabase';
 
 export async function uploadAvatarFromUri(
@@ -6,28 +7,15 @@ export async function uploadAvatarFromUri(
     uri: string,
 ): Promise<{ url: string | null; error: string | null }> {
     try {
+        const localUri = await compressImageForUpload(uri, 'avatar');
         const fileName = `${userId}/avatar.jpg`;
-        const response = await fetch(uri);
-        const blob = await response.blob();
-
-        const base64data = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const data = reader.result?.toString().split(',')[1];
-                if (data) resolve(data);
-                else reject(new Error('read_failed'));
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
+        await uploadLocalUriToStorage({
+            bucket: 'avatars',
+            path: fileName,
+            uri: localUri,
+            contentType: 'image/jpeg',
+            upsert: true,
         });
-
-        const { error: uploadError } = await supabase.storage
-            .from('avatars')
-            .upload(fileName, decode(base64data), { contentType: 'image/jpeg', upsert: true });
-
-        if (uploadError) {
-            return { url: null, error: uploadError.message };
-        }
 
         const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
         const urlWithTimestamp = `${publicUrl}?t=${Date.now()}`;

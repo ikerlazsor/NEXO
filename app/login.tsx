@@ -7,7 +7,7 @@ import { Asset } from 'expo-asset';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React,
     { useCallback,
     useEffect,
@@ -39,34 +39,27 @@ import {
     deleteAccount,
     ensureProfile,
     isValidDisplayName,
-    isUsernameTaken,
-    isValidUsername,
     normalizeDisplayName,
-    formatUsernameInput,
-    normalizeUsername,
-    UsernameCheckError,
-    USERNAME_MAX_LENGTH,
 } from '../lib/profile';
 import { resolveOnboardingDone } from '../lib/onboarding';
+import {
+    isAppleAuthSupported,
+    SocialAuthCancelledError,
+    SocialAuthConfigError,
+    signInWithApple,
+    signInWithGoogle,
+    type SocialProvider,
+} from '../lib/socialAuth';
 import { supabase } from '../lib/supabase';
 import { signOutAndClearLocalData } from '../lib/session';
+import { NEXO_NORMS_URL, NEXO_PRIVACY_URL, NEXO_TERMS_URL, openNexoPage } from '../lib/brand';
+import { useAppTheme, useThemedStyles } from '../lib/appTheme';
+import { type ThemeColors } from '../theme';
 
 const LOGO = require('../assets/images/nexo-logo-ui.png');
 void Asset.fromModule(LOGO).downloadAsync().catch(() => {});
 
-const PRIMARY = '#4DA6FF';
-const PRIMARY_DARK = '#2563EB';
-/** Mismo color que el splash / alrededor de la figura del logo */
-const BRAND_SURFACE = '#E2EBF2';
-const INK = '#0F2A4A';
-const MUTED = '#64748B';
-const PLACEHOLDER = '#94A3B8';
-const FIELD_BG = '#F5F9FF';
-const FIELD_BORDER = '#E3ECFB';
-const DANGER = '#DC2626';
-
-type FieldName = 'nombre' | 'username' | 'email' | 'password' | null;
-type UsernameStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
+type FieldName = 'nombre' | 'email' | 'password' | null;
 
 /** Borra un auth user incompleto si la contraseña coincide (libera el email). */
 async function tryReclaimIncompleteEmail(email: string, password: string): Promise<boolean> {
@@ -102,20 +95,25 @@ export default function LoginScreen() {
     const [registerEmail, setRegisterEmail] = useState('');
     const [registerPassword, setRegisterPassword] = useState('');
     const [nombre, setNombre] = useState('');
-    const [username, setUsername] = useState('');
     const [loading, setLoading] = useState(false);
-    const [isRegistering, setIsRegistering] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
     const [focusedField, setFocusedField] = useState<FieldName>(null);
-    const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>('idle');
     const [keyboardHeight, setKeyboardHeight] = useState(0);
-    const usernameCheckGen = useRef(0);
     const scrollRef = useRef<ScrollView>(null);
     const scrollYRef = useRef(0);
     const fieldRefs = useRef<Partial<Record<Exclude<FieldName, null>, View | null>>>({});
     const inputRefs = useRef<Partial<Record<Exclude<FieldName, null>, TextInput | null>>>({});
     const router = useRouter();
+    const { mode } = useLocalSearchParams<{ mode?: string | string[] }>();
     const { t } = useT();
+    const { colors, scheme } = useAppTheme();
+    const styles = useThemedStyles(createLoginStyles);
+    const startOnRegister = (Array.isArray(mode) ? mode[0] : mode) === 'register';
+    const [isRegistering, setIsRegistering] = useState(startOnRegister);
+
+    useEffect(() => {
+        if (startOnRegister) setIsRegistering(true);
+    }, [startOnRegister]);
 
     const email = isRegistering ? registerEmail : loginEmail;
     const password = isRegistering ? registerPassword : loginPassword;
@@ -124,7 +122,7 @@ export default function LoginScreen() {
 
     const fieldOrder = useMemo<Exclude<FieldName, null>[]>(
         () => isRegistering
-            ? ['nombre', 'username', 'email', 'password']
+            ? ['nombre', 'email', 'password']
             : ['email', 'password'],
         [isRegistering],
     );
@@ -194,39 +192,6 @@ export default function LoginScreen() {
         return () => clearTimeout(timer);
     }, [keyboardHeight, focusedField, isRegistering, ensureFieldVisible]);
 
-    useEffect(() => {
-        if (!isRegistering) {
-            setUsernameStatus('idle');
-            return;
-        }
-        const handle = normalizeUsername(username);
-        if (!handle) {
-            setUsernameStatus('idle');
-            return;
-        }
-        if (!isValidUsername(handle)) {
-            setUsernameStatus('invalid');
-            return;
-        }
-
-        const gen = ++usernameCheckGen.current;
-        setUsernameStatus('checking');
-        const timer = setTimeout(() => {
-            void (async () => {
-                try {
-                    const taken = await isUsernameTaken(handle);
-                    if (usernameCheckGen.current !== gen) return;
-                    setUsernameStatus(taken ? 'taken' : 'available');
-                } catch {
-                    if (usernameCheckGen.current !== gen) return;
-                    setUsernameStatus('idle');
-                }
-            })();
-        }, 400);
-
-        return () => clearTimeout(timer);
-    }, [username, isRegistering]);
-
     const validatePassword = (pass: string) => isStrongPassword(pass);
 
     const validateEmail = (mail: string) => {
@@ -261,7 +226,7 @@ export default function LoginScreen() {
     };
 
     async function handleAuth() {
-        if (!email || !password || (isRegistering && (!nombre.trim() || !username.trim()))) {
+        if (!email || !password || (isRegistering && !nombre.trim())) {
             return Alert.alert(t('login.notice'), t('login.fillAll'));
         }
 
@@ -274,43 +239,19 @@ export default function LoginScreen() {
         }
 
         const displayName = normalizeDisplayName(nombre);
-        const handle = normalizeUsername(username);
-        if (isRegistering) {
-            if (!isValidDisplayName(displayName)) {
-                return Alert.alert(t('login.notice'), t('login.displayNameHint'));
-            }
-            if (!isValidUsername(handle) || usernameStatus === 'invalid') {
-                setUsernameStatus('invalid');
-                return Alert.alert(t('login.notice'), t('login.usernameInvalid'));
-            }
-            if (usernameStatus === 'taken') {
-                return Alert.alert(t('login.notice'), t('login.usernameTaken'));
-            }
+        if (isRegistering && !isValidDisplayName(displayName)) {
+            return Alert.alert(t('login.notice'), t('login.displayNameHint'));
         }
 
         setLoading(true);
         try {
             if (isRegistering) {
-                try {
-                    const taken = await isUsernameTaken(handle);
-                    if (taken) {
-                        setUsernameStatus('taken');
-                        return Alert.alert(t('login.notice'), t('login.usernameTaken'));
-                    }
-                } catch (e) {
-                    if (e instanceof UsernameCheckError) {
-                        return Alert.alert(t('login.notice'), t('login.usernameCheckFailed'));
-                    }
-                    return Alert.alert(t('login.notice'), t('login.usernameCheckFailed'));
-                }
-
                 const registerEmail = email.trim().toLowerCase();
                 const redirectTo = Linking.createURL('verify-email');
                 const signUpOptions = {
                     emailRedirectTo: redirectTo,
                     data: {
                         nombre: displayName,
-                        nombre_usuario: handle,
                         registro_completado: false,
                     },
                 };
@@ -321,7 +262,6 @@ export default function LoginScreen() {
                 });
                 if (error) throw error;
 
-                // Supabase a veces no errora: user sin identities = email ya registrado
                 if ((data.user?.identities?.length ?? 0) === 0) {
                     const reclaimed = await tryReclaimIncompleteEmail(registerEmail, password);
                     if (!reclaimed) {
@@ -344,24 +284,20 @@ export default function LoginScreen() {
                 await setPendingSignup({
                     email: registerEmail,
                     nombre: displayName,
-                    nombreUsuario: handle,
                 });
                 await setPendingVerifyEmail(registerEmail);
 
                 if (data.session?.user && isEmailVerified(data.session.user)) {
                     const { error: profileError } = await ensureProfile(data.session.user, {
                         nombre: displayName,
-                        nombreUsuario: handle,
                     });
                     if (profileError) {
                         await signOutAndClearLocalData({ scope: 'local' });
                         Alert.alert(
                             t('login.authError'),
-                            profileError === 'username_taken' || /unique|duplicate/i.test(profileError)
-                                ? t('login.usernameTaken')
-                                : profileError === 'db_error'
-                                  ? t('login.dbSignupError')
-                                  : profileError,
+                            profileError === 'db_error'
+                                ? t('login.dbSignupError')
+                                : profileError,
                         );
                         return;
                     }
@@ -370,11 +306,9 @@ export default function LoginScreen() {
                     return;
                 }
 
-                // Confirmación requerida (o sesión aún sin verificar)
                 if (data.session?.user) {
                     await ensureProfile(data.session.user, {
                         nombre: displayName,
-                        nombreUsuario: handle,
                     }).catch(() => {});
                 }
                 scheduleOnboardingPrefetch();
@@ -414,7 +348,7 @@ export default function LoginScreen() {
             if (msg === 'User already registered'
                 || /already\s*(been\s*)?registered|already\s*exists|email.*exist/i.test(msg)) {
                 errorMessage = t('login.emailTaken');
-            } else if (isPasswordPolicyError(msg)) {
+            } else if (isPasswordPolicyError(msg, error?.code)) {
                 errorMessage = t('login.weakPasswordMsg');
             } else if (msg === 'Invalid login credentials') {
                 errorMessage = t('login.invalidCredentials');
@@ -428,26 +362,65 @@ export default function LoginScreen() {
         }
     }
 
+    const socialErrorMessage = (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error ?? '');
+        if (error instanceof SocialAuthConfigError) {
+            if (error.message === 'missing_google_web_client') return t('login.googleNotConfigured');
+            if (error.message === 'apple_unavailable' || error.message === 'apple_ios_only') {
+                return t('login.appleUnavailable');
+            }
+        }
+        if (/provider is not enabled|Unsupported provider|validation_failed/i.test(msg)) {
+            return t('login.oauthHint');
+        }
+        if (msg === 'db_error') return t('login.dbSignupError');
+        return msg || t('login.oauthFailed');
+    };
+
+    const handleSocialAuth = async (provider: SocialProvider) => {
+        if (loading) return;
+        setLoading(true);
+        try {
+            if (provider === 'apple') {
+                await signInWithApple();
+            } else {
+                await signInWithGoogle();
+            }
+            scheduleOnboardingPrefetch();
+        } catch (error) {
+            if (error instanceof SocialAuthCancelledError) return;
+            Alert.alert(t('login.authError'), socialErrorMessage(error));
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const switchMode = (registering: boolean) => {
         if (registering === isRegistering) return;
         setIsRegistering(registering);
         setShowPassword(false);
         setFocusedField(null);
-        setUsernameStatus('idle');
         Keyboard.dismiss();
     };
 
     const fieldStyle = (name: FieldName) => [
         styles.fieldWrapper,
         focusedField === name && styles.fieldWrapperFocused,
-        name === 'username' &&
-            (usernameStatus === 'taken' || (usernameStatus === 'invalid' && username.length > 0)) &&
-            styles.fieldWrapperError,
     ];
 
     return (
         <View style={styles.container}>
             <View style={styles.heroGradient} />
+            {router.canGoBack() ? (
+                <TouchableOpacity
+                    style={[styles.closeBtn, { top: Math.max(insets.top, 12) + 4 }]}
+                    onPress={() => router.back()}
+                    accessibilityLabel={t('common.back')}
+                    activeOpacity={0.85}
+                >
+                    <Ionicons name="close" size={24} color={colors.text} />
+                </TouchableOpacity>
+            ) : null}
 
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -474,13 +447,12 @@ export default function LoginScreen() {
                         <Image
                             source={LOGO}
                             style={styles.logoImage}
-                            accessibilityLabel="Nexo"
+                            accessibilityLabel="Nexo!"
                             contentFit="contain"
                             cachePolicy="memory-disk"
                             priority="high"
                             transition={0}
                         />
-                        <Text style={styles.brandTitle}>NEXO</Text>
                     </View>
 
                     {/* ---------- Tarjeta ---------- */}
@@ -518,11 +490,12 @@ export default function LoginScreen() {
                                 >
                                     <Text style={styles.label}>{t('login.displayName')}</Text>
                                     <View style={fieldStyle('nombre')}>
-                                        <Ionicons name="person-outline" size={20} color={focusedField === 'nombre' ? PRIMARY_DARK : PLACEHOLDER} />
+                                        <Ionicons name="person-outline" size={20} color={focusedField === 'nombre' ? colors.primary : colors.textSubtle} />
                                         <TextInput
                                             testID="auth-display-name"
                                             placeholder={t('login.displayNamePlaceholder')}
-                                            placeholderTextColor={PLACEHOLDER}
+                                            placeholderTextColor={colors.textSubtle}
+                                            keyboardAppearance={scheme}
                                             style={styles.fieldInput}
                                             value={nombre}
                                             onChangeText={(text) => setNombre(text.slice(0, DISPLAY_NAME_MAX_LENGTH))}
@@ -542,66 +515,6 @@ export default function LoginScreen() {
                                         />
                                     </View>
                                 </View>
-                                <View
-                                    style={styles.fieldBlock}
-                                    ref={(r) => {
-                                        fieldRefs.current.username = r;
-                                    }}
-                                >
-                                    <Text style={styles.label}>{t('login.username')}</Text>
-                                    <View style={fieldStyle('username')}>
-                                        <Text
-                                            style={[
-                                                styles.atPrefix,
-                                                (usernameStatus === 'taken' ||
-                                                    (usernameStatus === 'invalid' && username.length > 0)) &&
-                                                    styles.atPrefixError,
-                                            ]}
-                                        >
-                                            @
-                                        </Text>
-                                        <TextInput
-                                            testID="auth-username"
-                                            placeholder={t('login.usernamePlaceholder')}
-                                            placeholderTextColor={PLACEHOLDER}
-                                            style={[
-                                                styles.fieldInput,
-                                                (usernameStatus === 'taken' ||
-                                                    (usernameStatus === 'invalid' && username.length > 0)) &&
-                                                    styles.fieldInputError,
-                                            ]}
-                                            value={username}
-                                            onChangeText={(text) => setUsername(formatUsernameInput(text))}
-                                            onFocus={() => onFieldFocus('username')}
-                                            onBlur={() => setFocusedField(null)}
-                                            autoCapitalize="none"
-                                            autoCorrect={false}
-                                            spellCheck={false}
-                                            maxLength={USERNAME_MAX_LENGTH}
-                                            returnKeyType="next"
-                                            blurOnSubmit={false}
-                                            onSubmitEditing={() => focusNextField('username')}
-                                            autoComplete="off"
-                                            textContentType="none"
-                                            importantForAutofill="no"
-                                            key="reg-username"
-                                            ref={(r) => {
-                                                inputRefs.current.username = r;
-                                            }}
-                                        />
-                                        {usernameStatus === 'checking' ? (
-                                            <ActivityIndicator size="small" color={PRIMARY_DARK} />
-                                        ) : usernameStatus === 'available' ? (
-                                            <Ionicons name="checkmark-circle" size={22} color="#16A34A" />
-                                        ) : null}
-                                    </View>
-                                    {usernameStatus === 'taken' ? (
-                                        <Text style={styles.fieldErrorText}>{t('login.usernameTaken')}</Text>
-                                    ) : null}
-                                    {usernameStatus === 'invalid' && username.length > 0 ? (
-                                        <Text style={styles.fieldErrorText}>{t('login.usernameInvalid')}</Text>
-                                    ) : null}
-                                </View>
                             </>
                         )}
 
@@ -616,7 +529,7 @@ export default function LoginScreen() {
                             </Text>
                             <View style={fieldStyle('email')}>
                                 {isRegistering ? (
-                                    <Ionicons name="mail-outline" size={20} color={focusedField === 'email' ? PRIMARY_DARK : PLACEHOLDER} />
+                                    <Ionicons name="mail-outline" size={20} color={focusedField === 'email' ? colors.primary : colors.textSubtle} />
                                 ) : null}
                                 <TextInput
                                     testID="auth-email"
@@ -626,7 +539,8 @@ export default function LoginScreen() {
                                             ? t('login.emailPlaceholder')
                                             : t('login.emailPlaceholder')
                                     }
-                                    placeholderTextColor={PLACEHOLDER}
+                                    placeholderTextColor={colors.textSubtle}
+                                    keyboardAppearance={scheme}
                                     style={styles.fieldInput}
                                     value={email}
                                     onChangeText={setEmail}
@@ -638,8 +552,8 @@ export default function LoginScreen() {
                                     returnKeyType="next"
                                     blurOnSubmit={false}
                                     onSubmitEditing={() => focusNextField('email')}
-                                    autoComplete="off"
-                                    textContentType="oneTimeCode"
+                                    autoComplete={isRegistering ? 'email' : 'username'}
+                                    textContentType="emailAddress"
                                     importantForAutofill="no"
                                     ref={(r) => {
                                         inputRefs.current.email = r;
@@ -656,12 +570,13 @@ export default function LoginScreen() {
                         >
                             <Text style={styles.label}>{t('login.password')}</Text>
                             <View style={fieldStyle('password')}>
-                                <Ionicons name="lock-closed-outline" size={20} color={focusedField === 'password' ? PRIMARY_DARK : PLACEHOLDER} />
+                                <Ionicons name="lock-closed-outline" size={20} color={focusedField === 'password' ? colors.primary : colors.textSubtle} />
                                 <TextInput
                                     testID="auth-password"
                                     key={isRegistering ? 'reg-password' : 'login-password'}
                                     placeholder="••••••••"
-                                    placeholderTextColor={PLACEHOLDER}
+                                    placeholderTextColor={colors.textSubtle}
+                                    keyboardAppearance={scheme}
                                     style={styles.fieldInput}
                                     value={password}
                                     onChangeText={setPassword}
@@ -670,8 +585,8 @@ export default function LoginScreen() {
                                     secureTextEntry={!showPassword}
                                     autoCapitalize="none"
                                     autoCorrect={false}
-                                    autoComplete="off"
-                                    textContentType="oneTimeCode"
+                                    autoComplete={isRegistering ? 'password-new' : 'password'}
+                                    textContentType={isRegistering ? 'newPassword' : 'password'}
                                     importantForAutofill="no"
                                     returnKeyType="done"
                                     onSubmitEditing={handleAuth}
@@ -687,7 +602,7 @@ export default function LoginScreen() {
                                     <Ionicons
                                         name={showPassword ? 'eye-off-outline' : 'eye-outline'}
                                         size={21}
-                                        color={PLACEHOLDER}
+                                        color={colors.textSubtle}
                                     />
                                 </TouchableOpacity>
                             </View>
@@ -714,7 +629,7 @@ export default function LoginScreen() {
                             style={styles.btnPrimaryWrapper}
                         >
                             <LinearGradient
-                                colors={[PRIMARY, PRIMARY_DARK]}
+                                colors={[colors.brand, colors.primary]}
                                 start={{ x: 0, y: 0 }}
                                 end={{ x: 1, y: 0 }}
                                 style={styles.btnPrimary}
@@ -722,16 +637,63 @@ export default function LoginScreen() {
                                 {loading ? (
                                     <ActivityIndicator color="#FFF" />
                                 ) : (
-                                    <>
-                                        <Text style={styles.btnText}>
-                                            {isRegistering ? t('login.createAccount') : t('login.enter')}
-                                        </Text>
-                                        <Ionicons name="arrow-forward" size={19} color="#FFF" />
-                                    </>
+                                    <Text style={styles.btnText}>
+                                        {isRegistering ? t('login.createAccount') : t('login.enter')}
+                                    </Text>
                                 )}
                             </LinearGradient>
                         </TouchableOpacity>
+
+                        <View style={styles.socialDivider}>
+                            <View style={styles.socialDividerLine} />
+                            <Text style={styles.socialDividerText}>{t('login.orContinueWith')}</Text>
+                            <View style={styles.socialDividerLine} />
+                        </View>
+                        <View style={styles.socialRow}>
+                            {isAppleAuthSupported() ? (
+                                <TouchableOpacity
+                                    testID="auth-apple"
+                                    onPress={() => void handleSocialAuth('apple')}
+                                    disabled={loading}
+                                    activeOpacity={0.85}
+                                    style={[styles.socialBtn, styles.socialBtnApple]}
+                                >
+                                    <Ionicons name="logo-apple" size={20} color="#FFF" />
+                                    <Text style={styles.socialBtnAppleText}>{t('login.apple')}</Text>
+                                </TouchableOpacity>
+                            ) : null}
+                            <TouchableOpacity
+                                testID="auth-google"
+                                onPress={() => void handleSocialAuth('google')}
+                                disabled={loading}
+                                activeOpacity={0.85}
+                                style={[
+                                    styles.socialBtn,
+                                    styles.socialBtnGoogle,
+                                    !isAppleAuthSupported() && styles.socialBtnFull,
+                                ]}
+                            >
+                                <Ionicons name="logo-google" size={18} color={colors.text} />
+                                <Text style={styles.socialBtnGoogleText}>{t('login.google')}</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
+
+                    <Text style={styles.legalText}>
+                        {t('login.legalBefore')}
+                        <Text style={styles.legalLink} onPress={() => void openNexoPage(NEXO_TERMS_URL)}>
+                            {t('settings.terms')}
+                        </Text>
+                        {t('login.legalMid1')}
+                        <Text style={styles.legalLink} onPress={() => void openNexoPage(NEXO_NORMS_URL)}>
+                            {t('settings.communityNorms')}
+                        </Text>
+                        {t('login.legalMid2')}
+                        <Text style={styles.legalLink} onPress={() => void openNexoPage(NEXO_PRIVACY_URL)}>
+                            {t('settings.privacy')}
+                        </Text>
+                        {t('login.legalAfter')}
+                    </Text>
 
                     <TouchableOpacity
                         style={styles.switchLink}
@@ -748,8 +710,36 @@ export default function LoginScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: BRAND_SURFACE },
+function createLoginStyles(c: ThemeColors) {
+    const INK = c.text;
+    const MUTED = c.textMuted;
+    const PRIMARY = c.brand;
+    const PRIMARY_DARK = c.primary;
+    const DANGER = c.danger;
+    const isDark = c.statusBar !== 'dark';
+    const pageBg = isDark ? c.backgroundAlt : '#E2EBF2';
+    const fieldBg = isDark ? c.surfaceSubtle : '#F5F9FF';
+    const fieldBorder = isDark ? c.border : '#E3ECFB';
+    return StyleSheet.create({
+    container: { flex: 1, backgroundColor: pageBg },
+    closeBtn: {
+        position: 'absolute',
+        left: 16,
+        zIndex: 4,
+        width: 44,
+        height: 44,
+        borderRadius: 15,
+        backgroundColor: c.surface,
+        alignItems: 'center',
+        justifyContent: 'center',
+        elevation: 3,
+        shadowColor: PRIMARY_DARK,
+        shadowOpacity: 0.12,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: c.border,
+    },
     flex: { flex: 1 },
     heroGradient: {
         position: 'absolute',
@@ -757,7 +747,7 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         height: 380,
-        backgroundColor: BRAND_SURFACE,
+        backgroundColor: pageBg,
         borderBottomLeftRadius: 42,
         borderBottomRightRadius: 42,
     },
@@ -773,33 +763,28 @@ const styles = StyleSheet.create({
     logoImage: {
         width: 104,
         height: 104,
-        marginBottom: 10,
-    },
-    brandTitle: {
-        fontSize: 40,
-        fontWeight: '900',
-        color: INK,
-        letterSpacing: 12,
-        marginLeft: 12,
+        marginBottom: 0,
     },
     card: {
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderRadius: 28,
         padding: 22,
-        shadowColor: '#1E3A8A',
+        shadowColor: '#000',
         shadowOpacity: 0.14,
         shadowRadius: 24,
         shadowOffset: { width: 0, height: 12 },
         elevation: 10,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: c.border,
     },
     segmented: {
         flexDirection: 'row',
-        backgroundColor: FIELD_BG,
+        backgroundColor: fieldBg,
         borderRadius: 16,
         padding: 4,
         marginBottom: 22,
         borderWidth: 1,
-        borderColor: FIELD_BORDER,
+        borderColor: fieldBorder,
     },
     segmentBtn: {
         flex: 1,
@@ -808,7 +793,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     segmentBtnActive: {
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         shadowColor: '#1E3A8A',
         shadowOpacity: 0.1,
         shadowRadius: 8,
@@ -829,15 +814,15 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
-        backgroundColor: FIELD_BG,
+        backgroundColor: fieldBg,
         borderRadius: 15,
         borderWidth: 1.5,
-        borderColor: FIELD_BORDER,
+        borderColor: fieldBorder,
         paddingHorizontal: 14,
     },
     fieldWrapperFocused: {
         borderColor: PRIMARY,
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
     },
     fieldWrapperError: {
         borderColor: DANGER,
@@ -859,7 +844,10 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingVertical: 15,
         fontSize: 15.5,
+        fontWeight: '400',
         color: INK,
+        letterSpacing: 0,
+        textTransform: 'none',
     },
     atPrefix: {
         fontSize: 16,
@@ -870,7 +858,7 @@ const styles = StyleSheet.create({
     eyeButton: { padding: 2 },
     inputHint: {
         fontSize: 12,
-        color: PLACEHOLDER,
+        color: c.textSubtle,
         fontWeight: '500',
         marginTop: 6,
         marginLeft: 4,
@@ -895,6 +883,46 @@ const styles = StyleSheet.create({
         borderRadius: 16,
     },
     btnText: { color: '#FFF', fontWeight: '800', fontSize: 16 },
+    socialDivider: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginTop: 18,
+        marginBottom: 14,
+    },
+    socialDividerLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: fieldBorder },
+    socialDividerText: { fontSize: 12, fontWeight: '700', color: MUTED, textTransform: 'uppercase' },
+    socialRow: { flexDirection: 'row', gap: 10 },
+    socialBtn: {
+        flex: 1,
+        minHeight: 50,
+        borderRadius: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingHorizontal: 12,
+    },
+    socialBtnFull: { flex: 1 },
+    socialBtnApple: { backgroundColor: '#111111' },
+    socialBtnAppleText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
+    socialBtnGoogle: {
+        backgroundColor: c.surface,
+        borderWidth: 1.5,
+        borderColor: fieldBorder,
+    },
+    socialBtnGoogleText: { color: INK, fontWeight: '800', fontSize: 15 },
+    legalText: {
+        marginTop: 16,
+        paddingHorizontal: 4,
+        fontSize: 12.5,
+        lineHeight: 18,
+        fontWeight: '500',
+        color: MUTED,
+        textAlign: 'center',
+    },
+    legalLink: { color: PRIMARY_DARK, fontWeight: '800' },
     switchLink: { marginTop: 22, alignItems: 'center', paddingVertical: 6 },
     switchLinkText: { color: MUTED, fontWeight: '600', fontSize: 14 },
-});
+    });
+}

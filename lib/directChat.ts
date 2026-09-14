@@ -16,7 +16,7 @@ export interface DirectConversation {
     avatar_url: string | null;
     avatarUri: string;
     lastMessage: DirectMessagePreview | null;
-    /** Para ordenar hilos abiertos sin mensajes. */
+    /** Hilos abiertos desde el + (aún sin mensajes). */
     openedAt?: string;
     unread: number;
 }
@@ -64,19 +64,23 @@ async function writeOpenedEntries(userId: string, entries: OpenedEntry[]): Promi
 }
 
 /**
- * Marca un chat 1:1 como abierto aunque aún no haya mensajes,
- * para que aparezca en Mis chats al volver atrás.
+ * Marca un chat 1:1 como abierto (p. ej. desde el +) para que aparezca en Mis chats
+ * aunque aún no haya mensajes. No usar desde el perfil si no se quiere listar vacío.
  */
 export async function ensureDirectConversation(userId: string, peerId: string): Promise<void> {
     if (!userId || !peerId || userId === peerId) return;
     const opened = await readOpenedEntries(userId);
     const rest = opened.filter((entry) => entry.id !== peerId);
     await writeOpenedEntries(userId, [{ id: peerId, at: new Date().toISOString() }, ...rest]);
-    await supabase
-        .from('chats_directos_ocultos')
-        .delete()
-        .eq('usuario_id', userId)
-        .eq('peer_id', peerId);
+    try {
+        await supabase
+            .from('chats_directos_ocultos')
+            .delete()
+            .eq('usuario_id', userId)
+            .eq('peer_id', peerId);
+    } catch {
+        // best effort: no bloquear abrir el chat
+    }
 }
 
 async function removeOpenedPeer(userId: string, peerId: string): Promise<void> {
@@ -89,8 +93,8 @@ async function removeOpenedPeer(userId: string, peerId: string): Promise<void> {
 }
 
 /**
- * Conversaciones directas ya resumidas por Supabase. Solo se combinan aquí
- * los hilos abiertos localmente que todavía no tienen ningún mensaje.
+ * Conversaciones con mensajes + hilos abiertos localmente desde el + (sin mensajes).
+ * Abrir mensaje desde un perfil NO llama a ensureDirectConversation → no aparece vacío.
  */
 export async function getDirectConversations(
     userId: string,
@@ -106,11 +110,11 @@ export async function getDirectConversations(
     ]);
 
     const hiddenPeers = new Set((hiddenResult.data ?? []).map((row) => row.peer_id as string));
-    const directRows = summaries.filter((row) => row.conversation_kind === 'direct');
     const conversations = new Map<string, DirectConversation>();
 
-    for (const row of directRows) {
+    for (const row of summaries.filter((r) => r.conversation_kind === 'direct')) {
         const peerId = row.conversation_id;
+        // get_chat_summaries ya excluye ocultos salvo mensajes posteriores a oculto_en.
         const nombre = row.title || 'Usuario';
         conversations.set(peerId, {
             peerId,
@@ -158,7 +162,21 @@ export async function getDirectConversations(
     return [...conversations.values()];
 }
 
-/** Quita el chat directo de tu lista (reaparece si el otro te escribe de nuevo). */
+/** Vuelve a mostrar un chat directo en la lista (p. ej. al enviar o recibir un mensaje). */
+export async function unhideDirectChat(userId: string, peerId: string): Promise<void> {
+    if (!userId || !peerId || userId === peerId) return;
+    try {
+        await supabase
+            .from('chats_directos_ocultos')
+            .delete()
+            .eq('usuario_id', userId)
+            .eq('peer_id', peerId);
+    } catch {
+        // best effort
+    }
+}
+
+/** Quita el chat directo de tu lista (reaparece si vuelves a escribir o te escriben). */
 export async function hideDirectChat(
     userId: string,
     peerId: string,

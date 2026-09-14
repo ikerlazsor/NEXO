@@ -30,30 +30,43 @@ serve(async (req: Request) => {
       if (callerProfile?.rol !== 'owner' || callerProfile?.baneado === true) {
         return jsonResponse(403, { error: 'not_authorized' });
       }
-      if (!targetProfile) return jsonResponse(404, { error: 'user_not_found' });
-      if (targetProfile.rol === 'owner' || targetProfile.rol === 'admin') {
+      if (!targetProfile && !(await admin.auth.admin.getUserById(targetUserId)).data.user) {
+        return jsonResponse(404, { error: 'user_not_found' });
+      }
+      if (targetProfile?.rol === 'owner' || targetProfile?.rol === 'admin') {
         return jsonResponse(403, { error: 'cannot_moderate_staff' });
       }
     }
 
-    const { data: existingUser, error: lookupError } = await admin.auth.admin.getUserById(targetUserId);
-    if (lookupError || !existingUser.user) return jsonResponse(404, { error: 'user_not_found' });
+    // Storage: best-effort.
+    try {
+      const { data: paths, error: pathError } = await admin.rpc(
+        'get_user_storage_cleanup_paths',
+        { p_user_id: targetUserId },
+      );
+      if (!pathError && paths) {
+        try {
+          await removeStoragePaths(admin, paths);
+        } catch (storageErr) {
+          console.error('storage_cleanup_skipped', storageErr);
+        }
+      }
+    } catch (storageErr) {
+      console.error('storage_cleanup_skipped', storageErr);
+    }
 
-    const { data: paths, error: pathError } = await admin.rpc(
-      'get_user_storage_cleanup_paths',
-      { p_user_id: targetUserId },
-    );
-    if (pathError) throw new Error(`cleanup_paths_failed:${pathError.message}`);
-
-    await removeStoragePaths(admin, paths);
-
-    const { error: prepareError } = await admin.rpc('prepare_account_deletion', {
+    const { error: deleteError } = await admin.rpc('service_delete_account', {
       p_user_id: targetUserId,
+      p_actor_id: caller.id,
     });
-    if (prepareError) throw new Error(`prepare_deletion_failed:${prepareError.message}`);
-
-    const { error: deleteError } = await admin.auth.admin.deleteUser(targetUserId, false);
-    if (deleteError) throw new Error(`auth_delete_failed:${deleteError.message}`);
+    if (deleteError) {
+      const msg = deleteError.message || 'delete_account_failed';
+      if (/not_authorized/i.test(msg)) return jsonResponse(403, { error: 'not_authorized' });
+      if (/cannot_moderate_staff/i.test(msg)) return jsonResponse(403, { error: 'cannot_moderate_staff' });
+      if (/invalid_target/i.test(msg)) return jsonResponse(400, { error: 'invalid_target' });
+      if (/user_not_found/i.test(msg)) return jsonResponse(404, { error: 'user_not_found' });
+      throw new Error(`service_delete_failed:${msg}`);
+    }
 
     return jsonResponse(200, { ok: true });
   } catch (error) {
@@ -62,4 +75,3 @@ serve(async (req: Request) => {
     return jsonResponse(status, { error: message });
   }
 });
-

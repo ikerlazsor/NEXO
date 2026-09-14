@@ -1,5 +1,6 @@
 import type { Membership } from '../components/PlanCard';
 import type { FeedTaste } from './feedAffinity';
+import { isPlanActiveForFeed } from './planLifecycle';
 import type { Genero } from './profileFields';
 import { screenCacheKey, ScreenCacheTTL } from './screenCaches';
 
@@ -17,7 +18,16 @@ export type FeedSnapshot = {
     invitedPlanIds: string[];
     feedTaste: FeedTaste;
     notifBreakdown: { friendRequests: number; planRequests: number; planInvites: number };
+    isOrganizer?: boolean;
 };
 
 export const FEED_PLAN_COLUMNS =
-    'id, titulo, imagen_url, categoria, tipo_deporte, solo_chicas, solo_amigos, modo_privado, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion, estado';
+    'id, titulo, imagen_url, imagenes_url, recurrencia, categoria, tipo_deporte, solo_chicas, solo_amigos, modo_privado, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion, estado, creado_en';
+
+/** Quita planes ya pasados del snapshot en disco / memoria. */
+export function sanitizeFeedSnapshot(snap: FeedSnapshot): FeedSnapshot {
+    return {
+        ...snap,
+        plans: Array.isArray(snap.plans) ? snap.plans.filter(isPlanActiveForFeed) : [],
+    };
+}

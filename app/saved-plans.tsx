@@ -1,13 +1,15 @@
 import {
-    Ionicons } from '@expo/vector-icons';
+    Ionicons
+} from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { FlashList } from '@shopify/flash-list';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React,
-    { useCallback,
+import React, {
+    useCallback,
     useRef,
-    useState } from 'react';
-import { FlashList } from '@shopify/flash-list';
+    useState
+} from 'react';
 import {
     ActivityIndicator,
     Platform,
@@ -16,29 +18,34 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { Alert } from '../lib/nexoAlert';
 import { PlanCard, type Membership } from '../components/PlanCard';
 import { useListScrollRestore } from '../hooks/useListScrollRestore';
+import { getAuthUser } from '../lib/auth';
+import { useAuthSession } from '../lib/authSession';
 import { deletePlanCompletely } from '../lib/deletePlan';
+import { attachFeedPlanPeople } from '../lib/feedQuery';
 import { useT } from '../lib/i18n';
 import { FLASH_LIST_DRAW_DISTANCE } from '../lib/listConfig';
-import { ScreenKeys } from '../lib/screenState';
+import { broadcastPlanMembership } from '../lib/membershipBroadcast';
+import { Alert } from '../lib/nexoAlert';
+import { persistJoinWithWaitlistFallback, persistLeave } from '../lib/offlineActions';
+import { peekViewerIsOrganizer, rememberViewerIsOrganizer } from '../lib/organizer';
 import {
-    isAcceptedParticipant,
+    canJoinWaitlist,
     mapEstadoToMembership,
     membershipFromJoinEstado,
     promoteWaitlist,
     resolveJoinEstado,
 } from '../lib/participants';
-import { canJoinPlanByGender } from '../lib/soloChicas';
-import { canJoinMorePlans } from '../lib/planLimits';
-import { getAuthUser } from '../lib/auth';
-import type { Genero } from '../lib/profileFields';
 import { isPlanActiveForSaved, purgePastSavedPlansForUser, runPlanLifecycleMaintenance } from '../lib/planLifecycle';
-import { screenCacheKey, ScreenCacheTTL, invalidatePlanMembershipCaches } from '../lib/screenCaches';
-import { cacheGetStale, cacheSet } from '../lib/ttlCache';
-import { getMyProfile, getPublicProfileCards } from '../lib/profileData';
+import { canJoinMorePlans, countLocalActivePlans, MAX_ACTIVE_PLANS } from '../lib/planLimits';
+import { getMyProfile } from '../lib/profileData';
+import type { Genero } from '../lib/profileFields';
+import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
+import { ScreenKeys } from '../lib/screenState';
+import { canJoinPlanByGender } from '../lib/soloChicas';
 import { supabase } from '../lib/supabase';
+import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
@@ -55,24 +62,51 @@ type SavedPlansSnapshot = {
 export default function SavedPlansScreen() {
     const router = useRouter();
     const { t } = useT();
-    const [loading, setLoading] = useState(true);
-    const [savedPlans, setSavedPlans] = useState<any[]>([]);
-    const [membershipMap, setMembershipMap] = useState<Record<string, Membership>>({});
-    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-    const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(null);
+    const { userId: sessionUserId } = useAuthSession();
+    const cachedSaved = sessionUserId
+        ? cacheGetStale<SavedPlansSnapshot>(screenCacheKey.savedPlans(sessionUserId))
+        : null;
+    const upcomingCached = (cachedSaved?.savedPlans ?? []).filter((p) => isPlanActiveForSaved(p));
+    const [loading, setLoading] = useState(() => !cachedSaved);
+    const [savedPlans, setSavedPlans] = useState<any[]>(() => upcomingCached);
+    const [membershipMap, setMembershipMap] = useState<Record<string, Membership>>(
+        () => cachedSaved?.membershipMap ?? {},
+    );
+    const [currentUserId, setCurrentUserId] = useState<string | null>(sessionUserId);
+    const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(
+        () => cachedSaved?.currentUserGenero ?? null,
+    );
+    const [isOrganizerAccount, setIsOrganizerAccount] = useState(() => peekViewerIsOrganizer());
     const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.SAVED_PLANS);
-    const hasDataRef = useRef(false);
+    const hasDataRef = useRef(!!cachedSaved);
     const fetchGenRef = useRef(0);
+    const joiningRef = useRef(false);
+
+    // Sincronizar estado de corazón desde feed / pantalla de detalle
+    React.useEffect(() => {
+        const saveUnsub = subscribeSaveState((evt) => {
+            setSavedPlans((prev) => {
+                if (evt.saved) {
+                    // Si se guarda, añadir si no existe
+                    return prev.some((p) => p.id === evt.planId) ? prev : prev;
+                } else {
+                    // Si se quita, eliminar de la lista
+                    return prev.filter((p) => p.id !== evt.planId);
+                }
+            });
+        });
+        return saveUnsub;
+    }, []);
 
     const fetchSavedData = useCallback(async () => {
         const gen = ++fetchGenRef.current;
         try {
-            const user = await getAuthUser();
-            if (!user) return;
+            const userId = sessionUserId ?? (await getAuthUser())?.id ?? null;
+            if (!userId) return;
             if (gen !== fetchGenRef.current) return;
-            setCurrentUserId(user.id);
+            setCurrentUserId(userId);
 
-            const cacheKey = screenCacheKey.savedPlans(user.id);
+            const cacheKey = screenCacheKey.savedPlans(userId);
             const cached = cacheGetStale<SavedPlansSnapshot>(cacheKey);
             if (cached && !hasDataRef.current) {
                 const upcoming = (cached.savedPlans ?? []).filter((p) => isPlanActiveForSaved(p));
@@ -89,20 +123,22 @@ export default function SavedPlansScreen() {
             if (gen !== fetchGenRef.current) return;
             const nextGenero = (myProfile?.genero as Genero) ?? null;
             setCurrentUserGenero(nextGenero);
+            setIsOrganizerAccount(myProfile?.es_organizador === true);
+            rememberViewerIsOrganizer(myProfile?.es_organizador === true);
 
             void runPlanLifecycleMaintenance();
-            await purgePastSavedPlansForUser(user.id);
+            await purgePastSavedPlansForUser(userId);
             if (gen !== fetchGenRef.current) return;
 
             const { data: savedData } = await supabase
                 .from('planes_guardados')
-                .select('plan_id, planes (*, participantes(usuario_id, estado))')
-                .eq('usuario_id', user.id);
+                .select('plan_id, planes (*)')
+                .eq('usuario_id', userId);
 
             const { data: joinedData } = await supabase
                 .from('participantes')
                 .select('plan_id, estado')
-                .eq('usuario_id', user.id);
+                .eq('usuario_id', userId);
 
             if (gen !== fetchGenRef.current) return;
 
@@ -111,27 +147,7 @@ export default function SavedPlansScreen() {
                 .filter(Boolean)
                 .filter((plan: any) => isPlanActiveForSaved(plan));
 
-            const profileIds = Array.from(new Set(rawPlans.flatMap((plan: any) => [
-                plan.creador_id,
-                ...(plan.participantes ?? [])
-                    .filter((p: any) => isAcceptedParticipant(p.estado))
-                    .map((p: any) => p.usuario_id),
-            ]).filter(Boolean)));
-            const publicProfiles = await getPublicProfileCards(profileIds);
-            const profileMap = Object.fromEntries(publicProfiles.map((profile) => [profile.id, profile]));
-
-            const formatted = rawPlans.map((plan: any) => {
-                const rawParticipants = (plan.participantes || []) as any[];
-                const accepted = rawParticipants.filter((p: any) => isAcceptedParticipant(p.estado));
-                const list: any[] = [];
-                const creator = profileMap[plan.creador_id];
-                if (creator) list.push({ ...creator, isCreator: true });
-                accepted.forEach((p: any) => {
-                    const prof = profileMap[p.usuario_id];
-                    if (prof && prof.id !== plan.creador_id) list.push({ ...prof, isCreator: false });
-                });
-                return { ...plan, joinedCount: accepted.length, participantsList: list };
-            });
+            const formatted = await attachFeedPlanPeople(rawPlans, { keepNonFeed: true });
 
             setSavedPlans(formatted);
             hasDataRef.current = true;
@@ -153,7 +169,7 @@ export default function SavedPlansScreen() {
         } finally {
             if (gen === fetchGenRef.current) setLoading(false);
         }
-    }, []);
+    }, [sessionUserId]);
 
     useFocusEffect(
         useCallback(() => {
@@ -161,8 +177,22 @@ export default function SavedPlansScreen() {
         }, [fetchSavedData]),
     );
 
+    const joinErrorCopy = (error: { message?: string } | null | undefined) => {
+        const msg = String(error?.message || '');
+        if (msg.includes('organizer_cannot_join')) return t('organizer.cannotJoin');
+        if (msg.includes('solo_chicas')) return t('card.soloChicasOnly');
+        if (msg.includes('friends_only')) return t('feed.joinError');
+        if (msg.includes('plan_private') || msg.includes('invite_required')) return t('feed.joinError');
+        if (msg.includes('plan_full')) return t('feed.joinError');
+        return t('feed.joinError');
+    };
+
     const handleJoin = async (planId: string) => {
-        if (!currentUserId) return;
+        if (!currentUserId || joiningRef.current) return;
+        if (isOrganizerAccount) {
+            Alert.alert(t('feed.error'), t('organizer.cannotJoin'));
+            return;
+        }
         const plan = savedPlans.find(p => p.id === planId);
         if (!plan) return;
 
@@ -171,33 +201,89 @@ export default function SavedPlansScreen() {
             return;
         }
 
-        const limitCheck = await canJoinMorePlans(currentUserId, planId);
-        if (!limitCheck.allowed) {
-            Alert.alert(t('feed.error'), t('feed.planLimitReached', { max: limitCheck.max }));
-            return;
+        const existingMembership = membershipMap[planId];
+        const alreadyIn =
+            existingMembership === 'joined' ||
+            existingMembership === 'requested' ||
+            existingMembership === 'waitlist';
+        if (!alreadyIn) {
+            const localCount = countLocalActivePlans(currentUserId, savedPlans, membershipMap);
+            if (localCount >= MAX_ACTIVE_PLANS) {
+                const limitCheck = await canJoinMorePlans(currentUserId, planId);
+                if (!limitCheck.allowed) {
+                    Alert.alert(
+                        t('feed.error'),
+                        limitCheck.reason === 'organizer'
+                            ? t('organizer.cannotJoin')
+                            : t('feed.planLimitReached', { max: limitCheck.max }),
+                    );
+                    return;
+                }
+            }
         }
 
+        joiningRef.current = true;
         const estado = resolveJoinEstado({
             requiere_aprobacion: plan.requiere_aprobacion,
             maximo_participantes: plan.maximo_participantes,
             joinedCount: plan.joinedCount,
         });
         const nextMembership = membershipFromJoinEstado(estado);
+        const prevMap = membershipMap;
+        const prevPlans = savedPlans;
         setMembershipMap(prev => ({ ...prev, [planId]: nextMembership }));
         if (estado === 'aceptado') {
             setSavedPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: p.joinedCount + 1 } : p));
         }
-        await supabase.from('participantes').insert({ plan_id: planId, usuario_id: currentUserId, estado });
-        invalidatePlanMembershipCaches(currentUserId);
-        const { notifyPlanJoin, schedulePlanLifecycleReminders } = await import('../lib/push');
-            notifyPlanJoin(planId, estado);
-            if (estado === 'aceptado') {
-                void schedulePlanLifecycleReminders({
-                planId,
-                planTitle: plan.titulo,
-                fechaEvento: plan.fecha_evento,
-                categoria: plan.categoria,
+        try {
+            const { queued, error, estado: applied } = await persistJoinWithWaitlistFallback(
+                {
+                    planId,
+                    userId: currentUserId,
+                    estado,
+                    planTitle: plan.titulo,
+                    fechaEvento: plan.fecha_evento,
+                    categoria: plan.categoria,
+                    locationName: plan.nombre_ubicacion,
+                },
+                canJoinWaitlist(plan.fecha_evento),
+            );
+            if (error) {
+                setMembershipMap(prevMap);
+                setSavedPlans(prevPlans);
+                Alert.alert(t('feed.error'), joinErrorCopy(error));
+                return;
+            }
+            if (applied === 'lista_espera' && estado === 'aceptado') {
+                setMembershipMap((prev) => ({ ...prev, [planId]: 'waitlist' }));
+                setSavedPlans(prevPlans);
+                Alert.alert(t('feed.joinedWaitlist'));
+            }
+            const finalMembership: Membership =
+                applied === 'lista_espera'
+                    ? 'waitlist'
+                    : applied === 'pendiente'
+                      ? 'requested'
+                      : nextMembership;
+            broadcastPlanMembership(planId, finalMembership, {
+                userId: currentUserId,
+                bumpJoined: finalMembership === 'joined',
+                clearInvite: true,
             });
+            if (!queued) {
+                const { notifyPlanJoin, schedulePlanLifecycleReminders } = await import('../lib/push');
+                notifyPlanJoin(planId, applied);
+                if (applied === 'aceptado') {
+                    void schedulePlanLifecycleReminders({
+                        planId,
+                        planTitle: plan.titulo,
+                        fechaEvento: plan.fecha_evento,
+                        categoria: plan.categoria,
+                    });
+                }
+            }
+        } finally {
+            joiningRef.current = false;
         }
     };
 
@@ -212,11 +298,22 @@ export default function SavedPlansScreen() {
             [
             { text: t('common.no') },
             { text: t('common.yes'), onPress: async () => {
+                const prevMap = membershipMap;
+                const prevPlans = savedPlans;
                 setMembershipMap(prev => { const n = { ...prev }; delete n[planId]; return n; });
                 if (wasJoined) setSavedPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: Math.max(0, p.joinedCount - 1) } : p));
-                await supabase.from('participantes').delete().eq('plan_id', planId).eq('usuario_id', currentUserId);
-                invalidatePlanMembershipCaches(currentUserId);
-                if (wasJoined) {
+                const { queued, error } = await persistLeave(planId, currentUserId, wasJoined);
+                if (error) {
+                    setMembershipMap(prevMap);
+                    setSavedPlans(prevPlans);
+                    Alert.alert(t('feed.error'), t('feed.leaveError'));
+                    return;
+                }
+                broadcastPlanMembership(planId, 'none', {
+                    userId: currentUserId,
+                    dropJoined: wasJoined,
+                });
+                if (wasJoined && !queued) {
                     await promoteWaitlist(planId);
                     fetchSavedData();
                 }
@@ -280,6 +377,7 @@ export default function SavedPlansScreen() {
                             userGenero={currentUserGenero}
                             membership={membershipMap[item.id] || 'none'}
                             isSaved={true}
+                            viewerIsOrganizer={isOrganizerAccount}
                             onJoin={handleJoin}
                             onLeave={handleLeave}
                             onDelete={handleDelete}
@@ -297,7 +395,7 @@ export default function SavedPlansScreen() {
                                 <Ionicons name="heart-outline" size={48} color={PRIMARY} />
                             </View>
                             <Text style={styles.emptyTitle}>{t('saved.empty')}</Text>
-                            <TouchableOpacity style={styles.exploreBtn} onPress={() => router.back()}>
+                            <TouchableOpacity style={styles.exploreBtn} onPress={() => router.navigate('/')}>
                                 <Text style={styles.exploreBtnText}>{t('saved.explore')}</Text>
                             </TouchableOpacity>
                         </View>

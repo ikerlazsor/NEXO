@@ -19,7 +19,7 @@ SET created_at = COALESCE(created_at, creado_en, now())
 WHERE created_at IS NULL;
 
 -- Cuenta planes activos: creados futuros/sin fecha + unidos aceptados
--- (excluyendo los que ya cuentan como creador).
+-- (excluyendo los que ya cuentan como creador y los chats de grupo/directo).
 CREATE OR REPLACE FUNCTION public.count_user_active_plans(p_user_id uuid)
 RETURNS integer
 LANGUAGE sql
@@ -32,6 +32,9 @@ AS $$
             SELECT COUNT(*)::int
             FROM public.planes
             WHERE creador_id = p_user_id
+              AND COALESCE(is_group_chat, false) = false
+              AND COALESCE(is_direct_chat, false) = false
+              AND COALESCE(categoria, '') NOT IN ('Grupo', 'Chat')
               AND (fecha_evento IS NULL OR fecha_evento >= now())
         )
         +
@@ -42,13 +45,16 @@ AS $$
             WHERE p.usuario_id = p_user_id
               AND p.estado = 'aceptado'
               AND pl.creador_id IS DISTINCT FROM p_user_id
+              AND COALESCE(pl.is_group_chat, false) = false
+              AND COALESCE(pl.is_direct_chat, false) = false
+              AND COALESCE(pl.categoria, '') NOT IN ('Grupo', 'Chat')
               AND (pl.fecha_evento IS NULL OR pl.fecha_evento >= now())
         );
 $$;
 
 GRANT EXECUTE ON FUNCTION public.count_user_active_plans(uuid) TO authenticated;
 
--- Impide superar 3 planes activos al insertar/actualizar a 'aceptado'
+-- Impide superar 5 planes activos al insertar/actualizar a 'aceptado'
 -- (el creador del plan sí puede estar como aceptado en su propio plan).
 CREATE OR REPLACE FUNCTION public.enforce_active_plan_limit()
 RETURNS trigger
@@ -57,8 +63,9 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_max int := 3;
+    v_max int := 5;
     v_is_creator boolean;
+    v_is_chat boolean;
     v_count int;
 BEGIN
     IF NEW.estado IS DISTINCT FROM 'aceptado' THEN
@@ -69,12 +76,18 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    SELECT EXISTS (
-        SELECT 1 FROM public.planes
-        WHERE id = NEW.plan_id AND creador_id = NEW.usuario_id
-    ) INTO v_is_creator;
+    SELECT
+        (pl.creador_id = NEW.usuario_id),
+        (
+            COALESCE(pl.is_group_chat, false)
+            OR COALESCE(pl.is_direct_chat, false)
+            OR COALESCE(pl.categoria, '') IN ('Grupo', 'Chat')
+        )
+    INTO v_is_creator, v_is_chat
+    FROM public.planes pl
+    WHERE pl.id = NEW.plan_id;
 
-    IF v_is_creator THEN
+    IF COALESCE(v_is_creator, false) OR COALESCE(v_is_chat, false) THEN
         RETURN NEW;
     END IF;
 
@@ -110,7 +123,7 @@ DECLARE
     v_next_user uuid;
     v_tried uuid[] := ARRAY[]::uuid[];
     v_user_active int;
-    v_max_active int := 3;
+    v_max_active int := 5;
 BEGIN
     SELECT maximo_participantes INTO v_max_spots FROM public.planes WHERE id = p_plan_id;
     IF v_max_spots IS NULL THEN

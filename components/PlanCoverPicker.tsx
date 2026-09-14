@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useRef } from 'react';
+import { Image } from 'expo-image';
 import {
     Dimensions,
     FlatList,
-    Image,
     NativeScrollEvent,
     NativeSyntheticEvent,
     Pressable,
@@ -13,7 +13,6 @@ import {
     View,
 } from 'react-native';
 import { useT } from '../lib/i18n';
-import { MAIN_CATEGORY_ICONS } from '../lib/categories';
 
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
@@ -22,14 +21,7 @@ const { width: SCREEN_W } = Dimensions.get('window');
 const H_PAD = 20;
 const PREVIEW_W = SCREEN_W - H_PAD * 2;
 const PREVIEW_H = 248;
-const THUMB = 72;
-
-const CATEGORY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-    ...Object.fromEntries(
-        Object.entries(MAIN_CATEGORY_ICONS).map(([k, v]) => [k, v as keyof typeof Ionicons.glyphMap]),
-    ),
-    Grupo: 'people',
-};
+const THUMB_GAP = 8;
 
 interface Props {
     category: string;
@@ -38,22 +30,29 @@ interface Props {
     images: any[];
     selectedIndex: number;
     onSelectIndex: (index: number) => void;
+    hideTitle?: boolean;
 }
 
-export function PlanCoverPicker({ category, coverKey, categoryLabel, images, selectedIndex, onSelectIndex }: Props) {
+export function PlanCoverPicker({ category, coverKey, categoryLabel: _categoryLabel, images, selectedIndex, onSelectIndex, hideTitle = false }: Props) {
     const { t } = useT();
     const listRef = useRef<FlatList>(null);
     const listKey = coverKey ?? category;
     const thumbScrollRef = useRef(false);
+    const programmaticScrollRef = useRef(false);
 
     useEffect(() => {
         const idx = Math.max(0, Math.min(images.length - 1, selectedIndex));
+        programmaticScrollRef.current = true;
         listRef.current?.scrollToOffset({ offset: idx * PREVIEW_W, animated: false });
+        const tmr = setTimeout(() => {
+            programmaticScrollRef.current = false;
+        }, 80);
+        return () => clearTimeout(tmr);
     }, [listKey, images.length, selectedIndex]);
 
     const onScrollEnd = useCallback(
         (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-            if (thumbScrollRef.current) return;
+            if (thumbScrollRef.current || programmaticScrollRef.current) return;
             const idx = Math.round(e.nativeEvent.contentOffset.x / PREVIEW_W);
             const clamped = Math.max(0, Math.min(images.length - 1, idx));
             if (clamped !== selectedIndex) onSelectIndex(clamped);
@@ -71,18 +70,13 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
         }, 350);
     };
 
-    const icon = CATEGORY_ICONS[category] ?? 'image';
-
     return (
         <View style={styles.wrap}>
+            {hideTitle ? null : (
             <View style={styles.headerRow}>
                 <Text style={styles.title}>{t('createplan.coverPhoto')}</Text>
-                <View style={styles.counterPill}>
-                    <Text style={styles.counterText}>
-                        {t('createplan.coverPhotoOf', { current: selectedIndex + 1, total: images.length })}
-                    </Text>
-                </View>
             </View>
+            )}
 
             <View style={styles.previewShadow}>
                 <View style={styles.previewCard}>
@@ -109,7 +103,9 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
                             <Image
                                 source={typeof item === 'number' ? item : { uri: item }}
                                 style={styles.previewImage}
-                                resizeMode="cover"
+                                contentFit="cover"
+                                cachePolicy="memory-disk"
+                                recyclingKey={`${listKey}-${String(item)}`}
                             />
                         )}
                     />
@@ -119,13 +115,6 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
                         style={styles.previewGradient}
                         pointerEvents="none"
                     />
-
-                    <View style={styles.previewBadge} pointerEvents="none">
-                        <View style={styles.categoryChip}>
-                            <Ionicons name={icon} size={14} color="#FFF" />
-                            <Text style={styles.categoryChipText}>{categoryLabel}</Text>
-                        </View>
-                    </View>
 
                     <View style={styles.swipeHint} pointerEvents="none">
                         <Ionicons name="swap-horizontal" size={14} color="rgba(255,255,255,0.85)" />
@@ -137,16 +126,25 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
             <View style={styles.thumbRow}>
                 {images.map((img, i) => {
                     const active = i === selectedIndex;
+                    const n = Math.max(images.length, 1);
+                    const thumbSize = Math.floor(
+                        (SCREEN_W - H_PAD * 2 - THUMB_GAP * (n - 1)) / n,
+                    );
                     return (
                         <Pressable
                             key={`${listKey}-thumb-${i}`}
                             onPress={() => pickThumb(i)}
-                            style={[styles.thumbWrap, active && styles.thumbWrapActive]}
+                            style={[
+                                styles.thumbWrap,
+                                { width: thumbSize, height: thumbSize },
+                                active && styles.thumbWrapActive,
+                            ]}
                         >
                             <Image
                                 source={typeof img === 'number' ? img : { uri: img }}
                                 style={styles.thumbImage}
-                                resizeMode="cover"
+                                contentFit="cover"
+                                cachePolicy="memory-disk"
                             />
                             {active && (
                                 <View style={styles.thumbCheck}>
@@ -163,35 +161,17 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel, images, sel
 
 const styles = StyleSheet.create({
     wrap: {
-        paddingTop: 8,
-        paddingBottom: 4,
+        paddingTop: 28,
+        paddingBottom: 8,
         backgroundColor: '#F2F7FF',
         borderBottomWidth: 4,
         borderBottomColor: '#E8F0FE',
     },
     headerRow: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        justifyContent: 'space-between',
         paddingHorizontal: H_PAD,
         marginBottom: 14,
-        gap: 12,
     },
     title: { fontSize: 17, fontWeight: '800', color: INK, letterSpacing: -0.3 },
-    counterPill: {
-        backgroundColor: '#FFF',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: '#E3ECFB',
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.08,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 2,
-    },
-    counterText: { fontSize: 12, fontWeight: '800', color: PRIMARY_DARK },
     previewShadow: {
         marginHorizontal: H_PAD,
         borderRadius: 24,
@@ -218,19 +198,6 @@ const styles = StyleSheet.create({
         bottom: 0,
         height: PREVIEW_H * 0.45,
     },
-    previewBadge: { position: 'absolute', top: 14, left: 14 },
-    categoryChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        backgroundColor: 'rgba(37, 99, 235, 0.88)',
-        paddingHorizontal: 12,
-        paddingVertical: 7,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.25)',
-    },
-    categoryChipText: { color: '#FFF', fontSize: 12, fontWeight: '800' },
     swipeHint: {
         position: 'absolute',
         bottom: 14,
@@ -246,30 +213,29 @@ const styles = StyleSheet.create({
     swipeHintText: { color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: '600' },
     thumbRow: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 10,
+        flexWrap: 'nowrap',
+        gap: THUMB_GAP,
         paddingHorizontal: H_PAD,
         paddingTop: 16,
         paddingBottom: 20,
-        justifyContent: 'center',
+        justifyContent: 'flex-start',
+        alignItems: 'center',
     },
     thumbWrap: {
-        width: THUMB,
-        height: THUMB,
-        borderRadius: 16,
+        borderRadius: 14,
         overflow: 'hidden',
         borderWidth: 2.5,
         borderColor: 'transparent',
         backgroundColor: '#E2E8F0',
+        flexShrink: 0,
     },
     thumbWrapActive: {
         borderColor: PRIMARY_DARK,
-        transform: [{ scale: 1.04 }],
         shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.35,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 3 },
-        elevation: 4,
+        shadowOpacity: 0.3,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 3,
     },
     thumbImage: { width: '100%', height: '100%' },
     thumbCheck: {

@@ -182,7 +182,7 @@ export default function AdminReportUserScreen() {
             <ScreenHeader title={t('admin.reportUser')} onBack={() => router.back()} />
             <ScrollView contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + 32 }]}>
                 <Text style={styles.title}>
-                    @{row.denunciado?.nombre_usuario || row.denunciado_id.slice(0, 8)}
+                    {row.denunciado?.nombre || row.denunciado_id.slice(0, 8)}
                 </Text>
                 {isBanned ? (
                     <View style={styles.bannedTag}>
@@ -193,7 +193,7 @@ export default function AdminReportUserScreen() {
                     {t('admin.reason')}: {row.motivo}
                 </Text>
                 <Text style={styles.meta}>
-                    @{row.reportador?.nombre_usuario || '—'} · {new Date(row.creado_en).toLocaleString()}
+                    {row.reportador?.nombre || '—'} · {new Date(row.creado_en).toLocaleString()}
                 </Text>
                 {row.mensaje ? (
                     <View style={styles.box}>

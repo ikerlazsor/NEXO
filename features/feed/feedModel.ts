@@ -1,6 +1,28 @@
 import { ScreenKeys, setScreenScrollOffset } from "../../lib/screenState";
 
-export const DATE_KEYS = ["all", "today", "week", "month"];
+export const DATE_KEYS = ["all", "today", "week"];
+
+export function toDayKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+export function parseDayKey(key: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function feedDateBounds(from = new Date()): { min: Date; max: Date } {
+  const min = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  const max = new Date(from.getFullYear(), from.getMonth() + 5, from.getDate());
+  min.setHours(0, 0, 0, 0);
+  max.setHours(23, 59, 59, 999);
+  return { min, max };
+}
 
 export function asStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {

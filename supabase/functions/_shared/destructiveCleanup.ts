@@ -64,7 +64,9 @@ export async function removeStoragePaths(
     for (let offset = 0; offset < allNames.length; offset += 100) {
       const chunk = allNames.slice(offset, offset + 100);
       const { error } = await admin.storage.from(bucket).remove(chunk);
-      if (error) throw new Error(`storage_cleanup_failed:${bucket}:${error.message}`);
+      if (error) {
+        console.error(`storage_cleanup_failed:${bucket}:${error.message}`);
+      }
     }
   }
 }

@@ -6,13 +6,15 @@ import { isFeedPlan } from './feedPlans';
 import { normalizeMainCategory } from './categories';
 
 const FEED_CATEGORIES = ['FOODIES', 'DEPORTES', 'AIRE_LIBRE', 'SHOWTIME', 'DESCUBRIR', 'VIBES'] as const;
-const BADGE_STATS_TTL_MS = 90_000;
+const BADGE_STATS_TTL_MS = 180_000;
 
 export interface BadgeStats extends UserStats {
     planesTapas: number;
     planesDeporte: number;
     planesFiesta: number;
     planesEstudio: number;
+    planesAireLibre: number;
+    planesShowtime: number;
     planesSoloChicas: number;
     planesCreados: number;
     categoriasProbadas: number;
@@ -26,6 +28,8 @@ export const EMPTY_BADGE_STATS: BadgeStats = {
     planesDeporte: 0,
     planesFiesta: 0,
     planesEstudio: 0,
+    planesAireLibre: 0,
+    planesShowtime: 0,
     planesSoloChicas: 0,
     planesCreados: 0,
     categoriasProbadas: 0,
@@ -34,10 +38,70 @@ export const EMPTY_BADGE_STATS: BadgeStats = {
 };
 
 function badgeCacheKey(userId: string) {
-    return `badgeStats:${userId}`;
+    return `badgeStats:v2:${userId}`;
 }
 
-function countByCategory(rows: { categoria?: string | null }[]): Pick<BadgeStats, 'planesTapas' | 'planesDeporte' | 'planesFiesta' | 'planesEstudio' | 'planesSoloChicas' | 'categoriasProbadas'> {
+function applyCategoryCounts(
+    stats: BadgeStats,
+    rows: { categoria?: string | null }[],
+): BadgeStats {
+    const cats = countByCategory(rows);
+    return {
+        ...stats,
+        planesTapas: cats.planesTapas,
+        planesDeporte: cats.planesDeporte,
+        planesFiesta: cats.planesFiesta,
+        planesEstudio: cats.planesEstudio,
+        planesAireLibre: cats.planesAireLibre,
+        planesShowtime: cats.planesShowtime,
+        categoriasProbadas: cats.categoriasProbadas,
+    };
+}
+
+/** RPC de categorías o, si aún no está pegada, historial propio. */
+async function fetchAttendedCategories(userId: string): Promise<{
+    rows: { categoria?: string | null }[];
+    authoritative: boolean;
+}> {
+    try {
+        const { data, error } = await supabase.rpc('get_user_attended_categories', {
+            p_user_id: userId,
+        });
+        if (!error && Array.isArray(data)) {
+            return {
+                rows: data.map((c) => ({ categoria: typeof c === 'string' ? c : null })),
+                authoritative: true,
+            };
+        }
+    } catch {
+        /* RPC ausente hasta pegar la migración */
+    }
+
+    const { data, error } = await supabase
+        .from('historial_planes')
+        .select('planes ( categoria )')
+        .eq('usuario_id', userId);
+    if (error) return { rows: [], authoritative: false };
+
+    const rows = (data ?? []).map((r) => {
+        const raw = r.planes;
+        const plan = Array.isArray(raw) ? raw[0] : raw;
+        return { categoria: (plan as { categoria?: string })?.categoria ?? null };
+    });
+    return { rows, authoritative: false };
+}
+
+function countByCategory(rows: { categoria?: string | null }[]): Pick<
+    BadgeStats,
+    | 'planesTapas'
+    | 'planesDeporte'
+    | 'planesFiesta'
+    | 'planesEstudio'
+    | 'planesAireLibre'
+    | 'planesShowtime'
+    | 'planesSoloChicas'
+    | 'categoriasProbadas'
+> {
     const counts: Record<(typeof FEED_CATEGORIES)[number], number> = {
         FOODIES: 0,
         DEPORTES: 0,
@@ -56,8 +120,42 @@ function countByCategory(rows: { categoria?: string | null }[]): Pick<BadgeStats
         planesDeporte: counts.DEPORTES,
         planesFiesta: counts.VIBES,
         planesEstudio: counts.DESCUBRIR,
+        planesAireLibre: counts.AIRE_LIBRE,
+        planesShowtime: counts.SHOWTIME,
         planesSoloChicas: 0,
         categoriasProbadas: tried,
+    };
+}
+
+/** Categoría principal a la que más ha ido. */
+export function topAttendedCategory(stats: BadgeStats): (typeof FEED_CATEGORIES)[number] | null {
+    const pairs: Array<[(typeof FEED_CATEGORIES)[number], number]> = [
+        ['FOODIES', stats.planesTapas],
+        ['DEPORTES', stats.planesDeporte],
+        ['VIBES', stats.planesFiesta],
+        ['DESCUBRIR', stats.planesEstudio],
+        ['AIRE_LIBRE', stats.planesAireLibre],
+        ['SHOWTIME', stats.planesShowtime],
+    ];
+    let best: (typeof FEED_CATEGORIES)[number] | null = null;
+    let max = 0;
+    for (const [id, n] of pairs) {
+        if (n > max) {
+            max = n;
+            best = id;
+        }
+    }
+    return max > 0 ? best : null;
+}
+
+export function categoryCounts(stats: BadgeStats): Partial<Record<(typeof FEED_CATEGORIES)[number], number>> {
+    return {
+        FOODIES: stats.planesTapas,
+        DEPORTES: stats.planesDeporte,
+        VIBES: stats.planesFiesta,
+        DESCUBRIR: stats.planesEstudio,
+        AIRE_LIBRE: stats.planesAireLibre,
+        SHOWTIME: stats.planesShowtime,
     };
 }
 
@@ -85,6 +183,8 @@ function parseRpcBadgeStats(raw: Record<string, unknown>): BadgeStats {
         planesDeporte: Number(raw.planesDeporte) || 0,
         planesFiesta: Number(raw.planesFiesta) || 0,
         planesEstudio: Number(raw.planesEstudio) || 0,
+        planesAireLibre: Number(raw.planesAireLibre) || 0,
+        planesShowtime: Number(raw.planesShowtime) || 0,
         planesSoloChicas: Number(raw.planesSoloChicas) || 0,
         planesCreados: Number(raw.planesCreados) || 0,
         categoriasProbadas: Number(raw.categoriasProbadas) || 0,
@@ -147,6 +247,8 @@ async function fetchBadgeStatsTable(
         planesDeporte: row.planes_deporte ?? 0,
         planesFiesta: row.planes_fiesta ?? 0,
         planesEstudio: row.planes_estudio ?? 0,
+        planesAireLibre: 0,
+        planesShowtime: 0,
         planesSoloChicas: row.planes_solo_chicas ?? 0,
         categoriasProbadas: row.categorias_probadas ?? 0,
         planesCreados: row.planes_creados ?? 0,
@@ -223,12 +325,21 @@ export async function getBadgeStats(
         if (cached) return cached;
     }
 
-    const rpcStats = await fetchBadgeStatsRpc(userId);
+    const [rpcStats, attended] = await Promise.all([
+        fetchBadgeStatsRpc(userId),
+        fetchAttendedCategories(userId),
+    ]);
     const tableStats =
         rpcStats ??
         (await fetchBadgeStatsTable(userId, options?.userCreatedAt));
-    const stats =
+    let stats =
         tableStats ?? (await fetchBadgeStatsClient(userId, options));
+    // El RPC/materializado cuenta Tapas/Deporte legacy y deja AIRE_LIBRE/SHOWTIME a 0.
+    // Solo pisamos si el RPC de categorías existe o el historial propio trajo filas
+    // (en perfiles ajenos el historial está vacío por RLS).
+    if (attended.authoritative || attended.rows.length > 0) {
+        stats = applyCategoryCounts(stats, attended.rows);
+    }
     cacheSet(badgeCacheKey(userId), stats, BADGE_STATS_TTL_MS);
     return stats;
 }

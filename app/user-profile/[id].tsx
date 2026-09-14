@@ -18,12 +18,26 @@ import {
 import { Alert } from '../../lib/nexoAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AvatarLightbox } from '../../components/AvatarLightbox';
+import { MediaLightbox } from '../../components/MediaLightbox';
+import { TranslatedText } from '../../components/TranslatedText';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { ProfileReputationStats } from '../../components/ProfileReputationStats';
-import { BadgeDetailModal, BadgeTile } from '../../components/TrophyBadge';
+import {
+    AttendedPlansRow,
+    FrostedIconButton,
+    GalleryThumb,
+    InterestTiles,
+    MutualAvatarsRow,
+    FollowersAvatarsRow,
+    OrganizerIdentity,
+    ProfileDualActions,
+    ProfileHero,
+    ProfileSection,
+    ProfileStatsCard,
+    formatMembers,
+} from '../../components/profile-ui/ProfileRedesign';
 import { getAuthUser } from '../../lib/auth';
-import { getUserBadges, type UserBadge } from '../../lib/badges';
-import { getBadgeStats } from '../../lib/badgeStats';
+import { useAuthSession } from '../../lib/authSession';
 import {
     acceptFriendRequest,
     cancelFriendRequest,
@@ -38,34 +52,63 @@ import { blockUser, isBlockedEitherWay, isUserBlocked, unblockUser } from '../..
 import { countSharedAttendedPlans } from '../../lib/coincidences';
 import { hapticError, hapticLight, hapticSuccess } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
-import { renderRatingStars } from '../../lib/profileRating';
-import { EMPTY_STATS, formatRatingScore, getUserStats, type UserStats } from '../../lib/stats';
+import { useAppTheme } from '../../lib/appTheme';
+import { EMPTY_STATS, getUserStats, personRepeatStat, type UserStats } from '../../lib/stats';
+import { EMPTY_BADGE_STATS, getBadgeStats, type BadgeStats } from '../../lib/badgeStats';
+import {
+    affinityPersonFromProfile,
+    countSharedOrganizerFollows,
+    fetchFirstPersonRepeat,
+    resolveProfileAffinity,
+    type AffinityPerson,
+    type FirstRepeatVote,
+} from '../../lib/profileAffinity';
 import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
+import { USER_PROFILE_TTL_MS, userProfileKey } from '../../lib/userProfileCache';
+import { rememberFriendStatus, resolveKnownFriendStatus } from '../../lib/friendStatusPeek';
+import { ensureViewerAffinityPerson } from '../../lib/viewerAffinityCache';
 import { screenCacheKey } from '../../lib/screenCaches';
-import { ensureDirectConversation } from '../../lib/directChat';
 import { getAdminProfileAccess, getMyProfile, getPublicProfile } from '../../lib/profileData';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../../lib/screenState';
-import { bothFemaleGenero, getPersonalityLabel, parseHabitos, parsePrivacy, type ProfilePrivacy } from '../../lib/profileFields';
+import { bothFemaleGenero, calcAge, parseHabitos, parsePrivacy } from '../../lib/profileFields';
 import { deleteUserAdmin } from '../../lib/moderation';
 import { fetchAccountAccess } from '../../lib/roles';
+import { ownerActionsVisible } from '../../lib/ownerSecretActions';
+import {
+    followOrganizer,
+    getOrganizerFollowStats,
+    getOrganizerMembers,
+    getOrganizerPastPlans,
+    getOrganizerPlansCount,
+    getOrganizerUpcomingPlans,
+    organizerPlanCard,
+    organizerProfileCopy,
+    parseOrganizerMeta,
+    unfollowOrganizer,
+    type OrganizerMeta,
+    type OrganizerUpcomingPlan,
+} from '../../lib/organizer';
+import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../../lib/planDetailCache';
+import { readCoverUrl } from '../../lib/profileCover';
+import { recordOrganizerProfileView } from '../../lib/organizerInsights';
+import {
+    getMutualFriends,
+    getOrganizerFriendAttendees,
+    getPublicAttendedPlans,
+    type MutualFriendsResult,
+    type PublicAttendedPlan,
+} from '../../lib/profileSocial';
 
-const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
-const INK = '#0F172A';
 const MUTED = '#64748B';
-const BG = '#F8FAFC';
-const SURFACE = '#FFFFFF';
-const BORDER = '#E2E8F0';
-const SUCCESS = '#22C55E';
 const DANGER = '#EF4444';
-const USER_PROFILE_TTL_MS = 90_000;
-const userProfileKey = (id: string) => `userProfile:${id}`;
 
 type PublicProfile = {
     id: string;
     nombre: string | null;
     avatar_url: string | null;
+    cover_url?: string | null;
     descripcion: string | null;
     etiquetas: string[] | null;
     edad: number | null;
@@ -74,26 +117,42 @@ type PublicProfile = {
     habitos_consumo: Record<string, unknown> | null;
     ambientes_preferidos: string[] | null;
     perfil_gustos: Record<string, unknown> | null;
+    es_organizador?: boolean;
+    organizador?: OrganizerMeta;
 };
 
 type UserProfileSnapshot = {
     userProfile: PublicProfile;
     friendsCount: number;
     stats: UserStats;
-    badges: UserBadge[];
-    privacy: ProfilePrivacy;
     friendStatus: FriendStatus | null;
     requestId: string | null;
     blocked: boolean;
     blockedEitherWay: boolean;
     currentUserId: string | null;
     currentUserGenero: string | null;
+    currentUserIsOrganizer?: boolean;
     sharedPlans: number;
+    followersCount?: number;
+    organizerPlansCount?: number;
+    followingOrganizer?: boolean;
+    upcomingPlans?: OrganizerUpcomingPlan[];
+    organizedPlans?: OrganizerUpcomingPlan[];
+    mutualFriends?: MutualFriendsResult;
+    attendedPlans?: PublicAttendedPlan[];
+    orgFriendAttendees?: MutualFriendsResult;
+    followerPreviews?: Array<{ id: string; nombre: string; avatar_url: string | null }>;
+    badgeStats?: BadgeStats;
+    viewerAffinity?: AffinityPerson | null;
+    sharedCommunities?: number;
+    firstRepeat?: FirstRepeatVote;
 };
 
 export default function UserProfileScreen() {
     const router = useRouter();
-    const { t } = useT();
+    const { t, lang } = useT();
+    const { colors } = useAppTheme();
+    const { userId: sessionUserId } = useAuthSession();
     const { id, isFriend } = useLocalSearchParams<{ id: string | string[]; isFriend?: string }>();
     const profileId = Array.isArray(id) ? id[0] : id;
     const friendHint = isFriend === '1';
@@ -105,46 +164,127 @@ export default function UserProfileScreen() {
 
     const [loading, setLoading] = useState(() => !cached?.userProfile);
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(() => cached?.userProfile ?? null);
-    const [currentUserId, setCurrentUserId] = useState<string | null>(() => cached?.currentUserId ?? null);
-    const [friendStatus, setFriendStatus] = useState<FriendStatus | null>(
-        () => cached?.friendStatus ?? (friendHint ? 'friends' : 'none'),
+    const [currentUserId, setCurrentUserId] = useState<string | null>(
+        () => sessionUserId ?? cached?.currentUserId ?? null,
+    );
+    const [friendStatus, setFriendStatus] = useState<FriendStatus | null>(() =>
+        resolveKnownFriendStatus({
+            viewerId: sessionUserId ?? cached?.currentUserId,
+            otherUserId: profileId,
+            cachedStatus: cached?.friendStatus,
+            friendHint,
+        }),
     );
     const [requestId, setRequestId] = useState<string | null>(() => cached?.requestId ?? null);
     const [friendsCount, setFriendsCount] = useState(() => cached?.friendsCount ?? 0);
     const [stats, setStats] = useState<UserStats>(() => cached?.stats ?? EMPTY_STATS);
     const [blocked, setBlocked] = useState(() => cached?.blocked ?? false);
     const [blockedEitherWay, setBlockedEitherWay] = useState(() => cached?.blockedEitherWay ?? false);
-    const [privacy, setPrivacy] = useState<ProfilePrivacy | null>(() => cached?.privacy ?? null);
-    const [badges, setBadges] = useState<UserBadge[]>(() => cached?.badges ?? []);
-    const [selectedBadge, setSelectedBadge] = useState<UserBadge | null>(null);
     const [avatarOpen, setAvatarOpen] = useState(false);
     const [sharedPlans, setSharedPlans] = useState(() => cached?.sharedPlans ?? 0);
     const [currentUserGenero, setCurrentUserGenero] = useState<string | null>(
         () => cached?.currentUserGenero ?? null,
     );
+    const [currentUserIsOrganizer, setCurrentUserIsOrganizer] = useState(
+        () => cached?.currentUserIsOrganizer === true,
+    );
     const [isOwner, setIsOwner] = useState(false);
     const [targetIsStaff, setTargetIsStaff] = useState(false);
     const [deletingUser, setDeletingUser] = useState(false);
+    const [followersCount, setFollowersCount] = useState(() => cached?.followersCount ?? 0);
+    const [organizerPlansCount, setOrganizerPlansCount] = useState(() => cached?.organizerPlansCount ?? 0);
+    const [followingOrganizer, setFollowingOrganizer] = useState(() => cached?.followingOrganizer ?? false);
+    const [followBusy, setFollowBusy] = useState(false);
+    const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+    const [upcomingPlans, setUpcomingPlans] = useState(cached?.upcomingPlans ?? []);
+    const [organizedPlans, setOrganizedPlans] = useState(cached?.organizedPlans ?? []);
+    const [mutualFriends, setMutualFriends] = useState<MutualFriendsResult>(
+        cached?.mutualFriends ?? { total: 0, items: [] },
+    );
+    const [attendedPlans, setAttendedPlans] = useState<PublicAttendedPlan[]>(cached?.attendedPlans ?? []);
+    const [orgFriendAttendees, setOrgFriendAttendees] = useState<MutualFriendsResult>(
+        cached?.orgFriendAttendees ?? { total: 0, items: [] },
+    );
+    const [followerPreviews, setFollowerPreviews] = useState(
+        cached?.followerPreviews ?? [],
+    );
+    const [badgeStats, setBadgeStats] = useState<BadgeStats>(
+        cached?.badgeStats ?? EMPTY_BADGE_STATS,
+    );
+    const [viewerAffinity, setViewerAffinity] = useState<AffinityPerson | null>(
+        () => cached?.viewerAffinity ?? null,
+    );
+    const [sharedCommunities, setSharedCommunities] = useState(() => cached?.sharedCommunities ?? 0);
+    const [firstRepeat, setFirstRepeat] = useState<FirstRepeatVote>(() => cached?.firstRepeat ?? null);
     const hasDataRef = useRef(!!cached?.userProfile);
     /** Promesa del envío en curso (para poder cancelar antes de tener requestId). */
     const pendingSendRef = useRef<Promise<string | null> | null>(null);
     const cancelDesiredRef = useRef(false);
+    const friendStatusRef = useRef(friendStatus);
+    const requestIdRef = useRef(requestId);
+    friendStatusRef.current = friendStatus;
+    requestIdRef.current = requestId;
+
+    /** Evita que un loadProfile en vuelo pise el estado optimista de solicitud enviada. */
+    const coalesceFriendStatus = useCallback(
+        (
+            incoming: FriendStatus | null,
+            incomingRequestId: string | null,
+        ): { status: FriendStatus | null; requestId: string | null } => {
+            const currentStatus = friendStatusRef.current;
+            const currentRequestId = requestIdRef.current;
+
+            if (pendingSendRef.current) {
+                return { status: currentStatus, requestId: currentRequestId };
+            }
+
+            if (currentStatus === 'pending_sent' && incoming === 'none') {
+                return { status: currentStatus, requestId: currentRequestId ?? incomingRequestId };
+            }
+
+            return { status: incoming, requestId: incomingRequestId };
+        },
+        [],
+    );
 
     const applySnapshot = useCallback((snap: UserProfileSnapshot) => {
         setUserProfile(snap.userProfile);
         setFriendsCount(snap.friendsCount);
         setStats(snap.stats);
-        setBadges(snap.badges);
-        setPrivacy(snap.privacy);
-        setFriendStatus(snap.friendStatus);
+        const resolved =
+            snap.friendStatus ??
+            resolveKnownFriendStatus({
+                viewerId: snap.currentUserId ?? sessionUserId,
+                otherUserId: snap.userProfile?.id ?? profileId,
+                cachedStatus: null,
+                friendHint,
+            });
+        setFriendStatus(resolved);
+        if (resolved && resolved !== 'self' && snap.userProfile?.id) {
+            rememberFriendStatus(snap.userProfile.id, resolved, snap.requestId);
+        }
         setRequestId(snap.requestId);
         setBlocked(snap.blocked);
         setBlockedEitherWay(snap.blockedEitherWay);
         setCurrentUserId(snap.currentUserId);
         setCurrentUserGenero(snap.currentUserGenero);
+        setCurrentUserIsOrganizer(snap.currentUserIsOrganizer === true);
         setSharedPlans(snap.sharedPlans);
+        setFollowersCount(snap.followersCount ?? 0);
+        setOrganizerPlansCount(snap.organizerPlansCount ?? 0);
+        setFollowingOrganizer(snap.followingOrganizer ?? false);
+        setUpcomingPlans(snap.upcomingPlans ?? []);
+        setOrganizedPlans(snap.organizedPlans ?? []);
+        setMutualFriends(snap.mutualFriends ?? { total: 0, items: [] });
+        setAttendedPlans(snap.attendedPlans ?? []);
+        setOrgFriendAttendees(snap.orgFriendAttendees ?? { total: 0, items: [] });
+        setFollowerPreviews(snap.followerPreviews ?? []);
+        setBadgeStats(snap.badgeStats ?? EMPTY_BADGE_STATS);
+        setViewerAffinity(snap.viewerAffinity ?? null);
+        setSharedCommunities(snap.sharedCommunities ?? 0);
+        setFirstRepeat(snap.firstRepeat ?? null);
         hasDataRef.current = true;
-    }, []);
+    }, [friendHint, profileId, sessionUserId]);
 
     const loadProfile = useCallback(async (opts?: { force?: boolean }) => {
         if (!profileId) return;
@@ -152,18 +292,27 @@ export default function UserProfileScreen() {
 
         try {
             const stale = cacheGetStale<UserProfileSnapshot>(profileKey);
+            const viewerNeeded =
+                sessionUserId
+                && profileId
+                && sessionUserId !== profileId
+                && !stale?.userProfile?.es_organizador;
             if (stale?.userProfile) {
                 // Solo hidratar si aún no hay UI: evita un segundo layout al refrescar.
                 if (!hasDataRef.current) {
                     applySnapshot(stale);
                 }
                 setLoading(false);
-                if (!opts?.force && cacheIsFresh(profileKey)) return;
+                if (!opts?.force && cacheIsFresh(profileKey) && stale.badgeStats) {
+                    if (!viewerNeeded || stale.viewerAffinity) return;
+                }
             } else if (!hasDataRef.current) {
                 setLoading(true);
             }
 
-            const user = await getAuthUser();
+            const userId = sessionUserId ?? (await getAuthUser())?.id ?? null;
+            const user = userId ? { id: userId } : null;
+            const peekIsOrg = stale?.userProfile?.es_organizador === true;
 
             const friendPromise =
                 user && user.id !== profileId
@@ -171,18 +320,22 @@ export default function UserProfileScreen() {
                           getFriendStatus(user.id, profileId),
                           isUserBlocked(user.id, profileId),
                           isBlockedEitherWay(user.id, profileId),
-                          countSharedAttendedPlans(user.id, profileId),
+                          Promise.resolve(0),
                           getMyProfile(),
+                          // Termómetro en 1ª oleada (cacheado por sesión).
+                          ensureViewerAffinityPerson(user.id),
+                          Promise.resolve(0),
+                          Promise.resolve(null as FirstRepeatVote),
                       ])
                     : Promise.resolve(null);
 
-            const [profile, count, userStats, badgeStats, friendData, access] = await Promise.all([
+            const [profile, count, userStats, friendData, access, earlyBadgeStats] = await Promise.all([
                 getPublicProfile(profileId),
                 getFriendsCount(profileId),
                 getUserStats(profileId),
-                getBadgeStats(profileId),
                 friendPromise,
                 user ? fetchAccountAccess(user.id) : Promise.resolve(null),
+                peekIsOrg ? Promise.resolve(EMPTY_BADGE_STATS) : getBadgeStats(profileId),
             ]);
 
             if (!profile) throw new Error('profile_missing');
@@ -199,6 +352,11 @@ export default function UserProfileScreen() {
                 nombre: profile.nombre,
                 nombre_usuario: profile.nombre_usuario,
                 avatar_url: profile.avatar_url,
+                cover_url: readCoverUrl({
+                    cover_url: profile.cover_url,
+                    organizador: profile.organizador,
+                    perfil_gustos: profile.perfil_gustos,
+                }) || parseOrganizerMeta(profile.organizador).portada || null,
                 descripcion: profile.descripcion,
                 etiquetas: Array.isArray(profile.etiquetas) ? profile.etiquetas : [],
                 edad: profile.edad,
@@ -206,6 +364,8 @@ export default function UserProfileScreen() {
                 habitos_consumo: (profile.habitos_consumo as Record<string, unknown>) ?? {},
                 ambientes_preferidos: Array.isArray(profile.ambientes_preferidos) ? profile.ambientes_preferidos : [],
                 perfil_gustos: (profile.perfil_gustos as Record<string, unknown>) ?? {},
+                es_organizador: profile.es_organizador === true,
+                organizador: parseOrganizerMeta(profile.organizador),
             };
 
             let nextFriendStatus: FriendStatus | null = 'none';
@@ -215,71 +375,205 @@ export default function UserProfileScreen() {
             let nextSharedPlans = 0;
             let nextMyGenero: string | null = null;
 
+            let nextViewerAffinity: AffinityPerson | null = null;
+            let nextSharedCommunities = 0;
+            let nextFirstRepeat: FirstRepeatVote = null;
+
             if (friendData) {
-                const [status, isBlocked, eitherWay, shared, myProfileRes] = friendData;
+                const [status, isBlocked, eitherWay, shared, myProfileRes, viewerPerson, communities, repeatVote] =
+                    friendData;
                 nextFriendStatus = status.status;
                 nextRequestId = status.requestId;
+                rememberFriendStatus(profileId, status.status, status.requestId);
                 nextBlocked = isBlocked;
                 nextBlockedEitherWay = eitherWay;
                 nextSharedPlans = shared;
                 nextMyGenero = (myProfileRes.data?.genero as string | null) ?? null;
+                if (!nextProfile.es_organizador) {
+                    nextViewerAffinity = viewerPerson;
+                }
+                nextSharedCommunities = communities;
+                nextFirstRepeat = repeatVote;
             } else if (user?.id === profileId) {
                 nextFriendStatus = 'self';
             }
 
-            const snap: UserProfileSnapshot = {
+            ({ status: nextFriendStatus, requestId: nextRequestId } = coalesceFriendStatus(
+                nextFriendStatus,
+                nextRequestId,
+            ));
+
+            const viewerIsOrganizer = friendData
+                ? friendData[4].data?.es_organizador === true
+                : false;
+
+            // Shell rápido: perfil + social + stats; reputación/listas llegan en la 2ª oleada.
+            const earlySnap: UserProfileSnapshot = {
                 userProfile: nextProfile,
-                // Amigos públicos desde stats (amistades RLS solo deja ver las propias).
                 friendsCount: Math.max(count, userStats.numeroAmistades || 0),
                 stats: userStats,
-                badges: getUserBadges(badgeStats),
-                privacy: parsePrivacy(profile.perfil_gustos),
                 friendStatus: nextFriendStatus,
                 requestId: nextRequestId,
                 blocked: nextBlocked,
                 blockedEitherWay: nextBlockedEitherWay,
                 currentUserId: user?.id ?? null,
                 currentUserGenero: nextMyGenero,
+                currentUserIsOrganizer: viewerIsOrganizer,
                 sharedPlans: nextSharedPlans,
+                followersCount: stale?.followersCount ?? 0,
+                organizerPlansCount: stale?.organizerPlansCount ?? 0,
+                followingOrganizer: stale?.followingOrganizer ?? false,
+                upcomingPlans: stale?.upcomingPlans ?? [],
+                organizedPlans: stale?.organizedPlans ?? [],
+                mutualFriends: stale?.mutualFriends ?? { total: 0, items: [] },
+                attendedPlans: stale?.attendedPlans ?? [],
+                orgFriendAttendees: stale?.orgFriendAttendees ?? { total: 0, items: [] },
+                followerPreviews: stale?.followerPreviews ?? [],
+                badgeStats: earlyBadgeStats ?? stale?.badgeStats ?? EMPTY_BADGE_STATS,
+                viewerAffinity: nextViewerAffinity,
+                sharedCommunities: nextSharedCommunities,
+                firstRepeat: nextFirstRepeat,
+            };
+            cacheSet(profileKey, earlySnap, USER_PROFILE_TTL_MS);
+            if (!hasDataRef.current) {
+                applySnapshot(earlySnap);
+            } else {
+                startTransition(() => applySnapshot(earlySnap));
+            }
+            setLoading(false);
+
+            const [
+                orgStats,
+                upcoming,
+                organized,
+                mutual,
+                attended,
+                orgFriends,
+                orgMembers,
+                orgPlansCount,
+                nextBadgeStats,
+                sharedFill,
+                myBadgesFill,
+                communitiesFill,
+                repeatFill,
+            ] = await Promise.all([
+                nextProfile.es_organizador
+                    ? getOrganizerFollowStats(profileId)
+                    : Promise.resolve({ followers: 0, following: false }),
+                nextProfile.es_organizador ? getOrganizerUpcomingPlans(profileId, 8) : Promise.resolve([]),
+                nextProfile.es_organizador ? getOrganizerPastPlans(profileId, 12) : Promise.resolve([]),
+                user && user.id !== profileId && !nextProfile.es_organizador
+                    ? getMutualFriends(profileId, 6)
+                    : Promise.resolve({ total: 0, items: [] }),
+                nextProfile.es_organizador ? Promise.resolve([]) : getPublicAttendedPlans(profileId, 12),
+                user && user.id !== profileId && nextProfile.es_organizador
+                    ? getOrganizerFriendAttendees(profileId)
+                    : Promise.resolve({ total: 0, items: [] }),
+                nextProfile.es_organizador ? getOrganizerMembers(profileId) : Promise.resolve([]),
+                nextProfile.es_organizador ? getOrganizerPlansCount(profileId) : Promise.resolve(0),
+                nextProfile.es_organizador
+                    ? Promise.resolve(EMPTY_BADGE_STATS)
+                    : peekIsOrg
+                      ? getBadgeStats(profileId)
+                      : Promise.resolve(earlyBadgeStats),
+                user && user.id !== profileId && !nextProfile.es_organizador
+                    ? countSharedAttendedPlans(user.id, profileId)
+                    : Promise.resolve(0),
+                user && user.id !== profileId && !nextProfile.es_organizador
+                    ? getBadgeStats(user.id)
+                    : Promise.resolve(EMPTY_BADGE_STATS),
+                user && user.id !== profileId
+                    ? countSharedOrganizerFollows(user.id, profileId)
+                    : Promise.resolve(0),
+                user && user.id !== profileId && !nextProfile.es_organizador
+                    ? fetchFirstPersonRepeat(user.id, profileId)
+                    : Promise.resolve(null as FirstRepeatVote),
+            ]);
+
+            nextSharedPlans = sharedFill;
+            nextSharedCommunities = communitiesFill;
+            nextFirstRepeat = repeatFill;
+            if (friendData && !nextProfile.es_organizador) {
+                nextViewerAffinity =
+                    (await ensureViewerAffinityPerson(user!.id)) ?? nextViewerAffinity;
+            }
+
+            ({ status: nextFriendStatus, requestId: nextRequestId } = coalesceFriendStatus(
+                nextFriendStatus,
+                nextRequestId,
+            ));
+
+            const snap: UserProfileSnapshot = {
+                userProfile: nextProfile,
+                // Amigos públicos desde stats (amistades RLS solo deja ver las propias).
+                friendsCount: Math.max(count, userStats.numeroAmistades || 0),
+                stats: userStats,
+                friendStatus: nextFriendStatus,
+                requestId: nextRequestId,
+                blocked: nextBlocked,
+                blockedEitherWay: nextBlockedEitherWay,
+                currentUserId: user?.id ?? null,
+                currentUserGenero: nextMyGenero,
+                currentUserIsOrganizer: viewerIsOrganizer,
+                sharedPlans: nextSharedPlans,
+                followersCount: orgStats.followers ?? 0,
+                organizerPlansCount: orgPlansCount,
+                followingOrganizer: orgStats.following,
+                upcomingPlans: upcoming,
+                organizedPlans: organized,
+                mutualFriends: mutual,
+                attendedPlans: attended,
+                orgFriendAttendees: orgFriends,
+                followerPreviews: orgMembers.map((row) => ({
+                    id: row.id,
+                    nombre: row.nombre ?? '',
+                    avatar_url: row.avatar_url,
+                })),
+                badgeStats: nextBadgeStats,
+                viewerAffinity: nextViewerAffinity,
+                sharedCommunities: nextSharedCommunities,
+                firstRepeat: nextFirstRepeat,
             };
 
             cacheSet(profileKey, snap, USER_PROFILE_TTL_MS);
-            if (hasDataRef.current) {
-                // Refresco en background: no forzar un segundo layout brusco al entrar.
-                startTransition(() => applySnapshot(snap));
-            } else {
-                applySnapshot(snap);
-            }
+            startTransition(() => applySnapshot(snap));
         } catch (error) {
             if (__DEV__) console.error('Error fetching user profile:', error);
             if (!hasDataRef.current) setUserProfile(null);
         } finally {
             setLoading(false);
         }
-    }, [profileId, applySnapshot]);
+    }, [profileId, applySnapshot, sessionUserId, coalesceFriendStatus]);
 
     useFocusEffect(
         useCallback(() => {
             void loadProfile();
+            if (profileId && sessionUserId && sessionUserId !== profileId) {
+                recordOrganizerProfileView(profileId);
+            }
             // La amistad puede cambiar en otro dispositivo mientras la caché sigue "fresca".
             let cancelled = false;
             void (async () => {
                 if (!profileId) return;
-                const user = await getAuthUser();
-                if (!user || user.id === profileId) return;
+                const userId = sessionUserId ?? (await getAuthUser())?.id ?? null;
+                if (!userId || userId === profileId) return;
                 try {
-                    const status = await getFriendStatus(user.id, profileId);
+                    const status = await getFriendStatus(userId, profileId);
                     if (cancelled) return;
-                    setFriendStatus(status.status);
-                    setRequestId(status.requestId);
+                    const coalesced = coalesceFriendStatus(status.status, status.requestId);
+                    setFriendStatus(coalesced.status);
+                    setRequestId(coalesced.requestId);
+                    if (coalesced.status) {
+                        rememberFriendStatus(profileId, coalesced.status, coalesced.requestId);
+                    }
                     const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId));
                     if (prev) {
                         cacheSet(
                             userProfileKey(profileId),
                             {
                                 ...prev,
-                                friendStatus: status.status,
-                                requestId: status.requestId,
+                                friendStatus: coalesced.status,
+                                requestId: coalesced.requestId,
                             },
                             USER_PROFILE_TTL_MS,
                         );
@@ -291,7 +585,7 @@ export default function UserProfileScreen() {
             return () => {
                 cancelled = true;
             };
-        }, [loadProfile, profileId])
+        }, [loadProfile, profileId, sessionUserId, coalesceFriendStatus])
     );
 
     const handleSendRequest = () => {
@@ -307,13 +601,30 @@ export default function UserProfileScreen() {
         const sendPromise = (async () => {
             const { error, requestId: nextId } = await sendFriendRequest(currentUserId, profileId);
             if (error) {
+                if (error === 'Ya enviaste una solicitud' && nextId) {
+                    setFriendStatus('pending_sent');
+                    setRequestId(nextId);
+                    const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId));
+                    if (prev) {
+                        cacheSet(userProfileKey(profileId), {
+                            ...prev,
+                            friendStatus: 'pending_sent',
+                            requestId: nextId,
+                        }, USER_PROFILE_TTL_MS);
+                    }
+                    return nextId;
+                }
                 if (!cancelDesiredRef.current) {
                     setFriendStatus(prevStatus);
                     setRequestId(prevRequestId);
                     hapticError();
                     Alert.alert(
                         t('userprofile.sendFail'),
-                        error === 'friend_request_daily_limit' ? t('friends.requestDailyLimit') : error,
+                        error === 'friend_request_daily_limit'
+                            ? t('friends.requestDailyLimit')
+                            : error === 'organizer_no_friends'
+                              ? t('friends.organizerNoFriends')
+                              : error,
                     );
                 }
                 return null;
@@ -358,7 +669,6 @@ export default function UserProfileScreen() {
             return;
         }
 
-        Alert.alert(t('userprofile.nowFriends'), t('userprofile.nowFriendsMsg'));
         const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId!));
         if (prev) {
             cacheSet(userProfileKey(profileId!), {
@@ -398,11 +708,15 @@ export default function UserProfileScreen() {
     };
 
     const handleOwnerDeleteUser = () => {
-        if (!isOwner || !profileId || friendStatus === 'self' || targetIsStaff || deletingUser) return;
-        Alert.alert(t('admin.deleteUserTitle'), t('admin.deleteUserMsg'), [
+        if (!ownerActionsVisible(isOwner) || !profileId || friendStatus === 'self' || targetIsStaff || deletingUser) return;
+        const isCommunity = userProfile?.es_organizador === true;
+        Alert.alert(
+            t(isCommunity ? 'admin.deleteCommunityTitle' : 'admin.deleteUserTitle'),
+            t(isCommunity ? 'admin.deleteCommunityMsg' : 'admin.deleteUserMsg'),
+            [
             { text: t('common.cancel'), style: 'cancel' },
             {
-                text: t('admin.deleteUserConfirm'),
+                text: t(isCommunity ? 'admin.deleteCommunityConfirm' : 'admin.deleteUserConfirm'),
                 style: 'destructive',
                 onPress: () => {
                     setDeletingUser(true);
@@ -410,18 +724,18 @@ export default function UserProfileScreen() {
                         const { error } = await deleteUserAdmin(profileId);
                         setDeletingUser(false);
                         if (error) {
-                            const key = `admin.err.${error}` as const;
-                            const msg =
-                                error === 'cannot_moderate_staff'
-                                    ? t('admin.err.cannot_moderate_staff')
-                                    : error === 'not_authorized'
-                                      ? t('admin.err.not_authorized')
-                                      : error === 'user_not_found'
-                                        ? t('admin.err.user_not_found')
-                                        : error === 'invalid_target'
-                                          ? t('admin.err.invalid_target')
-                                          : error;
-                            Alert.alert(t('admin.error'), typeof msg === 'string' ? msg : t(key));
+                            const known = [
+                                'cannot_moderate_staff',
+                                'not_authorized',
+                                'user_not_found',
+                                'invalid_target',
+                            ] as const;
+                            const msg = known.includes(error as (typeof known)[number])
+                                ? t(`admin.err.${error}` as 'admin.err.not_authorized')
+                                : /auth_delete_failed|prepare_deletion_failed|cleanup_paths/i.test(error)
+                                  ? t('admin.err.delete_failed')
+                                  : error;
+                            Alert.alert(t('admin.error'), msg);
                             return;
                         }
                         Alert.alert(t('admin.userDeleted'));
@@ -429,7 +743,8 @@ export default function UserProfileScreen() {
                     })();
                 },
             },
-        ]);
+            ],
+        );
     };
 
     const handleCancelRequest = () => {
@@ -471,7 +786,7 @@ export default function UserProfileScreen() {
     };
 
     const handleRemoveFriend = () => {
-        if (!requestId || !userProfile) return;
+        if (!userProfile || !profileId) return;
         const fem = bothFemaleGenero(currentUserGenero, userProfile.genero);
 
         Alert.alert(
@@ -489,22 +804,38 @@ export default function UserProfileScreen() {
                         const prevRequestId = requestId;
                         setFriendStatus('none');
                         setRequestId(null);
-                        void removeFriend(prevRequestId!).then(({ error }) => {
+                        void (async () => {
+                            let friendshipId = prevRequestId;
+                            if (!friendshipId && currentUserId) {
+                                try {
+                                    const st = await getFriendStatus(currentUserId, profileId);
+                                    friendshipId = st.requestId;
+                                } catch {
+                                    /* ignore */
+                                }
+                            }
+                            if (!friendshipId) {
+                                setFriendStatus(prevStatus);
+                                setRequestId(prevRequestId);
+                                Alert.alert(t('profile.error'), t('userprofile.loadError'));
+                                return;
+                            }
+                            const { error } = await removeFriend(friendshipId);
                             if (error) {
                                 setFriendStatus(prevStatus);
                                 setRequestId(prevRequestId);
                                 Alert.alert(t('profile.error'), error.message);
                                 return;
                             }
-                            const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId!));
+                            const prev = cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId));
                             if (prev) {
-                                cacheSet(userProfileKey(profileId!), {
+                                cacheSet(userProfileKey(profileId), {
                                     ...prev,
                                     friendStatus: 'none',
                                     requestId: null,
                                 }, USER_PROFILE_TTL_MS);
                             }
-                        });
+                        })();
                     },
                 },
             ]
@@ -515,10 +846,13 @@ export default function UserProfileScreen() {
         if (!currentUserId || !profileId || !userProfile) return;
 
         if (blocked) {
-            Alert.alert(t('userprofile.unblockTitle'), t('userprofile.unblockConfirm'), [
+            Alert.alert(
+                t(isOrganizerProfile ? 'userprofile.unblockOrganizerTitle' : 'userprofile.unblockTitle'),
+                t(isOrganizerProfile ? 'userprofile.unblockOrganizerConfirm' : 'userprofile.unblockConfirm'),
+                [
                 { text: t('common.cancel'), style: 'cancel' },
                 {
-                    text: t('userprofile.unblock'),
+                    text: t(isOrganizerProfile ? 'userprofile.unblockOrganizer' : 'userprofile.unblock'),
                     onPress: () => {
                         const prevBlocked = blocked;
                         const prevEither = blockedEitherWay;
@@ -538,12 +872,14 @@ export default function UserProfileScreen() {
         }
 
         Alert.alert(
-            t('userprofile.blockTitle'),
-            t('userprofile.blockConfirmName', { name: userProfile.nombre || t('chats.user') }),
+            t(isOrganizerProfile ? 'userprofile.blockOrganizerTitle' : 'userprofile.blockTitle'),
+            t(isOrganizerProfile ? 'userprofile.blockOrganizerConfirm' : 'userprofile.blockConfirmName', {
+                name: userProfile.nombre || t('chats.user'),
+            }),
             [
                 { text: t('common.cancel'), style: 'cancel' },
                 {
-                    text: t('userprofile.block'),
+                    text: t(isOrganizerProfile ? 'userprofile.blockOrganizer' : 'userprofile.block'),
                     style: 'destructive',
                     onPress: () => {
                         const prevBlocked = blocked;
@@ -573,144 +909,181 @@ export default function UserProfileScreen() {
     };
 
     const femalePair = bothFemaleGenero(currentUserGenero, userProfile?.genero);
+    const isOrganizerProfile = userProfile?.es_organizador === true;
+    const orgMeta = userProfile?.organizador ?? {};
 
-    const renderFriendAction = () => {
-        if (friendStatus === 'self' || blockedEitherWay) return null;
+    const handleToggleFollow = async () => {
+        if (!profileId || followBusy || friendStatus === 'self') return;
+        setFollowBusy(true);
+        const prev = followingOrganizer;
+        setFollowingOrganizer(!prev);
+        setFollowersCount((n) => Math.max(0, n + (prev ? -1 : 1)));
+        const { error } = prev ? await unfollowOrganizer(profileId) : await followOrganizer(profileId);
+        setFollowBusy(false);
+        if (error) {
+            setFollowingOrganizer(prev);
+            setFollowersCount((n) => Math.max(0, n + (prev ? 1 : -1)));
+            Alert.alert(t('profile.error'), t('organizer.followError'));
+        }
+    };
 
-        if (friendStatus === 'friends') {
-            return (
-                <View style={[styles.actionSlot, styles.friendsActions]}>
-                    <TouchableOpacity
-                        style={styles.chatBtn}
-                        onPress={() => {
-                            if (!userProfile?.id || !currentUserId) return;
-                            void ensureDirectConversation(currentUserId, userProfile.id).then(() => {
-                                cacheInvalidate(screenCacheKey.chatsList(currentUserId));
-                            });
-                            router.push(`/direct-chat/${userProfile.id}`);
-                        }}
-                        activeOpacity={0.88}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('chat.directSubtitle')}
-                    >
-                        <Ionicons name="chatbubble" size={22} color="#FFF" />
-                    </TouchableOpacity>
-                    <View style={styles.friendsBadge}>
-                        <Ionicons name="checkmark-circle" size={18} color={SUCCESS} />
-                        <Text style={styles.friendsBadgeText}>
-                            {t(femalePair ? 'userprofile.areFriendsF' : 'userprofile.areFriends')}
-                        </Text>
-                    </View>
-                    <TouchableOpacity style={styles.removeFriendBtn} onPress={handleRemoveFriend} activeOpacity={0.85}>
-                        <Ionicons name="heart-dislike-outline" size={17} color={DANGER} />
-                        <Text style={styles.removeFriendText}>
-                            {t(femalePair ? 'userprofile.unfriendF' : 'userprofile.unfriend')}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
+    const openMessage = () => {
+        if (!userProfile?.id || !currentUserId) return;
+        router.push(`/direct-chat/${userProfile.id}`);
+    };
+
+    const openPlan = (planId: string) => {
+        const fromLists =
+            upcomingPlans.find((p) => String(p.id) === String(planId)) ||
+            organizedPlans.find((p) => String(p.id) === String(planId)) ||
+            attendedPlans.find((p) => String(p.id) === String(planId));
+        if (fromLists) {
+            seedPlanDetailFromFeed(
+                {
+                    ...fromLists,
+                    creador_id: profileId,
+                    host: userProfile
+                        ? {
+                              id: userProfile.id,
+                              nombre: userProfile.nombre ?? t('profile.user'),
+                              avatar_url: userProfile.avatar_url,
+                              isCreator: true,
+                          }
+                        : undefined,
+                    participantsList: userProfile
+                        ? [
+                              {
+                                  id: userProfile.id,
+                                  nombre: userProfile.nombre ?? t('profile.user'),
+                                  avatar_url: userProfile.avatar_url,
+                                  isCreator: true,
+                              },
+                          ]
+                        : [],
+                    es_organizador: userProfile?.es_organizador === true,
+                } as Record<string, unknown>,
             );
         }
-
-        if (friendStatus === 'pending_sent') {
-            return (
-                <TouchableOpacity style={[styles.actionSlot, styles.pendingBtn]} onPress={handleCancelRequest} activeOpacity={0.85}>
-                    <Ionicons name="time-outline" size={18} color="#64748B" />
-                    <Text style={styles.pendingBtnText}>{t('userprofile.requestSent')}</Text>
-                </TouchableOpacity>
-            );
-        }
-
-        if (friendStatus === 'pending_received') {
-            return (
-                <View style={[styles.actionSlot, styles.receivedActions]}>
-                    <TouchableOpacity style={styles.acceptBtn} onPress={handleAccept} activeOpacity={0.88}>
-                        <Ionicons name="person-add" size={18} color="#FFF" />
-                        <Text style={styles.acceptBtnText}>{t('userprofile.acceptFriend')}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.rejectBtn} onPress={handleReject} activeOpacity={0.85}>
-                        <Text style={styles.rejectBtnText}>{t('userprofile.reject')}</Text>
-                    </TouchableOpacity>
-                </View>
-            );
-        }
-
-        return (
-            <TouchableOpacity style={[styles.actionSlot, styles.addFriendBtn]} onPress={handleSendRequest} activeOpacity={0.88}>
-                <Ionicons name="person-add-outline" size={20} color="#FFF" />
-                <Text style={styles.addFriendText}>{t('userprofile.addFriend')}</Text>
-            </TouchableOpacity>
-        );
+        prefetchPlanDetail(planId);
+        router.push({ pathname: '/plan/[id]', params: { id: planId } });
     };
 
     const displayName = userProfile?.nombre?.trim() || t('profile.user');
     const aboutText = (userProfile?.descripcion ?? '').trim();
+    const organizerCopy = organizerProfileCopy(aboutText, orgMeta);
+
+    const openMoreMenu = () => {
+        if (!userProfile || friendStatus === 'self') return;
+        const buttons: Array<{ text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }> = [];
+        if (friendStatus === 'friends') {
+            buttons.push({
+                text: t(femalePair ? 'userprofile.unfriendF' : 'userprofile.unfriend'),
+                style: 'destructive',
+                onPress: handleRemoveFriend,
+            });
+        }
+        buttons.push({
+            text: t(isOrganizerProfile ? 'userprofile.reportOrganizer' : 'userprofile.report'),
+            onPress: () => router.push({ pathname: '/report-user', params: { userId: userProfile.id } }),
+        });
+        buttons.push({
+            text: blocked
+                ? t(isOrganizerProfile ? 'userprofile.unblockOrganizer' : 'userprofile.unblock')
+                : t(isOrganizerProfile ? 'userprofile.blockOrganizer' : 'userprofile.block'),
+            style: blocked ? undefined : 'destructive',
+            onPress: handleToggleBlock,
+        });
+        if (ownerActionsVisible(isOwner) && !targetIsStaff) {
+            buttons.push({
+                text: t(isOrganizerProfile ? 'admin.deleteCommunityConfirm' : 'admin.deleteUserConfirm'),
+                style: 'destructive',
+                onPress: handleOwnerDeleteUser,
+            });
+        }
+        buttons.push({ text: t('common.cancel'), style: 'cancel' });
+        Alert.alert(displayName, undefined, buttons);
+    };
+
     const hobbies = userProfile?.ambientes_preferidos?.length
         ? userProfile.ambientes_preferidos
         : (userProfile?.etiquetas ?? []);
-    const age = userProfile?.edad ?? null;
-    const habitos = parseHabitos(userProfile?.habitos_consumo ?? null);
-    const priv = privacy ?? parsePrivacy(userProfile?.perfil_gustos);
     const ready = !!userProfile;
+    const viewerFemale = currentUserGenero === 'femenino';
 
-    const detailItems: {
-        key: string;
-        label: string;
-        value: string;
-        kind: 'age' | 'gender' | 'bebida' | 'tabaco';
-        genero?: string;
-    }[] = [];
-    if (ready) {
-        if (priv.mostrar_edad && age) {
-            detailItems.push({ key: 'age', label: t('profile.age'), value: String(age), kind: 'age' });
-        }
-        if (priv.mostrar_genero && userProfile.genero) {
-            detailItems.push({
-                key: 'gender',
-                label: t('profile.gender'),
-                value: t('genero.' + userProfile.genero),
-                kind: 'gender',
-                genero: userProfile.genero,
-            });
-        }
-        if (priv.mostrar_bebida && habitos.bebida !== 'no_especificado') {
-            detailItems.push({
-                key: 'bebida',
-                label: t('profile.drinking'),
-                value: t('habito.' + habitos.bebida),
-                kind: 'bebida',
-            });
-        }
-        if (priv.mostrar_tabaco && habitos.tabaco !== 'no_especificado') {
-            detailItems.push({
-                key: 'tabaco',
-                label: t('profile.smoking'),
-                value: t('habito.' + habitos.tabaco),
-                kind: 'tabaco',
-            });
-        }
-    }
+    const personRep = personRepeatStat(stats, {
+        isSelf: friendStatus === 'self',
+        genero: userProfile?.genero,
+        t,
+    });
+    const profileAffinity =
+        userProfile && viewerAffinity
+            ? resolveProfileAffinity({
+                  isSelf: friendStatus === 'self',
+                  viewer: viewerAffinity,
+                  target: affinityPersonFromProfile({
+                      age: userProfile.edad,
+                      tags: hobbies,
+                      habitos: parseHabitos(userProfile.habitos_consumo),
+                      stats,
+                      badgeStats,
+                      friendsCount,
+                  }),
+                  isFriends: friendStatus === 'friends',
+                  mutualFriends: mutualFriends.total,
+                  sharedCommunities,
+                  firstRepeat,
+              })
+            : null;
+    const reviewsLabel = isOrganizerProfile
+        ? `${stats.numeroValoraciones} ${t(
+              stats.numeroValoraciones === 1 ? 'userprofile.review' : 'userprofile.reviews',
+          )}`
+        : personRep.label;
+
+    const showActions = friendStatus !== 'self' && !blockedEitherWay;
+    const canFriend = showActions && !isOrganizerProfile && !currentUserIsOrganizer;
+    const canFollow = showActions && isOrganizerProfile;
+    const primaryFriendLabel =
+        friendStatus === 'friends'
+            ? t(viewerFemale ? 'profilev.iAmFriendF' : 'profilev.iAmFriend')
+            : friendStatus === 'pending_sent'
+              ? t('userprofile.requestSent')
+              : friendStatus === 'pending_received'
+                ? t('userprofile.acceptFriend')
+                : t(userProfile?.genero === 'femenino' ? 'profilev.addFriendF' : 'profilev.addFriend');
+    const primaryFriendIcon =
+        friendStatus === 'friends' || friendStatus === 'pending_sent'
+            ? 'checkmark'
+            : friendStatus === 'pending_received'
+              ? 'person-add'
+              : 'person-add-outline';
+    const onPrimaryFriend =
+        friendStatus === 'friends'
+            ? handleRemoveFriend
+            : friendStatus === 'pending_sent'
+              ? handleCancelRequest
+              : friendStatus === 'pending_received'
+                ? () => void handleAccept()
+                : handleSendRequest;
 
     return (
-        <SafeAreaView style={styles.safe} edges={['top']}>
-            <View style={styles.topBar}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} activeOpacity={0.8}>
-                    <Ionicons name="chevron-back" size={24} color={INK} />
-                </TouchableOpacity>
-                <Text style={styles.topTitle}>{t('userprofile.title')}</Text>
-                <View style={styles.iconBtnPlaceholder} />
-            </View>
-
+        <View style={[styles.page, { backgroundColor: colors.background }]}>
             {!ready ? (
-                <View style={styles.loadingContainer}>
-                    {loading ? (
-                        <ActivityIndicator size="large" color={PRIMARY_DARK} />
-                    ) : (
-                        <>
-                            <Ionicons name="alert-circle-outline" size={40} color="#94A3B8" />
-                            <Text style={styles.errorText}>{t('userprofile.loadError')}</Text>
-                        </>
-                    )}
-                </View>
+                <SafeAreaView style={[styles.loadingContainer, { backgroundColor: colors.background }]} edges={['top']}>
+                    <View style={styles.loadingTop}>
+                        <FrostedIconButton icon="chevron-back" onPress={() => router.back()} accessibilityLabel={t('common.back')} />
+                    </View>
+                    <View style={styles.loadingBody}>
+                        {loading ? (
+                            <ActivityIndicator size="large" color={PRIMARY_DARK} />
+                        ) : (
+                            <>
+                                <Ionicons name="alert-circle-outline" size={40} color="#94A3B8" />
+                                <Text style={[styles.errorText, { color: colors.textMuted }]}>{t('userprofile.loadError')}</Text>
+                            </>
+                        )}
+                    </View>
+                </SafeAreaView>
             ) : (
                 <ScrollView
                     ref={scrollRef}
@@ -720,524 +1093,255 @@ export default function UserProfileScreen() {
                     contentContainerStyle={styles.scroll}
                     removeClippedSubviews={false}
                 >
-                    <View style={styles.heroCard}>
-                        <TouchableOpacity
-                            onPress={() => setAvatarOpen(true)}
-                            activeOpacity={0.9}
-                            accessibilityRole="imagebutton"
-                            style={
-                                friendStatus === 'friends'
-                                    ? [styles.avatarRingFriend, { width: 108, height: 108, borderRadius: 54 }]
-                                    : undefined
-                            }
-                        >
-                            <ProfileAvatar
-                                uri={userProfile.avatar_url}
-                                name={displayName}
-                                size={96}
-                                recyclingKey={userProfile.id}
-                            />
-                        </TouchableOpacity>
+                    <ProfileHero
+                        variant={isOrganizerProfile ? 'organizer' : 'person'}
+                        coverUrl={userProfile.cover_url || orgMeta.portada || null}
+                        avatarUrl={userProfile.avatar_url}
+                        name={displayName}
+                        verified={isOrganizerProfile}
+                        onBack={() => router.back()}
+                        onMore={friendStatus === 'self' ? undefined : openMoreMenu}
+                        onCoverPress={undefined}
+                        backLabel={t('common.back')}
+                        moreLabel={t('profilev.moreOptions')}
+                    />
 
-                        <Text style={styles.displayName} numberOfLines={1}>{displayName}</Text>
-                        <Text
-                            style={[styles.username, !userProfile.nombre_usuario && styles.usernameHidden]}
-                            numberOfLines={1}
-                        >
-                            {userProfile.nombre_usuario ? `@${userProfile.nombre_usuario}` : ' '}
-                        </Text>
-
-                        <View style={styles.statsRow}>
-                            <View style={styles.statItem}>
-                                <Text style={styles.statValue}>{stats.numeroPlanesRealizados}</Text>
-                                <Text style={styles.statLabel}>{t('userprofile.plansLabel')}</Text>
-                            </View>
-                            <View style={styles.statDivider} />
-                            <View style={styles.statItem}>
-                                <Text style={styles.statValue}>{formatRatingScore(stats.valoracionMedia)}</Text>
-                                <View style={styles.starsRow}>{renderRatingStars(stats.valoracionMedia, 12)}</View>
-                                <Text style={styles.statMeta}>
-                                    {stats.numeroValoraciones}{' '}
-                                    {t(stats.numeroValoraciones === 1 ? 'userprofile.review' : 'userprofile.reviews')}
-                                </Text>
-                            </View>
-                            <View style={styles.statDivider} />
-                            <View style={styles.statItem}>
-                                <Text style={styles.statValue}>{friendsCount}</Text>
-                                <Text style={styles.statLabel}>{t('userprofile.friendsLabel')}</Text>
-                            </View>
-                        </View>
-
-                        <View style={styles.reputationSlot} collapsable={false}>
-                            <ProfileReputationStats
-                                stats={stats}
-                                displayName={displayName}
-                                genero={userProfile.genero}
-                            />
-                        </View>
-
-                        {friendStatus !== 'self' && !blockedEitherWay && sharedPlans > 0 ? (
-                            <View style={styles.sharedPlansBanner}>
-                                <Ionicons name="calendar-outline" size={16} color={PRIMARY_DARK} style={{ marginTop: 1 }} />
-                                <Text style={styles.sharedPlansText}>
-                                    {t(
-                                        sharedPlans === 1
-                                            ? femalePair
-                                                ? 'userprofile.sharedPlansOneF'
-                                                : 'userprofile.sharedPlansOne'
-                                            : femalePair
-                                              ? 'userprofile.sharedPlansManyF'
-                                              : 'userprofile.sharedPlansMany',
-                                        { name: displayName, n: sharedPlans },
-                                    )}
-                                </Text>
-                            </View>
-                        ) : null}
-
-                        {friendStatus !== 'self' && !blockedEitherWay ? (
-                            <View style={styles.actionWrap} collapsable={false}>
-                                {renderFriendAction()}
-                            </View>
-                        ) : null}
-                    </View>
-
-                    {aboutText ? (
-                        <View style={styles.card}>
-                            <Text style={styles.cardTitle}>{t('userprofile.aboutMe')}</Text>
-                            <Text style={styles.aboutText}>{aboutText}</Text>
-                        </View>
-                    ) : null}
-
-                    {detailItems.length > 0 ? (
-                        <View style={styles.detailsWrap}>
-                            {detailItems.map((item) => {
-                                const isMale = item.genero === 'masculino';
-                                const isFemale = item.genero === 'femenino';
-                                return (
-                                    <View
-                                        key={item.key}
-                                        style={[
-                                            styles.detailChip,
-                                            item.kind === 'gender' && isMale && styles.detailChipMale,
-                                            item.kind === 'gender' && isFemale && styles.detailChipFemale,
-                                        ]}
-                                    >
-                                        {item.kind === 'age' ? (
-                                            <Ionicons name="calendar-outline" size={15} color={PRIMARY_DARK} />
-                                        ) : null}
-                                        {item.kind === 'gender' ? (
-                                            <Ionicons
-                                                name={
-                                                    isMale
-                                                        ? 'male'
-                                                        : isFemale
-                                                          ? 'female'
-                                                          : item.genero === 'no_binario'
-                                                            ? 'male-female'
-                                                            : 'ellipsis-horizontal'
-                                                }
-                                                size={16}
-                                                color={isMale ? '#2563EB' : isFemale ? '#DB2777' : PRIMARY_DARK}
-                                            />
-                                        ) : null}
-                                        {item.kind === 'bebida' ? (
-                                            <Ionicons name="wine-outline" size={15} color={PRIMARY_DARK} />
-                                        ) : null}
-                                        {item.kind === 'tabaco' ? (
-                                            <Ionicons name="leaf-outline" size={15} color={PRIMARY_DARK} />
-                                        ) : null}
-                                        <Text
-                                            style={[
-                                                styles.detailChipText,
-                                                item.kind === 'gender' && isMale && styles.detailChipTextMale,
-                                                item.kind === 'gender' && isFemale && styles.detailChipTextFemale,
-                                            ]}
-                                            numberOfLines={1}
-                                        >
-                                            {item.value}
-                                        </Text>
-                                    </View>
-                                );
-                            })}
-                        </View>
-                    ) : null}
-
-                    {priv.mostrar_aficiones && hobbies.length > 0 ? (
-                        <View style={styles.card}>
-                            <View style={styles.tagsWrap}>
-                                {hobbies.map((tag, index) => (
-                                    <View key={`${tag}-${index}`} style={styles.tag}>
-                                        <Text style={styles.tagText}>
-                                            {getPersonalityLabel(tag, userProfile.genero, t)}
-                                        </Text>
-                                    </View>
-                                ))}
-                            </View>
-                        </View>
-                    ) : null}
-
-                    <View style={styles.card}>
-                        <View style={styles.cardHeaderRow}>
-                            <Text style={styles.cardTitleInline}>{t('profile.badges')}</Text>
-                            <Text style={styles.cardMeta}>
-                                {badges.filter((b) => b.unlocked).length}/{badges.length}
-                            </Text>
-                        </View>
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            nestedScrollEnabled
-                            contentContainerStyle={styles.badgeRow}
-                        >
-                            {badges.map((badge) => (
-                                <BadgeTile
-                                    key={badge.family.id}
-                                    badge={badge}
-                                    onPress={() => setSelectedBadge(badge)}
-                                />
-                            ))}
-                        </ScrollView>
-                    </View>
-
-                    {friendStatus !== 'self' ? (
-                        <View style={styles.safetyActions} collapsable={false}>
-                            <TouchableOpacity
-                                style={styles.reportBtn}
-                                onPress={() =>
-                                    router.push({
-                                        pathname: '/report-user',
-                                        params: { userId: userProfile.id },
-                                    })
-                                }
-                                activeOpacity={0.85}
-                            >
-                                <Text style={styles.reportBtnText}>{t('userprofile.report')}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.blockBtn} onPress={handleToggleBlock} activeOpacity={0.85}>
-                                <Text style={[styles.blockBtnText, blocked && { color: '#64748B' }]}>
-                                    {blocked ? t('userprofile.unblock') : t('userprofile.block')}
-                                </Text>
-                            </TouchableOpacity>
-                            {isOwner && !targetIsStaff ? (
+                    {isOrganizerProfile ? (
+                        <OrganizerIdentity
+                            name={displayName}
+                            verifiedLabel={t('profilev.verifiedCommunity')}
+                            description={organizerCopy.description}
+                            web={orgMeta.web}
+                            instagram={orgMeta.instagram}
+                            whatsapp={orgMeta.whatsapp}
+                            whatsappLabel={t('organizer.whatsappGroup')}
+                            avatar={
                                 <TouchableOpacity
-                                    style={styles.ownerDeleteUserBtn}
-                                    onPress={handleOwnerDeleteUser}
-                                    activeOpacity={0.85}
-                                    disabled={deletingUser}
+                                    onPress={() => setAvatarOpen(true)}
+                                    activeOpacity={0.9}
+                                    style={{ borderWidth: 4, borderColor: '#FFF', borderRadius: 56, backgroundColor: '#FFF' }}
                                 >
-                                    {deletingUser ? (
-                                        <ActivityIndicator color="#FFF" />
-                                    ) : (
-                                        <Text style={styles.ownerDeleteUserBtnText}>
-                                            {t('admin.deleteUserConfirm')}
-                                        </Text>
-                                    )}
+                                    <ProfileAvatar
+                                        uri={userProfile.avatar_url}
+                                        name={displayName}
+                                        size={104}
+                                        recyclingKey={userProfile.id}
+                                    />
                                 </TouchableOpacity>
-                            ) : null}
+                            }
+                        />
+                    ) : null}
+
+                    <ProfileStatsCard
+                        leftValue={isOrganizerProfile ? formatMembers(organizerPlansCount) : stats.numeroPlanesRealizados}
+                        leftLabel={t('profilev.statPlans')}
+                        rating={stats.valoracionMedia}
+                        reviewsLabel={reviewsLabel}
+                        middleMode={isOrganizerProfile ? 'stars' : 'repeat'}
+                        repeatPct={isOrganizerProfile ? null : personRep.repeatPct}
+                        middleText={isOrganizerProfile ? undefined : personRep.middleText}
+                        rightValue={isOrganizerProfile ? formatMembers(followersCount) : friendsCount}
+                        rightLabel={isOrganizerProfile ? t('profilev.statMembers') : t('userprofile.friendsLabel')}
+                        overlapHero={!isOrganizerProfile}
+                        onRightPress={
+                            isOrganizerProfile && profileId
+                                ? () => router.push({ pathname: '/organizer-members', params: { id: profileId } })
+                                : undefined
+                        }
+                    />
+
+                    {!isOrganizerProfile && friendStatus !== 'self' && mutualFriends.total > 0 ? (
+                        <View style={styles.socialProof}>
+                            {mutualFriends.items.length ? (
+                                <MutualAvatarsRow
+                                    people={mutualFriends.items}
+                                    tone="dark"
+                                    label={t(
+                                        mutualFriends.total === 1
+                                            ? 'profilev.mutualOne'
+                                            : 'profilev.mutualMany',
+                                        { n: mutualFriends.total },
+                                    )}
+                                />
+                            ) : (
+                                <Text style={[styles.socialFallback, { color: colors.textMuted }]}>
+                                    {t(
+                                        mutualFriends.total === 1
+                                            ? 'profilev.mutualOne'
+                                            : 'profilev.mutualMany',
+                                        { n: mutualFriends.total },
+                                    )}
+                                </Text>
+                            )}
                         </View>
                     ) : null}
+
+                    {isOrganizerProfile && (followersCount > 0 || followerPreviews.length > 0) ? (
+                        <View style={styles.socialProof}>
+                            <FollowersAvatarsRow people={followerPreviews} total={followersCount} />
+                        </View>
+                    ) : null}
+
+                    {canFollow ? (
+                        <ProfileDualActions
+                            primaryLabel={followingOrganizer ? t('organizer.following') : t('organizer.follow')}
+                            primaryIcon={followingOrganizer ? 'checkmark' : 'heart-outline'}
+                            onPrimary={() => void handleToggleFollow()}
+                            primaryTone="purple"
+                            primaryActive={followingOrganizer}
+                            secondaryLabel={t('profilev.message')}
+                            secondaryIcon="chatbubble-outline"
+                            onSecondary={openMessage}
+                        />
+                    ) : null}
+
+                    {canFriend ? (
+                        <ProfileDualActions
+                            primaryLabel={primaryFriendLabel}
+                            primaryIcon={primaryFriendIcon}
+                            onPrimary={onPrimaryFriend ?? (() => undefined)}
+                            primaryTone="green"
+                            primaryActive={friendStatus === 'friends' || friendStatus === 'pending_sent'}
+                            secondaryLabel={t('profilev.message')}
+                            secondaryIcon="chatbubble-outline"
+                            onSecondary={openMessage}
+                            extra={
+                                friendStatus === 'pending_received' ? (
+                                    <TouchableOpacity style={styles.rejectLink} onPress={() => void handleReject()}>
+                                        <Text style={styles.rejectLinkText}>{t('userprofile.reject')}</Text>
+                                    </TouchableOpacity>
+                                ) : null
+                            }
+                        />
+                    ) : null}
+
+                    <ProfileReputationStats
+                        stats={isOrganizerProfile ? stats : badgeStats}
+                        isSelf={friendStatus === 'self'}
+                        genero={isOrganizerProfile ? null : userProfile.genero}
+                        affinityLevel={profileAffinity?.level ?? 0}
+                        showThermo={
+                            !isOrganizerProfile
+                            && friendStatus !== 'self'
+                            && !!currentUserId
+                            && !currentUserIsOrganizer
+                            && profileAffinity != null
+                        }
+                        variant={isOrganizerProfile ? 'organizer' : 'person'}
+                    />
+
+                    {!isOrganizerProfile ? (
+                        <>
+                            {aboutText ? (
+                                <ProfileSection title={t('userprofile.aboutMe')}>
+                                    <TranslatedText
+                                        text={aboutText}
+                                        style={[styles.aboutText, { color: colors.textMuted }]}
+                                    />
+                                </ProfileSection>
+                            ) : null}
+                            {hobbies.length > 0 ? (
+                                <ProfileSection title={t('userprofile.interests')}>
+                                    <InterestTiles tags={hobbies} genero={userProfile.genero} t={t} />
+                                </ProfileSection>
+                            ) : null}
+                            {parsePrivacy(userProfile.perfil_gustos).mostrar_planes !== false &&
+                            attendedPlans.length > 0 ? (
+                            <ProfileSection title={t('profilev.attendedPlans')}>
+                                <AttendedPlansRow
+                                    plans={attendedPlans}
+                                    emptyLabel={t('profilev.attendedEmpty')}
+                                    lang={lang === 'en' ? 'en' : 'es'}
+                                    onPressPlan={openPlan}
+                                />
+                            </ProfileSection>
+                            ) : null}
+                        </>
+                    ) : (
+                        <>
+                            {organizedPlans.length > 0 ? (
+                                <ProfileSection title={t('organizer.organizedPlans')}>
+                                    <AttendedPlansRow
+                                        plans={organizedPlans.map(organizerPlanCard)}
+                                        emptyLabel=""
+                                        lang={lang === 'en' ? 'en' : 'es'}
+                                        onPressPlan={openPlan}
+                                    />
+                                </ProfileSection>
+                            ) : null}
+                            {upcomingPlans.length > 0 ? (
+                                <ProfileSection title={t('organizer.upcomingPlans')}>
+                                    <AttendedPlansRow
+                                        plans={upcomingPlans.map(organizerPlanCard)}
+                                        emptyLabel=""
+                                        lang={lang === 'en' ? 'en' : 'es'}
+                                        showWhen
+                                        onPressPlan={openPlan}
+                                    />
+                                </ProfileSection>
+                            ) : null}
+                            {(orgMeta.galeria?.length ?? 0) > 0 ? (
+                                <ProfileSection title={t('organizer.moments')}>
+                                    <ScrollView
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        nestedScrollEnabled
+                                        contentContainerStyle={{ gap: 12, paddingRight: 8 }}
+                                    >
+                                        {(orgMeta.galeria ?? []).map((item, i) => (
+                                            <GalleryThumb
+                                                key={item.url}
+                                                item={item}
+                                                onPress={() => setGalleryIndex(i)}
+                                            />
+                                        ))}
+                                    </ScrollView>
+                                </ProfileSection>
+                            ) : null}
+                            {organizerCopy.information ? (
+                                <ProfileSection title={t('organizer.fieldInfo')}>
+                                    <TranslatedText text={organizerCopy.information} style={[styles.aboutText, { color: colors.textMuted }]} />
+                                </ProfileSection>
+                            ) : null}
+                        </>
+                    )}
                 </ScrollView>
             )}
 
-            <BadgeDetailModal
-                badge={selectedBadge}
-                visible={!!selectedBadge}
-                onClose={() => setSelectedBadge(null)}
-            />
             <AvatarLightbox
                 visible={avatarOpen}
                 uri={userProfile?.avatar_url}
                 name={displayName}
                 onClose={() => setAvatarOpen(false)}
             />
-        </SafeAreaView>
+            <MediaLightbox
+                visible={galleryIndex != null}
+                items={orgMeta.galeria ?? []}
+                initialIndex={galleryIndex ?? 0}
+                onClose={() => setGalleryIndex(null)}
+            />
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: BG },
-    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, paddingHorizontal: 32 },
-    errorText: { fontSize: 16, color: MUTED, textAlign: 'center' },
-    topBar: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-    },
-    iconBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        backgroundColor: SURFACE,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: BORDER,
-    },
-    iconBtnPlaceholder: { width: 40 },
-    topTitle: { fontSize: 17, fontWeight: '700', color: INK },
-    scroll: { paddingHorizontal: 20, paddingBottom: 36 },
-    heroCard: {
-        backgroundColor: SURFACE,
-        borderRadius: 16,
-        marginBottom: 14,
-        paddingVertical: 24,
-        paddingHorizontal: 20,
-        borderWidth: 1,
-        borderColor: BORDER,
-        alignItems: 'center',
-    },
-    avatarRingFriend: {
+    page: { flex: 1 },
+    scroll: { paddingBottom: 112 },
+    loadingContainer: { flex: 1 },
+    loadingTop: { paddingHorizontal: 16 },
+    loadingBody: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+    errorText: { fontSize: 16, textAlign: 'center', marginTop: 16 },
+    socialProof: { paddingHorizontal: 20, marginTop: 16 },
+    socialFallback: { color: MUTED, fontWeight: '700', fontSize: 13, textAlign: 'center' },
+    aboutText: { color: '#334155', fontSize: 16, lineHeight: 24, fontWeight: '500' },
+    rejectLink: { alignSelf: 'center', paddingVertical: 4 },
+    rejectLinkText: { color: DANGER, fontWeight: '700' },
+    galleryThumb: { width: 92, height: 92, borderRadius: 14, overflow: 'hidden', marginRight: 8 },
+    galleryThumbImg: { width: 92, height: 92 },
+    galleryPlay: {
+        ...StyleSheet.absoluteFillObject,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 3,
-        borderColor: '#10B981',
-        backgroundColor: '#ECFDF5',
+        backgroundColor: 'rgba(0,0,0,0.28)',
     },
-    displayName: {
-        fontSize: 22,
-        fontWeight: '700',
-        color: INK,
-        textAlign: 'center',
-        marginTop: 14,
-        paddingHorizontal: 20,
-    },
-    username: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: MUTED,
-        marginTop: 4,
-        textAlign: 'center',
-        minHeight: 20,
-    },
-    usernameHidden: { opacity: 0 },
-    reputationSlot: {
-        width: '100%',
-        minHeight: 0,
-    },
-    sharedPlansBanner: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 8,
-        width: '100%',
-        marginTop: 14,
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderRadius: 12,
-        backgroundColor: '#EFF6FF',
-        borderWidth: 1,
-        borderColor: '#DBEAFE',
-    },
-    sharedPlansText: {
-        flex: 1,
-        minWidth: 0,
-        flexShrink: 1,
-        fontSize: 13,
-        fontWeight: '700',
-        color: PRIMARY_DARK,
-        lineHeight: 18,
-    },
-    statsRow: {
-        flexDirection: 'row',
-        marginTop: 18,
-        width: '100%',
-        backgroundColor: '#F8FAFC',
-        borderRadius: 18,
-        paddingVertical: 14,
-        borderWidth: 1,
-        borderColor: '#EEF3FB',
-    },
-    statItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-    statDivider: { width: 1, backgroundColor: '#E2E8F0', marginVertical: 4 },
-    statValue: { fontSize: 20, fontWeight: '900', color: INK },
-    starsRow: { flexDirection: 'row', marginTop: 2 },
-    statMeta: { fontSize: 9, color: '#94A3B8', marginTop: 2, fontWeight: '600' },
-    statLabel: {
-        fontSize: 10,
-        fontWeight: '700',
-        color: '#64748B',
-        marginTop: 4,
-        textTransform: 'uppercase',
-        textAlign: 'center',
-    },
-    actionWrap: {
-        paddingHorizontal: 4,
-        marginTop: 16,
-        width: '100%',
-        justifyContent: 'flex-start',
-    },
-    actionSlot: {
-        width: '100%',
-        justifyContent: 'center',
-    },
-    addFriendBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: PRIMARY_DARK,
-        paddingVertical: 14,
-        borderRadius: 12,
-        minHeight: 52,
-    },
-    addFriendText: { color: '#FFF', fontWeight: '700', fontSize: 14, textAlign: 'center', flexShrink: 1 },
-    pendingBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: '#F1F5F9',
-        paddingVertical: 13,
-        borderRadius: 16,
-        minHeight: 52,
-    },
-    pendingBtnText: { color: '#64748B', fontWeight: '700', fontSize: 14 },
-    friendsActions: { gap: 10 },
-    chatBtn: {
-        width: '100%',
-        minHeight: 48,
-        borderRadius: 14,
-        backgroundColor: PRIMARY,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    friendsBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: '#ECFDF5',
-        paddingVertical: 12,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: '#BBF7D0',
-    },
-    friendsBadgeText: { color: SUCCESS, fontWeight: '800', fontSize: 14 },
-    removeFriendBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 12,
-        borderRadius: 16,
-        backgroundColor: '#FEF2F2',
-        borderWidth: 1,
-        borderColor: '#FECACA',
-    },
-    removeFriendText: { color: DANGER, fontWeight: '700', fontSize: 14 },
-    receivedActions: { gap: 10 },
-    acceptBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: SUCCESS,
-        paddingVertical: 14,
-        borderRadius: 16,
-    },
-    acceptBtnText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
-    rejectBtn: { alignItems: 'center', paddingVertical: 8 },
-    rejectBtnText: { color: DANGER, fontWeight: '700', fontSize: 14 },
-    card: {
-        backgroundColor: SURFACE,
-        borderRadius: 16,
-        padding: 18,
-        marginBottom: 14,
-        borderWidth: 1,
-        borderColor: BORDER,
-    },
-    cardTitle: { fontSize: 16, fontWeight: '700', color: INK, marginBottom: 12 },
-    cardTitleInline: { fontSize: 16, fontWeight: '700', color: INK },
-    cardHeaderRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 12,
-    },
-    cardMeta: { fontSize: 13, fontWeight: '700', color: MUTED },
-    badgeRow: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 10,
-        paddingVertical: 4,
-        paddingRight: 4,
-    },
-    aboutText: { fontSize: 15, color: '#334155', lineHeight: 22 },
-    aboutEmptyText: { fontSize: 14, color: MUTED, lineHeight: 21 },
-    detailsWrap: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginBottom: 14,
-    },
-    detailChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        backgroundColor: SURFACE,
-        borderRadius: 999,
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderWidth: 1,
-        borderColor: BORDER,
-    },
-    detailChipMale: {
-        backgroundColor: '#EFF6FF',
-        borderColor: '#BFDBFE',
-    },
-    detailChipFemale: {
-        backgroundColor: '#FDF2F8',
-        borderColor: '#FBCFE8',
-    },
-    detailChipText: { fontSize: 13, fontWeight: '700', color: INK, maxWidth: 160 },
-    detailChipTextMale: { color: '#2563EB' },
-    detailChipTextFemale: { color: '#DB2777' },
-    tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    tag: {
-        backgroundColor: '#F1F5F9',
-        paddingHorizontal: 12,
-        paddingVertical: 7,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: BORDER,
-    },
-    tagText: { fontSize: 13, color: INK, fontWeight: '600' },
-    safetyActions: { gap: 10, marginTop: 2 },
-    reportBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 13,
-        borderRadius: 16,
-        backgroundColor: '#FFF',
-        borderWidth: 1,
-        borderColor: '#FECACA',
-    },
-    reportBtnText: { color: DANGER, fontWeight: '700', fontSize: 14 },
-    blockBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 13,
-        borderRadius: 16,
-        backgroundColor: '#FFF',
-        borderWidth: 1,
-        borderColor: '#FECACA',
-    },
-    blockBtnText: { color: DANGER, fontWeight: '700', fontSize: 14 },
-    ownerDeleteUserBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 14,
-        borderRadius: 16,
-        backgroundColor: DANGER,
-        marginTop: 4,
-    },
-    ownerDeleteUserBtnText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
 });

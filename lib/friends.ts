@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { isBlockedEitherWay } from './blocks';
-import { invalidateProfileNotificationCount } from './notifications';
+import { invalidateProfileNotificationCount } from './profileNotificationBus';
+import { getMyProfile, getPublicProfile } from './profileData';
 
 export type FriendStatus = 'self' | 'none' | 'friends' | 'pending_sent' | 'pending_received';
 
@@ -81,6 +82,11 @@ export async function sendFriendRequest(
     fromUserId: string,
     toUserId: string
 ): Promise<{ error: string | null; requestId?: string | null }> {
+    const [me, other] = await Promise.all([getMyProfile(), getPublicProfile(toUserId)]);
+    if (me.data?.es_organizador === true || other?.es_organizador === true) {
+        return { error: 'organizer_no_friends' };
+    }
+
     if (await isBlockedEitherWay(fromUserId, toUserId)) {
         return { error: 'No puedes enviar solicitudes a este usuario' };
     }
@@ -167,7 +173,13 @@ export async function acceptFriendRequest(requestId: string) {
         notifyFriendAccepted(row.usuario_origen_id);
         if (row.usuario_destino_id) {
             invalidateProfileNotificationCount(row.usuario_destino_id);
+            void import('./prefetchHome').then(({ schedulePersonalRewarm }) => {
+                schedulePersonalRewarm(row.usuario_destino_id as string);
+            });
         }
+        void import('./userProfileCache').then(({ prefetchUserProfile }) => {
+            prefetchUserProfile(row.usuario_origen_id as string);
+        });
     }
 
     return result;
@@ -223,31 +235,87 @@ export async function getPendingRequestsCount(userId: string): Promise<number> {
 export async function getFriends(userId: string): Promise<(FriendProfile & { friendshipId: string })[]> {
     const { data, error } = await supabase
         .from('amistades')
-        .select(`
-            id,
-            usuario_origen_id,
-            usuario_destino_id,
-            solicitante:perfiles!amistades_origen_fkey ( id, nombre, nombre_usuario, avatar_url ),
-            receptor:perfiles!amistades_destino_fkey ( id, nombre, nombre_usuario, avatar_url )
-        `)
+        .select('id, usuario_origen_id, usuario_destino_id')
         .eq('estado', 'aceptado')
         .or(`usuario_origen_id.eq.${userId},usuario_destino_id.eq.${userId}`)
         .order('actualizado_en', { ascending: false });
 
     if (error) throw error;
 
-    return (data ?? []).map((row) => {
-        const solicitante = mapProfile(row.solicitante);
-        const receptor = mapProfile(row.receptor);
-        const friend = row.usuario_origen_id === userId ? receptor : solicitante;
+    const rows = data ?? [];
+    const peerIds = [
+        ...new Set(
+            rows
+                .map((row) =>
+                    row.usuario_origen_id === userId
+                        ? (row.usuario_destino_id as string)
+                        : (row.usuario_origen_id as string),
+                )
+                .filter(Boolean),
+        ),
+    ];
+    if (peerIds.length === 0) return [];
 
-        return {
-            id: friend?.id ?? '',
-            nombre: friend?.nombre ?? 'Usuario',
-            avatar_url: friend?.avatar_url ?? null,
-            friendshipId: row.id as string,
-        };
-    }).filter((f) => f.id);
+    const { data: profiles, error: profilesError } = await supabase
+        .from('perfiles')
+        .select('id, nombre, nombre_usuario, avatar_url')
+        .in('id', peerIds);
+    if (profilesError) throw profilesError;
+
+    const profileById = new Map((profiles ?? []).map((p) => [p.id as string, p]));
+
+    return rows
+        .map((row) => {
+            const peerId =
+                row.usuario_origen_id === userId
+                    ? (row.usuario_destino_id as string)
+                    : (row.usuario_origen_id as string);
+            const profile = profileById.get(peerId);
+            return {
+                id: peerId,
+                nombre: profile?.nombre?.trim() || 'Usuario',
+                avatar_url: profile?.avatar_url ?? null,
+                nombre_usuario: profile?.nombre_usuario ?? null,
+                friendshipId: row.id as string,
+            };
+        })
+        .filter((f) => !!f.id);
+}
+
+export async function getFriendIds(userId: string): Promise<Set<string>> {
+    const { data, error } = await supabase
+        .from('amistades')
+        .select('usuario_origen_id, usuario_destino_id')
+        .eq('estado', 'aceptado')
+        .or(`usuario_origen_id.eq.${userId},usuario_destino_id.eq.${userId}`);
+    if (error || !data) return new Set();
+    const ids = new Set<string>();
+    for (const row of data) {
+        const other = row.usuario_origen_id === userId ? row.usuario_destino_id : row.usuario_origen_id;
+        if (other) ids.add(other as string);
+    }
+    return ids;
+}
+
+/** Amigos de tus amigos (sin incluirte ni a tus amigos directos). */
+export async function getFriendOfFriendIds(userId: string, friendIds: Set<string>): Promise<Set<string>> {
+    if (friendIds.size === 0) return new Set();
+    const list = [...friendIds];
+    const csv = list.join(',');
+    const { data, error } = await supabase
+        .from('amistades')
+        .select('usuario_origen_id, usuario_destino_id')
+        .eq('estado', 'aceptado')
+        .or(`usuario_origen_id.in.(${csv}),usuario_destino_id.in.(${csv})`);
+    if (error || !data) return new Set();
+    const out = new Set<string>();
+    for (const row of data) {
+        const a = row.usuario_origen_id as string;
+        const b = row.usuario_destino_id as string;
+        const other = friendIds.has(a) ? b : a;
+        if (other && other !== userId && !friendIds.has(other)) out.add(other);
+    }
+    return out;
 }
 
 export async function getIncomingRequests(userId: string): Promise<FriendRequest[]> {

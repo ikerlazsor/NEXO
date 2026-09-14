@@ -10,6 +10,7 @@ export type OnboardingData = {
     genero: Genero;
     avatar_url: string;
     ambientes_preferidos: string[];
+    descripcion?: string;
 };
 
 export async function fetchOnboardingStatus(
@@ -88,6 +89,7 @@ export async function saveOnboardingPreferences(
         avatar_url: data.avatar_url,
         ambientes_preferidos: data.ambientes_preferidos,
         etiquetas: data.ambientes_preferidos,
+        descripcion: data.descripcion?.trim() || null,
         registro_completado: true,
     };
     if (nombre) preferencePayload.nombre = nombre;

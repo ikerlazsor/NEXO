@@ -38,6 +38,33 @@ export type Database = {
         }
         Relationships: []
       }
+      alineaciones: {
+        Row: {
+          created_at: string
+          equipo: number
+          id: string
+          plan_id: string
+          posicion: number
+          usuario_id: string
+        }
+        Insert: {
+          created_at?: string
+          equipo: number
+          id?: string
+          plan_id: string
+          posicion: number
+          usuario_id: string
+        }
+        Update: {
+          created_at?: string
+          equipo?: number
+          id?: string
+          plan_id?: string
+          posicion?: number
+          usuario_id?: string
+        }
+        Relationships: []
+      }
       amistades: {
         Row: {
           actualizado_en: string
@@ -315,18 +342,21 @@ export type Database = {
         Row: {
           creado_en: string | null
           id: string
+          oculto_perfil: boolean
           plan_id: string
           usuario_id: string
         }
         Insert: {
           creado_en?: string | null
           id?: string
+          oculto_perfil?: boolean
           plan_id: string
           usuario_id: string
         }
         Update: {
           creado_en?: string | null
           id?: string
+          oculto_perfil?: boolean
           plan_id?: string
           usuario_id?: string
         }
@@ -611,6 +641,7 @@ export type Database = {
           notif_reminders: boolean
           notif_social: boolean
           notificaciones_push: boolean
+          idioma: string
           perfil_gustos: Json | null
           registro_completado: boolean
           rol: string
@@ -637,6 +668,7 @@ export type Database = {
           notif_reminders?: boolean
           notif_social?: boolean
           notificaciones_push?: boolean
+          idioma?: string
           perfil_gustos?: Json | null
           registro_completado?: boolean
           rol?: string
@@ -663,6 +695,7 @@ export type Database = {
           notif_reminders?: boolean
           notif_social?: boolean
           notificaciones_push?: boolean
+          idioma?: string
           perfil_gustos?: Json | null
           registro_completado?: boolean
           rol?: string
@@ -702,6 +735,7 @@ export type Database = {
       planes: {
         Row: {
           actualizado_en: string
+          alineacion: Json | null
           categoria: string
           chat_eliminado_en: string | null
           creado_en: string
@@ -728,6 +762,7 @@ export type Database = {
         }
         Insert: {
           actualizado_en?: string
+          alineacion?: Json | null
           categoria: string
           chat_eliminado_en?: string | null
           creado_en?: string
@@ -754,6 +789,7 @@ export type Database = {
         }
         Update: {
           actualizado_en?: string
+          alineacion?: Json | null
           categoria?: string
           chat_eliminado_en?: string | null
           creado_en?: string
@@ -1156,6 +1192,7 @@ export type Database = {
           plan_id: string
           puntuacion_general: number | null
           repetiria_experiencia: string | null
+          tipo: string
         }
         Insert: {
           actualizado_en?: string
@@ -1172,6 +1209,7 @@ export type Database = {
           plan_id: string
           puntuacion_general?: number | null
           repetiria_experiencia?: string | null
+          tipo?: string
         }
         Update: {
           actualizado_en?: string
@@ -1188,6 +1226,7 @@ export type Database = {
           plan_id?: string
           puntuacion_general?: number | null
           repetiria_experiencia?: string | null
+          tipo?: string
         }
         Relationships: [
           {
@@ -1361,6 +1400,17 @@ export type Database = {
       day_start_madrid: { Args: never; Returns: string }
       delete_own_account: { Args: never; Returns: undefined }
       get_badge_stats: { Args: { p_user_id: string }; Returns: Json }
+      get_user_attended_categories: { Args: { p_user_id: string }; Returns: string[] }
+      set_plan_alineacion: { Args: { p_plan_id: string; p_alineacion: Json }; Returns: undefined }
+      claim_alineacion_slot: {
+        Args: { p_plan_id: string; p_equipo: number; p_posicion: number }
+        Returns: undefined
+      }
+      release_alineacion_slot: { Args: { p_plan_id: string }; Returns: undefined }
+      get_person_ranking_this_month: {
+        Args: { p_limit?: number; p_user_ids?: string[] | null }
+        Returns: { score: number; usuario_id: string }[]
+      }
       get_chat_summaries: {
         Args: { p_direct_read_at?: Json; p_plan_read_at?: Json }
         Returns: {
@@ -1391,6 +1441,15 @@ export type Database = {
         Args: { p_username: string }
         Returns: string
       }
+      get_owner_analytics_dashboard: {
+        Args: { p_days?: number }
+        Returns: Json
+      }
+      get_organizer_insights: {
+        Args: { p_range?: string }
+        Returns: Json
+      }
+      get_feed_plan_people: { Args: { p_plan_ids: string[] }; Returns: Json }
       get_user_public_stats: { Args: { p_user_id: string }; Returns: Json }
       guardar_valoracion: {
         Args: {
@@ -1401,6 +1460,7 @@ export type Database = {
           p_plan_id: string
           p_puntuacion_general?: number
           p_repetiria_experiencia?: string
+          p_tipo?: string
         }
         Returns: Json
       }
@@ -1444,6 +1504,10 @@ export type Database = {
       }
       recalcular_planes_creados: {
         Args: { p_usuario: string }
+        Returns: undefined
+      }
+      record_organizer_profile_view: {
+        Args: { p_organizador_id: string }
         Returns: undefined
       }
       user_can_view_plan: {

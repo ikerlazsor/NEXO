@@ -458,7 +458,7 @@ const CONCEPT_GROUPS: string[][] = [
 
 const CATEGORY_KEYWORDS: Record<MainCategoryId, string[]> = {
     FOODIES: [
-        'foodies', 'comida', 'food', 'gastro', 'comer', 'cenar', 'tapas', 'cafe',
+        'foodies', 'picoteo', 'comida', 'food', 'gastro', 'comer', 'cenar', 'tapas', 'cafe',
         'café', 'restaurant', 'restaurante', 'brunch', 'cena', 'almuerzo', 'pintxos',
         'gastronomia', 'gastronomía', 'cocina', 'foodie', 'pizza', 'burger', 'sushi',
         'paella', 'vermut', 'cerveza', 'vino',
@@ -484,7 +484,7 @@ const CATEGORY_KEYWORDS: Record<MainCategoryId, string[]> = {
         'exposicion', 'exposición', 'mercado',
     ],
     VIBES: [
-        'vibes', 'fiesta', 'party', 'social', 'gaming', 'juegos', 'noche', 'copas',
+        'vibes', 'ocio', 'fiesta', 'party', 'social', 'gaming', 'juegos', 'noche', 'copas',
         'terraceo', 'compras', 'ocio', 'afterwork', 'tardeo', 'quedada', 'karaoke',
         'bolera', 'escape room',
     ],

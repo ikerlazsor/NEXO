@@ -1,5 +1,4 @@
 import { Platform } from 'react-native';
-import { isLocationInEurope } from './geo';
 
 export type GeocodeResult = {
     id: string;
@@ -9,15 +8,7 @@ export type GeocodeResult = {
     subtitle: string;
 };
 
-const USER_AGENT = `Nexo/1.0 (${Platform.OS})`;
-
-/** Códigos ISO de países europeos para Nominatim (sin sesgo a solo España). */
-const EUROPE_COUNTRY_CODES = [
-    'ad', 'al', 'at', 'ba', 'be', 'bg', 'by', 'ch', 'cy', 'cz', 'de', 'dk', 'ee', 'es',
-    'fi', 'fo', 'fr', 'gb', 'gg', 'gi', 'gr', 'hr', 'hu', 'ie', 'im', 'is', 'it', 'je',
-    'li', 'lt', 'lu', 'lv', 'mc', 'md', 'me', 'mk', 'mt', 'nl', 'no', 'pl', 'pt', 'ro',
-    'rs', 'se', 'si', 'sk', 'sm', 'ua', 'va', 'xk',
-].join(',');
+const USER_AGENT = `Nexo!/1.0 (${Platform.OS})`;
 
 function formatPhotonFeature(feat: {
     geometry: { coordinates: [number, number] };
@@ -38,29 +29,23 @@ function formatPhotonFeature(feat: {
     };
 }
 
-function onlyInEurope(items: GeocodeResult[]): GeocodeResult[] {
-    return items.filter((item) => isLocationInEurope(item.latitude, item.longitude));
-}
-
 async function searchPhoton(
     query: string,
     bias?: { lat: number; lon: number },
 ): Promise<GeocodeResult[]> {
     let url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=12`;
-    // bbox Europa aprox. (Photon: minLon,minLat,maxLon,maxLat)
-    url += '&bbox=-31.5,27.5,45,71.5';
     if (bias) url += `&lat=${bias.lat}&lon=${bias.lon}`;
     const response = await fetch(url);
     if (!response.ok) return [];
     const data = await response.json();
     if (data?.type !== 'FeatureCollection' || !Array.isArray(data.features)) return [];
-    return onlyInEurope(data.features.map(formatPhotonFeature));
+    return data.features.map(formatPhotonFeature);
 }
 
 async function searchNominatim(query: string): Promise<GeocodeResult[]> {
     const url =
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}` +
-        `&format=json&limit=8&countrycodes=${EUROPE_COUNTRY_CODES}&addressdetails=1`;
+        `&format=json&limit=8&addressdetails=1`;
     const response = await fetch(url, {
         headers: {
             Accept: 'application/json',
@@ -71,18 +56,16 @@ async function searchNominatim(query: string): Promise<GeocodeResult[]> {
     if (!response.ok) return [];
     const data = await response.json();
     if (!Array.isArray(data)) return [];
-    return onlyInEurope(
-        data.map((item: { place_id: number; lat: string; lon: string; name?: string; display_name: string }) => ({
-            id: `nominatim-${item.place_id}`,
-            latitude: parseFloat(item.lat),
-            longitude: parseFloat(item.lon),
-            label: item.name || item.display_name.split(',')[0]?.trim() || item.display_name,
-            subtitle: item.display_name,
-        })),
-    );
+    return data.map((item: { place_id: number; lat: string; lon: string; name?: string; display_name: string }) => ({
+        id: `nominatim-${item.place_id}`,
+        latitude: parseFloat(item.lat),
+        longitude: parseFloat(item.lon),
+        label: item.name || item.display_name.split(',')[0]?.trim() || item.display_name,
+        subtitle: item.display_name,
+    }));
 }
 
-/** Busca lugares en Europa (Photon + Nominatim). El bias es opcional (solo si el usuario ya eligió sitio). */
+/** Busca lugares en todo el mundo (Photon + Nominatim). El bias acerca resultados al mapa actual. */
 export async function searchPlaces(
     query: string,
     bias?: { lat: number; lon: number } | null,

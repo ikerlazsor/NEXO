@@ -5,7 +5,6 @@ const KEY = '@nexo_pending_signup';
 export type PendingSignup = {
     email: string;
     nombre: string;
-    nombreUsuario: string;
 };
 
 export async function setPendingSignup(data: PendingSignup): Promise<void> {
@@ -17,11 +16,7 @@ export async function getPendingSignup(): Promise<PendingSignup | null> {
         const raw = await AsyncStorage.getItem(KEY);
         if (!raw) return null;
         const parsed = JSON.parse(raw) as PendingSignup;
-        if (
-            !parsed?.email ||
-            !parsed?.nombre ||
-            !parsed?.nombreUsuario
-        ) {
+        if (!parsed?.email || !parsed?.nombre) {
             return null;
         }
         return parsed;

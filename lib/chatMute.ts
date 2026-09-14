@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuthUser } from './auth';
 import { supabase } from './supabase';
 
 const KEY = '@nexo_muted_plan_chats_v1';
@@ -30,8 +31,8 @@ export async function setPlanChatMuted(planId: string, muted: boolean): Promise<
     await writeSet(set);
 
     try {
-        const { data } = await supabase.auth.getUser();
-        const uid = data.user?.id;
+        const user = await getAuthUser();
+        const uid = user?.id;
         if (!uid) return;
         if (muted) {
             await supabase.from('push_chat_mutes').upsert(

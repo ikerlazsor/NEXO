@@ -1,6 +1,6 @@
 /** Claves y TTL compartidos entre pantallas y prefetch al entrar al feed. */
 
-import { cacheInvalidate } from './ttlCache';
+import { cacheInvalidate, cacheInvalidatePrefix } from './ttlCache';
 
 export const ScreenCacheTTL = {
     profileUI: 90_000,
@@ -21,17 +21,30 @@ export const screenCacheKey = {
     myPlans: (userId: string) => `myPlans:${userId}`,
     friends: (userId: string) => `friendsScreen:${userId}`,
     savedPlans: (userId: string) => `savedPlans:${userId}`,
-    rankings: (userId: string, key: string, scope: string) => `rankings:${userId}:${key}:${scope}`,
+    rankings: (userId: string, key: string, scope: string) => `rankings:v5:${userId}:${key}:${scope}`,
     feedSnapshot: 'feedSnapshot',
 } as const;
 
-/** Tras unirse/salir/crear: evita que Mis planes / Chats muestren datos viejos ~90s. */
+/** Foto, portada, intereses: el perfil propio, el público y el detalle de planes no deben quedar stale. */
+export function invalidateProfilePresentationCaches(userId: string | null | undefined): void {
+    if (!userId) return;
+    cacheInvalidate(screenCacheKey.profileUI(userId));
+    cacheInvalidate(`userProfile:${userId}`);
+    cacheInvalidate(screenCacheKey.feedSnapshot);
+    cacheInvalidatePrefix('planDetail:');
+}
+
+/** Tras unirse/salir/crear: evita que Mis planes / Chats / feed / Guardados queden stale. */
 export function invalidatePlanMembershipCaches(userId: string | null | undefined): void {
     if (!userId) return;
     cacheInvalidate(screenCacheKey.myPlans(userId));
     cacheInvalidate(screenCacheKey.chatsList(userId));
+    cacheInvalidate(screenCacheKey.savedPlans(userId));
+    cacheInvalidate(screenCacheKey.feedSnapshot);
     void import('./diskCache').then(({ diskRemove }) => {
         void diskRemove(screenCacheKey.myPlans(userId));
         void diskRemove(screenCacheKey.chatsList(userId));
+        void diskRemove(screenCacheKey.savedPlans(userId));
+        void diskRemove(screenCacheKey.feedSnapshot);
     });
 }

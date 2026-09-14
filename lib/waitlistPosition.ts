@@ -5,14 +5,21 @@ export async function getWaitlistPosition(
     planId: string,
     userId: string,
 ): Promise<number | null> {
-    const { data, error } = await supabase
+    const { data: mine, error: mineError } = await supabase
         .from('participantes')
-        .select('usuario_id, creado_en')
+        .select('creado_en')
+        .eq('plan_id', planId)
+        .eq('usuario_id', userId)
+        .eq('estado', 'lista_espera')
+        .maybeSingle();
+    if (mineError || !mine?.creado_en) return null;
+
+    const { count, error } = await supabase
+        .from('participantes')
+        .select('id', { count: 'exact', head: true })
         .eq('plan_id', planId)
         .eq('estado', 'lista_espera')
-        .order('creado_en', { ascending: true });
-
-    if (error || !data?.length) return null;
-    const idx = data.findIndex((r) => r.usuario_id === userId);
-    return idx >= 0 ? idx + 1 : null;
+        .lte('creado_en', mine.creado_en);
+    if (error || count == null) return null;
+    return count;
 }

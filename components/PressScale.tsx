@@ -50,7 +50,7 @@ export function PressScale({
             onPressOut={() => {
                 scale.value = withSpring(1, { damping: 16, stiffness: 380 });
             }}
-            style={[style, styles.minimumTarget, animatedStyle]}
+            style={[styles.minimumTarget, style, animatedStyle]}
         >
             {children}
         </AnimatedPressable>

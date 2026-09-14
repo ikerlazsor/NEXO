@@ -8,7 +8,8 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { theme } from '../../theme';
+import { theme, type ThemeColors } from '../../theme';
+import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
 
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 
@@ -33,11 +34,11 @@ export function NexoButton({
   leftIcon,
   style,
 }: Props) {
+  const styles = useThemedStyles(createButtonStyles);
+  const { colors } = useAppTheme();
   const unavailable = disabled || busy;
   const spinnerColor =
-    variant === 'primary' || variant === 'danger'
-      ? theme.colors.surface
-      : theme.colors.primary;
+    variant === 'primary' || variant === 'danger' ? colors.onPrimary : colors.primary;
   const labelStyle =
     variant === 'primary'
       ? styles.primaryLabel
@@ -74,35 +75,37 @@ export function NexoButton({
   );
 }
 
-const styles = StyleSheet.create({
-  base: {
-    minHeight: theme.accessibility.minimumTouchTarget,
-    minWidth: theme.accessibility.minimumTouchTarget,
-    borderRadius: theme.radii.md,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: theme.spacing.xs,
-  },
-  primary: { backgroundColor: theme.colors.primary },
-  secondary: {
-    backgroundColor: theme.colors.primarySoft,
-    borderWidth: 1,
-    borderColor: theme.colors.primaryBorder,
-  },
-  danger: { backgroundColor: theme.colors.danger },
-  ghost: { backgroundColor: 'transparent' },
-  pressed: { opacity: 0.78 },
-  disabled: { opacity: 0.5 },
-  label: {
-    ...theme.typography.bodySmall,
-    textAlign: 'center',
-    flexShrink: 1,
-  },
-  primaryLabel: { color: theme.colors.surface },
-  secondaryLabel: { color: theme.colors.primary },
-  dangerLabel: { color: theme.colors.surface },
-  ghostLabel: { color: theme.colors.primary },
-});
+function createButtonStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    base: {
+      minHeight: theme.accessibility.minimumTouchTarget,
+      minWidth: theme.accessibility.minimumTouchTarget,
+      borderRadius: theme.radii.md,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.sm,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexDirection: 'row',
+      gap: theme.spacing.xs,
+    },
+    primary: { backgroundColor: c.primary },
+    secondary: {
+      backgroundColor: c.primarySoft,
+      borderWidth: 1,
+      borderColor: c.primaryBorder,
+    },
+    danger: { backgroundColor: c.danger },
+    ghost: { backgroundColor: 'transparent' },
+    pressed: { opacity: 0.78 },
+    disabled: { opacity: 0.5 },
+    label: {
+      ...theme.typography.bodySmall,
+      textAlign: 'center',
+      flexShrink: 1,
+    },
+    primaryLabel: { color: c.onPrimary },
+    secondaryLabel: { color: c.primary },
+    dangerLabel: { color: c.onPrimary },
+    ghostLabel: { color: c.primary },
+  });
+}

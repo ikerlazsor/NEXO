@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import {
     metalForPreview,
@@ -28,14 +29,16 @@ export const METAL_PALETTE: Record<
 interface TrophyProps {
     shape: BadgeShape;
     metal: TrophyMetal;
-    size?: 'grid' | 'modal' | 'preview' | 'hero';
+    size?: 'tiny' | 'grid' | 'modal' | 'preview' | 'hero' | 'featured';
 }
 
 const SIZE_MAP = {
+    tiny: 34,
     grid: 52,
     preview: 56,
     modal: 88,
     hero: 48,
+    featured: 108,
 } as const;
 
 export function TrophyIcon({ shape, metal, size = 'grid' }: TrophyProps) {
@@ -450,6 +453,54 @@ export function BadgeDetailModal({
     );
 }
 
+export function BadgeLibraryModal({
+    visible,
+    badges,
+    onClose,
+    featuredId,
+    canSetFeatured,
+    onSetFeatured,
+}: {
+    visible: boolean;
+    badges: UserBadge[];
+    onClose: () => void;
+    featuredId?: string | null;
+    canSetFeatured?: boolean;
+    onSetFeatured?: (badge: UserBadge) => void;
+}) {
+    const { t } = useT();
+    const [detail, setDetail] = useState<UserBadge | null>(null);
+
+    return (
+        <>
+            <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+                <Pressable style={styles.modalOverlay} onPress={onClose}>
+                    <Pressable style={styles.librarySheet} onPress={(e) => e.stopPropagation()}>
+                        <Text style={styles.modalTitle}>{t('profile.badges')}</Text>
+                        <Text style={styles.libraryHint}>{t('profile.badgeLibraryHint')}</Text>
+                        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.libraryGrid}>
+                            {badges.map((badge) => (
+                                <BadgeTile key={badge.family.id} badge={badge} onPress={() => setDetail(badge)} />
+                            ))}
+                        </ScrollView>
+                        <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+                            <Text style={styles.closeBtnText}>{t('common.back')}</Text>
+                        </TouchableOpacity>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+            <BadgeDetailModal
+                badge={detail}
+                visible={!!detail}
+                onClose={() => setDetail(null)}
+                isFeatured={detail?.family.id === featuredId}
+                canSetFeatured={canSetFeatured}
+                onSetFeatured={onSetFeatured}
+            />
+        </>
+    );
+}
+
 const styles = StyleSheet.create({
     iconRoot: { alignItems: 'center', justifyContent: 'center', position: 'relative' },
     glow: { position: 'absolute', borderRadius: 999, opacity: 0.75 },
@@ -722,4 +773,28 @@ const styles = StyleSheet.create({
         backgroundColor: '#EFF6FF',
     },
     closeBtnText: { color: '#2563EB', fontWeight: '800', fontSize: 15 },
+    librarySheet: {
+        width: '100%',
+        maxWidth: 420,
+        maxHeight: '82%',
+        backgroundColor: '#FFF',
+        borderRadius: 24,
+        padding: 20,
+        paddingBottom: 12,
+    },
+    libraryHint: {
+        fontSize: 13,
+        color: MUTED,
+        fontWeight: '600',
+        textAlign: 'center',
+        marginTop: 4,
+        marginBottom: 12,
+    },
+    libraryGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'center',
+        gap: 8,
+        paddingBottom: 8,
+    },
 });

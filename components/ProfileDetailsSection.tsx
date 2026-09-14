@@ -122,6 +122,12 @@ export function ProfileDetailsSection({
 
     return (
         <View style={styles.card}>
+            <View style={styles.header}>
+                <View style={styles.headerIcon}>
+                    <Ionicons name="person" size={16} color={ACCENT} />
+                </View>
+                <Text style={styles.headerTitle}>{t('profile.details')}</Text>
+            </View>
             <DetailRow
                 label={t('profile.age')}
                 value={ageValue}
@@ -207,24 +213,40 @@ export function ProfileDetailsSection({
 
 const styles = StyleSheet.create({
     card: {
-        backgroundColor: '#FFF',
-        borderRadius: 16,
-        paddingHorizontal: 14,
-        paddingTop: 8,
-        paddingBottom: 6,
+        backgroundColor: '#F8FBFF',
+        borderRadius: 22,
+        paddingHorizontal: 16,
+        paddingTop: 16,
+        paddingBottom: 10,
         marginBottom: 16,
-        shadowColor: '#0F2A4A',
-        shadowOpacity: 0.04,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 1,
+        borderWidth: 1,
+        borderColor: '#DBEAFE',
+        shadowColor: '#2563EB',
+        shadowOpacity: 0.06,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 2,
     },
+    header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+    headerIcon: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        backgroundColor: '#DBEAFE',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    headerTitle: { fontSize: 17, fontWeight: '800', color: INK, letterSpacing: -0.2 },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        minHeight: 40,
-        paddingVertical: 4,
+        minHeight: 46,
+        paddingVertical: 8,
+        paddingHorizontal: 8,
         gap: 8,
+        backgroundColor: '#FFF',
+        borderRadius: 14,
+        marginBottom: 8,
     },
     labelRow: {
         width: 88,

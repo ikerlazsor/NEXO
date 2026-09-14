@@ -43,6 +43,23 @@ export function isLocationInEurope(lat: number, lng: number): boolean {
 }
 
 /** Distancia en km entre dos coordenadas (haversine). */
+/** Caja aproximada de `km` alrededor de un punto (para consultas geo). */
+export function boundingBox(
+    lat: number,
+    lng: number,
+    km: number,
+): { minLat: number; maxLat: number; minLng: number; maxLng: number } {
+    const dLat = km / 111;
+    const cos = Math.cos((lat * Math.PI) / 180);
+    const dLng = km / (111 * Math.max(0.2, Math.abs(cos)));
+    return {
+        minLat: lat - dLat,
+        maxLat: lat + dLat,
+        minLng: lng - dLng,
+        maxLng: lng + dLng,
+    };
+}
+
 export function distanceKm(
     lat1: number,
     lon1: number,

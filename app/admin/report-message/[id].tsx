@@ -103,11 +103,11 @@ export default function AdminReportMessageScreen() {
             <ScreenHeader title={t('admin.reportMessage')} onBack={() => router.back()} />
             <ScrollView contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + 32 }]}>
                 <Text style={styles.title}>
-                    @{row.denunciado_usuario_snapshot || row.denunciado_nombre_snapshot || '—'}
+                    {row.denunciado_nombre_snapshot || row.denunciado_usuario_snapshot || '—'}
                 </Text>
                 <Text style={styles.meta}>{t('admin.reason')}: {row.motivo}</Text>
                 <Text style={styles.meta}>
-                    @{row.reportador?.nombre_usuario || '—'} · {new Date(row.creado_en).toLocaleString()}
+                    {row.reportador?.nombre || '—'} · {new Date(row.creado_en).toLocaleString()}
                 </Text>
 
                 <Text style={styles.label}>{t('admin.messageSnapshot')}</Text>

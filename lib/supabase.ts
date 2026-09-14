@@ -4,12 +4,14 @@ import { AppState, Platform } from 'react-native';
 
 const productionSupabaseUrl = 'https://nixeproyzxvqzyrvsxcx.supabase.co';
 const configuredSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseUrl = configuredSupabaseUrl ?? productionSupabaseUrl;
+export const SUPABASE_URL = configuredSupabaseUrl ?? productionSupabaseUrl;
+const supabaseUrl = SUPABASE_URL;
 
 const configuredSupabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-const supabaseAnonKey =
+export const SUPABASE_ANON_KEY =
     configuredSupabaseAnonKey ??
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5peGVwcm95enh2cXp5cnZzeGN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODIxODEsImV4cCI6MjA5MjQ1ODE4MX0.YNd1J4HglBU36uB4QJ3vGf02Mkf1yJtead7anLfevU0';
+const supabaseAnonKey = SUPABASE_ANON_KEY;
 
 if (
     process.env.EXPO_PUBLIC_E2E_MODE === 'true' &&

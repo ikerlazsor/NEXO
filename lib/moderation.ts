@@ -9,6 +9,7 @@ export type ModerationCounts = {
     reportes_planes: number;
     reportes_usuarios: number;
     reportes_mensajes: number;
+    organizadores: number;
     total: number;
 };
 
@@ -88,12 +89,40 @@ function rpcErr(error: { message?: string } | null): string | null {
     return m;
 }
 
+/** Extrae el `{ error }` real de una Edge Function (supabase-js solo dice non-2xx). */
+async function edgeInvokeError(
+    error: unknown,
+    data: unknown,
+): Promise<string | null> {
+    if (data && typeof data === 'object' && data !== null && 'error' in data) {
+        const code = (data as { error?: unknown }).error;
+        if (typeof code === 'string' && code.trim()) return rpcErr({ message: code }) ?? code;
+    }
+    const ctx = error && typeof error === 'object' && error !== null && 'context' in error
+        ? (error as { context?: Response }).context
+        : null;
+    if (ctx && typeof ctx.json === 'function') {
+        try {
+            const body = await ctx.json();
+            if (body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string') {
+                const code = (body as { error: string }).error;
+                return rpcErr({ message: code }) ?? code;
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+    if (error instanceof Error && error.message) return rpcErr(error) ?? error.message;
+    return 'request_failed';
+}
+
 export async function fetchModerationCounts(): Promise<ModerationCounts> {
     const empty: ModerationCounts = {
         soporte: 0,
         reportes_planes: 0,
         reportes_usuarios: 0,
         reportes_mensajes: 0,
+        organizadores: 0,
         total: 0,
     };
     const { data, error } = await supabase.rpc('admin_moderation_counts');
@@ -107,6 +136,7 @@ export async function fetchModerationCounts(): Promise<ModerationCounts> {
         reportes_planes: Number(row.reportes_planes ?? 0),
         reportes_usuarios: Number(row.reportes_usuarios ?? 0),
         reportes_mensajes: Number(row.reportes_mensajes ?? 0),
+        organizadores: Number(row.organizadores ?? 0),
         total: Number(row.total ?? 0),
     };
 }
@@ -275,9 +305,9 @@ export async function deleteUserAdmin(userId: string): Promise<{ error: string |
         const { data, error } = await supabase.functions.invoke('delete-account', {
             body: { targetUserId: userId },
         });
-        if (error) return { error: rpcErr(error) };
+        if (error) return { error: await edgeInvokeError(error, data) };
         const payload = data as { error?: string } | null;
-        return { error: payload?.error ?? null };
+        return { error: payload?.error ? (rpcErr({ message: payload.error }) ?? payload.error) : null };
     } catch (error) {
         return { error: error instanceof Error ? error.message : 'delete_user_failed' };
     }
@@ -288,9 +318,9 @@ export async function deletePlanAdmin(planId: string): Promise<{ error: string |
         const { data, error } = await supabase.functions.invoke('delete-plan', {
             body: { planId },
         });
-        if (error) return { error: rpcErr(error) };
+        if (error) return { error: await edgeInvokeError(error, data) };
         const payload = data as { error?: string } | null;
-        return { error: payload?.error ?? null };
+        return { error: payload?.error ? (rpcErr({ message: payload.error }) ?? payload.error) : null };
     } catch (error) {
         return { error: error instanceof Error ? error.message : 'delete_plan_failed' };
     }

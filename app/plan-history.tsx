@@ -16,6 +16,7 @@ import { isFeedPlan } from '../lib/feedPlans';
 import { useT } from '../lib/i18n';
 import { getPlanCategoryDisplay } from '../lib/categories';
 import { resolvePlanImageSource } from '../lib/sports';
+import { getAuthUser } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY_DARK = '#2563EB';
@@ -45,7 +46,7 @@ export default function PlanHistoryScreen() {
     const fetchHistory = useCallback(async () => {
         try {
             if (!hasDataRef.current) setLoading(true);
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = await getAuthUser();
             if (!user) {
                 router.replace('/login');
                 return;
@@ -163,23 +164,25 @@ export default function PlanHistoryScreen() {
                                     <Text style={styles.cardCat}>{getPlanCategoryDisplay(item, t)}</Text>
                                     <Text style={styles.cardDate}>{formatDate(item.fecha_evento ?? item.completedAt)}</Text>
                                 </View>
+                                <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
                             </TouchableOpacity>
                             {item.isCreator ? (
-                                <TouchableOpacity
-                                    style={styles.dupBtn}
-                                    onPress={() =>
-                                        router.push({
-                                            pathname: '/create-plan',
-                                            params: { duplicateId: item.planId },
-                                        })
-                                    }
-                                    hitSlop={8}
-                                >
-                                    <Ionicons name="copy-outline" size={18} color={PRIMARY_DARK} />
-                                </TouchableOpacity>
-                            ) : (
-                                <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
-                            )}
+                                <View style={styles.cardActions}>
+                                    <TouchableOpacity
+                                        style={styles.cardActionBtn}
+                                        onPress={() =>
+                                            router.push({
+                                                pathname: '/create-plan',
+                                                params: { duplicateId: item.planId },
+                                            })
+                                        }
+                                        activeOpacity={0.85}
+                                    >
+                                        <Ionicons name="copy-outline" size={17} color={PRIMARY_DARK} />
+                                        <Text style={styles.cardActionText}>{t('createplan.duplicate')}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            ) : null}
                         </View>
                     )}
                 />
@@ -217,28 +220,33 @@ const styles = StyleSheet.create({
     },
     list: { paddingHorizontal: 20, paddingBottom: 40 },
     card: {
-        flexDirection: 'row',
-        alignItems: 'center',
         backgroundColor: '#FFF',
         borderRadius: 18,
         padding: 12,
         marginBottom: 10,
-        gap: 8,
         elevation: 3,
         shadowColor: '#1E3A8A',
         shadowOpacity: 0.08,
         shadowRadius: 10,
         shadowOffset: { width: 0, height: 4 },
     },
-    cardMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
-    dupBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        backgroundColor: '#EFF6FF',
+    cardMain: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    cardActions: {
+        marginTop: 10,
+        paddingTop: 10,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: '#E2E8F0',
+    },
+    cardActionBtn: {
+        flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 11,
+        borderRadius: 12,
+        backgroundColor: '#EFF6FF',
     },
+    cardActionText: { fontSize: 14, fontWeight: '800', color: PRIMARY_DARK },
     thumb: { width: 54, height: 54, borderRadius: 16, backgroundColor: '#E3ECFB' },
     cardBody: { flex: 1 },
     cardTitle: { fontSize: 15, fontWeight: '800', color: INK },

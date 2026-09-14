@@ -6,8 +6,8 @@ const { Navigator } = createPagerTabNavigator();
 const PagerTabs = withLayoutContext(Navigator);
 
 /**
- * Orden del deslizamiento: chats → mis planes → feed → buscar.
- * PagerView enseña la pantalla de destino mientras deslizas.
+ * Orden del deslizamiento: planes → chats.
+ * Buscar gente y Mis planes viven fuera del pager (stack).
  */
 export default function TabLayout() {
     return (
@@ -16,13 +16,11 @@ export default function TabLayout() {
                 initialRouteName="index"
                 screenOptions={{
                     swipeEnabled: true,
-                    lazy: true,
+                    lazy: false,
                 }}
             >
-                <PagerTabs.Screen name="chats" />
-                <PagerTabs.Screen name="my-plans" />
                 <PagerTabs.Screen name="index" />
-                <PagerTabs.Screen name="search-profiles" />
+                <PagerTabs.Screen name="chats" />
             </PagerTabs>
         </MainChrome>
     );

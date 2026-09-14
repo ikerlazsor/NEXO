@@ -9,6 +9,8 @@ import { useCallback,
 import { FlashList } from '@shopify/flash-list';
 import {
     ActivityIndicator,
+    AppState,
+    type AppStateStatus,
     Keyboard,
     KeyboardAvoidingView,
     Modal,
@@ -25,53 +27,53 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Alert } from '../../lib/nexoAlert';
-import { theme } from '../../theme';
-import { PlanImage } from '../../components/PlanImage';
+import { type ThemeColors } from '../../theme';
+import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
+import { ChatListRow, type ChatListItem } from '../../components/ChatListRow';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { ChatSkeletonList } from '../../components/SkeletonShimmer';
+import { NexoEmptyState } from '../../components/ui/NexoState';
 import { useListScrollRestore } from '../../hooks/useListScrollRestore';
 import { getDirectConversations, hideDirectChat, ensureDirectConversation } from '../../lib/directChat';
 import { getChatSummaries } from '../../lib/chatSummaries';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { isGroupChatPlan } from '../../lib/feedPlans';
-import { getFriends, type FriendProfile } from '../../lib/friends';
+import { getFriends, getAvatarUri, type FriendProfile } from '../../lib/friends';
 import { useT } from '../../lib/i18n';
+import { formatChatListPreview } from '../../lib/chatSystem';
 import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { ScreenKeys } from '../../lib/screenState';
-import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
+import { useAuthSession } from '../../lib/authSession';
+import { GuestLockedPanel } from '../../components/GuestLockedPanel';
+import { useChromeHeaderLayout } from '../../components/MainChrome';
 import { markDirectChatRead, markPlanChatRead, subscribeChatUnread } from '../../lib/chatUnread';
-import { hapticSelection } from '../../lib/haptics';
 import { isPlanChatAlive, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
 import { filterHiddenPlanChats, hidePlanChat } from '../../lib/planChatHide';
 import { diskSet } from '../../lib/diskCache';
+import { prefetchRemoteImages } from '../../lib/prefetchCovers';
+import { prefetchRecentChatThreads, seedChatThreadPeek } from '../../lib/prefetchChats';
 import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from '../../lib/screenCaches';
+import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
 import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
 
-const PRIMARY = theme.colors.brand;
-const PRIMARY_DARK = theme.colors.primary;
-const INK = theme.colors.text;
+type ChatRow = ChatListItem;
 
-type ChatRow = {
-    id: string;
-    title: string;
-    image_url: string | null;
-    kind: 'plan' | 'group' | 'direct';
-    peerId?: string;
-    creadorId?: string;
-    fechaEvento?: string | null;
-    ultimoTexto: string;
-    lastAt: string;
-    unread: number;
-};
+const MAX_GROUP_NAME_LENGTH = 40;
 
 export default function MyChatsScreen() {
     const router = useRouter();
     const { t } = useT();
+    const { colors, scheme } = useAppTheme();
+    const styles = useThemedStyles(createChatsStyles);
+    const { isGuest, userId } = useAuthSession();
+    const chrome = useChromeHeaderLayout();
     const insets = useSafeAreaInsets();
-    const [chats, setChats] = useState<ChatRow[]>([]);
-    const [loading, setLoading] = useState(true);
+    const cachedChats = userId ? cacheGetStale<ChatRow[]>(screenCacheKey.chatsList(userId)) : null;
+    const cachedHasRows = Array.isArray(cachedChats) && cachedChats.length > 0;
+    const [chats, setChats] = useState<ChatRow[]>(() => (cachedHasRows ? cachedChats! : []));
+    const [loading, setLoading] = useState(() => !cachedHasRows);
     const [refreshing, setRefreshing] = useState(false);
     const [loadError, setLoadError] = useState(false);
     const [showCreateGroup, setShowCreateGroup] = useState(false);
@@ -80,34 +82,37 @@ export default function MyChatsScreen() {
     const [selectedFriends, setSelectedFriends] = useState<Set<string>>(new Set());
     const [loadingFriends, setLoadingFriends] = useState(false);
     const [creatingGroup, setCreatingGroup] = useState(false);
-    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-    const hasDataRef = useRef(false);
-    const didSessionLoadRef = useRef(false);
+    const [currentUserId, setCurrentUserId] = useState<string | null>(userId);
+    const hasDataRef = useRef(cachedHasRows);
     const fetchInFlightRef = useRef(false);
     const openSwipeRef = useRef<Swipeable | null>(null);
+    const swipeRefs = useRef(new Map<string, Swipeable>());
     const silentRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const fetchMyChatsRef = useRef<(opts?: { silent?: boolean; force?: boolean }) => Promise<void>>(async () => {});
-    const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore<ChatRow>(ScreenKeys.CHATS);
+    const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore<ChatRow>(
+        ScreenKeys.CHATS,
+        { restoreOnFocus: false },
+    );
 
     const scheduleSilentRefresh = useCallback(() => {
         if (silentRefreshTimer.current) clearTimeout(silentRefreshTimer.current);
         silentRefreshTimer.current = setTimeout(() => {
             void fetchMyChatsRef.current({ silent: true });
-        }, 450);
+        }, 900);
     }, []);
 
     useEffect(() => {
-        void getAuthUser().then((user) => {
-            setCurrentUserId(user?.id ?? null);
-            if (!user) return;
-            const cached = cacheGetStale<ChatRow[]>(screenCacheKey.chatsList(user.id));
-            if (Array.isArray(cached)) {
-                setChats(cached);
-                hasDataRef.current = true;
-                setLoading(false);
-            }
-        });
-    }, []);
+        if (!userId) return;
+        setCurrentUserId(userId);
+        const cached = cacheGetStale<ChatRow[]>(screenCacheKey.chatsList(userId));
+        if (Array.isArray(cached) && cached.length > 0 && !hasDataRef.current) {
+            setChats(cached);
+            hasDataRef.current = true;
+            setLoading(false);
+        }
+        // Siempre pedir red al conocer userId (caché [] no cuenta).
+        void fetchMyChatsRef.current({ silent: hasDataRef.current, force: !hasDataRef.current });
+    }, [userId]);
 
     useEffect(() => {
         const unsub = subscribeChatUnread(() => {
@@ -129,38 +134,50 @@ export default function MyChatsScreen() {
         };
     }, [scheduleSilentRefresh]);
 
-    const formatPreview = (msg: { tipo: string; contenido: string; emisor_id: string }, names: Record<string, string>) => {
-        const nombre = names[msg.emisor_id] || t('chats.user');
-        if (msg.tipo === 'imagen') return `${nombre}: ${t('chats.previewImage')}`;
-        if (msg.tipo === 'video') return `${nombre}: ${t('chats.previewVideo')}`;
-        if (msg.tipo === 'audio') {
-            const sec = parseInt(msg.contenido, 10);
-            const dur = Number.isFinite(sec) && sec > 0
-                ? `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, '0')}`
-                : null;
-            return dur ? `${nombre}: ${t('chats.previewVoice')} ${dur}` : `${nombre}: ${t('chats.previewVoice')}`;
-        }
-        return `${nombre}: ${msg.contenido}`;
-    };
+    const formatPreview = (msg: { tipo: string; contenido: string; emisor_id: string }, names: Record<string, string>) =>
+        formatChatListPreview(msg, {
+            names,
+            currentUserId,
+            youLabel: t('chats.you'),
+            userFallback: t('chats.user'),
+            labels: {
+                joinedPlanSelf: t('chat.systemJoinedPlanSelf'),
+                joinedGroupSelf: t('chat.systemJoinedGroupSelf'),
+                joinedPlan: (name) => t('chat.systemJoinedPlan', { name }),
+                joinedGroup: (name) => t('chat.systemJoinedGroup', { name }),
+                image: t('chats.previewImage'),
+                video: t('chats.previewVideo'),
+                voice: t('chats.previewVoice'),
+            },
+        });
+
 
     const fetchMyChats = async (opts?: { silent?: boolean; force?: boolean }) => {
         if (fetchInFlightRef.current && opts?.silent) return;
         try {
             fetchInFlightRef.current = true;
             if (!opts?.silent && !refreshing && !hasDataRef.current) setLoading(true);
-            const user = await getAuthUser();
-            if (!user) return;
-            setCurrentUserId(user.id);
+            const uid = userId ?? (await getAuthUser())?.id ?? null;
+            if (!uid) return;
+            setCurrentUserId(uid);
+            const user = { id: uid };
 
             const cacheKey = screenCacheKey.chatsList(user.id);
             const cached = cacheGetStale<ChatRow[]>(cacheKey);
-            if (Array.isArray(cached) && !hasDataRef.current) {
+            if (Array.isArray(cached) && cached.length > 0 && !hasDataRef.current) {
                 setChats(cached);
                 hasDataRef.current = true;
                 setLoading(false);
             }
 
-            if (!opts?.force && !opts?.silent && cacheIsFresh(cacheKey) && hasDataRef.current) {
+            if (
+                !opts?.force
+                && !opts?.silent
+                && cacheIsFresh(cacheKey)
+                && hasDataRef.current
+                && Array.isArray(cached)
+                && cached.length > 0
+            ) {
                 setLoading(false);
                 setRefreshing(false);
                 return;
@@ -249,6 +266,8 @@ export default function MyChatsScreen() {
             setLoadError(false);
             cacheSet(cacheKey, rows, ScreenCacheTTL.chatsList);
             void diskSet(cacheKey, rows);
+            prefetchRemoteImages(rows.map((row) => row.image_url), 24);
+            prefetchRecentChatThreads(user.id, rows);
         } catch (error) {
             if (__DEV__) console.error('Error cargando mis chats:', error);
             if (!hasDataRef.current) setLoadError(true);
@@ -262,21 +281,20 @@ export default function MyChatsScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            if (!didSessionLoadRef.current) {
-                didSessionLoadRef.current = true;
-                void fetchMyChatsRef.current();
-                return;
-            }
-            // Al volver: refrescar si la caché se invalidó (p. ej. chat 1:1 recién abierto).
-            void getAuthUser().then((user) => {
-                if (!user) return;
-                if (cacheIsFresh(screenCacheKey.chatsList(user.id))) return;
-                void fetchMyChatsRef.current({ silent: true, force: true });
-            });
+            void fetchMyChatsRef.current({ silent: hasDataRef.current, force: false });
         }, []),
     );
 
-    const confirmDeleteChat = (item: ChatRow) => {
+    useEffect(() => {
+        const onAppState = (next: AppStateStatus) => {
+            if (next !== 'active') return;
+            void fetchMyChatsRef.current({ silent: true, force: false });
+        };
+        const sub = AppState.addEventListener('change', onAppState);
+        return () => sub.remove();
+    }, []);
+
+    const confirmDeleteChat = useCallback((item: ChatRow) => {
         if (!currentUserId) return;
         openSwipeRef.current?.close();
 
@@ -355,17 +373,90 @@ export default function MyChatsScreen() {
                                 void import('../../lib/push').then(({ cancelPlanLifecycleReminders }) => {
                                     void cancelPlanLifecycleReminders(item.id);
                                 });
+                                broadcastPlanMembership(item.id, 'none', {
+                                    userId: currentUserId,
+                                    dropJoined: true,
+                                });
                             } else {
                                 await hidePlanChat(currentUserId, item.id);
+                                invalidatePlanMembershipCaches(currentUserId);
                             }
-                            invalidatePlanMembershipCaches(currentUserId);
+                            if (isHost) {
+                                invalidatePlanMembershipCaches(currentUserId);
+                            }
                             setChats((prev) => prev.filter((c) => c.id !== item.id));
                         })();
                     }, 0);
                 },
             },
         ]);
-    };
+    }, [currentUserId, t]);
+
+    const registerSwipeRef = useCallback((key: string, ref: Swipeable | null) => {
+        if (ref) swipeRefs.current.set(key, ref);
+        else swipeRefs.current.delete(key);
+    }, []);
+
+    const handleSwipeWillOpen = useCallback((key: string) => {
+        const next = swipeRefs.current.get(key);
+        const prev = openSwipeRef.current;
+        if (prev && prev !== next) prev.close();
+        if (next) openSwipeRef.current = next;
+    }, []);
+
+    const handleSwipeClose = useCallback((key: string) => {
+        const current = swipeRefs.current.get(key);
+        if (openSwipeRef.current === current) openSwipeRef.current = null;
+    }, []);
+
+    const handleMarkChatRead = useCallback((item: ChatRow) => {
+        if (!currentUserId || item.unread <= 0) return;
+        if (item.kind === 'direct' && item.peerId) {
+            void markDirectChatRead(currentUserId, item.peerId);
+        } else {
+            void markPlanChatRead(currentUserId, item.id);
+        }
+        setChats((prev) =>
+            prev.map((c) =>
+                c.id === item.id && c.kind === item.kind ? { ...c, unread: 0 } : c,
+            ),
+        );
+    }, [currentUserId]);
+
+    const handleOpenChat = useCallback((item: ChatRow) => {
+        openSwipeRef.current?.close();
+        if (item.kind === 'direct' && item.peerId) {
+            router.push(`/direct-chat/${item.peerId}`);
+        } else {
+            router.push(`/chat/${item.id}`);
+        }
+    }, [router]);
+
+    const renderChatItem = useCallback(
+        ({ item }: { item: ChatRow }) => (
+            <ChatListRow
+                item={item}
+                currentUserId={currentUserId}
+                deleteLabel={t('chat.deleteChat')}
+                onDelete={confirmDeleteChat}
+                onOpen={handleOpenChat}
+                onMarkRead={handleMarkChatRead}
+                onSwipeWillOpen={handleSwipeWillOpen}
+                onSwipeClose={handleSwipeClose}
+                registerSwipeRef={registerSwipeRef}
+            />
+        ),
+        [
+            confirmDeleteChat,
+            currentUserId,
+            handleMarkChatRead,
+            handleOpenChat,
+            handleSwipeClose,
+            handleSwipeWillOpen,
+            registerSwipeRef,
+            t,
+        ],
+    );
 
     const openCreateGroup = async () => {
         setShowCreateGroup(true);
@@ -373,7 +464,7 @@ export default function MyChatsScreen() {
         setSelectedFriends(new Set());
         setLoadingFriends(true);
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = await getAuthUser();
             if (!user) return;
             const list = await getFriends(user.id);
             setFriends(list);
@@ -436,6 +527,10 @@ export default function MyChatsScreen() {
         if (selectedFriends.size === 1) {
             const peerId = [...selectedFriends][0];
             const friend = friends.find((f) => f.id === peerId);
+            const title = friend?.nombre?.trim() || t('chats.user');
+            const imageUrl = friend
+                ? getAvatarUri({ nombre: title, avatar_url: friend.avatar_url ?? null })
+                : null;
             setShowCreateGroup(false);
             setGroupName('');
             setSelectedFriends(new Set());
@@ -449,8 +544,8 @@ export default function MyChatsScreen() {
                 const row: ChatRow = {
                     id: `direct-${peerId}`,
                     peerId,
-                    title: friend?.nombre || t('chats.user'),
-                    image_url: friend?.avatar_url ?? null,
+                    title,
+                    image_url: imageUrl,
                     kind: 'direct',
                     ultimoTexto: t('chats.noMessages'),
                     lastAt: now,
@@ -458,7 +553,17 @@ export default function MyChatsScreen() {
                 };
                 setChats((prev) => [row, ...prev.filter((c) => c.id !== row.id)]);
                 hasDataRef.current = true;
+                seedChatThreadPeek(user.id, {
+                    id: row.id,
+                    title: row.title,
+                    image_url: row.image_url,
+                    kind: 'direct',
+                    peerId,
+                });
                 router.push(`/direct-chat/${peerId}`);
+            } catch (e: any) {
+                if (__DEV__) console.error(e);
+                Alert.alert(t('profile.error'), e?.message || t('friends.chatError'));
             } finally {
                 setCreatingGroup(false);
             }
@@ -470,13 +575,17 @@ export default function MyChatsScreen() {
             Alert.alert(t('login.notice'), t('chats.groupName'));
             return;
         }
+        if (name.length > MAX_GROUP_NAME_LENGTH) {
+            Alert.alert(t('login.notice'), t('chats.groupNameTooLong', { max: MAX_GROUP_NAME_LENGTH }));
+            return;
+        }
 
         setCreatingGroup(true);
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = await getAuthUser();
             if (!user) return;
 
-            const newPlan = await insertGroupPlan(user.id, name);
+            const newPlan = await insertGroupPlan(user.id, name.slice(0, MAX_GROUP_NAME_LENGTH));
             // Primero el creador; luego el resto (anfitrión puede insertar miembros).
             const { error: meError } = await supabase.from('participantes').insert({
                 plan_id: newPlan.id,
@@ -485,27 +594,33 @@ export default function MyChatsScreen() {
             });
             if (meError) throw meError;
 
+            setShowCreateGroup(false);
+            setGroupName('');
             const friendIds = [...selectedFriends];
+            setSelectedFriends(new Set());
+            invalidatePlanMembershipCaches(user.id);
+            router.push(`/chat/${newPlan.id}`);
+            void fetchMyChats({ force: true });
+
             if (friendIds.length > 0) {
-                const { error: partsError } = await supabase.from('participantes').insert(
+                void supabase.from('participantes').insert(
                     friendIds.map((usuario_id) => ({
                         plan_id: newPlan.id,
                         usuario_id,
                         estado: 'aceptado',
                     })),
-                );
-                if (partsError) throw partsError;
+                ).then(({ error: partsError }) => {
+                    if (partsError && __DEV__) console.error(partsError);
+                });
             }
-
-            setShowCreateGroup(false);
-            setGroupName('');
-            setSelectedFriends(new Set());
-            invalidatePlanMembershipCaches(user.id);
-            router.push(`/chat/${newPlan.id}`);
-            void fetchMyChats({ force: true });
         } catch (e: any) {
             if (__DEV__) console.error(e);
-            Alert.alert(t('profile.error'), e?.message || t('friends.chatError'));
+            const msg = String(e?.message ?? '');
+            if (/active_plan_limit/i.test(msg)) {
+                Alert.alert(t('profile.error'), t('createplan.planLimitReached', { max: 5 }));
+            } else {
+                Alert.alert(t('profile.error'), msg || t('friends.chatError'));
+            }
         } finally {
             setCreatingGroup(false);
         }
@@ -517,45 +632,60 @@ export default function MyChatsScreen() {
     };
 
     const renderEmpty = () => (
-        <View style={styles.emptyContainer}>
-            <View style={styles.emptyIconBg}>
-                <Ionicons name={loadError ? 'cloud-offline-outline' : 'chatbubbles-outline'} size={60} color={PRIMARY} />
-            </View>
-            <Text style={styles.emptyTitle}>{loadError ? t('chats.loadError') : t('chats.empty')}</Text>
-            {!loadError ? <Text style={styles.emptySubtitle}>{t('chats.emptySub')}</Text> : null}
-            {loadError ? (
-                <TouchableOpacity
-                    style={styles.exploreBtn}
-                    onPress={() => {
-                        setLoadError(false);
-                        void fetchMyChats({ force: true });
-                    }}
-                >
-                    <Text style={styles.exploreBtnText}>{t('chats.retry')}</Text>
-                </TouchableOpacity>
-            ) : (
-                <>
-                    <TouchableOpacity
-                        style={styles.exploreBtn}
-                        onPress={() => router.navigate('/')}
-                    >
-                        <Text style={styles.exploreBtnText}>{t('chats.explore')}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.createGroupBtnEmpty} onPress={openCreateGroup}>
-                        <Ionicons name="people" size={18} color={theme.colors.surface} />
-                        <Text style={styles.createGroupBtnText}>{t('chats.createGroup')}</Text>
-                    </TouchableOpacity>
-                </>
-            )}
-        </View>
+        <NexoEmptyState
+            icon={loadError ? 'cloud-offline-outline' : 'chatbubbles-outline'}
+            title={loadError ? t('chats.loadError') : t('chats.empty')}
+            description={loadError ? undefined : t('chats.emptySub')}
+            actionLabel={loadError ? t('chats.retry') : t('chats.explore')}
+            onAction={() => {
+                if (loadError) {
+                    setLoadError(false);
+                    void fetchMyChats({ force: true });
+                } else {
+                    router.navigate('/');
+                }
+            }}
+            secondaryLabel={loadError ? undefined : t('chats.createGroup')}
+            onSecondaryAction={loadError ? undefined : openCreateGroup}
+            style={{ paddingTop: 48 }}
+        />
     );
+
+    if (isGuest) {
+        return (
+            <View style={styles.container}>
+                <View
+                    style={[
+                        styles.pageHeader,
+                        {
+                            paddingTop: chrome.headerTop,
+                            height: chrome.headerTop + chrome.headerRowHeight,
+                            paddingRight: chrome.headerRight,
+                        },
+                    ]}
+                >
+                    <Text style={styles.pageTitle}>{t('chats.title')}</Text>
+                </View>
+                <GuestLockedPanel intent={{ type: 'chats' }} />
+            </View>
+        );
+    }
 
     return (
             <View style={styles.container}>
-                <View style={styles.pageHeader}>
+                <View
+                    style={[
+                        styles.pageHeader,
+                        {
+                            paddingTop: chrome.headerTop,
+                            height: chrome.headerTop + chrome.headerRowHeight,
+                            paddingRight: chrome.headerRight,
+                        },
+                    ]}
+                >
                     <Text style={styles.pageTitle}>{t('chats.title')}</Text>
-                    <TouchableOpacity onPress={openCreateGroup} style={styles.addBtn}>
-                        <Ionicons name="add" size={26} color={INK} />
+                    <TouchableOpacity onPress={openCreateGroup} style={styles.addBtn} hitSlop={6}>
+                        <Ionicons name="add" size={28} color={colors.text} />
                     </TouchableOpacity>
                 </View>
 
@@ -574,109 +704,10 @@ export default function MyChatsScreen() {
                     scrollEventThrottle={scrollEventThrottle}
                     drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     refreshControl={
-                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />
+                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
                     }
-                    renderItem={({ item }) => (
-                        <View style={styles.swipeRow}>
-                            <Swipeable
-                                ref={(ref) => {
-                                    if (ref) {
-                                        (item as any)._swipeRef = ref;
-                                    }
-                                }}
-                                overshootRight={false}
-                                friction={2}
-                                rightThreshold={40}
-                                onSwipeableWillOpen={() => {
-                                    const prev = openSwipeRef.current;
-                                    const next = (item as any)._swipeRef as Swipeable | undefined;
-                                    if (prev && prev !== next) prev.close();
-                                    if (next) openSwipeRef.current = next;
-                                }}
-                                onSwipeableClose={() => {
-                                    const current = (item as any)._swipeRef as Swipeable | undefined;
-                                    if (openSwipeRef.current === current) openSwipeRef.current = null;
-                                }}
-                                renderRightActions={() => (
-                                    <TouchableOpacity
-                                        style={styles.deleteAction}
-                                        activeOpacity={0.9}
-                                        onPress={() => confirmDeleteChat(item)}
-                                    >
-                                        <Ionicons name="trash" size={22} color={theme.colors.surface} />
-                                        <Text style={styles.deleteActionText}>{t('chat.deleteChat')}</Text>
-                                    </TouchableOpacity>
-                                )}
-                            >
-                                <TouchableOpacity
-                                    style={styles.chatCard}
-                                    activeOpacity={0.85}
-                                    onLongPress={() => confirmDeleteChat(item)}
-                                    onPress={() => {
-                                        hapticSelection();
-                                        openSwipeRef.current?.close();
-                                        if (currentUserId && item.unread > 0) {
-                                            if (item.kind === 'direct' && item.peerId) {
-                                                void markDirectChatRead(currentUserId, item.peerId);
-                                            } else {
-                                                void markPlanChatRead(currentUserId, item.id);
-                                            }
-                                            setChats((prev) =>
-                                                prev.map((c) =>
-                                                    c.id === item.id && c.kind === item.kind ? { ...c, unread: 0 } : c,
-                                                ),
-                                            );
-                                        }
-                                        if (item.kind === 'direct' && item.peerId) {
-                                            router.push(`/direct-chat/${item.peerId}`);
-                                        } else {
-                                            router.push(`/chat/${item.id}`);
-                                        }
-                                    }}
-                                >
-                                    {item.kind === 'direct' ? (
-                                        <ProfileAvatar
-                                            uri={item.image_url}
-                                            name={item.title}
-                                            size={52}
-                                            recyclingKey={item.peerId ?? item.id}
-                                        />
-                                    ) : item.kind === 'group' && item.image_url ? (
-                                        <PlanImage
-                                            source={resolvePlanImageSource(item.image_url)}
-                                            style={styles.chatImage}
-                                            recyclingKey={`group-${item.id}`}
-                                        />
-                                    ) : item.kind === 'group' ? (
-                                        <View style={styles.groupIconWrap}>
-                                            <Ionicons name="people" size={28} color={PRIMARY_DARK} />
-                                        </View>
-                                    ) : (
-                                        <PlanImage
-                                            source={resolvePlanImageSource(item.image_url)}
-                                            style={styles.chatImage}
-                                            recyclingKey={String(item.id)}
-                                        />
-                                    )}
-                                    <View style={styles.chatInfo}>
-                                        <Text style={styles.chatTitle} numberOfLines={1}>{item.title}</Text>
-                                        <Text style={styles.lastMsg} numberOfLines={1}>{item.ultimoTexto}</Text>
-                                    </View>
-                                    <View style={styles.chevronWrap}>
-                                        {item.unread > 0 ? (
-                                            <View style={styles.unreadBadge}>
-                                                <Text style={styles.unreadText}>
-                                                    {item.unread > 9 ? '9+' : item.unread}
-                                                </Text>
-                                            </View>
-                                        ) : (
-                                            <Ionicons name="chevron-forward" size={16} color={PRIMARY_DARK} />
-                                        )}
-                                    </View>
-                                </TouchableOpacity>
-                            </Swipeable>
-                        </View>
-                    )}
+                    renderItem={renderChatItem}
+                    extraData={currentUserId}
                 />
                 )}
 
@@ -701,7 +732,7 @@ export default function MyChatsScreen() {
                                             : t('chats.createGroupTitle')}
                                     </Text>
                                     <TouchableOpacity onPress={() => setShowCreateGroup(false)}>
-                                        <Ionicons name="close" size={26} color={INK} />
+                                        <Ionicons name="close" size={26} color={colors.text} />
                                     </TouchableOpacity>
                                 </View>
 
@@ -711,12 +742,19 @@ export default function MyChatsScreen() {
                                         <TextInput
                                             style={styles.modalInput}
                                             placeholder={t('chats.groupNamePlaceholder')}
-                                            placeholderTextColor={theme.colors.textSubtle}
+                                            placeholderTextColor={colors.textSubtle}
+                                            keyboardAppearance={scheme === 'dark' ? 'dark' : 'light'}
                                             value={groupName}
-                                            onChangeText={setGroupName}
+                                            onChangeText={(text) =>
+                                                setGroupName(text.slice(0, MAX_GROUP_NAME_LENGTH))
+                                            }
+                                            maxLength={MAX_GROUP_NAME_LENGTH}
                                             returnKeyType="done"
                                             onSubmitEditing={Keyboard.dismiss}
                                         />
+                                        <Text style={styles.groupNameCount}>
+                                            {groupName.length}/{MAX_GROUP_NAME_LENGTH}
+                                        </Text>
                                     </>
                                 ) : null}
 
@@ -729,7 +767,7 @@ export default function MyChatsScreen() {
                                     {t('chats.inviteFriends')}
                                 </Text>
                                 {loadingFriends ? (
-                                    <ActivityIndicator color={PRIMARY} style={{ marginVertical: 20 }} />
+                                    <ActivityIndicator color={colors.brand} style={{ marginVertical: 20 }} />
                                 ) : friends.length === 0 ? (
                                     <Text style={styles.noFriendsHint}>{t('friends.noFriends')}</Text>
                                 ) : (
@@ -757,7 +795,7 @@ export default function MyChatsScreen() {
                                                     <Ionicons
                                                         name={selected ? 'checkmark-circle' : 'ellipse-outline'}
                                                         size={24}
-                                                        color={selected ? PRIMARY_DARK : '#CBD5E1'}
+                                                        color={selected ? colors.primary : colors.borderStrong}
                                                     />
                                                 </TouchableOpacity>
                                             );
@@ -771,7 +809,7 @@ export default function MyChatsScreen() {
                                     disabled={creatingGroup}
                                 >
                                     {creatingGroup ? (
-                                        <ActivityIndicator color={theme.colors.surface} />
+                                        <ActivityIndicator color={colors.onPrimary} />
                                     ) : (
                                         <Text style={styles.createGroupConfirmText}>
                                             {selectedFriends.size <= 1
@@ -788,82 +826,105 @@ export default function MyChatsScreen() {
     );
 }
 
-const styles = StyleSheet.create({
+function createChatsStyles(c: ThemeColors) {
+    const INK = c.text;
+    const PRIMARY = c.brand;
+    const PRIMARY_DARK = c.primary;
+    return StyleSheet.create({
     container: { flex: 1, backgroundColor: 'transparent' },
     pageHeader: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingBottom: 14,
+        paddingLeft: 20,
+        marginBottom: 8,
     },
-    pageTitle: { fontSize: 22, fontWeight: '900', color: INK },
-    addBtn: { width: 45, height: 45, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: 15, elevation: 3, shadowColor: PRIMARY_DARK, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+    pageTitle: { fontSize: 24, fontWeight: '900', color: INK },
+    addBtn: {
+        width: 44,
+        height: 44,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: c.surface,
+        borderRadius: 14,
+        elevation: 3,
+        shadowColor: PRIMARY_DARK,
+        shadowOpacity: 0.12,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: c.border,
+    },
     loading: { flex: 1, justifyContent: 'center' },
-    listContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 130 },
-    swipeRow: { marginBottom: 12 },
+    listContent: { paddingHorizontal: 0, paddingTop: 8, paddingBottom: 130 },
+    swipeRow: { marginBottom: 0 },
     chatCard: {
         flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: theme.colors.surface,
-        borderRadius: 20,
-        padding: 12,
-        elevation: 4,
-        shadowColor: '#1E3A8A',
-        shadowOpacity: 0.1,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
+        alignItems: 'flex-start',
+        backgroundColor: 'transparent',
+        paddingLeft: 16,
+        paddingRight: 12,
+        paddingTop: 20,
+        paddingBottom: 0,
     },
     deleteAction: {
-        width: 92,
-        marginLeft: 10,
-        borderRadius: 20,
-        backgroundColor: theme.colors.danger,
+        width: 88,
+        backgroundColor: c.danger,
         justifyContent: 'center',
         alignItems: 'center',
         gap: 4,
     },
-    deleteActionText: { color: theme.colors.surface, fontWeight: '800', fontSize: 12 },
-    chatImage: { width: 58, height: 58, borderRadius: 20, backgroundColor: theme.colors.border },
-    groupIconWrap: { width: 58, height: 58, borderRadius: 20, backgroundColor: theme.colors.border, justifyContent: 'center', alignItems: 'center' },
-    chatInfo: { flex: 1, marginLeft: 14 },
-    chatTitle: { fontSize: 16, fontWeight: '800', color: INK, marginBottom: 3 },
-    lastMsg: { fontSize: 14, color: theme.colors.textSubtle },
+    deleteActionText: { color: c.onPrimary, fontWeight: '800', fontSize: 12 },
+    chatImage: { width: 64, height: 64, borderRadius: 32, backgroundColor: c.border },
+    groupIconWrap: { width: 64, height: 64, borderRadius: 32, backgroundColor: c.border, justifyContent: 'center', alignItems: 'center' },
+    chatInfo: { flex: 1, marginLeft: 14, minWidth: 0, paddingTop: 0 },
+    chatMain: { flexDirection: 'row', alignItems: 'flex-start', paddingBottom: 0, paddingRight: 4 },
+    chatCopy: { flex: 1, minWidth: 0, marginRight: 8, paddingTop: 1 },
+    chatTitle: { fontSize: 18, fontWeight: '800', color: INK, marginBottom: 4, lineHeight: 22 },
+    lastMsg: { fontSize: 14, color: c.textSubtle, lineHeight: 18 },
+    chatSep: {
+        height: 1.25,
+        backgroundColor: c.borderStrong,
+        marginRight: 10,
+        marginTop: 30,
+    },
     unreadBadge: {
-        minWidth: 22,
-        height: 22,
-        borderRadius: 11,
-        backgroundColor: theme.colors.danger,
+        minWidth: 26,
+        height: 26,
+        borderRadius: 13,
+        backgroundColor: PRIMARY_DARK,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingHorizontal: 6,
+        paddingHorizontal: 7,
+        marginTop: 19,
     },
-    unreadText: { color: theme.colors.surface, fontSize: 11, fontWeight: '800' },
-    chevronWrap: { width: 30, height: 30, borderRadius: 15, backgroundColor: theme.colors.surfaceSubtle, justifyContent: 'center', alignItems: 'center' },
+    unreadText: { color: c.onPrimary, fontSize: 12, fontWeight: '800' },
     emptyContainer: {
         alignItems: 'center',
         marginTop: 60,
         paddingHorizontal: 40,
     },
-    emptyIconBg: { width: 120, height: 120, borderRadius: 60, backgroundColor: theme.colors.surface, justifyContent: 'center', alignItems: 'center', marginBottom: 20, elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
+    emptyIconBg: { width: 120, height: 120, borderRadius: 60, backgroundColor: c.surface, justifyContent: 'center', alignItems: 'center', marginBottom: 20, elevation: 4, shadowColor: PRIMARY_DARK, shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
     emptyTitle: { fontSize: 20, fontWeight: '800', color: INK, marginBottom: 10 },
-    emptySubtitle: { fontSize: 15, color: theme.colors.textMuted, textAlign: 'center', lineHeight: 22, marginBottom: 24 },
+    emptySubtitle: { fontSize: 15, color: c.textMuted, textAlign: 'center', lineHeight: 22, marginBottom: 24 },
     exploreBtn: { backgroundColor: PRIMARY_DARK, paddingHorizontal: 30, paddingVertical: 15, borderRadius: 18, marginBottom: 12 },
-    exploreBtnText: { color: theme.colors.surface, fontWeight: '700', fontSize: 16 },
+    exploreBtnText: { color: c.onPrimary, fontWeight: '700', fontSize: 16 },
     createGroupBtnEmpty: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: PRIMARY, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 18 },
-    createGroupBtnText: { color: theme.colors.surface, fontWeight: '800', fontSize: 15 },
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(15,42,74,0.45)', justifyContent: 'flex-end' },
-    modalSheet: { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 22, maxHeight: '85%' },
+    createGroupBtnText: { color: c.onPrimary, fontWeight: '800', fontSize: 15 },
+    modalOverlay: { flex: 1, backgroundColor: c.overlay, justifyContent: 'flex-end' },
+    modalSheet: { backgroundColor: c.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 22, maxHeight: '85%' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
     modalTitle: { fontSize: 20, fontWeight: '900', color: INK },
-    modalLabel: { fontSize: 13, fontWeight: '800', color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 8 },
-    modalInput: { backgroundColor: theme.colors.surfaceSubtle, borderRadius: 14, padding: 14, fontSize: 16, color: INK, borderWidth: 1, borderColor: theme.colors.border },
+    modalLabel: { fontSize: 13, fontWeight: '800', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 8 },
+    modalInput: { backgroundColor: c.surfaceSubtle, borderRadius: 14, padding: 14, fontSize: 16, color: INK, borderWidth: 1, borderColor: c.border },
+    groupNameCount: { alignSelf: 'flex-end', marginTop: 6, fontSize: 12, fontWeight: '600', color: c.textSubtle },
     friendsScroll: { maxHeight: 220, marginBottom: 16 },
     friendPickRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 8, borderRadius: 14, marginBottom: 6 },
-    friendPickSelected: { backgroundColor: theme.colors.primarySoft },
-    friendPickAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: theme.colors.border },
+    friendPickSelected: { backgroundColor: c.primarySoft },
+    friendPickAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: c.border },
     friendPickName: { flex: 1, fontSize: 16, fontWeight: '700', color: INK },
-    noFriendsHint: { color: theme.colors.textSubtle, textAlign: 'center', marginVertical: 16, fontWeight: '600' },
+    noFriendsHint: { color: c.textSubtle, textAlign: 'center', marginVertical: 16, fontWeight: '600' },
     createGroupConfirm: { backgroundColor: PRIMARY_DARK, paddingVertical: 16, borderRadius: 16, alignItems: 'center' },
-    createGroupConfirmText: { color: theme.colors.surface, fontWeight: '800', fontSize: 16 },
-});
+    createGroupConfirmText: { color: c.onPrimary, fontWeight: '800', fontSize: 16 },
+    });
+}

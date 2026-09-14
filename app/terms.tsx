@@ -13,6 +13,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { SupportEmailLink } from '../components/SupportEmailLink';
+import { LegalWebLink } from '../components/LegalWebLink';
+import { NEXO_TERMS_URL } from '../lib/brand';
 import { useT } from '../lib/i18n';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -88,7 +91,8 @@ export default function TermsScreen() {
 
                 <View style={styles.footerCard}>
                     <Text style={styles.footerTitle}>{t('terms.questions')}</Text>
-                    <Text style={styles.footerDesc}>{t('terms.questionsDesc')}</Text>
+                    <SupportEmailLink prefix={t('terms.questionsDesc')} />
+                    <LegalWebLink url={NEXO_TERMS_URL} />
                 </View>
             </ScrollView>
         </View>
@@ -154,5 +158,4 @@ const styles = StyleSheet.create({
         padding: 20,
     },
     footerTitle: { fontSize: 16, fontWeight: '700', color: INK },
-    footerDesc: { marginTop: 8, fontSize: 14, lineHeight: 21, color: MUTED, fontWeight: '500' },
 });

@@ -1,11 +1,15 @@
 import { createNavigatorFactory, TabRouter, useNavigationBuilder } from '@react-navigation/native';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import PagerView from 'react-native-pager-view';
+import { subscribeMainTab } from './mainTab';
+import { subscribeCreatePlanClosed } from './createPlanIntent';
+import { TabPagerScrollProvider, useTabPagerScroll } from './tabPagerScroll';
 
 /**
  * Tabs horizontales con PagerView: al deslizar se ve la pantalla adyacente
  * (mismo comportamiento que el gesto atrás del stack).
+ * Crear plan solo desde la barra inferior.
  */
 function PagerTabNavigator(props: Record<string, unknown>) {
     const {
@@ -34,6 +38,9 @@ function PagerTabNavigator(props: Record<string, unknown>) {
 
     const pagerRef = useRef<PagerView>(null);
     const pageIndexRef = useRef(state.index);
+    const { scrollEnabled } = useTabPagerScroll();
+    const pagerWasLockedRef = useRef(false);
+    const [holdPager, setHoldPager] = useState(false);
 
     useEffect(() => {
         if (pageIndexRef.current === state.index) return;
@@ -43,14 +50,50 @@ function PagerTabNavigator(props: Record<string, unknown>) {
         });
     }, [state.index]);
 
+    useEffect(() => {
+        if (!scrollEnabled) {
+            pagerWasLockedRef.current = true;
+            return;
+        }
+        if (pagerWasLockedRef.current) {
+            pagerWasLockedRef.current = false;
+            requestAnimationFrame(() => {
+                pagerRef.current?.setPageWithoutAnimation(state.index);
+            });
+        }
+    }, [scrollEnabled, state.index]);
+
+    useEffect(() => {
+        return subscribeCreatePlanClosed(() => {
+            setHoldPager(false);
+            requestAnimationFrame(() => {
+                pagerRef.current?.setPageWithoutAnimation(pageIndexRef.current);
+            });
+        });
+    }, []);
+
+    useEffect(() => {
+        return subscribeMainTab((routeName) => {
+            const index = state.routes.findIndex((route: { name: string }) => route.name === routeName);
+            if (index < 0) return;
+            if (state.index !== index) {
+                navigation.navigate(routeName);
+            }
+            requestAnimationFrame(() => {
+                pagerRef.current?.setPageWithoutAnimation(index);
+            });
+        });
+    }, [navigation, state.index, state.routes]);
+
     return (
         <NavigationContent>
             <PagerView
                 ref={pagerRef}
                 style={styles.pager}
                 initialPage={state.index}
-                overdrag
-                offscreenPageLimit={1}
+                scrollEnabled={scrollEnabled && !holdPager}
+                overdrag={false}
+                offscreenPageLimit={2}
                 onPageSelected={(e) => {
                     const position = e.nativeEvent.position;
                     pageIndexRef.current = position;
@@ -62,7 +105,7 @@ function PagerTabNavigator(props: Record<string, unknown>) {
                 }}
             >
                 {state.routes.map((route: { key: string; name: string }, index: number) => {
-                    const isInMountWindow = Math.abs(index - state.index) <= 1;
+                    const isInMountWindow = Math.abs(index - state.index) <= 2;
                     return (
                         <View key={route.key} collapsable={false} style={styles.page}>
                             {isInMountWindow ? descriptors[route.key].render() : null}
@@ -79,6 +122,14 @@ const styles = StyleSheet.create({
     page: { flex: 1 },
 });
 
-export function createPagerTabNavigator(config?: unknown) {
-    return createNavigatorFactory(PagerTabNavigator)(config as never);
+function PagerTabNavigatorWithScrollLock(props: Record<string, unknown>) {
+    return (
+        <TabPagerScrollProvider>
+            <PagerTabNavigator {...props} />
+        </TabPagerScrollProvider>
+    );
+}
+
+export function createPagerTabNavigator() {
+    return createNavigatorFactory(PagerTabNavigatorWithScrollLock)();
 }

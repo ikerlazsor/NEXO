@@ -5,6 +5,7 @@ export type PrivateProfileRow = {
     nombre: string | null;
     nombre_usuario: string | null;
     avatar_url: string | null;
+    cover_url?: string | null;
     descripcion: string | null;
     etiquetas: string[] | null;
     fecha_nacimiento: string | null;
@@ -19,6 +20,9 @@ export type PrivateProfileRow = {
     notif_messages: boolean;
     notif_social: boolean;
     notif_reminders: boolean;
+    idioma?: string | null;
+    es_organizador?: boolean;
+    organizador?: Record<string, unknown> | null;
 };
 
 export type PublicProfileRow = {
@@ -26,6 +30,7 @@ export type PublicProfileRow = {
     nombre: string | null;
     nombre_usuario: string | null;
     avatar_url: string | null;
+    cover_url?: string | null;
     descripcion: string | null;
     etiquetas: string[];
     edad: number | null;
@@ -33,6 +38,8 @@ export type PublicProfileRow = {
     habitos_consumo: Record<string, unknown>;
     ambientes_preferidos: string[];
     perfil_gustos: Record<string, unknown>;
+    es_organizador?: boolean;
+    organizador?: Record<string, unknown> | null;
 };
 
 export async function getMyProfile(): Promise<{
@@ -73,8 +80,10 @@ export async function getPublicProfileCards(userIds: string[]): Promise<
         nombre_usuario: string | null;
         avatar_url: string | null;
         genero: string | null;
+        edad: number | null;
         ambientes_preferidos: string[];
         etiquetas: string[];
+        es_organizador?: boolean;
     }>
 > {
     return (await getPublicProfiles(userIds)).map((row) => ({
@@ -83,8 +92,10 @@ export async function getPublicProfileCards(userIds: string[]): Promise<
         nombre_usuario: row.nombre_usuario,
         avatar_url: row.avatar_url,
         genero: row.genero,
+        edad: row.edad ?? null,
         ambientes_preferidos: row.ambientes_preferidos,
         etiquetas: row.etiquetas,
+        es_organizador: row.es_organizador === true,
     }));
 }
 

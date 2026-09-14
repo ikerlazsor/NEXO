@@ -5,6 +5,7 @@ const {
   StartupCoordinator,
   classifyStartupFailure,
   shouldRunStartupForAuthEvent,
+  canShowAppBeforeNetwork,
 } = require('../.test-dist/startupControl.js');
 
 test('profile metadata updates do not restart a verified session', () => {
@@ -89,6 +90,45 @@ test('network failures are reported separately from unexpected failures', () => 
   assert.equal(classifyStartupFailure(new Error('Failed to fetch'), true).kind, 'offline');
   assert.equal(classifyStartupFailure(new Error('database unavailable'), false).kind, 'offline');
   assert.equal(classifyStartupFailure(new Error('invalid response'), true).kind, 'unexpected');
+});
+
+test('verified sessions can enter before the network check', () => {
+  assert.equal(
+    canShowAppBeforeNetwork({
+      hasSession: false,
+      emailVerified: false,
+      onboardingMetaDone: false,
+      hadCache: false,
+    }),
+    true,
+  );
+  assert.equal(
+    canShowAppBeforeNetwork({
+      hasSession: true,
+      emailVerified: true,
+      onboardingMetaDone: true,
+      hadCache: false,
+    }),
+    true,
+  );
+  assert.equal(
+    canShowAppBeforeNetwork({
+      hasSession: true,
+      emailVerified: true,
+      onboardingMetaDone: false,
+      hadCache: true,
+    }),
+    true,
+  );
+  assert.equal(
+    canShowAppBeforeNetwork({
+      hasSession: true,
+      emailVerified: true,
+      onboardingMetaDone: false,
+      hadCache: false,
+    }),
+    true,
+  );
 });
 
 test('a failed startup can be retried successfully with the same coordinator', async () => {

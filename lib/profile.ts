@@ -15,6 +15,7 @@ export interface ProfileRow {
     nombre: string | null;
     nombre_usuario: string | null;
     avatar_url: string | null;
+    cover_url?: string | null;
     descripcion: string | null;
     etiquetas: string[] | null;
     fecha_nacimiento: string | null;
@@ -22,6 +23,8 @@ export interface ProfileRow {
     habitos_consumo: Record<string, unknown> | null;
     ambientes_preferidos: string[] | null;
     perfil_gustos: Record<string, unknown> | null;
+    es_organizador?: boolean;
+    organizador?: Record<string, unknown> | null;
 }
 
 /**
@@ -165,22 +168,12 @@ export async function ensureProfile(
         email?: string | null;
         user_metadata?: Record<string, unknown> | null;
     },
-    options?: { nombre?: string; nombreUsuario?: string } | string,
+    options?: { nombre?: string } | string,
 ): Promise<{ error: string | null }> {
-    const opts =
-        typeof options === 'string'
-            ? { nombre: options, nombreUsuario: options }
-            : options ?? {};
+    const opts = typeof options === 'string' ? { nombre: options } : options ?? {};
 
     const metaNombre = readNombreFromUser(user);
     const displayName = normalizeDisplayName(opts.nombre || metaNombre) || resolveDisplayName(user);
-    const preferredUsername = opts.nombreUsuario
-        ? normalizeUsername(opts.nombreUsuario)
-        : normalizeUsername(
-              typeof user.user_metadata?.nombre_usuario === 'string'
-                  ? user.user_metadata.nombre_usuario
-                  : '',
-          );
 
     const { data: existing } = await getMyProfile();
 
@@ -198,12 +191,6 @@ export async function ensureProfile(
         registro_completado: existing?.registro_completado === true,
     };
 
-    const wantsExplicitUsername = !!opts.nombreUsuario && isValidUsername(preferredUsername);
-
-    if (!existing?.nombre_usuario && preferredUsername && isValidUsername(preferredUsername)) {
-        payload.nombre_usuario = preferredUsername;
-    }
-
     const persist = async (nextPayload: Record<string, unknown>) => {
         if (existing) {
             const updates = { ...nextPayload };
@@ -213,21 +200,7 @@ export async function ensureProfile(
         return supabase.from('perfiles').insert(nextPayload);
     };
 
-    let { error } = await persist(payload);
-
-    if (error && payload.nombre_usuario) {
-        const isDuplicate =
-            error.code === '23505' ||
-            /unique|duplicate|nombre_usuario/i.test(error.message);
-
-        // En registro el handle es obligatorio: no continuar sin él.
-        if (wantsExplicitUsername && isDuplicate) {
-            return { error: 'username_taken' };
-        }
-
-        delete payload.nombre_usuario;
-        ({ error } = await persist(payload));
-    }
+    const { error } = await persist(payload);
 
     if (error) {
         return { error: error.message };

@@ -1,16 +1,16 @@
-﻿/* 
-Sin sesi├│n ÔåÆ login (o verify-email si hay email pendiente)
-Sesi├│n sin email verificado ÔåÆ verify-email
-Sesi├│n + onboarding incompleto ÔåÆ onboarding
-Sesi├│n + onboarding hecho ÔåÆ (tabs)
+/* 
+Sin sesión → feed invitado (login/verify-email si hay registro pendiente)
+Sesión sin email verificado → verify-email
+Sesión + onboarding incompleto → onboarding
+Sesión + onboarding hecho → (tabs)
  */
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ThemeProvider } from '@react-navigation/native';
 import { Session } from '@supabase/supabase-js';
 import * as SplashScreen from 'expo-splash-screen';
+import { hideNativeSplashOnce } from '../lib/nativeSplash';
 import { Stack, useRouter, useSegments } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import 'react-native-reanimated';
@@ -18,12 +18,18 @@ import 'react-native-reanimated';
 import { Asset } from 'expo-asset';
 import { AndroidSwipeBack } from '../components/AndroidSwipeBack';
 import { NexoAlertHost } from '../components/NexoAlertHost';
+import { InAppToastHost } from '../components/InAppToastHost';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { PushBootstrap } from '../components/PushBootstrap';
 import { NexoButton } from '../components/ui/NexoButton';
 import { NexoLoadingState } from '../components/ui/NexoState';
 import { scheduleCoverPrefetch } from '../lib/prefetchCovers';
-import { hydrateFeedFromDisk, hydrateChatsFromDisk, hydrateMyPlansFromDisk } from '../lib/prefetchHome';
+import { hydrateFeedFromDisk, hydrateChatsFromDisk, hydrateMyPlansFromDisk, scheduleOnboardingPrefetch } from '../lib/prefetchHome';
+import { FEED_CACHE_KEY } from '../lib/feedCache';
+import { hydrateUserCoordsFromDisk } from '../lib/location';
+import { getIsOnline, subscribeNetwork } from '../lib/network';
+import { flushOfflineActions } from '../lib/offlineActions';
+import { cacheGetStale } from '../lib/ttlCache';
 import {
   getPendingVerifyEmail,
   isEmailVerified,
@@ -31,8 +37,12 @@ import {
 } from '../lib/emailVerification';
 import { fetchOnboardingStatus } from '../lib/onboarding';
 import { reconcileLocalUserData } from '../lib/localDataPrivacy';
+import { AuthPromptHost } from '../components/AuthPromptHost';
+import { LaunchRevealHost, willShowLaunchSplashOverlay } from '../components/LaunchRevealHost';
+import { LAUNCH_SPLASH_BG } from '../components/LaunchMaskReveal';
+import { AuthSessionProvider } from '../lib/authSession';
+import { takePendingAuthRoute } from '../lib/authIntent';
 import { I18nProvider } from '../lib/i18n';
-import { getIsOnline } from '../lib/network';
 import { isPasswordRecoveryPending, setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { fetchAccountAccess } from '../lib/roles';
 import {
@@ -44,16 +54,38 @@ import {
 } from '../lib/startupControl';
 import { supabase } from '../lib/supabase';
 import { ensureStartupAppUpdateCheck, startAppUpdateListener } from '../lib/appUpdates';
-import { navigationTheme, theme } from '../theme';
+import { AppThemeProvider, useAppTheme } from '../lib/appTheme';
+import { theme } from '../theme';
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
+// Sin fade nativo: el handoff lo hace el overlay JS (evita el “tic” del logo).
+try {
+  SplashScreen.setOptions({ fade: false, duration: 0 });
+} catch {
+  /* Expo Go / web */
+}
 // Precarga logo UI para login/registro (aparece al instante)
 void Asset.fromModule(require('../assets/images/nexo-logo-ui.png')).downloadAsync().catch(() => {});
-// Solo se precargan recursos p├║blicos hasta conocer la identidad de la sesi├│n.
+void Asset.fromModule(require('../assets/images/nexo-splash-logo.png')).downloadAsync().catch(() => {});
+// Solo se precargan recursos públicos hasta conocer la identidad de la sesión.
 scheduleCoverPrefetch();
 
 /** iOS only: thin left-edge native pop. Android uses system back (no overlay / no RN gesture). */
 const BACK_GESTURE_END = 20;
+
+const GUEST_ROOTS = new Set([
+  '(tabs)',
+  'plan',
+  'settings',
+  'privacy',
+  'terms',
+  'community-norms',
+  'help-center',
+  'login',
+  'verify-email',
+  'reset-password',
+  'my-plans',
+]);
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -78,6 +110,7 @@ function AuthGate({ children }: { children: ReactNode }) {
   const startupReadyRef = useRef(false);
   const segments = useSegments();
   const router = useRouter();
+  const { colors } = useAppTheme();
   const ready = startupPhase === 'ready';
 
   useEffect(() => {
@@ -87,13 +120,37 @@ function AuthGate({ children }: { children: ReactNode }) {
     const releaseSplash = async () => {
       if (splashReleasedRef.current) return;
       splashReleasedRef.current = true;
-      await SplashScreen.hideAsync().catch(() => {});
     };
 
     type StartupSnapshot = {
       session: Session | null;
       onboardingDone: boolean | null;
       banned: boolean;
+      deferNetwork: boolean;
+    };
+
+    const verifyAccountInBackground = async (s: Session) => {
+      if (!getIsOnline()) return;
+      try {
+        const access = await fetchAccountAccess(s.user.id);
+        if (!mounted) return;
+        if (access.banned) {
+          setBanned(true);
+          return;
+        }
+        if (access.verified && !metaOnboardingDone(s.user)) {
+          const dbDone = await fetchOnboardingStatus(s.user.id);
+          if (!mounted) return;
+          setOnboardingDone(dbDone);
+          if (dbDone) {
+            void supabase.auth.updateUser({
+              data: { registro_completado: true, onboarding_completed: true },
+            });
+          }
+        }
+      } catch {
+        /* ya hay UI; el ban/onboarding se comprobará al volver online */
+      }
     };
 
     const runStartup = async (providedSession?: Session | null) => {
@@ -102,8 +159,8 @@ function AuthGate({ children }: { children: ReactNode }) {
       setStartupFailure(null);
       setStartupPhase('loading');
 
-      await ensureStartupAppUpdateCheck();
-      if (!mounted) return;
+      // OTA en paralelo: no bloquear splash ni forzar reload aquí.
+      void ensureStartupAppUpdateCheck();
 
       const result = await coordinator.run<StartupSnapshot>(
         async (signal) => {
@@ -119,17 +176,18 @@ function AuthGate({ children }: { children: ReactNode }) {
           await reconcileLocalUserData(nextUserId);
           throwIfAborted(signal);
 
-          if (nextUserId) {
-            await Promise.all([
-              hydrateFeedFromDisk(nextUserId),
-              hydrateChatsFromDisk(nextUserId),
-              hydrateMyPlansFromDisk(nextUserId),
-            ]);
-            throwIfAborted(signal);
-          }
+          await hydrateUserCoordsFromDisk();
+          throwIfAborted(signal);
+
+          await Promise.all([
+            hydrateFeedFromDisk(nextUserId),
+            nextUserId ? hydrateChatsFromDisk(nextUserId) : Promise.resolve(),
+            nextUserId ? hydrateMyPlansFromDisk(nextUserId) : Promise.resolve(),
+          ]);
+          throwIfAborted(signal);
 
           if (!nextSession) {
-            return { session: null, onboardingDone: null, banned: false };
+            return { session: null, onboardingDone: null, banned: false, deferNetwork: false };
           }
 
           if (!isEmailVerified(nextSession.user)) {
@@ -137,43 +195,54 @@ function AuthGate({ children }: { children: ReactNode }) {
               await setPendingVerifyEmail(nextSession.user.email);
               throwIfAborted(signal);
             }
-            return { session: nextSession, onboardingDone: null, banned: false };
+            return { session: nextSession, onboardingDone: null, banned: false, deferNetwork: false };
           }
 
-          const access = await fetchAccountAccess(nextSession.user.id, {
-            signal,
-            throwOnError: true,
-          });
-          throwIfAborted(signal);
-          if (!access.verified) throw new Error('Account access could not be verified');
-          if (access.banned) {
-            return { session: nextSession, onboardingDone: true, banned: true };
-          }
-
-          if (metaOnboardingDone(nextSession.user)) {
-            return { session: nextSession, onboardingDone: true, banned: false };
-          }
-
-          const dbDone = await fetchOnboardingStatus(nextSession.user.id, {
-            signal,
-            throwOnError: true,
-          });
-          throwIfAborted(signal);
-          if (dbDone) {
-            void supabase.auth.updateUser({
-              data: { registro_completado: true, onboarding_completed: true },
-            });
-          }
-          return { session: nextSession, onboardingDone: dbDone, banned: false };
+          const hadCache = cacheGetStale(FEED_CACHE_KEY) != null;
+          const metaDone = metaOnboardingDone(nextSession.user);
+          // Instagram-style: pintar ya (disco/caché) y validar ban/onboarding en background.
+          return {
+            session: nextSession,
+            onboardingDone: metaDone || hadCache,
+            banned: false,
+            deferNetwork: true,
+          };
         },
         { timeoutMs: STARTUP_TIMEOUT_MS, isOnline: getIsOnline },
       );
 
       if (!mounted || result.status === 'stale') return;
-      await releaseSplash();
-      if (!mounted) return;
 
       if (result.status === 'failure') {
+        await releaseSplash();
+        if (!mounted) return;
+        const offlineLike =
+          result.failure.kind === 'offline' || result.failure.kind === 'timeout';
+        if (offlineLike) {
+          const localSession =
+            latestSessionRef.current
+            ?? (await supabase.auth.getSession()).data.session
+            ?? null;
+          if (localSession && isEmailVerified(localSession.user)) {
+            await hydrateUserCoordsFromDisk();
+            await Promise.all([
+              hydrateFeedFromDisk(localSession.user.id),
+              hydrateChatsFromDisk(localSession.user.id),
+              hydrateMyPlansFromDisk(localSession.user.id),
+            ]);
+            const hadCache = cacheGetStale(FEED_CACHE_KEY) != null;
+            if (metaOnboardingDone(localSession.user) || hadCache) {
+              sessionKnownRef.current = true;
+              latestSessionRef.current = localSession;
+              setSession(localSession);
+              setOnboardingDone(true);
+              setBanned(false);
+              startupReadyRef.current = true;
+              setStartupPhase('ready');
+              return;
+            }
+          }
+        }
         startupReadyRef.current = false;
         setStartupFailure(result.failure);
         setStartupPhase('error');
@@ -187,6 +256,18 @@ function AuthGate({ children }: { children: ReactNode }) {
       setBanned(result.value.banned);
       startupReadyRef.current = true;
       setStartupPhase('ready');
+      requestAnimationFrame(() => {
+        void releaseSplash();
+      });
+      if (result.value.session?.user?.id) {
+        void import('../lib/viewerAffinityCache').then(({ ensureViewerAffinityPerson }) => {
+          void ensureViewerAffinityPerson(result.value!.session!.user.id);
+        });
+      }
+      if (result.value.deferNetwork && result.value.session) {
+        void verifyAccountInBackground(result.value.session);
+      }
+      if (!result.value.session) scheduleOnboardingPrefetch();
     };
 
     retryRef.current = () => {
@@ -194,6 +275,17 @@ function AuthGate({ children }: { children: ReactNode }) {
     };
 
     void runStartup();
+
+    const unsubNet = subscribeNetwork((online) => {
+      if (!online) return;
+      void flushOfflineActions();
+      const s = latestSessionRef.current;
+      if (!s?.user?.id || !startupReadyRef.current) return;
+      void fetchAccountAccess(s.user.id).then((access) => {
+        if (!mounted || !access.verified) return;
+        if (access.banned) setBanned(true);
+      });
+    });
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, s) => {
       const previousUserId = latestSessionRef.current?.user.id ?? null;
@@ -226,6 +318,7 @@ function AuthGate({ children }: { children: ReactNode }) {
       mounted = false;
       retryRef.current = () => {};
       coordinator.cancel();
+      unsubNet();
       authListener.subscription.unsubscribe();
     };
   }, [router]);
@@ -256,7 +349,7 @@ function AuthGate({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Sin sesi├│n: verificar email pendiente o login
+      // Sin sesión: registro pendiente, o browse de invitado
       if (!session) {
         const pendingEmail = await getPendingVerifyEmail();
         if (cancelled) return;
@@ -266,7 +359,7 @@ function AuthGate({ children }: { children: ReactNode }) {
           }
           return;
         }
-        if (!inLogin && !inResetPassword) {
+        if (rootSegment && !GUEST_ROOTS.has(rootSegment)) {
           router.replace('/login');
         }
         return;
@@ -295,7 +388,9 @@ function AuthGate({ children }: { children: ReactNode }) {
       }
 
       if (onboardingDone === true && (inLogin || inOnboarding || inBanned || inVerifyEmail)) {
-        router.replace('/(tabs)');
+        const next = await takePendingAuthRoute();
+        if (cancelled) return;
+        router.replace(next);
       }
     })();
 
@@ -316,29 +411,48 @@ function AuthGate({ children }: { children: ReactNode }) {
     router,
   ]);
 
-  if (startupPhase === 'loading') {
-    if (!splashReleasedRef.current) return null;
-    return <NexoLoadingState label="Verificando tu cuentaÔÇª" />;
-  }
+  useEffect(() => {
+    if (startupPhase === 'error') {
+      void hideNativeSplashOnce();
+    }
+  }, [startupPhase]);
 
+  useEffect(() => {
+    if (!ready) return;
+    const onMainFeed = rootSegment === '(tabs)' || rootSegment === undefined;
+    const blocked = inLogin || inOnboarding || inBanned || inVerifyEmail || inResetPassword;
+    if (!willShowLaunchSplashOverlay(blocked, onMainFeed)) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          void hideNativeSplashOnce();
+        });
+      });
+    }
+  }, [ready, rootSegment, inLogin, inOnboarding, inBanned, inVerifyEmail, inResetPassword]);
+
+  const gateBlocked =
+    inLogin || inOnboarding || inBanned || inVerifyEmail || inResetPassword;
+  const booting = startupPhase === 'loading';
+
+  let body: ReactNode = null;
   if (startupPhase === 'error') {
     const isOffline = startupFailure?.kind === 'offline';
     const isTimeout = startupFailure?.kind === 'timeout';
-    return (
-      <View style={styles.accessUnavailable}>
-        <Text style={styles.accessUnavailableTitle}>
+    body = (
+      <View style={[styles.accessUnavailable, { backgroundColor: colors.backgroundAlt }]}>
+        <Text style={[styles.accessUnavailableTitle, { color: colors.text }]}>
           {isOffline
-            ? 'Sin conexi├│n'
+            ? 'Sin conexión'
             : isTimeout
-              ? 'La comprobaci├│n est├í tardando demasiado'
-              : 'No se pudo iniciar NEXO'}
+              ? 'La comprobación está tardando demasiado'
+              : 'No se pudo iniciar Nexo!'}
         </Text>
-        <Text style={styles.accessUnavailableBody}>
+        <Text style={[styles.accessUnavailableBody, { color: colors.textMuted }]}>
           {isOffline
-            ? 'Con├®ctate a Internet y vuelve a intentarlo. NEXO no abrir├í datos de otra cuenta mientras no pueda verificar la sesi├│n.'
+            ? 'Conéctate a Internet y vuelve a intentarlo. Si ya usaste Nexo!, al reintentar se abrirá lo último guardado.'
             : isTimeout
-              ? 'La verificaci├│n super├│ el tiempo m├íximo de espera. Puedes reintentarlo sin cerrar la aplicaci├│n.'
-              : 'No se ha podido comprobar la sesi├│n de forma segura. Int├®ntalo de nuevo.'}
+              ? 'La verificación superó el tiempo máximo de espera. Puedes reintentarlo sin cerrar la aplicación.'
+              : 'No se ha podido comprobar la sesión de forma segura. Inténtalo de nuevo.'}
         </Text>
         <NexoButton
           label="Reintentar"
@@ -347,13 +461,44 @@ function AuthGate({ children }: { children: ReactNode }) {
         />
       </View>
     );
+  } else if (booting) {
+    body = splashReleasedRef.current ? (
+      <NexoLoadingState label="Verificando tu cuenta…" />
+    ) : (
+      <View style={{ flex: 1, backgroundColor: LAUNCH_SPLASH_BG }} />
+    );
+  } else {
+    body = (
+      <AuthSessionProvider session={session}>
+        <PushBootstrap
+          userId={session?.user?.id ?? null}
+          ready={Boolean(session && onboardingDone === true && !banned)}
+        />
+        {children}
+        <AuthPromptHost />
+      </AuthSessionProvider>
+    );
   }
 
   return (
-    <>
-      <PushBootstrap userId={session?.user?.id ?? null} />
-      {children}
-    </>
+    <LaunchRevealHost
+      booting={booting}
+      ready={startupPhase === 'ready' || startupPhase === 'error'}
+      blocked={startupPhase === 'error' ? true : gateBlocked}
+    >
+      {body}
+    </LaunchRevealHost>
+  );
+}
+
+function ThemedNavigation({ children }: { children: ReactNode }) {
+  const { navigationTheme: navTheme, colors } = useAppTheme();
+  return (
+    <ThemeProvider value={navTheme}>
+      <GestureHandlerRootView style={[styles.root, { backgroundColor: colors.backgroundAlt }]}>
+        {children}
+      </GestureHandlerRootView>
+    </ThemeProvider>
   );
 }
 
@@ -362,10 +507,25 @@ function RootLayout() {
 
   return (
     <I18nProvider>
-      <GestureHandlerRootView style={styles.root}>
+      <AppThemeProvider>
         <NexoAlertHost>
-          <ThemeProvider value={navigationTheme}>
+          <InAppToastHost>
+          <ThemedNavigation>
             <AuthGate>
+              <RootStack />
+              <AndroidSwipeBack />
+              <OfflineBanner />
+            </AuthGate>
+          </ThemedNavigation>
+          </InAppToastHost>
+        </NexoAlertHost>
+      </AppThemeProvider>
+    </I18nProvider>
+  );
+}
+function RootStack() {
+  const { colors } = useAppTheme();
+  return (
               <Stack
                 screenOptions={{
                   headerShown: false,
@@ -375,7 +535,7 @@ function RootLayout() {
                   gestureEnabled: Platform.OS === 'ios',
                   fullScreenGestureEnabled: false,
                   animationMatchesGesture: Platform.OS === 'ios',
-                  contentStyle: { backgroundColor: theme.colors.backgroundAlt },
+                  contentStyle: { backgroundColor: colors.backgroundAlt },
                   ...(Platform.OS === 'ios'
                     ? { gestureResponseDistance: { end: BACK_GESTURE_END } }
                     : {}),
@@ -385,6 +545,8 @@ function RootLayout() {
                   name="(tabs)"
                   options={{ animation: 'none', gestureEnabled: false, freezeOnBlur: false }}
                 />
+                <Stack.Screen name="my-plans" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="search-profiles" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="onboarding" options={{ gestureEnabled: false, animation: 'none' }} />
                 <Stack.Screen name="verify-email" options={{ gestureEnabled: false, animation: 'fade' }} />
                 <Stack.Screen name="reset-password" options={{ gestureEnabled: false, animation: 'fade' }} />
@@ -398,7 +560,7 @@ function RootLayout() {
                     gestureEnabled: Platform.OS === 'ios',
                     fullScreenGestureEnabled: false,
                     freezeOnBlur: false,
-                    contentStyle: { backgroundColor: theme.colors.surface },
+                    contentStyle: { backgroundColor: colors.surface },
                   }}
                 />
                 <Stack.Screen
@@ -415,24 +577,33 @@ function RootLayout() {
                   name="profile"
                   options={{
                     animation: 'slide_from_bottom',
-                    animationDuration: 320,
+                    animationDuration: 380,
                     gestureEnabled: Platform.OS === 'ios',
                     fullScreenGestureEnabled: false,
                     freezeOnBlur: false,
-                    contentStyle: { backgroundColor: theme.colors.surface },
+                    contentStyle: { backgroundColor: colors.surface },
                   }}
+                />
+                <Stack.Screen
+                  name="edit-profile"
+                  options={{ animation: 'slide_from_right', freezeOnBlur: false }}
                 />
                 <Stack.Screen
                   name="settings"
                   options={{ animation: 'slide_from_right', freezeOnBlur: false }}
                 />
+                <Stack.Screen name="organizer-apply" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="organizer-members" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="organizer-insights" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="admin/organizers" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="admin/organizer/[id]" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="analytics" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="community-norms" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="friends" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="saved-plans" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="plan-history" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="user-profile/[id]" options={{ animation: 'slide_from_right' }} />
-                <Stack.Screen name="plan/[id]" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen name="plan/[id]" options={{ animation: 'slide_from_right', freezeOnBlur: false }} />
                 <Stack.Screen
                   name="direct-chat/[id]"
                   options={{ animation: 'slide_from_right', animationDuration: 260 }}
@@ -442,14 +613,6 @@ function RootLayout() {
                   options={{ presentation: 'modal', animation: 'fade_from_bottom' }}
                 />
               </Stack>
-              <AndroidSwipeBack />
-              <OfflineBanner />
-            </AuthGate>
-            <StatusBar style="dark" />
-          </ThemeProvider>
-        </NexoAlertHost>
-      </GestureHandlerRootView>
-    </I18nProvider>
   );
 }
 

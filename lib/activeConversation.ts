@@ -1,3 +1,5 @@
+import { dismissPushForDirectChat, dismissPushForPlanChat } from './presentedPush';
+
 /** Conversación abierta en primer plano (para silenciar banners push de ese hilo). */
 
 export type ActiveConversation =
@@ -9,6 +11,8 @@ let active: ActiveConversation = null;
 
 export function setActiveConversation(next: ActiveConversation): void {
     active = next;
+    if (next?.kind === 'plan') dismissPushForPlanChat(next.id);
+    if (next?.kind === 'direct') dismissPushForDirectChat(next.id);
 }
 
 export function getActiveConversation(): ActiveConversation {

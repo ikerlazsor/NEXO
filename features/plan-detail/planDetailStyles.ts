@@ -1,37 +1,39 @@
 import { Dimensions, Platform, StyleSheet } from "react-native";
-import { theme } from "../../theme";
+import { palettes, theme, type ThemeColors } from "../../theme";
 
 const { width: SCREEN_W } = Dimensions.get("window");
-const HERO_H = Math.min(380, SCREEN_W * 0.92);
-const PRIMARY_DARK = theme.colors.primary;
-const INK = theme.colors.text;
-const MUTED = theme.colors.textMuted;
-const SURFACE = theme.colors.surface;
-const BORDER = theme.colors.border;
-const SUCCESS = theme.colors.success;
-const DANGER = theme.colors.danger;
-const FRIEND = theme.colors.successStrong;
-const FRIEND_BG = theme.colors.successSoft;
-const FRIEND_BORDER = "#6EE7B7";
-const ACQUAINTANCE = theme.colors.accent;
-const ACQUAINTANCE_BG = "#F5F3FF";
-const ACQUAINTANCE_BORDER = "#C4B5FD";
-const GOLD = theme.colors.warning;
-const WAITLIST = theme.colors.accent;
+const HERO_H = Math.min(440, SCREEN_W * 1.08);
 
-export const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.colors.surfaceSubtle },
+export function createPlanDetailStyles(c: ThemeColors) {
+  const PRIMARY_DARK = c.primary;
+  const INK = c.text;
+  const MUTED = c.textMuted;
+  const SURFACE = c.surface;
+  const BORDER = c.border;
+  const SUCCESS = c.success;
+  const DANGER = c.danger;
+  const FRIEND = c.successStrong;
+  const FRIEND_BG = c.successSoft;
+  const FRIEND_BORDER = c.success;
+  const ACQUAINTANCE = c.primary;
+  const ACQUAINTANCE_BG = c.primarySoft;
+  const ACQUAINTANCE_BORDER = c.primaryBorder;
+  const GOLD = c.warning;
+  const WAITLIST = c.accent;
+
+  return StyleSheet.create({
+  root: { flex: 1, backgroundColor: c.surfaceSubtle },
   loadingWrap: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: theme.colors.surfaceSubtle,
+    backgroundColor: c.surfaceSubtle,
   },
   notFoundWrap: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: theme.colors.surfaceSubtle,
+    backgroundColor: c.surfaceSubtle,
     padding: 24,
   },
   notFoundTitle: {
@@ -44,8 +46,41 @@ export const styles = StyleSheet.create({
   backLink: { marginTop: 20, paddingHorizontal: 20, paddingVertical: 10 },
   backLinkText: { color: PRIMARY_DARK, fontWeight: "700", fontSize: 16 },
 
-  heroWrap: { height: HERO_H, backgroundColor: theme.colors.border },
+  heroWrap: { height: HERO_H, backgroundColor: c.border },
   heroImage: { width: "100%", height: "100%" },
+  heroBottomScrim: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: "48%",
+  },
+  heroTitleWrap: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    bottom: 28,
+    zIndex: 2,
+  },
+  heroTitle: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    lineHeight: 36,
+    letterSpacing: -0.4,
+    textShadowColor: "rgba(0,0,0,0.85)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 10,
+  },
+  heroTitleBackdrop: {
+    position: "absolute",
+    left: -6,
+    right: -6,
+    top: -4,
+    bottom: -4,
+    backgroundColor: "rgba(15, 23, 42, 0.38)",
+    borderRadius: 12,
+  },
   heroTopBar: {
     position: "absolute",
     top: 0,
@@ -57,11 +92,21 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 16,
     zIndex: 2,
   },
-  heroTopRight: { flexDirection: "row", gap: 8 },
+  heroTopRight: { flexDirection: "row", gap: 6 },
   glassBtn: {
     width: theme.accessibility.minimumTouchTarget,
     height: theme.accessibility.minimumTouchTarget,
     borderRadius: theme.radii.md,
+    backgroundColor: "rgba(15,42,74,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+  },
+  glassBtnSm: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
     backgroundColor: "rgba(15,42,74,0.45)",
     alignItems: "center",
     justifyContent: "center",
@@ -80,7 +125,7 @@ export const styles = StyleSheet.create({
     marginTop: -16,
     ...Platform.select({
       ios: {
-        shadowColor: theme.colors.text,
+        shadowColor: c.text,
         shadowOffset: { width: 0, height: -4 },
         shadowOpacity: 0.08,
         shadowRadius: 12,
@@ -88,16 +133,16 @@ export const styles = StyleSheet.create({
       android: { elevation: 8 },
     }),
   },
-  titleBlock: { marginBottom: 20 },
+  titleBlock: { marginBottom: 16 },
   categoryChipLight: {
     alignSelf: "flex-start",
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: c.primarySoft,
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 20,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#BFDBFE",
+    borderColor: c.primaryBorder,
   },
   categoryChipLightText: {
     color: PRIMARY_DARK,
@@ -112,13 +157,23 @@ export const styles = StyleSheet.create({
     lineHeight: 32,
     letterSpacing: -0.4,
   },
+  planTitleOnHero: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    lineHeight: 36,
+    letterSpacing: -0.4,
+    textShadowColor: "rgba(0,0,0,0.9)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 12,
+  },
   sportChipLight: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     marginTop: 12,
     alignSelf: "flex-start",
-    backgroundColor: theme.colors.background,
+    backgroundColor: c.background,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 14,
@@ -133,23 +188,16 @@ export const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: theme.colors.background,
+    backgroundColor: c.background,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: BORDER,
   },
-  dateCardText: { flex: 1 },
-  dateLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: MUTED,
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
-  },
-  dateValue: { fontSize: 14, fontWeight: "700", color: INK, marginTop: 2 },
+  dateValue: { flex: 1, fontSize: 15, fontWeight: "700", color: INK },
 
   section: { marginTop: 28 },
+  sectionAfterFit: { marginTop: 14 },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -166,19 +214,56 @@ export const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: c.primarySoft,
     borderWidth: 1,
-    borderColor: "#BFDBFE",
+    borderColor: c.primaryBorder,
     borderRadius: 14,
     paddingVertical: 12,
     paddingHorizontal: 14,
-    marginBottom: 14,
+    marginTop: 12,
+    marginBottom: 4,
   },
   inviteParticipantsBtnText: {
     flex: 1,
     color: PRIMARY_DARK,
     fontWeight: "800",
     fontSize: 14,
+  },
+  joinRequestsBlock: { gap: 10 },
+  joinRequestRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: c.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: c.border,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  joinRequestUser: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginRight: 8,
+  },
+  joinRequestName: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "700",
+    color: INK,
+  },
+  joinRequestActions: { flexDirection: "row", gap: 8 },
+  joinRequestBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  joinRequestBtnReject: {
+    backgroundColor: "#FEE2E2",
   },
   sectionTitle: {
     fontSize: 17,
@@ -193,13 +278,20 @@ export const styles = StyleSheet.create({
     fontWeight: "500",
   },
   mapCard: {
-    height: 180,
+    height: 280,
     borderRadius: 20,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: BORDER,
   },
   map: { width: "100%", height: "100%" },
+  mapPlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: c.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   mapTapOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
@@ -216,8 +308,9 @@ export const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 20,
   },
-  mapExpandText: { color: theme.colors.surface, fontSize: 13, fontWeight: "700" },
-  mapBottomSpacer: { height: 14, backgroundColor: SURFACE },
+  mapExpandText: { color: c.surface, fontSize: 13, fontWeight: "700" },
+  mapBottomSpacer: { height: 36, backgroundColor: SURFACE },
+  mapBottomSpacerCompact: { height: 14, backgroundColor: SURFACE },
 
   fullMapRoot: { flex: 1, backgroundColor: "#000" },
   fullMap: { ...StyleSheet.absoluteFillObject },
@@ -282,14 +375,14 @@ export const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  directionsBtnText: { color: theme.colors.surface, fontSize: 13, fontWeight: "800" },
+  directionsBtnText: { color: c.surface, fontSize: 13, fontWeight: "800" },
 
   creatorCard: {
     marginTop: 12,
-    backgroundColor: "#FFFBEB",
+    backgroundColor: c.primarySoft,
     borderRadius: 20,
     borderWidth: 1.5,
-    borderColor: "#FDE68A",
+    borderColor: c.primaryBorder,
     overflow: "hidden",
   },
   creatorCardFriend: {
@@ -298,26 +391,32 @@ export const styles = StyleSheet.create({
   },
   creatorMain: {
     flexDirection: "row",
-    padding: 16,
-    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    gap: 12,
     alignItems: "center",
   },
   creatorAvatarWrap: {
-    borderRadius: 40,
-    borderWidth: 3,
-    borderColor: GOLD,
-    padding: 2,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
   },
-  creatorAvatarWrapFriend: { borderColor: FRIEND },
+  creatorAvatarWrapFriend: {
+    borderWidth: 3,
+    borderColor: FRIEND,
+  },
   creatorInfo: { flex: 1 },
   creatorLabel: {
     fontSize: 11,
     fontWeight: "700",
-    color: GOLD,
+    color: PRIMARY_DARK,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  creatorName: { fontSize: 20, fontWeight: "800", color: INK, marginTop: 2 },
+  creatorName: { fontSize: 20, fontWeight: "800", color: INK },
   creatorNameFriend: { color: "#047857" },
   ratingRow: {
     flexDirection: "row",
@@ -327,6 +426,12 @@ export const styles = StyleSheet.create({
     marginTop: 6,
   },
   ratingText: { fontSize: 12, color: MUTED, fontWeight: "500" },
+  membersText: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "700",
+    color: MUTED,
+  },
   personalityRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -334,12 +439,12 @@ export const styles = StyleSheet.create({
     marginTop: 8,
   },
   personalityChip: {
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: c.primarySoft,
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderWidth: 1,
-    borderColor: "#BFDBFE",
+    borderColor: c.primaryBorder,
   },
   personalityChipText: { fontSize: 11, fontWeight: "700", color: PRIMARY_DARK },
 
@@ -350,7 +455,7 @@ export const styles = StyleSheet.create({
     position: "absolute",
     top: -4,
     right: -4,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: c.surface,
     borderRadius: 12,
   },
   personBubble: { width: 80, alignItems: "center" },
@@ -388,7 +493,7 @@ export const styles = StyleSheet.create({
     maxWidth: 76,
   },
   personNameFriend: { color: "#047857" },
-  personNameAcquaintance: { color: "#6D28D9" },
+  personNameAcquaintance: { color: PRIMARY_DARK },
   personSubtitle: { fontSize: 10, color: MUTED, marginTop: 2 },
   personSubtitleFriend: { color: FRIEND },
   personSubtitleAcquaintance: { color: ACQUAINTANCE },
@@ -422,7 +527,7 @@ export const styles = StyleSheet.create({
   emptyParticipants: {
     alignItems: "center",
     paddingVertical: 24,
-    backgroundColor: theme.colors.background,
+    backgroundColor: c.background,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: BORDER,
@@ -430,33 +535,40 @@ export const styles = StyleSheet.create({
   },
   emptyParticipantsText: { marginTop: 8, color: MUTED, fontWeight: "600" },
 
-  description: { fontSize: 15, lineHeight: 24, color: "#334155", marginTop: 8 },
+  description: { fontSize: 15, lineHeight: 24, color: MUTED, marginTop: 8 },
   rateBanner: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    marginHorizontal: 0,
+    marginHorizontal: 4,
     marginBottom: 16,
     paddingVertical: 14,
     paddingHorizontal: 14,
-    backgroundColor: "#FEF3C7",
+    backgroundColor: c.primarySoft,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#FCD34D",
+    borderColor: c.primaryBorder,
+  },
+  rateBannerWait: {
+    backgroundColor: c.warningSoft,
+    borderColor: "#FDE68A",
   },
   rateBannerIcon: {
     width: 36,
     height: 36,
     borderRadius: 12,
-    backgroundColor: "#FDE68A",
+    backgroundColor: c.surface,
     alignItems: "center",
     justifyContent: "center",
   },
-  rateBannerTitle: { fontSize: 14, fontWeight: "800", color: "#92400E" },
+  rateBannerIconWait: {
+    backgroundColor: "#FFFBEB",
+  },
+  rateBannerTitle: { fontSize: 14, fontWeight: "800", color: INK },
   rateBannerSub: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#B45309",
+    color: MUTED,
     marginTop: 2,
   },
 
@@ -489,7 +601,7 @@ export const styles = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: 24,
   },
-  joinBtnText: { color: theme.colors.surface, fontSize: 17, fontWeight: "800" },
+  joinBtnText: { color: c.surface, fontSize: 17, fontWeight: "800" },
   inviteDecisionWrap: { gap: 12 },
   inviteDecisionHeader: {
     flexDirection: "row",
@@ -516,14 +628,14 @@ export const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 12,
   },
-  inviteDecisionJoinText: { color: theme.colors.surface, fontSize: 16, fontWeight: "800" },
+  inviteDecisionJoinText: { color: c.surface, fontSize: 16, fontWeight: "800" },
   inviteDecisionReject: {
     flex: 1,
     minHeight: 50,
     borderRadius: 14,
-    backgroundColor: theme.colors.dangerSoft,
+    backgroundColor: c.dangerSoft,
     borderWidth: 1.5,
-    borderColor: theme.colors.dangerBorder,
+    borderColor: c.dangerBorder,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 12,
@@ -539,20 +651,33 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 24,
     borderRadius: 16,
   },
-  waitlistJoinText: { color: theme.colors.surface, fontSize: 17, fontWeight: "800" },
+  waitlistJoinText: { color: c.surface, fontSize: 17, fontWeight: "800" },
   fullClosedBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
-    backgroundColor: theme.colors.dangerSoft,
+    backgroundColor: c.dangerSoft,
     paddingVertical: 18,
     paddingHorizontal: 24,
     borderRadius: 16,
     borderWidth: 1.5,
-    borderColor: theme.colors.dangerBorder,
+    borderColor: c.dangerBorder,
   },
   fullClosedBtnText: { color: DANGER, fontSize: 16, fontWeight: "800" },
+  pastPlanBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: "#F1F5F9",
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: "#E2E8F0",
+  },
+  pastPlanBtnText: { color: "#64748B", fontSize: 16, fontWeight: "800" },
   genderBlockedBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -572,12 +697,31 @@ export const styles = StyleSheet.create({
     textAlign: "center",
     flex: 1,
   },
+  organizerBlockedBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: c.primarySoft,
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: c.primaryBorder,
+  },
+  organizerBlockedBtnText: {
+    color: PRIMARY_DARK,
+    fontSize: 15,
+    fontWeight: "800",
+    textAlign: "center",
+    flex: 1,
+  },
   requestedBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: "#FFFBEB",
+    backgroundColor: c.warningSoft,
     paddingVertical: 16,
     borderRadius: 16,
     borderWidth: 1.5,
@@ -589,13 +733,50 @@ export const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: "#F5F3FF",
+    backgroundColor: c.accentSoft,
     paddingVertical: 16,
     borderRadius: 16,
     borderWidth: 1.5,
     borderColor: "#DDD6FE",
   },
   waitlistBtnText: { color: WAITLIST, fontSize: 16, fontWeight: "800" },
+  pastPlanActions: { width: "100%", gap: 10 },
+  pastPlanPrimaryBtn: { width: "100%", borderRadius: 16, overflow: "hidden" },
+  pastPlanPrimaryGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+  },
+  pastPlanSecondaryRow: { flexDirection: "row", alignItems: "stretch", gap: 10 },
+  pastPlanSecondaryBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    minHeight: 50,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: c.primarySoft,
+    borderWidth: 1,
+    borderColor: c.primaryBorder,
+  },
+  pastPlanSecondaryBtnFull: { flex: 1 },
+  pastPlanDangerBtn: {
+    backgroundColor: c.dangerSoft,
+    borderColor: c.dangerBorder,
+  },
+  pastPlanSecondaryText: {
+    flexShrink: 1,
+    color: PRIMARY_DARK,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  pastPlanDangerText: { color: DANGER },
   joinedActions: { flexDirection: "row", alignItems: "center", gap: 10 },
   chatBtn: { borderRadius: 16, overflow: "hidden" },
   chatBtnGradient: {
@@ -607,7 +788,7 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   chatBtnText: {
-    color: theme.colors.surface,
+    color: c.surface,
     fontSize: 17,
     fontWeight: "800",
     letterSpacing: 0.2,
@@ -628,11 +809,11 @@ export const styles = StyleSheet.create({
     minHeight: 56,
     paddingVertical: 14,
     borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: "#BBF7D0",
-    backgroundColor: "#F0FDF4",
+    borderWidth: 2,
+    borderColor: "#34D399",
+    backgroundColor: "#D1FAE5",
   },
-  joinedOutlineText: { color: SUCCESS, fontSize: 15, fontWeight: "700" },
+  joinedOutlineText: { color: "#059669", fontSize: 15, fontWeight: "800" },
   hideFromListBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -642,9 +823,9 @@ export const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 22,
     borderRadius: 16,
-    backgroundColor: theme.colors.dangerSoft,
+    backgroundColor: c.dangerSoft,
     borderWidth: 1.5,
-    borderColor: theme.colors.dangerBorder,
+    borderColor: c.dangerBorder,
   },
   hideFromListText: {
     color: DANGER,
@@ -657,10 +838,13 @@ export const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 16,
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: c.primarySoft,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#BFDBFE",
+    borderColor: c.primaryBorder,
   },
-});
+  });
+}
+
+export const styles = createPlanDetailStyles(palettes.light);

@@ -23,21 +23,19 @@ export function mergeFeaturedBadge(
     return base;
 }
 
-export function resolveFeaturedBadges(
+export function resolveFeaturedBadge(
     perfilGustos: unknown,
     badgeStats: BadgeStats,
-): { welcome: UserBadge; featured: UserBadge | null } {
+): UserBadge {
     const all = getUserBadges(badgeStats);
     const welcome =
         all.find((b) => b.family.id === WELCOME_BADGE_ID)
         ?? all[0];
-
     const featuredId = parseFeaturedBadgeId(perfilGustos);
-    const featured = featuredId
-        ? all.find((b) => b.family.id === featuredId && b.unlocked && b.family.id !== WELCOME_BADGE_ID) ?? null
+    const picked = featuredId
+        ? all.find((b) => b.family.id === featuredId && b.unlocked) ?? null
         : null;
-
-    return { welcome, featured };
+    return picked ?? welcome;
 }
 
 export function badgeFamilyExists(id: string): boolean {

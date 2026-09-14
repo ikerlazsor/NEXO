@@ -87,6 +87,6 @@ WITH CHECK (
     usuario_id = auth.uid()
     OR EXISTS (
         SELECT 1 FROM public.planes pl
-        WHERE pl.id = participantes.plan_id AND pl.user_id = auth.uid()
+        WHERE pl.id = plan_id AND pl.creador_id = auth.uid()
     )
 );

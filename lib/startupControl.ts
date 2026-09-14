@@ -1,4 +1,4 @@
-export const STARTUP_TIMEOUT_MS = 12_000;
+export const STARTUP_TIMEOUT_MS = 8_000;
 
 export type StartupFailureKind = 'offline' | 'timeout' | 'unexpected';
 
@@ -26,6 +26,21 @@ export function shouldRunStartupForAuthEvent(
   if (!startupReady) return true;
   if (event === 'PASSWORD_RECOVERY') return true;
   return previousUserId !== nextUserId;
+}
+
+/** Con sesión verificada: entra ya (caché/disco) y la red va en segundo plano. */
+export function canShowAppBeforeNetwork(opts: {
+  hasSession: boolean;
+  emailVerified: boolean;
+  onboardingMetaDone: boolean;
+  hadCache: boolean;
+}): boolean {
+  if (!opts.hasSession) return true;
+  if (!opts.emailVerified) return true;
+  // Instagram-style: no bloquear el primer paint por ban/onboarding de red.
+  void opts.onboardingMetaDone;
+  void opts.hadCache;
+  return true;
 }
 
 function errorMessage(error: unknown): string {

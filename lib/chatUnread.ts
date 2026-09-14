@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getChatSummaries, invalidateChatSummaries } from './chatSummaries';
+import { isPlanChatAlive } from './planLifecycle';
 import { cacheGetStale, cacheInvalidate, cacheSet } from './ttlCache';
 
 const PREFIX = '@nexo_chat_read:';
@@ -36,12 +37,48 @@ function invalidateUnread(userId: string) {
 }
 
 export async function markPlanChatRead(userId: string, planId: string): Promise<void> {
+    const cached = peekChatUnreadMap(userId);
+    if (cached) {
+        const removed = cached.plans[planId] ?? 0;
+        if (removed > 0 || planId in cached.plans) {
+            const plans = { ...cached.plans };
+            delete plans[planId];
+            cacheSet(
+                unreadMapKey(userId),
+                {
+                    plans,
+                    directs: cached.directs,
+                    total: Math.max(0, cached.total - removed),
+                },
+                UNREAD_TTL_MS,
+            );
+            notifyChatUnreadChanged();
+        }
+    }
     await AsyncStorage.setItem(planKey(userId, planId), new Date().toISOString());
     invalidateUnread(userId);
     notifyChatUnreadChanged();
 }
 
 export async function markDirectChatRead(userId: string, peerId: string): Promise<void> {
+    const cached = peekChatUnreadMap(userId);
+    if (cached) {
+        const removed = cached.directs[peerId] ?? 0;
+        if (removed > 0 || peerId in cached.directs) {
+            const directs = { ...cached.directs };
+            delete directs[peerId];
+            cacheSet(
+                unreadMapKey(userId),
+                {
+                    plans: cached.plans,
+                    directs,
+                    total: Math.max(0, cached.total - removed),
+                },
+                UNREAD_TTL_MS,
+            );
+            notifyChatUnreadChanged();
+        }
+    }
     await AsyncStorage.setItem(directKey(userId, peerId), new Date().toISOString());
     invalidateUnread(userId);
     notifyChatUnreadChanged();
@@ -66,11 +103,23 @@ async function fetchChatUnreadMap(userId: string): Promise<ChatUnreadMap> {
 
         for (const row of summaries) {
             const unread = Math.max(0, row.unread_count);
+            if (unread <= 0) continue;
             if (row.conversation_kind === 'direct') {
-                if (unread > 0) directs[row.conversation_id] = unread;
-            } else if (unread > 0) {
-                plans[row.conversation_id] = unread;
+                directs[row.conversation_id] = unread;
+                total += unread;
+                continue;
             }
+            // Misma regla que la lista de chats: no contar chats de plan ya muertos.
+            if (
+                !isPlanChatAlive({
+                    fecha_evento: row.event_at,
+                    categoria: row.category,
+                    chat_eliminado_en: row.chat_deleted_at,
+                })
+            ) {
+                continue;
+            }
+            plans[row.conversation_id] = unread;
             total += unread;
         }
 

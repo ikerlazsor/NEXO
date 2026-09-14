@@ -2,11 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
@@ -28,6 +31,7 @@ import { signOutAndClearLocalData } from '../lib/session';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const MUTED = '#64748B';
+const OTP_LEN = 6;
 
 function parseAuthParams(url: string): Record<string, string> {
     const out: Record<string, string> = {};
@@ -45,11 +49,18 @@ function parseAuthParams(url: string): Record<string, string> {
     return out;
 }
 
+function digitsOnly(value: string) {
+    return value.replace(/\D/g, '').slice(0, OTP_LEN);
+}
+
 export default function VerifyEmailScreen() {
     const router = useRouter();
     const { t } = useT();
+    const codeRef = useRef<TextInput>(null);
     const [email, setEmail] = useState<string | null>(null);
+    const [code, setCode] = useState('');
     const [checking, setChecking] = useState(true);
+    const [verifying, setVerifying] = useState(false);
     const [resending, setResending] = useState(false);
     const [changingEmail, setChangingEmail] = useState(false);
 
@@ -80,16 +91,13 @@ export default function VerifyEmailScreen() {
                 if (error) throw error;
                 return true;
             }
-            if (params.type === 'signup' || params.type === 'email') {
-                // Token en query legacy
-                if (params.token_hash && params.type) {
-                    const { error } = await supabase.auth.verifyOtp({
-                        type: 'signup',
-                        token_hash: params.token_hash,
-                    });
-                    if (error) throw error;
-                    return true;
-                }
+            if (params.token_hash && (params.type === 'signup' || params.type === 'email')) {
+                const { error } = await supabase.auth.verifyOtp({
+                    type: 'signup',
+                    token_hash: params.token_hash,
+                });
+                if (error) throw error;
+                return true;
             }
             return false;
         },
@@ -120,7 +128,7 @@ export default function VerifyEmailScreen() {
                 try {
                     await ingestUrl(initial);
                 } catch {
-                    // El usuario puede abrir el enlace otra vez
+                    // El usuario puede pegar el código
                 }
                 if (!alive) return;
                 if (await refreshStatus()) return;
@@ -146,17 +154,51 @@ export default function VerifyEmailScreen() {
             }
         });
 
-        const poll = setInterval(() => {
-            void refreshStatus();
-        }, 4000);
-
         return () => {
             alive = false;
             sub.remove();
             authListener.subscription.unsubscribe();
-            clearInterval(poll);
         };
     }, [goNext, ingestUrl, refreshStatus, t]);
+
+    const verifyCode = async (value: string) => {
+        const token = digitsOnly(value);
+        if (!email) {
+            Alert.alert(t('verifyEmail.error'), t('verifyEmail.noEmail'));
+            return;
+        }
+        if (token.length !== OTP_LEN) {
+            Alert.alert(t('verifyEmail.error'), t('verifyEmail.codeIncomplete'));
+            return;
+        }
+        if (verifying) return;
+        setVerifying(true);
+        try {
+            const { error } = await supabase.auth.verifyOtp({
+                email,
+                token,
+                type: 'signup',
+            });
+            if (error) throw error;
+            await refreshStatus();
+        } catch (e: any) {
+            const msg = typeof e?.message === 'string' ? e.message : '';
+            Alert.alert(
+                t('verifyEmail.error'),
+                /expired|invalid|otp/i.test(msg) ? t('verifyEmail.invalidCode') : msg || t('verifyEmail.invalidCode'),
+            );
+        } finally {
+            setVerifying(false);
+        }
+    };
+
+    const handleCodeChange = (value: string) => {
+        const next = digitsOnly(value);
+        setCode(next);
+        if (next.length === OTP_LEN) {
+            void verifyCode(next);
+        }
+    };
 
     const handleResend = async () => {
         if (!email) {
@@ -172,6 +214,7 @@ export default function VerifyEmailScreen() {
                 options: { emailRedirectTo: redirectTo },
             });
             if (error) throw error;
+            setCode('');
             Alert.alert(t('verifyEmail.resentTitle'), t('verifyEmail.resentMsg'));
         } catch (e: any) {
             Alert.alert(t('verifyEmail.error'), e?.message || t('verifyEmail.resendError'));
@@ -198,8 +241,6 @@ export default function VerifyEmailScreen() {
                                 deleted = !error;
                             }
                             if (!deleted) {
-                                // No persistimos contraseñas para reautenticar. Si no hay sesión,
-                                // se limpia el registro local sin conservar credenciales sensibles.
                                 await signOutAndClearLocalData({ scope: 'local' });
                             }
                         } finally {
@@ -214,70 +255,80 @@ export default function VerifyEmailScreen() {
         ]);
     };
 
-    const handleAlreadyVerified = async () => {
-        setChecking(true);
-        try {
-            await supabase.auth.refreshSession();
-            const ok = await refreshStatus();
-            if (!ok) {
-                Alert.alert(t('verifyEmail.notYetTitle'), t('verifyEmail.notYetMsg'));
-            }
-        } finally {
-            setChecking(false);
-        }
-    };
+    const busy = checking || verifying || resending || changingEmail;
 
     return (
         <View style={styles.root}>
             <LinearGradient colors={['#DCEBFF', '#F2F7FF', '#FFFFFF']} style={StyleSheet.absoluteFill} />
             <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-                <View style={styles.card}>
-                    <View style={styles.iconWrap}>
-                        <Ionicons name="mail-unread-outline" size={40} color={PRIMARY_DARK} />
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                    style={styles.flex}
+                >
+                    <View style={styles.card}>
+                        <View style={styles.iconWrap}>
+                            <Ionicons name="keypad-outline" size={40} color={PRIMARY_DARK} />
+                        </View>
+                        <Text style={styles.title}>{t('verifyEmail.title')}</Text>
+                        <Text style={styles.sub}>{t('verifyEmail.sub')}</Text>
+                        {email ? <Text style={styles.email}>{email}</Text> : null}
+                        <Text style={styles.hint}>{t('verifyEmail.hint')}</Text>
+
+                        <TextInput
+                            ref={codeRef}
+                            value={code}
+                            onChangeText={handleCodeChange}
+                            keyboardType="number-pad"
+                            textContentType="oneTimeCode"
+                            autoComplete="one-time-code"
+                            maxLength={OTP_LEN}
+                            placeholder={'0'.repeat(OTP_LEN)}
+                            placeholderTextColor="#94A3B8"
+                            style={styles.codeInput}
+                            editable={!busy}
+                            caretHidden={false}
+                            autoFocus
+                        />
+
+                        <TouchableOpacity
+                            style={[styles.primaryBtn, (busy || code.length !== OTP_LEN) && styles.primaryBtnDisabled]}
+                            onPress={() => void verifyCode(code)}
+                            disabled={busy || code.length !== OTP_LEN}
+                            activeOpacity={0.9}
+                        >
+                            {verifying || checking ? (
+                                <ActivityIndicator color="#FFF" />
+                            ) : (
+                                <Text style={styles.primaryText}>{t('verifyEmail.confirmCode')}</Text>
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.secondaryBtn}
+                            onPress={() => void handleResend()}
+                            disabled={busy || !email}
+                            activeOpacity={0.85}
+                        >
+                            {resending ? (
+                                <ActivityIndicator color={PRIMARY_DARK} />
+                            ) : (
+                                <Text style={styles.secondaryText}>{t('verifyEmail.resend')}</Text>
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={handleChangeEmail}
+                            style={styles.linkBtn}
+                            disabled={busy}
+                        >
+                            {changingEmail ? (
+                                <ActivityIndicator color={PRIMARY_DARK} />
+                            ) : (
+                                <Text style={styles.linkText}>{t('verifyEmail.changeEmail')}</Text>
+                            )}
+                        </TouchableOpacity>
                     </View>
-                    <Text style={styles.title}>{t('verifyEmail.title')}</Text>
-                    <Text style={styles.sub}>{t('verifyEmail.sub')}</Text>
-                    {email ? <Text style={styles.email}>{email}</Text> : null}
-                    <Text style={styles.hint}>{t('verifyEmail.hint')}</Text>
-
-                    <TouchableOpacity
-                        style={styles.primaryBtn}
-                        onPress={() => void handleAlreadyVerified()}
-                        disabled={checking}
-                        activeOpacity={0.9}
-                    >
-                        {checking ? (
-                            <ActivityIndicator color="#FFF" />
-                        ) : (
-                            <Text style={styles.primaryText}>{t('verifyEmail.iConfirmed')}</Text>
-                        )}
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={styles.secondaryBtn}
-                        onPress={() => void handleResend()}
-                        disabled={resending || !email}
-                        activeOpacity={0.85}
-                    >
-                        {resending ? (
-                            <ActivityIndicator color={PRIMARY_DARK} />
-                        ) : (
-                            <Text style={styles.secondaryText}>{t('verifyEmail.resend')}</Text>
-                        )}
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        onPress={handleChangeEmail}
-                        style={styles.linkBtn}
-                        disabled={changingEmail || resending || checking}
-                    >
-                        {changingEmail ? (
-                            <ActivityIndicator color={PRIMARY_DARK} />
-                        ) : (
-                            <Text style={styles.linkText}>{t('verifyEmail.changeEmail')}</Text>
-                        )}
-                    </TouchableOpacity>
-                </View>
+                </KeyboardAvoidingView>
             </SafeAreaView>
         </View>
     );
@@ -285,6 +336,7 @@ export default function VerifyEmailScreen() {
 
 const styles = StyleSheet.create({
     root: { flex: 1 },
+    flex: { flex: 1, justifyContent: 'center' },
     safe: { flex: 1, justifyContent: 'center', paddingHorizontal: 24 },
     card: {
         backgroundColor: '#FFF',
@@ -334,7 +386,21 @@ const styles = StyleSheet.create({
         color: MUTED,
         textAlign: 'center',
         lineHeight: 19,
-        marginBottom: 22,
+        marginBottom: 18,
+    },
+    codeInput: {
+        letterSpacing: 10,
+        fontSize: 28,
+        fontWeight: '800',
+        color: INK,
+        textAlign: 'center',
+        borderWidth: 1,
+        borderColor: '#BFDBFE',
+        backgroundColor: '#F8FBFF',
+        borderRadius: 16,
+        paddingVertical: 14,
+        marginBottom: 16,
+        fontVariant: ['tabular-nums'],
     },
     primaryBtn: {
         backgroundColor: PRIMARY_DARK,
@@ -343,6 +409,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginBottom: 10,
     },
+    primaryBtnDisabled: { opacity: 0.55 },
     primaryText: { color: '#FFF', fontWeight: '800', fontSize: 16 },
     secondaryBtn: {
         borderRadius: 16,

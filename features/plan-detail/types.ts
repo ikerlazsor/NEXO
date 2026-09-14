@@ -30,6 +30,9 @@ export type PlanRow = {
   solo_chicas?: boolean;
   modo_privado?: boolean;
   chat_eliminado_en?: string | null;
+  imagenes_url?: string[] | null;
+  recurrencia?: { freq?: string; paused?: boolean } | null;
+  es_organizador?: boolean;
 };
 
 export type PlanDetailSnapshot = {
@@ -45,6 +48,7 @@ export type PlanDetailSnapshot = {
   currentUserGenero: Genero | null;
   openRating: PendingRatingPlan | null;
   currentUserId: string | null;
+  organizerFollowers?: number | null;
   /** Semilla incompleta del feed: no salta el fetch real. */
   partial?: boolean;
 };

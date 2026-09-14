@@ -18,6 +18,7 @@ import { Alert } from '../lib/nexoAlert';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { getBlockedUsers, unblockUser } from '../lib/blocks';
 import { useT } from '../lib/i18n';
+import { getAuthUser } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 
 const PRIMARY_DARK = '#2563EB';
@@ -33,7 +34,7 @@ export default function BlockedAccountsScreen() {
 
     const load = useCallback(async () => {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = await getAuthUser();
             if (!user) {
                 router.replace('/login');
                 return;
@@ -56,7 +57,7 @@ export default function BlockedAccountsScreen() {
                 onPress: () => {
                     const removed = users.find((u) => u.id === id);
                     setUsers((prev) => prev.filter((u) => u.id !== id));
-                    void supabase.auth.getUser().then(({ data: { user } }) => {
+                    void getAuthUser().then((user) => {
                         if (!user) {
                             if (removed) setUsers((prev) => [removed, ...prev]);
                             return;
@@ -98,9 +99,6 @@ export default function BlockedAccountsScreen() {
                             <ProfileAvatar uri={item.avatar_url} name={item.nombre} size={48} />
                             <View style={styles.rowInfo}>
                                 <Text style={styles.name}>{item.nombre}</Text>
-                                {item.nombre_usuario ? (
-                                    <Text style={styles.username}>@{item.nombre_usuario}</Text>
-                                ) : null}
                             </View>
                             <TouchableOpacity
                                 style={styles.unblockBtn}

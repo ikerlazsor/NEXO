@@ -126,7 +126,7 @@ export default function AdminTicketDetailScreen() {
                 <Text style={styles.type}>{t(`admin.tipo.${ticket.tipo}`)}</Text>
                 <Text style={styles.title}>{ticket.asunto || t(`admin.tipo.${ticket.tipo}`)}</Text>
                 <Text style={styles.meta}>
-                    @{ticket.perfil?.nombre_usuario || '—'} · {new Date(ticket.creado_en).toLocaleString()}
+                    {ticket.perfil?.nombre || '—'} · {new Date(ticket.creado_en).toLocaleString()}
                 </Text>
                 <View style={styles.box}>
                     <Text style={styles.boxText}>{ticket.mensaje}</Text>

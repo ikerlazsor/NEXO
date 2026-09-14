@@ -3,6 +3,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
   View,
@@ -13,7 +14,11 @@ import {
   getPersonalityLabel,
   type Genero,
 } from "../../lib/profileFields";
-import { styles } from "./profileStyles";
+import { getInterestAccent, getInterestIcon } from "../../lib/profileInterests";
+import { createProfileStyles } from "./profileStyles";
+import { useThemedStyles } from "../../lib/appTheme";
+
+const INK = "#0F172A";
 
 export function PersonalityPickerModal({
   visible,
@@ -29,6 +34,7 @@ export function PersonalityPickerModal({
   onClose: () => void;
 }) {
   const { t } = useT();
+  const styles = useThemedStyles(createProfileStyles);
   return (
     <Modal
       visible={visible}
@@ -42,36 +48,54 @@ export function PersonalityPickerModal({
           <Text style={styles.modalTitle}>{t("profile.pickPersonality")}</Text>
           <Text style={styles.modalSub}>{t("profile.tagLimit")}</Text>
           <ScrollView
-            contentContainerStyle={styles.modalTags}
+            contentContainerStyle={pickerStyles.grid}
             showsVerticalScrollIndicator={false}
           >
             {AFICIONES_OPTIONS.map((option) => {
               const isSelected = selected.includes(option);
+              const accent = getInterestAccent(option);
               return (
                 <TouchableOpacity
                   key={option}
                   style={[
-                    styles.modalTag,
-                    isSelected && styles.modalTagDisabled,
+                    pickerStyles.tile,
+                    {
+                      backgroundColor: isSelected ? accent.selectedBg : accent.bg,
+                      borderColor: isSelected ? accent.selectedBorder : accent.border,
+                    },
                   ]}
                   onPress={() => onAdd(option)}
                   disabled={isSelected}
                   activeOpacity={0.8}
                 >
+                  <View
+                    style={[
+                      pickerStyles.icon,
+                      {
+                        backgroundColor: isSelected ? accent.selectedBg : "#FFF",
+                        borderColor: isSelected ? accent.selectedBorder : accent.border,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={getInterestIcon(option)}
+                      size={26}
+                      color={accent.icon}
+                    />
+                  </View>
                   <Text
                     style={[
-                      styles.modalTagText,
-                      isSelected && styles.modalTagTextDisabled,
+                      pickerStyles.label,
+                      isSelected && { color: accent.icon },
                     ]}
+                    numberOfLines={2}
                   >
                     {getPersonalityLabel(option, genero, t)}
                   </Text>
                   {isSelected ? (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={18}
-                      color="#94A3B8"
-                    />
+                    <View style={[pickerStyles.check, { backgroundColor: accent.icon }]}>
+                      <Ionicons name="checkmark" size={12} color="#FFF" />
+                    </View>
                   ) : null}
                 </TouchableOpacity>
               );
@@ -85,3 +109,52 @@ export function PersonalityPickerModal({
     </Modal>
   );
 }
+
+const pickerStyles = StyleSheet.create({
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    paddingBottom: 8,
+  },
+  tile: {
+    width: "47%",
+    flexGrow: 1,
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 22,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderWidth: 1.5,
+    position: "relative",
+  },
+  icon: {
+    width: 68,
+    height: 68,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#0F2A4A",
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: INK,
+    textAlign: "center",
+  },
+  check: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});

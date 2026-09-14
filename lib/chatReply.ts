@@ -1,3 +1,5 @@
+import { isSystemMessageContent } from './chatSystem';
+
 export type ReplyQuote = {
     id: string;
     name: string;
@@ -35,6 +37,7 @@ export function previewForReply(contenido: string, tipo: string): string {
     if (tipo === 'imagen') return '📷 Foto';
     if (tipo === 'video') return '🎬 Vídeo';
     if (tipo === 'audio') return '🎤 Audio';
+    if (isSystemMessageContent(contenido)) return '';
     const { text } = parseReplyContent(contenido);
     return text.trim().slice(0, 100) || 'Mensaje';
 }

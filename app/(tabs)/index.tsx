@@ -2,81 +2,125 @@
 pantalla principal / home feed de planes
 */
 import {
-    Ionicons } from '@expo/vector-icons';
+    Ionicons
+} from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
-import { useCallback,
+import {
+    useCallback,
     useEffect,
     useMemo,
     useRef,
-    useState } from 'react';
-import { FlashList } from '@shopify/flash-list';
+    useState
+} from 'react';
 import {
+    ActivityIndicator,
     AppState,
-    type AppStateStatus,
-    InteractionManager,
-    Keyboard,
     Modal,
     Pressable,
     RefreshControl,
     ScrollView,
-    StatusBar,
-    StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
-    TouchableWithoutFeedback,
     View,
-    type ViewToken,
+    type AppStateStatus,
+    type ViewToken
 } from 'react-native';
-import { Alert } from '../../lib/nexoAlert';
-import { theme } from '../../theme';
-import { styles } from '../../features/feed/feedStyles';
+import Animated, {
+    interpolate,
+    useAnimatedStyle,
+    useSharedValue,
+    withTiming,
+} from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useChromeHeaderLayout } from '../../components/MainChrome';
+import { PlanCard, type Membership } from '../../components/PlanCard';
+import { PressScale } from '../../components/PressScale';
+import { FeedSkeletonList } from '../../components/SkeletonShimmer';
 import { EmptySearch } from '../../features/feed/EmptyFeedState';
 import {
-    DATE_KEYS,
     asStringArray,
+    DATE_KEYS,
     smoothScrollListToTop,
+    toDayKey,
     toggleInList,
 } from '../../features/feed/feedModel';
-import MapView, { Marker } from 'react-native-maps';
-import { NexoMapView } from '../../components/NexoMapView';
+import { createFeedStyles } from '../../features/feed/feedStyles';
 import { useListScrollRestore } from '../../hooks/useListScrollRestore';
-import { PlanCard, type Membership } from '../../components/PlanCard';
-import { PlanImage } from '../../components/PlanImage';
-import { FeedSkeletonList } from '../../components/SkeletonShimmer';
+import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
+import { getAuthUser } from '../../lib/auth';
+import { useAuthSession } from '../../lib/authSession';
 import {
+    MAIN_CATEGORY_COLORS,
+    MAIN_CATEGORY_ICONS,
+    MAIN_CATEGORY_IDS,
+    resolvePlanCategories,
+    SUBCATEGORIES,
+    type MainCategoryId,
+} from '../../lib/categories';
+import { deletePlanCompletely } from '../../lib/deletePlan';
+import { diskRemove, diskSet } from '../../lib/diskCache';
+import {
+    emptyFeedTaste,
+    type FeedTaste,
+} from '../../lib/feedAffinity';
+import {
+    FEED_CACHE_KEY,
+    FEED_CACHE_TTL_MS,
+    type FeedSnapshot,
+} from '../../lib/feedCache';
+import { emptyGuestFeedSnapshot, fetchSignedInFeedSnapshot } from '../../lib/feedLoad';
+import { requestOpenFeedMap } from '../../lib/feedMapIntent';
+import { attachFeedPlanPeople, fetchMoreFeedPlanRows, type FeedMoreCursor } from '../../lib/feedQuery';
+import {
+    applyStickyInviteClears,
     consumeFeedNeedsRefresh,
+    consumeFeedNeedsRefreshUrgent,
+    markFeedNeedsRefresh,
+    mergeStickyMembershipMap,
+    noteFeedMembershipPatch,
     subscribeFeedHomeRetap,
+    subscribeFeedRefreshSignal,
+    takeFeedInviteClears,
+    takeFeedMembershipPatches,
+    takeOptimisticFeedPlan
 } from '../../lib/feedReload';
+import { expandSearchQuery, planMatchesSearch } from '../../lib/feedSearch';
+import { buildFeedRows, type FeedRow } from '../../lib/feedSections';
+import { consumeFirstRunPending } from '../../lib/firstRun';
+import { rememberFriendsSet } from '../../lib/friendStatusPeek';
+import { distanceKm, formatDistanceKm } from '../../lib/geo';
+import { fetchGuestFeedPlans } from '../../lib/guestFeed';
+import { hapticError, hapticLight, hapticSelection, hapticSuccess } from '../../lib/haptics';
+import { useT } from '../../lib/i18n';
+import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
+import { getUserCoords, peekUserCoords, type UserCoords } from '../../lib/location';
+import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
+import { deletePlanAdmin } from '../../lib/moderation';
+import { getIsOnline } from '../../lib/network';
+import { Alert } from '../../lib/nexoAlert';
+import { persistJoinWithWaitlistFallback, persistLeave, persistSave } from '../../lib/offlineActions';
+import { peekViewerIsOrganizer, rememberViewerIsOrganizer } from '../../lib/organizer';
+import { ownerActionsVisible } from '../../lib/ownerSecretActions';
 import {
-    invalidatePlanDetailCache,
+    canJoinWaitlist,
+    membershipFromJoinEstado,
+    promoteWaitlist,
+    resolveJoinEstado
+} from '../../lib/participants';
+import {
     prefetchPlanDetail,
     seedPlanDetailFromFeed,
 } from '../../lib/planDetailCache';
-import { resolvePlanImageSource } from '../../lib/sports';
-import { getAuthUser } from '../../lib/auth';
-import { getCoincidedUserIds } from '../../lib/coincidences';
-import { getFriends } from '../../lib/friends';
-import { isFeedPlan } from '../../lib/feedPlans';
-import { diskSet } from '../../lib/diskCache';
-import { distanceKm, formatDistanceKm, isLocationInEurope } from '../../lib/geo';
-import { consumeFirstRunPending } from '../../lib/firstRun';
-import { hapticError, hapticLight, hapticSelection, hapticSuccess } from '../../lib/haptics';
-import { useT } from '../../lib/i18n';
-import { deletePlanCompletely } from '../../lib/deletePlan';
-import { deletePlanAdmin } from '../../lib/moderation';
-import { fetchAccountAccess } from '../../lib/roles';
-import { getUserCoords, peekUserCoords, type UserCoords } from '../../lib/location';
-import { withRetry } from '../../lib/retry';
-import { getProfileNotificationCount } from '../../lib/notifications';
+import { isPlanActiveForFeed, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
+import { canJoinMorePlans, countLocalActivePlans, MAX_ACTIVE_PLANS } from '../../lib/planLimits';
 import { canSeePlanInFeed } from '../../lib/planVisibility';
-import {
-    MAIN_CATEGORY_IDS,
-    SUBCATEGORIES,
-    resolvePlanCategories,
-    type MainCategoryId,
-} from '../../lib/categories';
+import { type Genero } from '../../lib/profileFields';
+import { withRetry } from '../../lib/retry';
+import { fetchAccountAccess } from '../../lib/roles';
+import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
 import {
     getScreenFilters,
     getScreenScrollOffset,
@@ -84,42 +128,22 @@ import {
     setScreenFilters,
     setScreenScrollOffset,
 } from '../../lib/screenState';
-import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
-import { supabase } from '../../lib/supabase';
-import { planMatchesProvince, SPAIN_PROVINCES } from '../../lib/provinces';
-import {
-    isAcceptedParticipant,
-    mapEstadoToMembership,
-    membershipFromJoinEstado,
-    promoteWaitlist,
-    resolveJoinEstado,
-} from '../../lib/participants';
-import type { Genero } from '../../lib/profileFields';
 import { canJoinPlanByGender, isSoloChicasPlan } from '../../lib/soloChicas';
-import { canJoinMorePlans } from '../../lib/planLimits';
-import { isPlanActiveForFeed, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
-import {
-    buildFeedTaste,
-    compareFeedAffinity,
-    emptyFeedTaste,
-    type FeedTaste,
-} from '../../lib/feedAffinity';
-import { expandSearchQuery, planMatchesSearch } from '../../lib/feedSearch';
-import {
-    FEED_CACHE_KEY,
-    FEED_CACHE_TTL_MS,
-    FEED_PLAN_COLUMNS,
-    type FeedSnapshot,
-} from '../../lib/feedCache';
-import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
-import { getMyProfile, getPublicProfileCards } from '../../lib/profileData';
-import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
+import { supabase } from '../../lib/supabase';
+import { cacheGetStale, cacheInvalidate, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
+import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
+import { theme } from '../../theme';
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
 
 export default function HomeScreen() {
     const router = useRouter();
     const { t, lang } = useT();
+    const { requireAccount, userId: sessionUserId } = useAuthSession();
+    const { colors, scheme } = useAppTheme();
+    const styles = useThemedStyles(createFeedStyles);
+    const chrome = useChromeHeaderLayout();
+    const insets = useSafeAreaInsets();
     const savedFilters = getScreenFilters<{
         search: string;
         selectedFilter: string;
@@ -127,8 +151,6 @@ export default function HomeScreen() {
         selectedSubcategory: string | null;
         selectedSubcategories: string[];
         dateFilter: string;
-        provinceFilter: string;
-        selectedProvinces: string[];
     }>(ScreenKeys.FEED);
 
     const cachedFeed = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY);
@@ -146,18 +168,11 @@ export default function HomeScreen() {
         }
         return asStringArray(savedFilters.selectedSubcategory);
     });
-    const [dateFilter, setDateFilter] = useState(savedFilters.dateFilter ?? 'all');
-    const [selectedProvinces, setSelectedProvinces] = useState<string[]>(() => {
-        if (Array.isArray(savedFilters.selectedProvinces)) {
-            return asStringArray(savedFilters.selectedProvinces);
-        }
-        return asStringArray(savedFilters.provinceFilter);
+    const [dateFilter, setDateFilter] = useState(() => {
+        const saved = savedFilters.dateFilter ?? 'all';
+        return saved === 'month' || saved === 'custom' ? 'all' : saved;
     });
-    const [showZoneModal, setShowZoneModal] = useState(false);
-    const [mapSelectedId, setMapSelectedId] = useState<string | null>(null);
-    const zoneMapRef = useRef<MapView | null>(null);
     const [showFiltersModal, setShowFiltersModal] = useState(false);
-    const [showProvincePicker, setShowProvincePicker] = useState(false);
     const [nearbyKm, setNearbyKm] = useState<number | null>(null);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
     const [showFirstRun, setShowFirstRun] = useState(false);
@@ -168,10 +183,14 @@ export default function HomeScreen() {
     );
     const [savedPlans, setSavedPlans] = useState<string[]>(() => cachedFeed?.savedPlans ?? []);
     const [currentUserId, setCurrentUserId] = useState<string | null>(() => cachedFeed?.currentUserId ?? null);
+    const [isOrganizerAccount, setIsOrganizerAccount] = useState(
+        () => peekViewerIsOrganizer() || cachedFeed?.isOrganizer === true,
+    );
     const [currentUserGenero, setCurrentUserGenero] = useState<Genero | null>(
         () => cachedFeed?.currentUserGenero ?? null,
     );
     const [isOwner, setIsOwner] = useState(false);
+    const secretOwnerUx = ownerActionsVisible(isOwner);
     const [loading, setLoading] = useState(() => cachedFeed == null);
     const [refreshing, setRefreshing] = useState(false);
     const [loadError, setLoadError] = useState(false);
@@ -190,22 +209,78 @@ export default function HomeScreen() {
     const [feedTaste, setFeedTaste] = useState<FeedTaste>(
         () => cachedFeed?.feedTaste ?? emptyFeedTaste(),
     );
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [hasMoreFeed, setHasMoreFeed] = useState(true);
+    const feedCursorRef = useRef<FeedMoreCursor | null>(null);
+    const loadingMoreRef = useRef(false);
     const [searchExpanded, setSearchExpanded] = useState<string[]>([]);
     const plansRef = useRef<any[]>([]);
     const currentUserIdRef = useRef<string | null>(null);
-    const { listRef, onScroll, restoreScroll, scrollEventThrottle } = useListScrollRestore(ScreenKeys.FEED);
+    const friendIdsRef = useRef<Set<string>>(new Set());
+    const coincidedIdsRef = useRef<Set<string>>(new Set());
+    const { listRef, onScroll, onListLayout, restoreScroll, scrollEventThrottle } = useListScrollRestore<FeedRow>(
+        ScreenKeys.FEED,
+        { restoreOnFocus: false },
+    );
+    const feedChromeVisible = useSharedValue(1);
+    const lastFeedScrollY = useRef(0);
+    const feedScrollAccumulator = useRef(0);
+
+    const onFeedScroll = useCallback(
+        (event: { nativeEvent: { contentOffset: { y: number }; contentSize: { height: number }; layoutMeasurement: { height: number } } }) => {
+            onScroll(event);
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            const y = contentOffset.y;
+            const maxY = Math.max(0, contentSize.height - layoutMeasurement.height);
+            const dy = y - lastFeedScrollY.current;
+            lastFeedScrollY.current = y;
+
+            if (y <= 6) {
+                feedScrollAccumulator.current = 0;
+                feedChromeVisible.value = withTiming(1, { duration: 200 });
+                return;
+            }
+
+            // Rebote al final del feed: ignorar el tirón hacia arriba.
+            if (y >= maxY - 2 && dy < 0) return;
+            if (y < 0) return;
+
+            if (Math.abs(dy) < 0.25) return;
+
+            feedScrollAccumulator.current += dy;
+
+            if (feedScrollAccumulator.current > 10) {
+                feedScrollAccumulator.current = 0;
+                feedChromeVisible.value = withTiming(0, { duration: 200 });
+            } else if (feedScrollAccumulator.current < -10) {
+                feedScrollAccumulator.current = 0;
+                feedChromeVisible.value = withTiming(1, { duration: 200 });
+            }
+        },
+        [feedChromeVisible, onScroll],
+    );
+
+    const feedChromeStyle = useAnimatedStyle(() => ({
+        height: interpolate(feedChromeVisible.value, [0, 1], [0, 56]),
+        opacity: feedChromeVisible.value,
+        marginBottom: interpolate(feedChromeVisible.value, [0, 1], [0, 10]),
+        overflow: 'hidden',
+    }));
 
     useEffect(() => {
         void consumeFirstRunPending().then((pending) => {
             if (pending) setShowFirstRun(true);
         });
         // Solo coords para mapa/distancias; no activar “Cerca” al abrir en frío.
+        const hadPeek = !!peekUserCoords();
         void getUserCoords({ requestPermission: false }).then((c) => {
-            if (c) setUserCoords(c);
+            if (!c) return;
+            setUserCoords(c);
+            if (!hadPeek) void fetchDataRef.current({ skipScrollJump: true });
         });
     }, []);
 
-    const enableNearby = useCallback(async (radius = 25) => {
+    const enableNearby = useCallback(async (radius = 10) => {
         const coords = await getUserCoords({ requestPermission: true, force: true });
         if (!coords) {
             Alert.alert(t('feed.error'), t('feed.enableLocation'));
@@ -215,6 +290,7 @@ export default function HomeScreen() {
         setNearbyKm(radius);
         setShowFirstRun(false);
         hapticSelection();
+        void fetchDataRef.current({ refresh: true, skipScrollJump: true });
     }, [t]);
 
     useEffect(() => {
@@ -223,9 +299,8 @@ export default function HomeScreen() {
             selectedCategories,
             selectedSubcategories,
             dateFilter,
-            selectedProvinces,
         });
-    }, [search, selectedCategories, selectedSubcategories, dateFilter, selectedProvinces]);
+    }, [search, selectedCategories, selectedSubcategories, dateFilter]);
 
     useEffect(() => {
         const q = search.trim();
@@ -247,204 +322,82 @@ export default function HomeScreen() {
 
     plansRef.current = plans;
     currentUserIdRef.current = currentUserId;
+    friendIdsRef.current = friendIds;
+    coincidedIdsRef.current = coincidedIds;
 
-    const fetchData = useCallback(async (opts?: { refresh?: boolean; skipScrollJump?: boolean }) => {
+    const fetchData = useCallback(async (opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => {
         let finished = false;
         const isRefresh = !!opts?.refresh;
+        const quiet = !!opts?.quiet;
         const safetyTimer = setTimeout(() => {
             if (!finished) {
                 setLoading(false);
                 setRefreshing(false);
             }
-        }, 12000);
+        }, 8000);
 
         try {
-            if (isRefresh) {
+            if (isRefresh && !quiet) {
                 setRefreshing(true);
             } else if (!hasDataRef.current) {
                 setLoading(true);
             }
             setLoadError(false);
 
-            const nowIso = new Date().toISOString();
             void runPlanLifecycleMaintenance();
 
-            const userPromise = getAuthUser();
-            const plansPromise = withRetry(async () => {
-                const res = await supabase
-                    .from('planes')
-                    .select(FEED_PLAN_COLUMNS)
-                    .or(`fecha_evento.is.null,fecha_evento.gte.${nowIso}`)
-                    .order('fecha_evento', { ascending: true })
-                    .limit(100);
-                if (res.error) throw res.error;
-                return res;
-            });
-
-            const [user, plansRes] = await Promise.all([userPromise, plansPromise]);
-            setCurrentUserId(user?.id || null);
-            if (user?.id) {
-                void fetchAccountAccess(user.id).then((access) => setIsOwner(access.isOwner));
+            const userId = sessionUserId ?? (await getAuthUser())?.id ?? null;
+            setCurrentUserId(userId);
+            if (userId) {
+                void fetchAccountAccess(userId).then((access) => setIsOwner(access.isOwner));
             } else {
                 setIsOwner(false);
             }
 
-            const safePlans = (plansRes.data || []).filter(isFeedPlan);
-            const planIds = safePlans.map((p) => p.id);
+            let formattedPlans: any[];
+            const coords = peekUserCoords() || userCoords;
 
-            const partsPromise = planIds.length > 0
-                ? supabase
-                    .from('participantes')
-                    .select('plan_id, usuario_id, estado')
-                    .in('plan_id', planIds)
-                    .eq('estado', 'aceptado')
-                : Promise.resolve({ data: [], error: null });
-
-            const creatorIds = Array.from(new Set(safePlans.map((p) => p.creador_id).filter(Boolean)));
-            const partsRes = await partsPromise;
-
-            let partsByPlan: Record<string, any[]> = {};
-            if (partsRes.error) {
-                console.warn('Participantes del feed:', partsRes.error.message);
+            if (!userId) {
+                formattedPlans = await withRetry(() => fetchGuestFeedPlans(coords));
             } else {
-                (partsRes.data || []).forEach((row: any) => {
-                    if (!partsByPlan[row.plan_id]) partsByPlan[row.plan_id] = [];
-                    partsByPlan[row.plan_id].push(row);
-                });
+                const snap = await withRetry(() => fetchSignedInFeedSnapshot(userId, coords));
+                formattedPlans = snap.plans;
+                setIsOrganizerAccount(snap.isOrganizer);
+                rememberViewerIsOrganizer(snap.isOrganizer);
+                setCurrentUserGenero(snap.currentUserGenero);
+                setFriendIds(new Set(snap.friendIds));
+                rememberFriendsSet(snap.friendIds);
+                setCoincidedIds(new Set(snap.coincidedIds));
+                setInvitedPlanIds(applyStickyInviteClears(snap.invitedPlanIds));
+                setMembershipMap(mergeStickyMembershipMap(snap.membershipMap));
+                setSavedPlans(snap.savedPlans);
+                setFeedTaste(snap.feedTaste);
+                setPlans(formattedPlans);
+                feedCursorRef.current = null;
+                setHasMoreFeed(true);
+                setLoading(false);
+                cacheSet(FEED_CACHE_KEY, snap, FEED_CACHE_TTL_MS);
+                void diskSet(FEED_CACHE_KEY, snap);
+                return;
             }
-
-            const profileIds = Array.from(new Set([
-                ...creatorIds,
-                ...(partsRes.data || []).map((row: any) => row.usuario_id),
-            ].filter(Boolean)));
-            const publicProfiles = await getPublicProfileCards(profileIds);
-            const profileMap = Object.fromEntries(publicProfiles.map((profile) => [profile.id, profile]));
-
-            const formattedPlans = safePlans.map((plan) => {
-                const rawParticipants = partsByPlan[plan.id] || [];
-                const accepted = rawParticipants.filter((p: any) => isAcceptedParticipant(p.estado));
-                const list: any[] = [];
-                const creator = profileMap[plan.creador_id];
-                if (creator) list.push({ ...creator, isCreator: true });
-                accepted.forEach((p: any) => {
-                    const prof = profileMap[p.usuario_id];
-                    if (prof && prof.id !== plan.creador_id) list.push({ ...prof, isCreator: false });
-                });
-                return { ...plan, joinedCount: accepted.length, participantsList: list };
-            });
 
             setPlans(formattedPlans);
+            feedCursorRef.current = null;
+            setHasMoreFeed(false); // invitado: un solo lote vía RPC
             setLoading(false);
 
-            let nextMembership: Record<string, Membership> = {};
-            let nextSaved: string[] = [];
-            let nextGenero: Genero | null = null;
-            let nextFriends = new Set<string>();
-            let nextCoincided = new Set<string>();
-            let nextInvited = new Set<string>();
-            let nextTaste = emptyFeedTaste();
-            let nextNotifs = { friendRequests: 0, planRequests: 0, planInvites: 0 };
-
-            if (user) {
-                const [
-                    profileRes,
-                    notifs,
-                    participantsRes,
-                    savedRes,
-                    friendsData,
-                    createdPlansRes,
-                    coincidedSet,
-                    invitesRes,
-                ] = await Promise.all([
-                    getMyProfile(),
-                    getProfileNotificationCount(user.id),
-                    supabase.from('participantes').select('plan_id, estado').eq('usuario_id', user.id),
-                    supabase.from('planes_guardados').select('plan_id').eq('usuario_id', user.id),
-                    getFriends(user.id),
-                    supabase
-                        .from('planes')
-                        .select('categoria, tipo_deporte')
-                        .eq('creador_id', user.id)
-                        .order('fecha_evento', { ascending: false })
-                        .limit(40),
-                    getCoincidedUserIds(user.id),
-                    supabase
-                        .from('invitaciones_planes')
-                        .select('plan_id')
-                        .eq('invitado_id', user.id)
-                        .eq('estado', 'pendiente'),
-                ]);
-
-                nextGenero = (profileRes.data?.genero as Genero) ?? null;
-                nextNotifs = {
-                    friendRequests: notifs.friendRequests,
-                    planRequests: notifs.planRequests,
-                    planInvites: notifs.planInvites,
-                };
-                nextFriends = new Set(friendsData.map((f) => f.id));
-                nextCoincided = coincidedSet;
-                nextInvited = new Set((invitesRes.data ?? []).map((r) => r.plan_id as string));
-                const map: Record<string, Membership> = {};
-                (participantsRes.data || []).forEach((p: any) => {
-                    const m = mapEstadoToMembership(p.estado);
-                    if (m) map[p.plan_id] = m;
-                });
-                nextMembership = map;
-                nextSaved = savedRes.data?.map((s) => s.plan_id) || [];
-
-                setCurrentUserGenero(nextGenero);
-                setFriendIds(nextFriends);
-                setCoincidedIds(nextCoincided);
-                setInvitedPlanIds(nextInvited);
-                setMembershipMap(nextMembership);
-                setSavedPlans(nextSaved);
-
-                const joinedPlanIds = (participantsRes.data || [])
-                    .filter((p: any) => mapEstadoToMembership(p.estado) === 'joined')
-                    .map((p: any) => p.plan_id as string);
-                let joinedHistory: { categoria?: string | null; tipo_deporte?: string | null }[] = [];
-                if (joinedPlanIds.length > 0) {
-                    const { data: joinedPlans } = await supabase
-                        .from('planes')
-                        .select('categoria, tipo_deporte')
-                        .in('id', joinedPlanIds.slice(0, 50));
-                    joinedHistory = joinedPlans || [];
-                }
-                const tags =
-                    (Array.isArray(profileRes.data?.ambientes_preferidos) && profileRes.data.ambientes_preferidos.length
-                        ? profileRes.data.ambientes_preferidos
-                        : profileRes.data?.etiquetas) || [];
-                nextTaste = buildFeedTaste(tags as string[], [
-                    ...(createdPlansRes.data || []),
-                    ...joinedHistory,
-                ]);
-                setFeedTaste(nextTaste);
-            } else {
-                nextNotifs = { friendRequests: 0, planRequests: 0, planInvites: 0 };
-                nextFriends = new Set();
-                nextCoincided = new Set();
-                nextInvited = new Set();
-                nextTaste = emptyFeedTaste();
-                setFriendIds(nextFriends);
-                setCoincidedIds(nextCoincided);
-                setInvitedPlanIds(nextInvited);
-                setFeedTaste(nextTaste);
-            }
-
-            const snap: FeedSnapshot = {
-                plans: formattedPlans,
-                membershipMap: nextMembership,
-                savedPlans: nextSaved,
-                currentUserId: user?.id || null,
-                currentUserGenero: nextGenero,
-                friendIds: [...nextFriends],
-                coincidedIds: [...nextCoincided],
-                invitedPlanIds: [...nextInvited],
-                feedTaste: nextTaste,
-                notifBreakdown: nextNotifs,
-            };
-            cacheSet(FEED_CACHE_KEY, snap, FEED_CACHE_TTL_MS);
-            void diskSet(FEED_CACHE_KEY, snap);
+            const guestSnap: FeedSnapshot = emptyGuestFeedSnapshot(formattedPlans);
+            setIsOrganizerAccount(false);
+            rememberViewerIsOrganizer(false);
+            setMembershipMap({});
+            setSavedPlans([]);
+            setCurrentUserGenero(null);
+            setFriendIds(new Set());
+            setCoincidedIds(new Set());
+            setInvitedPlanIds(new Set());
+            setFeedTaste(emptyFeedTaste());
+            cacheSet(FEED_CACHE_KEY, guestSnap, FEED_CACHE_TTL_MS);
+            void diskSet(FEED_CACHE_KEY, guestSnap);
         } catch (error) {
             if (__DEV__) console.log(error);
             // Sin datos en memoria: mostrar error (no fingir “vacío”).
@@ -467,7 +420,7 @@ export default function HomeScreen() {
                 });
             }
         }
-    }, [listRef]);
+    }, [listRef, sessionUserId]);
 
     const fetchDataRef = useRef(fetchData);
     fetchDataRef.current = fetchData;
@@ -480,18 +433,79 @@ export default function HomeScreen() {
     const deferMineSortIdsRef = useRef<Set<string>>(new Set());
     const [mineSortEpoch, setMineSortEpoch] = useState(0);
 
-    const requestFeedLoad = useCallback((opts?: { refresh?: boolean; skipScrollJump?: boolean }) => {
+    const loadMoreFeed = useCallback(async () => {
+        if (loadingMoreRef.current || !hasMoreFeed || loading || refreshing) return;
+        if (search.trim() || selectedCategories.length > 0 || selectedSubcategories.length > 0) return;
+        const known = plansRef.current;
+        if (known.length === 0) return;
+
+        loadingMoreRef.current = true;
+        setLoadingMore(true);
+        try {
+            const nowIso = new Date().toISOString();
+            const excludeIds = known.map((p) => String(p.id));
+            let extraRaw: Awaited<ReturnType<typeof fetchMoreFeedPlanRows>>['rows'] = [];
+            let hasMore = true;
+            for (let attempt = 0; attempt < 4 && extraRaw.length === 0 && hasMore; attempt++) {
+                const page = await fetchMoreFeedPlanRows({
+                    nowIso,
+                    excludeIds,
+                    cursor: feedCursorRef.current,
+                });
+                feedCursorRef.current = page.nextCursor;
+                hasMore = page.hasMore;
+                extraRaw = page.rows;
+                for (const row of page.rows) excludeIds.push(String(row.id));
+            }
+            if (extraRaw.length === 0) {
+                setHasMoreFeed(hasMore);
+                return;
+            }
+            const withPeople = await attachFeedPlanPeople(extraRaw);
+            if (withPeople.length === 0) {
+                setHasMoreFeed(hasMore);
+                return;
+            }
+            setPlans((prev) => {
+                const seen = new Set(prev.map((p) => String(p.id)));
+                const extra = withPeople
+                    .filter((p) => !seen.has(String(p.id)))
+                    .map((p) => ({ ...p, _feedTail: true }));
+                if (extra.length === 0) return prev;
+                return [...prev, ...extra];
+            });
+            setHasMoreFeed(hasMore);
+        } catch (e) {
+            if (__DEV__) console.warn('loadMoreFeed', e);
+        } finally {
+            loadingMoreRef.current = false;
+            setLoadingMore(false);
+        }
+    }, [
+        hasMoreFeed,
+        loading,
+        refreshing,
+        search,
+        selectedCategories.length,
+        selectedSubcategories.length,
+    ]);
+
+    const requestFeedLoad = useCallback((opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => {
         if (fetchInFlightRef.current) {
             // Casita / pull-to-refresh mientras ya carga: encolar una recarga al terminar.
             if (opts?.refresh) pendingFeedRefreshRef.current = true;
             return;
         }
         fetchInFlightRef.current = true;
+        const safety = setTimeout(() => {
+            fetchInFlightRef.current = false;
+        }, 12_000);
         void fetchDataRef.current(opts).finally(() => {
+            clearTimeout(safety);
             fetchInFlightRef.current = false;
             if (pendingFeedRefreshRef.current) {
                 pendingFeedRefreshRef.current = false;
-                requestFeedLoad({ refresh: true, skipScrollJump: true });
+                requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true });
                 return;
             }
             // Tras actualizar datos, recuperar scroll (si saliste a otra pantalla o volviste a la app).
@@ -502,23 +516,79 @@ export default function HomeScreen() {
         });
     }, [restoreScroll]);
 
+    useEffect(() => {
+        let seenInitial = false;
+        let lastId: string | null | undefined;
+        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+            const nextId = session?.user?.id ?? null;
+            if (!seenInitial) {
+                seenInitial = true;
+                lastId = nextId;
+                return;
+            }
+            if (lastId === nextId) return;
+            lastId = nextId;
+            cacheInvalidate(FEED_CACHE_KEY);
+            void diskRemove(FEED_CACHE_KEY);
+            didSessionFeedLoadRef.current = false;
+            markFeedNeedsRefresh();
+            requestFeedLoad({ refresh: true, skipScrollJump: true });
+        });
+        return () => data.subscription.unsubscribe();
+    }, [requestFeedLoad]);
+
     // Tras crear un plan: recarga diferida (evita freeze al cerrar el modal).
     useFocusEffect(
         useCallback(() => {
             feedFocusedRef.current = true;
             let cancelled = false;
-            let task: { cancel: () => void } | null = null;
             let timer: ReturnType<typeof setTimeout> | null = null;
 
-            if (consumeFeedNeedsRefresh()) {
-                didSessionFeedLoadRef.current = true;
-                task = InteractionManager.runAfterInteractions(() => {
-                    timer = setTimeout(() => {
-                        if (!cancelled) {
-                            requestFeedLoad({ refresh: true, skipScrollJump: true });
-                        }
-                    }, 280);
+            const patches = takeFeedMembershipPatches();
+            if (Object.keys(patches).length > 0) {
+                setMembershipMap((prev) => mergeStickyMembershipMap(prev));
+            }
+            const inviteClears = takeFeedInviteClears();
+            if (inviteClears.length > 0) {
+                setInvitedPlanIds((prev) => applyStickyInviteClears(prev));
+            }
+            const planDeletes = takeFeedPlanDeletes();
+            if (planDeletes.length > 0) {
+                const deleteSet = new Set(planDeletes);
+                setPlans((prev) => prev.filter((p) => !deleteSet.has(String(p.id))));
+            }
+
+            const optimistic = takeOptimisticFeedPlan();
+            if (optimistic?.id) {
+                const oid = String(optimistic.id);
+                setPlans((prev) => {
+                    // Si el estado en memoria está vacío, rehidratar desde caché para no dejar solo el plan nuevo.
+                    let base = prev;
+                    if (base.length === 0) {
+                        const cached = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY);
+                        if (cached?.plans?.length) base = cached.plans;
+                    }
+                    if (base.some((p) => String(p.id) === oid)) {
+                        return base.map((p) => (String(p.id) === oid ? { ...p, ...optimistic } : p));
+                    }
+                    return [optimistic, ...base];
                 });
+                setMembershipMap((prev) => ({
+                    ...prev,
+                    [oid]: (patches[oid] as Membership) || prev[oid] || 'joined',
+                }));
+                hasDataRef.current = true;
+            }
+
+            const urgent = consumeFeedNeedsRefreshUrgent();
+            if (consumeFeedNeedsRefresh() || urgent || optimistic) {
+                didSessionFeedLoadRef.current = true;
+                const delay = urgent || optimistic ? 40 : 450;
+                timer = setTimeout(() => {
+                    if (!cancelled) {
+                        requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true });
+                    }
+                }, delay);
             } else if (!hasDataRef.current || !didSessionFeedLoadRef.current) {
                 didSessionFeedLoadRef.current = true;
                 requestFeedLoad();
@@ -526,12 +596,27 @@ export default function HomeScreen() {
 
             return () => {
                 cancelled = true;
-                task?.cancel?.();
                 if (timer) clearTimeout(timer);
                 feedFocusedRef.current = false;
             };
         }, [requestFeedLoad]),
     );
+
+    // Tras publicar: si el feed ya está visible, recarga quieta (sin depender solo del focus).
+    useEffect(() => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const unsub = subscribeFeedRefreshSignal(() => {
+            if (!feedFocusedRef.current) return;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => {
+                requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true });
+            }, 160);
+        });
+        return () => {
+            unsub();
+            if (timer) clearTimeout(timer);
+        };
+    }, [requestFeedLoad]);
 
     // Fuera de la app → volver: una recarga (y luego restoreScroll).
     useEffect(() => {
@@ -540,11 +625,133 @@ export default function HomeScreen() {
             appStateRef.current = next;
             const fromBackground = prev === 'background' || prev === 'inactive';
             if (fromBackground && next === 'active' && feedFocusedRef.current) {
-                requestFeedLoad();
+                if (!cacheIsFresh(FEED_CACHE_KEY)) requestFeedLoad();
             }
         });
         return () => sub.remove();
     }, [requestFeedLoad]);
+
+    // Sincronizar estado de corazón desde pantalla de detalle
+    useEffect(() => {
+        const saveUnsub = subscribeSaveState((evt) => {
+            setSavedPlans((prev) => {
+                if (evt.saved) {
+                    return prev.includes(evt.planId) ? prev : [...prev, evt.planId];
+                } else {
+                    return prev.filter((id) => id !== evt.planId);
+                }
+            });
+        });
+        return saveUnsub;
+    }, []);
+
+    // Integrantes / aforo en vivo mientras el feed está abierto.
+    useEffect(() => {
+        if (!currentUserId) return;
+        const pending = new Set<string>();
+        let timer: ReturnType<typeof setTimeout> | null = null;
+
+        const flush = () => {
+            timer = null;
+            const ids = [...pending];
+            pending.clear();
+            if (ids.length === 0) return;
+            const known = plansRef.current.filter((p) => ids.includes(String(p.id)));
+            if (known.length === 0) return;
+            void attachFeedPlanPeople(known).then((updated) => {
+                if (!updated.length) return;
+                const byId = new Map(updated.map((p) => [String(p.id), p]));
+                setPlans((prev) =>
+                    prev.map((p) => {
+                        const next = byId.get(String(p.id));
+                        if (!next) return p;
+                        return {
+                            ...p,
+                            participantsList: next.participantsList,
+                            joinedCount: next.joinedCount,
+                            host: next.host ?? p.host,
+                            es_organizador: next.es_organizador ?? p.es_organizador,
+                        };
+                    }),
+                );
+            });
+        };
+
+        const queue = (planId: string | null | undefined) => {
+            if (!planId) return;
+            if (!plansRef.current.some((p) => String(p.id) === String(planId))) return;
+            pending.add(String(planId));
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(flush, 280);
+        };
+
+        const channel = supabase
+            .channel(`feed-participantes:${currentUserId}:${Math.random().toString(36).slice(2, 8)}`)
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'participantes' },
+                (payload) => {
+                    const rowNew = payload.new as
+                        | { plan_id?: string; usuario_id?: string; estado?: string }
+                        | null;
+                    const rowOld = payload.old as
+                        | { plan_id?: string; usuario_id?: string; estado?: string }
+                        | null;
+                    const planId = rowNew?.plan_id ?? rowOld?.plan_id;
+                    queue(planId);
+
+                    const uid = currentUserIdRef.current;
+                    const touchedUser = rowNew?.usuario_id ?? rowOld?.usuario_id;
+                    if (!uid || !planId || touchedUser !== uid) return;
+
+                    if (payload.eventType === 'DELETE' || !rowNew) {
+                        setMembershipMap((prev) => {
+                            if (!(planId in prev)) return prev;
+                            const next = { ...prev };
+                            delete next[planId];
+                            return next;
+                        });
+                        noteFeedMembershipPatch(planId, 'none');
+                        return;
+                    }
+
+                    const estado = String(rowNew.estado ?? '');
+                    const membership: Membership =
+                        estado === 'aceptado'
+                            ? 'joined'
+                            : estado === 'pendiente'
+                              ? 'requested'
+                              : estado === 'lista_espera'
+                                ? 'waitlist'
+                                : 'none';
+                    setMembershipMap((prev) => {
+                        if (membership === 'none') {
+                            if (!(planId in prev)) return prev;
+                            const next = { ...prev };
+                            delete next[planId];
+                            return next;
+                        }
+                        if (prev[planId] === membership) return prev;
+                        return { ...prev, [planId]: membership };
+                    });
+                    noteFeedMembershipPatch(planId, membership);
+                    if (membership !== 'none') {
+                        setInvitedPlanIds((prev) => {
+                            if (!prev.has(planId)) return prev;
+                            const next = new Set(prev);
+                            next.delete(planId);
+                            return next;
+                        });
+                    }
+                },
+            )
+            .subscribe();
+
+        return () => {
+            if (timer) clearTimeout(timer);
+            void supabase.removeChannel(channel);
+        };
+    }, [currentUserId]);
 
     const homeRetapBusyRef = useRef(false);
 
@@ -576,7 +783,13 @@ export default function HomeScreen() {
     }, [listRef, requestFeedLoad]);
 
     const handleJoin = async (planId: string) => {
+        if (requireAccount({ type: 'join', planId })) return;
         if (!currentUserId || joiningRef.current) return;
+        if (isOrganizerAccount) {
+            hapticError();
+            Alert.alert(t('feed.error'), t('organizer.cannotJoin'));
+            return;
+        }
         const plan = plans.find(p => p.id === planId);
         if (!plan) return;
 
@@ -586,11 +799,29 @@ export default function HomeScreen() {
             return;
         }
 
-        const limitCheck = await canJoinMorePlans(currentUserId, planId);
-        if (!limitCheck.allowed) {
-            hapticError();
-            Alert.alert(t('feed.error'), t('feed.planLimitReached', { max: limitCheck.max }));
-            return;
+        const existingMembership = membershipMap[planId];
+        const alreadyIn =
+            existingMembership === 'joined' ||
+            existingMembership === 'requested' ||
+            existingMembership === 'waitlist';
+        // Límite local primero: evita round-trip que congelaba el botón "Me apunto".
+        if (!alreadyIn) {
+            const localCount = countLocalActivePlans(currentUserId, plans, membershipMap);
+            if (localCount >= MAX_ACTIVE_PLANS) {
+                const limitCheck = getIsOnline()
+                    ? await canJoinMorePlans(currentUserId, planId)
+                    : { allowed: false as const, count: localCount, max: MAX_ACTIVE_PLANS };
+                if (!limitCheck.allowed) {
+                    hapticError();
+                    Alert.alert(
+                        t('feed.error'),
+                        limitCheck.reason === 'organizer'
+                            ? t('organizer.cannotJoin')
+                            : t('feed.planLimitReached', { max: limitCheck.max }),
+                    );
+                    return;
+                }
+            }
         }
 
         joiningRef.current = true;
@@ -612,30 +843,79 @@ export default function HomeScreen() {
             setPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: p.joinedCount + 1 } : p));
         }
         try {
-            const { error } = await supabase.from('participantes').insert({ plan_id: planId, usuario_id: currentUserId, estado });
+            const { queued, error, estado: applied } = await persistJoinWithWaitlistFallback(
+                {
+                    planId,
+                    userId: currentUserId,
+                    estado,
+                    planTitle: plan.titulo,
+                    fechaEvento: plan.fecha_evento,
+                    categoria: plan.categoria,
+                    locationName: plan.nombre_ubicacion,
+                },
+                canJoinWaitlist(plan.fecha_evento),
+            );
             if (error) {
                 deferMineSortIdsRef.current.delete(planId);
                 setMembershipMap(prevMap);
                 setPlans(prevPlans);
                 hapticError();
-                Alert.alert(t('feed.error'), t('feed.joinError'));
+                Alert.alert(
+                    t('feed.error'),
+                    String(error.message || '').toLowerCase().includes('plan_full')
+                        ? t('feed.planFull')
+                        : /active_plan_limit/i.test(String(error.message || ''))
+                          ? t('feed.planLimitReached', { max: MAX_ACTIVE_PLANS })
+                          : t('feed.joinError'),
+                );
             } else {
+                if (applied === 'lista_espera' && estado === 'aceptado') {
+                    setMembershipMap((prev) => ({ ...prev, [planId]: 'waitlist' }));
+                    setPlans(prevPlans);
+                    Alert.alert(t('feed.joinedWaitlist'));
+                }
                 hapticSuccess();
-                invalidatePlanMembershipCaches(currentUserId);
-                invalidatePlanDetailCache(planId);
-                const { notifyPlanJoin, schedulePlanLifecycleReminders } = await import('../../lib/push');
-                notifyPlanJoin(planId, estado);
-                if (estado === 'aceptado') {
-                    void schedulePlanLifecycleReminders({
-                        planId,
-                        planTitle: plan.titulo,
-                        fechaEvento: plan.fecha_evento,
-                        categoria: plan.categoria,
-                        locationName: plan.nombre_ubicacion,
-                    });
-                    void import('../../lib/analytics').then(({ trackFunnel }) =>
-                        trackFunnel('plan_join', { userId: currentUserId, props: { planId, estado } }),
+                const finalMembership: Membership =
+                    applied === 'lista_espera'
+                        ? 'waitlist'
+                        : applied === 'pendiente'
+                          ? 'requested'
+                          : nextMembership;
+                broadcastPlanMembership(planId, finalMembership, {
+                    userId: currentUserId,
+                    bumpJoined: finalMembership === 'joined',
+                    clearInvite: true,
+                });
+                setInvitedPlanIds((prev) => {
+                    if (!prev.has(planId)) return prev;
+                    const next = new Set(prev);
+                    next.delete(planId);
+                    return next;
+                });
+                if (applied === 'aceptado' || nextMembership === 'joined') {
+                    void import('../../lib/chatUnread').then(({ markPlanChatRead }) =>
+                        markPlanChatRead(currentUserId, planId),
                     );
+                }
+                if (!queued) {
+                    void import('../../lib/push').then(({ notifyPlanJoin, schedulePlanLifecycleReminders }) => {
+                        notifyPlanJoin(planId, applied);
+                        if (applied === 'aceptado') {
+                            void schedulePlanLifecycleReminders({
+                                planId,
+                                planTitle: plan.titulo,
+                                fechaEvento: plan.fecha_evento,
+                                categoria: plan.categoria,
+                                locationName: plan.nombre_ubicacion,
+                            });
+                            void import('../../lib/analytics').then(({ trackFunnel }) =>
+                                trackFunnel('plan_join', {
+                                    userId: currentUserId,
+                                    props: { planId, estado: applied },
+                                }),
+                            );
+                        }
+                    });
                 }
             }
         } finally {
@@ -671,20 +951,18 @@ export default function HomeScreen() {
                     if (wasJoined) {
                         setPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: Math.max(0, p.joinedCount - 1) } : p));
                     }
-                    const { error } = await supabase
-                        .from('participantes')
-                        .delete()
-                        .eq('plan_id', planId)
-                        .eq('usuario_id', currentUserId);
+                    const { queued, error } = await persistLeave(planId, currentUserId, wasJoined);
                     if (error) {
                         setMembershipMap(prevMap);
                         setPlans(prevPlans);
                         Alert.alert(t('feed.error'), t('feed.leaveError'));
                         return;
                     }
-                    invalidatePlanMembershipCaches(currentUserId);
-                    invalidatePlanDetailCache(planId);
-                    if (wasJoined) {
+                    broadcastPlanMembership(planId, 'none', {
+                        userId: currentUserId,
+                        dropJoined: wasJoined,
+                    });
+                    if (wasJoined && !queued) {
                         await promoteWaitlist(planId);
                         fetchData();
                     }
@@ -694,13 +972,14 @@ export default function HomeScreen() {
     };
 
     const handleSave = async (planId: string) => {
+        if (requireAccount({ type: 'save-plan', planId })) return;
         if (!currentUserId) return;
         const isAlreadySaved = savedPlans.includes(planId);
         const prevSaved = savedPlans;
         hapticLight();
         if (isAlreadySaved) {
             setSavedPlans(prev => prev.filter(id => id !== planId));
-            const { error } = await supabase.from('planes_guardados').delete().eq('plan_id', planId).eq('usuario_id', currentUserId);
+            const { error } = await persistSave(planId, currentUserId, false);
             if (error) {
                 setSavedPlans(prevSaved);
                 hapticError();
@@ -708,7 +987,7 @@ export default function HomeScreen() {
             }
         } else {
             setSavedPlans(prev => [...prev, planId]);
-            const { error } = await supabase.from('planes_guardados').insert({ plan_id: planId, usuario_id: currentUserId });
+            const { error } = await persistSave(planId, currentUserId, true);
             if (error) {
                 setSavedPlans(prevSaved);
                 hapticError();
@@ -719,12 +998,12 @@ export default function HomeScreen() {
 
     const handleDeletePlan = async (planId: string) => {
         Alert.alert(
-            isOwner ? t('admin.deletePlanTitle') : t('feed.deletePlan'),
-            isOwner ? t('admin.deletePlanMsg') : t('feed.deleteConfirm'),
+            secretOwnerUx ? t('admin.deletePlanTitle') : t('feed.deletePlan'),
+            secretOwnerUx ? t('admin.deletePlanMsg') : t('feed.deleteConfirm'),
             [
             { text: t('common.cancel'), style: 'cancel' },
             {
-                text: isOwner ? t('admin.deletePlanConfirm') : t('feed.deletePlan'),
+                text: secretOwnerUx ? t('admin.deletePlanConfirm') : t('feed.deletePlan'),
                 style: 'destructive',
                 // No async aquí: en Android el Alert espera el Promise y se queda abierto.
                 onPress: () => {
@@ -736,7 +1015,7 @@ export default function HomeScreen() {
                     setSavedPlans(prev => prev.filter(id => id !== planId));
                     setTimeout(() => {
                         void (async () => {
-                            const { error } = isOwner
+                            const { error } = secretOwnerUx
                                 ? await deletePlanAdmin(planId)
                                 : await deletePlanCompletely(planId);
                             if (error) {
@@ -775,40 +1054,6 @@ export default function HomeScreen() {
         [userCoords, lang],
     );
 
-    const renderPlanItem = ({ item, index }: { item: any; index: number }) => (
-            <PlanCard
-                item={item}
-                index={index}
-                currentUserId={currentUserId}
-                userGenero={currentUserGenero}
-                membership={membershipMap[item.id] || 'none'}
-                isSaved={savedPlans.includes(item.id)}
-                friendIds={friendIds}
-                coincidedIds={coincidedIds}
-                isOwner={isOwner}
-                distanceLabel={planDistanceLabel(item)}
-                onJoin={handleJoin}
-                joining={joiningPlanId === item.id}
-                onLeave={handleLeave}
-                onDelete={handleDeletePlan}
-                onEdit={handleEditPlan}
-                onToggleSave={handleSave}
-                onOpenDetail={(planId) => {
-                    const plan = plans.find((p) => String(p.id) === String(planId));
-                    const mid = String(planId);
-                    if (plan) {
-                        seedPlanDetailFromFeed(plan, {
-                            membership: membershipMap[mid] || 'none',
-                        });
-                    }
-                    prefetchPlanDetail(mid);
-                    router.push({ pathname: '/plan/[id]', params: { id: planId } });
-                }}
-                onParticipantsChanged={() => void fetchDataRef.current()}
-                router={router}
-            />
-        );
-
     const matchesDate = useCallback((plan: any) => {
         if (dateFilter === 'all') return true;
         if (!plan.fecha_evento) return false;
@@ -816,85 +1061,56 @@ export default function HomeScreen() {
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         if (dateFilter === 'today') {
-            return d.toDateString() === now.toDateString();
+            return toDayKey(d) === toDayKey(now);
         }
-        const days = dateFilter === 'week' ? 7 : 30;
-        const limit = new Date(startOfToday);
-        limit.setDate(limit.getDate() + days);
-        return d >= startOfToday && d <= limit;
+        if (dateFilter === 'week') {
+            const endOfWeek = new Date(startOfToday);
+            endOfWeek.setDate(endOfWeek.getDate() + 7);
+            endOfWeek.setHours(23, 59, 59, 999);
+            return d >= startOfToday && d <= endOfWeek;
+        }
+        return true;
     }, [dateFilter]);
 
     const filteredPlans = useMemo(() => {
-        const isMinePlan = (p: any) => {
-            // Tras unirte, el botón ya dice “unido”, pero no sube al tope hasta recargar.
-            if (mineSortEpoch >= 0 && deferMineSortIdsRef.current.has(p.id)) return false;
-            return (
-                String(p.creador_id) === String(currentUserId)
-                || membershipMap[p.id] === 'joined'
-                || membershipMap[p.id] === 'requested'
-            );
-        };
-
         const membershipPlanIds = new Set(Object.keys(membershipMap));
 
-        return plans
-            .filter(p => {
-                const { main, sub } = resolvePlanCategories(p);
-                const categoryOk =
-                    selectedCategories.length === 0
-                    || (main != null && selectedCategories.includes(main))
-                    || selectedCategories.includes(String(p.categoria || ''));
-                const subcategoryOk =
-                    selectedSubcategories.length === 0
-                    || (sub != null && selectedSubcategories.includes(sub));
-                const provinceOk =
-                    selectedProvinces.length === 0
-                    || selectedProvinces.some((prov) => planMatchesProvince(p, prov));
+        return plans.filter(p => {
+            const { main, sub } = resolvePlanCategories(p);
+            const categoryOk =
+                selectedCategories.length === 0
+                || (main != null && selectedCategories.includes(main))
+                || selectedCategories.includes(String(p.categoria || ''));
+            const subcategoryOk =
+                selectedSubcategories.length === 0
+                || (sub != null && selectedSubcategories.includes(sub));
 
-                let distanceOk = true;
-                if (nearbyKm != null && userCoords) {
-                    const lat = Number(p.latitud);
-                    const lng = Number(p.longitud);
-                    if (!Number.isFinite(lat) || !Number.isFinite(lng)) distanceOk = false;
-                    else {
-                        const d = distanceKm(userCoords.latitude, userCoords.longitude, lat, lng);
-                        distanceOk = d <= nearbyKm;
-                    }
+            let distanceOk = true;
+            if (nearbyKm != null && userCoords) {
+                const lat = Number(p.latitud);
+                const lng = Number(p.longitud);
+                if (!Number.isFinite(lat) || !Number.isFinite(lng)) distanceOk = false;
+                else {
+                    const d = distanceKm(userCoords.latitude, userCoords.longitude, lat, lng);
+                    distanceOk = d <= nearbyKm;
                 }
+            }
 
-                return isPlanActiveForFeed(p)
-                    && canSeePlanInFeed(p, {
-                        userId: currentUserId,
-                        friendIds,
-                        membershipPlanIds,
-                        invitedPlanIds,
-                        isOwner,
-                    })
-                    && (isOwner || !isSoloChicasPlan(p) || currentUserGenero === 'femenino')
-                    && categoryOk
-                    && subcategoryOk
-                    && provinceOk
-                    && distanceOk
-                    && planMatchesSearch(p, search, searchExpanded)
-                    && matchesDate(p);
-            })
-            .sort((a, b) => {
-                const am = isMinePlan(a) ? 0 : 1;
-                const bm = isMinePlan(b) ? 0 : 1;
-                if (am !== bm) return am - bm;
-                if (userCoords) {
-                    const da = Number.isFinite(Number(a.latitud))
-                        ? distanceKm(userCoords.latitude, userCoords.longitude, Number(a.latitud), Number(a.longitud))
-                        : Number.POSITIVE_INFINITY;
-                    const db = Number.isFinite(Number(b.latitud))
-                        ? distanceKm(userCoords.latitude, userCoords.longitude, Number(b.latitud), Number(b.longitud))
-                        : Number.POSITIVE_INFINITY;
-                    if (nearbyKm != null || Math.abs(da - db) > 0.05) {
-                        if (da !== db) return da - db;
-                    }
-                }
-                return compareFeedAffinity(a, b, feedTaste, friendIds);
-            });
+            return isPlanActiveForFeed(p)
+                && canSeePlanInFeed(p, {
+                    userId: currentUserId,
+                    friendIds,
+                    membershipPlanIds,
+                    invitedPlanIds,
+                    isOwner: secretOwnerUx,
+                })
+                && (secretOwnerUx || !isSoloChicasPlan(p) || currentUserGenero === 'femenino')
+                && categoryOk
+                && subcategoryOk
+                && distanceOk
+                && planMatchesSearch(p, search, searchExpanded)
+                && matchesDate(p);
+        });
     }, [
         plans,
         currentUserId,
@@ -902,39 +1118,226 @@ export default function HomeScreen() {
         membershipMap,
         friendIds,
         invitedPlanIds,
-        isOwner,
+        secretOwnerUx,
         selectedCategories,
         selectedSubcategories,
-        selectedProvinces,
         search,
         searchExpanded,
         matchesDate,
-        feedTaste,
         nearbyKm,
         userCoords,
+    ]);
+
+    const feedFlatten = search.trim().length > 0
+        || selectedCategories.length > 0
+        || selectedSubcategories.length > 0;
+
+    const feedRows = useMemo<FeedRow[]>(() => buildFeedRows({
+        plans: filteredPlans,
+        currentUserId,
+        membershipMap,
+        friendIds,
+        coincidedIds,
+        taste: feedTaste,
+        coords: userCoords,
+        flatten: feedFlatten,
+        deferMineIds: mineSortEpoch >= 0 ? deferMineSortIdsRef.current : undefined,
+    }), [
+        filteredPlans,
+        currentUserId,
+        membershipMap,
+        friendIds,
+        coincidedIds,
+        feedTaste,
+        userCoords,
+        feedFlatten,
         mineSortEpoch,
     ]);
 
-    /** Planes con coordenadas válidas en Europa para el mapa de zona. */
-    const zoneMapPlans = useMemo(() => {
-        const out: typeof filteredPlans = [];
-        for (const p of filteredPlans) {
+    const savedPlanIds = useMemo(() => new Set(savedPlans), [savedPlans]);
+
+    const feedRowsUi = useMemo<FeedRow[]>(() => {
+        return feedRows.map((row) => {
+            if (row.kind !== 'plan') return row;
+            const pid = String(row.plan.id);
+            return {
+                ...row,
+                membership: membershipMap[pid] || 'none',
+                isSaved: savedPlanIds.has(pid),
+                joining: joiningPlanId === pid,
+                distanceLabel: planDistanceLabel(row.plan),
+            };
+        });
+    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel]);
+
+    const feedRowsRef = useRef(feedRowsUi);
+    feedRowsRef.current = feedRowsUi;
+    const membershipMapRef = useRef(membershipMap);
+    membershipMapRef.current = membershipMap;
+    const prefetchedAheadRef = useRef(new Set<string>());
+
+    const openPlanDetail = useCallback(
+        (planId: string) => {
+            const found = plansRef.current.find((p) => String(p.id) === String(planId));
+            const mid = String(planId);
+            if (found) {
+                const hostId = String(found.creador_id || found.host?.id || '');
+                if (hostId) {
+                    seedUserProfilePeek({
+                        id: hostId,
+                        nombre: found.host?.nombre,
+                        avatar_url: found.host?.avatar_url,
+                        es_organizador: !!found.es_organizador,
+                    });
+                    prefetchUserProfile(hostId);
+                }
+                seedPlanDetailFromFeed(found, {
+                    membership: (membershipMapRef.current[mid] || 'none') as Membership,
+                    friendIds: [...friendIds],
+                    coincidedIds: [...coincidedIds],
+                    currentUserId,
+                    currentUserGenero,
+                    isSaved: savedPlanIds.has(mid),
+                });
+            }
+            prefetchPlanDetail(mid);
+            router.push({ pathname: '/plan/[id]', params: { id: planId } });
+        },
+        [router, friendIds, coincidedIds, currentUserId, currentUserGenero, savedPlanIds],
+    );
+
+    const openProfile = useCallback(
+        (userId: string) => {
+            if (requireAccount({ type: 'view-profile', userId })) return;
+            const fromPlan = plansRef.current.find(
+                (p) =>
+                    String(p.creador_id) === String(userId) ||
+                    (Array.isArray(p.participantsList) &&
+                        p.participantsList.some((x: { id?: string }) => String(x.id) === String(userId))),
+            );
+            const host = fromPlan?.host;
+            const person =
+                (host && String(host.id) === String(userId) ? host : null) ||
+                (Array.isArray(fromPlan?.participantsList)
+                    ? fromPlan.participantsList.find((x: { id?: string }) => String(x.id) === String(userId))
+                    : null);
+            seedUserProfilePeek({
+                id: userId,
+                nombre: person?.nombre,
+                avatar_url: person?.avatar_url,
+                es_organizador: !!fromPlan?.es_organizador && String(fromPlan?.creador_id) === String(userId),
+                friendStatus: friendIds.has(userId) ? 'friends' : undefined,
+            });
+            prefetchUserProfile(userId);
+            router.push({
+                pathname: '/user-profile/[id]',
+                params: { id: userId, isFriend: friendIds.has(userId) ? '1' : '0' },
+            });
+        },
+        [requireAccount, router, friendIds],
+    );
+
+    const joinHandlerRef = useRef(handleJoin);
+    joinHandlerRef.current = handleJoin;
+    const leaveHandlerRef = useRef(handleLeave);
+    leaveHandlerRef.current = handleLeave;
+    const saveHandlerRef = useRef(handleSave);
+    saveHandlerRef.current = handleSave;
+    const deleteHandlerRef = useRef(handleDeletePlan);
+    deleteHandlerRef.current = handleDeletePlan;
+    const editHandlerRef = useRef(handleEditPlan);
+    editHandlerRef.current = handleEditPlan;
+    const onJoinStable = useCallback((id: string) => { void joinHandlerRef.current(id); }, []);
+    const onLeaveStable = useCallback((id: string) => { void leaveHandlerRef.current(id); }, []);
+    const onSaveStable = useCallback((id: string) => { void saveHandlerRef.current(id); }, []);
+    const onDeleteStable = useCallback((id: string) => { void deleteHandlerRef.current(id); }, []);
+    const onEditStable = useCallback((id: string) => { editHandlerRef.current(id); }, []);
+
+    const renderPlanItem = useCallback(
+        ({ item, index }: { item: FeedRow; index: number }) => {
+            if (item.kind === 'header') {
+                return <Text style={styles.feedSectionTitle}>{t(item.titleKey)}</Text>;
+            }
+            const plan = item.plan;
+            return (
+                <PlanCard
+                    item={plan}
+                    index={index}
+                    currentUserId={currentUserId}
+                    userGenero={currentUserGenero}
+                    membership={(item.membership || 'none') as Membership}
+                    isSaved={item.isSaved === true}
+                    friendIds={friendIds}
+                    coincidedIds={coincidedIds}
+                    feedTaste={feedTaste}
+                    isOwner={secretOwnerUx}
+                    distanceLabel={item.distanceLabel}
+                    viewerIsOrganizer={isOrganizerAccount}
+                    onJoin={onJoinStable}
+                    joining={item.joining === true}
+                    onLeave={onLeaveStable}
+                    onDelete={onDeleteStable}
+                    onEdit={onEditStable}
+                    onToggleSave={onSaveStable}
+                    onOpenDetail={openPlanDetail}
+                    onParticipantsChanged={() => void fetchDataRef.current()}
+                    onOpenProfile={openProfile}
+                    router={router}
+                />
+            );
+        },
+        [
+            t,
+            styles.feedSectionTitle,
+            currentUserId,
+            currentUserGenero,
+            friendIds,
+            coincidedIds,
+            feedTaste,
+            secretOwnerUx,
+            isOrganizerAccount,
+            onJoinStable,
+            onLeaveStable,
+            onDeleteStable,
+            onEditStable,
+            onSaveStable,
+            openPlanDetail,
+            openProfile,
+            router,
+        ],
+    );
+
+    const nearestOutsideNearby = useMemo(() => {
+        if (nearbyKm == null || !userCoords || filteredPlans.length > 0) return null;
+        const membershipPlanIds = new Set(Object.keys(membershipMap));
+        let best: { plan: any; km: number } | null = null;
+        for (const p of plans) {
+            if (!isPlanActiveForFeed(p)) continue;
+            if (!canSeePlanInFeed(p, {
+                userId: currentUserId,
+                friendIds,
+                membershipPlanIds,
+                invitedPlanIds,
+                isOwner: secretOwnerUx,
+            })) continue;
             const lat = Number(p.latitud);
             const lng = Number(p.longitud);
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-            if (Math.abs(lat) < 0.01 && Math.abs(lng) < 0.01) continue;
-            if (!isLocationInEurope(lat, lng)) continue;
-            out.push(p);
-            // Demasiados Marker nativos en Expo Go suelen crashear al tocar.
-            if (out.length >= 80) break;
+            const km = distanceKm(userCoords.latitude, userCoords.longitude, lat, lng);
+            if (!best || km < best.km) best = { plan: p, km };
         }
-        return out;
-    }, [filteredPlans]);
-
-    const filteredPlansRef = useRef(filteredPlans);
-    filteredPlansRef.current = filteredPlans;
-    const membershipMapRef = useRef(membershipMap);
-    membershipMapRef.current = membershipMap;
+        return best;
+    }, [
+        nearbyKm,
+        userCoords,
+        filteredPlans.length,
+        plans,
+        membershipMap,
+        currentUserId,
+        friendIds,
+        invitedPlanIds,
+        secretOwnerUx,
+    ]);
 
     const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
         const indices = viewableItems
@@ -942,81 +1345,60 @@ export default function HomeScreen() {
             .filter((i): i is number => typeof i === 'number' && i >= 0);
         if (indices.length === 0) return;
         const maxIdx = Math.max(...indices);
-        const next = filteredPlansRef.current[maxIdx + 1];
-        if (!next?.id) return;
-        const mid = String(next.id);
-        seedPlanDetailFromFeed(next, {
-            membership: membershipMapRef.current[mid] || 'none',
-        });
-        prefetchPlanDetail(mid);
+        const rows = feedRowsRef.current;
+        let seeded = 0;
+        // Visible: calentar host de las tarjetas en pantalla.
+        for (const v of viewableItems) {
+            const row = typeof v.index === 'number' ? rows[v.index] : null;
+            if (!row || row.kind !== 'plan' || !row.plan) continue;
+            const host =
+                row.plan.host ||
+                (Array.isArray(row.plan.participantsList)
+                    ? row.plan.participantsList.find((p: { isCreator?: boolean }) => p.isCreator)
+                    : null);
+            if (host?.id) {
+                seedUserProfilePeek({
+                    id: host.id,
+                    nombre: host.nombre,
+                    avatar_url: host.avatar_url,
+                    es_organizador: !!row.plan.es_organizador,
+                });
+                prefetchUserProfile(host.id);
+            }
+        }
+        for (let i = maxIdx + 1; i < rows.length && seeded < 4; i++) {
+            const row = rows[i];
+            if (row.kind !== 'plan' || !row.plan?.id) continue;
+            const mid = String(row.plan.id);
+            if (prefetchedAheadRef.current.has(mid)) continue;
+            prefetchedAheadRef.current.add(mid);
+            seedPlanDetailFromFeed(row.plan, {
+                membership: membershipMapRef.current[mid] || 'none',
+                friendIds: [...(friendIdsRef.current ?? [])],
+                coincidedIds: [...(coincidedIdsRef.current ?? [])],
+                currentUserId: currentUserIdRef.current,
+            });
+            prefetchPlanDetail(mid);
+            const host =
+                row.plan.host ||
+                (Array.isArray(row.plan.participantsList)
+                    ? row.plan.participantsList.find((p: { isCreator?: boolean }) => p.isCreator)
+                    : null);
+            if (host?.id) prefetchUserProfile(host.id);
+            seeded += 1;
+        }
     }).current;
 
     const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 35, minimumViewTime: 120 }).current;
 
-    const mapSelectedPlan = useMemo(
-        () => zoneMapPlans.find((p) => String(p.id) === String(mapSelectedId)) ?? null,
-        [zoneMapPlans, mapSelectedId],
-    );
-
-    const selectMapPlan = useCallback((planId: string) => {
-        // Diferir el setState fuera del callback nativo del Marker (evita crash en Expo Go).
-        requestAnimationFrame(() => {
-            setMapSelectedId(planId);
-        });
-    }, []);
-
-    const openPlanFromMap = useCallback((plan: (typeof zoneMapPlans)[number]) => {
-        const planId = String(plan.id);
-        try {
-            seedPlanDetailFromFeed(plan, {
-                membership: membershipMapRef.current[planId] || 'none',
-            });
-            prefetchPlanDetail(planId);
-        } catch {
-            /* ignore seed errors */
-        }
-        // Cerrar el mapa ANTES de navegar: MapView + Modal + push crashea a menudo en Expo Go.
-        setShowZoneModal(false);
-        setMapSelectedId(null);
-        InteractionManager.runAfterInteractions(() => {
-            setTimeout(() => {
-                router.push({
-                    pathname: '/plan/[id]',
-                    params: { id: planId },
-                });
-            }, 80);
-        });
-    }, [router]);
-
-    const scrollToPlanInFeed = (planId: string) => {
-        const index = filteredPlans.findIndex((p) => String(p.id) === String(planId));
-        setShowZoneModal(false);
-        setMapSelectedId(null);
-        if (index < 0) return;
-
-        InteractionManager.runAfterInteractions(() => {
-            requestAnimationFrame(() => {
-                try {
-                    listRef.current?.scrollToIndex({
-                        index,
-                        animated: true,
-                        viewPosition: 0.12,
-                    });
-                } catch {
-                    listRef.current?.scrollToOffset({
-                        offset: Math.max(0, index * 320),
-                        animated: true,
-                    });
-                }
-            });
-        });
-    };
+    useEffect(() => {
+        if (nearbyKm === 10) setNearbyKm(null);
+    }, [nearbyKm]);
 
     const hasSheetFilters =
         selectedCategories.length > 0
         || selectedSubcategories.length > 0
         || dateFilter !== 'all'
-        || selectedProvinces.length > 0
         || nearbyKm != null;
 
     const subcategoryOptions = useMemo(() => {
@@ -1054,43 +1436,64 @@ export default function HomeScreen() {
         setSelectedCategories([]);
         setSelectedSubcategories([]);
         setDateFilter('all');
-        setSelectedProvinces([]);
         setNearbyKm(null);
     };
 
     return (
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <View style={{ flex: 1 }}>
-            <StatusBar barStyle="dark-content" />
+            <View style={{ flex: 1, backgroundColor: colors.backgroundAlt }}>
             <View style={styles.container}>
-            <View style={styles.searchWrapper}>
-                <View style={styles.searchContainer}>
+            <View
+                style={[
+                    styles.searchWrapper,
+                    {
+                        paddingTop: chrome.headerTop,
+                        height: chrome.headerTop + chrome.headerRowHeight,
+                        paddingRight: chrome.headerRight,
+                    },
+                ]}
+            >
+                <View style={[styles.searchContainer, { height: chrome.headerRowHeight }]}>
                     <Ionicons name="search" size={20} color={PRIMARY_DARK} />
-                    <TextInput placeholder={t('feed.searchPlaceholder')} placeholderTextColor={theme.colors.textSubtle} style={styles.searchInput} value={search} onChangeText={setSearch} />
+                    <TextInput
+                        placeholder={t('feed.searchPlaceholder')}
+                        placeholderTextColor={colors.textSubtle}
+                        style={styles.searchInput}
+                        value={search}
+                        onChangeText={setSearch}
+                        keyboardAppearance={scheme}
+                        autoCorrect={false}
+                        autoCapitalize="none"
+                    />
                 </View>
             </View>
 
-            <View style={styles.quickFiltersRow}>
-                <TouchableOpacity
-                    style={[styles.quickFilterPill, styles.quickFilterBox]}
-                    onPress={() => setShowZoneModal(true)}
-                >
-                    <Ionicons name="map" size={15} color={PRIMARY_DARK} />
-                    <Text style={styles.quickFilterText} numberOfLines={1}>
-                        {t('feed.map')}
-                    </Text>
-                </TouchableOpacity>
+            <Animated.View style={feedChromeStyle}>
+                <View style={styles.quickFiltersRow}>
+                    <PressScale
+                        style={[styles.quickFilterPill, styles.quickFilterBox]}
+                        onPress={() => requestOpenFeedMap()}
+                        pressedScale={0.96}
+                        haptic={false}
+                    >
+                        <Ionicons name="map" size={15} color={PRIMARY_DARK} />
+                        <Text style={styles.quickFilterText} numberOfLines={1}>
+                            {t('feed.map')}
+                        </Text>
+                    </PressScale>
 
-                <TouchableOpacity
-                    style={[styles.quickFilterPill, styles.quickFilterBox, hasSheetFilters ? styles.quickFilterActive : null]}
-                    onPress={() => setShowFiltersModal(true)}
-                >
-                    <Ionicons name="options" size={15} color={hasSheetFilters ? theme.colors.surface : PRIMARY_DARK} />
-                    <Text style={[styles.quickFilterText, hasSheetFilters ? { color: theme.colors.surface } : null]} numberOfLines={1}>
-                        {t('feed.filters')}
-                    </Text>
-                </TouchableOpacity>
-            </View>
+                    <PressScale
+                        style={[styles.quickFilterPill, styles.quickFilterBox, hasSheetFilters ? styles.quickFilterActive : null]}
+                        onPress={() => setShowFiltersModal(true)}
+                        pressedScale={0.96}
+                        haptic={false}
+                    >
+                        <Ionicons name="options" size={15} color={hasSheetFilters ? theme.colors.surface : PRIMARY_DARK} />
+                        <Text style={[styles.quickFilterText, hasSheetFilters ? { color: theme.colors.surface } : null]} numberOfLines={1}>
+                            {t('feed.filters')}
+                        </Text>
+                    </PressScale>
+                </View>
+            </Animated.View>
 
             {showFirstRun ? (
                 <View style={styles.firstRunBanner}>
@@ -1099,7 +1502,7 @@ export default function HomeScreen() {
                     <View style={styles.firstRunActions}>
                         <TouchableOpacity
                             style={styles.firstRunPrimary}
-                            onPress={() => void enableNearby(25)}
+                            onPress={() => setShowFirstRun(false)}
                             activeOpacity={0.9}
                         >
                             <Text style={styles.firstRunPrimaryText}>{t('feed.firstRunNearby')}</Text>
@@ -1133,24 +1536,36 @@ export default function HomeScreen() {
                 <FlashList
                     ref={listRef}
                     style={{ flex: 1 }}
-                    data={filteredPlans}
+                    data={feedRowsUi}
                     keyExtractor={(item) => item.id}
-                    extraData={{ membershipMap, savedPlans, friendIds, coincidedIds, nearbyKm, userCoords }}
+                    getItemType={(item) => item.kind}
+                    extraData={joiningPlanId}
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
-                    onScroll={onScroll}
+                    nestedScrollEnabled
+                    keyboardDismissMode="on-drag"
+                    keyboardShouldPersistTaps="handled"
+                    onLayout={onListLayout}
+                    onScroll={onFeedScroll}
                     scrollEventThrottle={scrollEventThrottle}
                     drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     ListEmptyComponent={
                         !loading ? (
                             <EmptySearch
                                 loadError={loadError}
+                                nearbyKm={nearbyKm}
+                                nearestDistanceLabel={
+                                    nearestOutsideNearby
+                                        ? formatDistanceKm(nearestOutsideNearby.km, lang)
+                                        : undefined
+                                }
                                 onRetry={() => void fetchData({ refresh: true })}
                                 onClear={() => {
                                     setSearch('');
                                     clearAllFilters();
                                     setLoadError(false);
                                 }}
+                                onWidenNearby={() => setNearbyKm(null)}
                                 onCreate={() => router.push('/create-plan')}
                             />
                         ) : null
@@ -1165,6 +1580,19 @@ export default function HomeScreen() {
                     renderItem={renderPlanItem}
                     onViewableItemsChanged={onViewableItemsChanged}
                     viewabilityConfig={viewabilityConfig}
+                    onEndReached={() => {
+                        void loadMoreFeed();
+                    }}
+                    onEndReachedThreshold={0.55}
+                    ListFooterComponent={
+                        loadingMore ? (
+                            <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                                <ActivityIndicator color={PRIMARY_DARK} />
+                            </View>
+                        ) : (
+                            <View style={{ height: 8 }} />
+                        )
+                    }
                 />
                 {loading && !refreshing && plans.length === 0 ? (
                     <View style={styles.listLoadingOverlay} pointerEvents="none">
@@ -1179,7 +1607,6 @@ export default function HomeScreen() {
                 animationType="fade"
                 onRequestClose={() => {
                     setShowFiltersModal(false);
-                    setShowProvincePicker(false);
                 }}
             >
                 <View style={styles.modalOverlay}>
@@ -1187,19 +1614,21 @@ export default function HomeScreen() {
                         style={styles.modalBackdrop}
                         onPress={() => {
                             setShowFiltersModal(false);
-                            setShowProvincePicker(false);
                         }}
                     />
-                    <View style={styles.filtersSheet}>
+                    <View style={[styles.filtersSheet, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
+                        <View style={styles.filtersGrabber} />
                         <View style={styles.filtersHeader}>
-                            <Text style={styles.modalTitle}>{t('feed.filters')}</Text>
+                            <View>
+                                <Text style={styles.modalTitle}>{t('feed.filters')}</Text>
+                                <Text style={styles.filtersSubtitle}>{t('feed.filtersHint')}</Text>
+                            </View>
                             {hasSheetFilters ? (
                                 <TouchableOpacity
                                     onPress={() => {
                                         setSelectedCategories([]);
                                         setSelectedSubcategories([]);
                                         setDateFilter('all');
-                                        setSelectedProvinces([]);
                                         setNearbyKm(null);
                                     }}
                                     hitSlop={8}
@@ -1219,6 +1648,7 @@ export default function HomeScreen() {
                             alwaysBounceVertical
                             scrollEventThrottle={16}
                         >
+                            <View style={styles.filterSectionCard}>
                             <Text style={styles.filterSectionLabel}>{t('feed.category')}</Text>
                             <View style={styles.chipWrap}>
                                 <TouchableOpacity
@@ -1231,12 +1661,22 @@ export default function HomeScreen() {
                                 </TouchableOpacity>
                                 {MAIN_CATEGORY_IDS.map((cat) => {
                                     const active = selectedCategories.includes(cat);
+                                    const accent = MAIN_CATEGORY_COLORS[cat];
                                     return (
                                         <TouchableOpacity
                                             key={cat}
-                                            style={[styles.filterChip, active && styles.filterChipActive]}
+                                            style={[
+                                                styles.filterChip,
+                                                styles.filterChipRow,
+                                                active && { backgroundColor: accent, borderColor: accent },
+                                            ]}
                                             onPress={() => toggleCategory(cat)}
                                         >
+                                            <Ionicons
+                                                name={MAIN_CATEGORY_ICONS[cat] as keyof typeof Ionicons.glyphMap}
+                                                size={15}
+                                                color={active ? '#FFF' : accent}
+                                            />
                                             <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
                                                 {t(`cat.main.${cat}`)}
                                             </Text>
@@ -1244,7 +1684,9 @@ export default function HomeScreen() {
                                     );
                                 })}
                             </View>
+                            </View>
 
+                            <View style={styles.filterSectionCard}>
                             <Text style={styles.filterSectionLabel}>{t('feed.subcategory')}</Text>
                             {selectedCategories.length === 0 ? (
                                 <Text style={styles.filterHint}>{t('feed.pickCategoryFirst')}</Text>
@@ -1274,87 +1716,30 @@ export default function HomeScreen() {
                                     })}
                                 </View>
                             )}
+                            </View>
 
+                            <View style={styles.filterSectionCard}>
                             <Text style={styles.filterSectionLabel}>{t('feed.date')}</Text>
-                            <View style={styles.chipWrap}>
+                            <View style={styles.dateFilterRow}>
                                 {DATE_KEYS.map((key) => {
                                     const active = dateFilter === key;
                                     return (
                                         <TouchableOpacity
                                             key={key}
-                                            style={[styles.filterChip, active && styles.filterChipActive]}
+                                            style={[styles.dateFilterChip, active && styles.dateFilterChipActive]}
                                             onPress={() => setDateFilter(key)}
                                         >
-                                            <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+                                            <Text style={[styles.dateFilterChipText, active && styles.dateFilterChipTextActive]}>
                                                 {t('date.' + key)}
                                             </Text>
                                         </TouchableOpacity>
                                     );
                                 })}
                             </View>
+                            </View>
 
-                            <Text style={styles.filterSectionLabel}>{t('feed.province')}</Text>
-                            {!showProvincePicker ? (
-                                <TouchableOpacity
-                                    style={styles.provinceToggle}
-                                    onPress={() => setShowProvincePicker(true)}
-                                    activeOpacity={0.75}
-                                >
-                                    <View style={styles.provinceToggleTextWrap}>
-                                        <Text style={styles.provinceToggleTitle}>
-                                            {selectedProvinces.length === 0
-                                                ? t('feed.chooseProvinces')
-                                                : selectedProvinces.length === 1
-                                                    ? selectedProvinces[0]
-                                                    : t('feed.provincesSelected', { n: selectedProvinces.length })}
-                                        </Text>
-                                        {selectedProvinces.length > 1 ? (
-                                            <Text style={styles.provinceToggleHint} numberOfLines={1}>
-                                                {selectedProvinces.join(', ')}
-                                            </Text>
-                                        ) : null}
-                                    </View>
-                                    <Ionicons name="chevron-down" size={18} color={PRIMARY_DARK} />
-                                </TouchableOpacity>
-                            ) : (
-                                <View>
-                                    <TouchableOpacity
-                                        style={styles.provinceToggle}
-                                        onPress={() => setShowProvincePicker(false)}
-                                        activeOpacity={0.75}
-                                    >
-                                        <Text style={styles.provinceToggleTitle}>{t('feed.hideProvinces')}</Text>
-                                        <Ionicons name="chevron-up" size={18} color={PRIMARY_DARK} />
-                                    </TouchableOpacity>
-                                    <View style={styles.chipWrap}>
-                                        <TouchableOpacity
-                                            style={[styles.filterChip, selectedProvinces.length === 0 && styles.filterChipActive]}
-                                            onPress={() => setSelectedProvinces([])}
-                                        >
-                                            <Text style={[styles.filterChipText, selectedProvinces.length === 0 && styles.filterChipTextActive]}>
-                                                {t('feed.allProvinces')}
-                                            </Text>
-                                        </TouchableOpacity>
-                                        {SPAIN_PROVINCES.map((prov) => {
-                                            const active = selectedProvinces.includes(prov);
-                                            return (
-                                                <TouchableOpacity
-                                                    key={prov}
-                                                    style={[styles.filterChip, active && styles.filterChipActive]}
-                                                    onPress={() => setSelectedProvinces((prev) => toggleInList(prev, prov))}
-                                                >
-                                                    <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
-                                                        {prov}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            );
-                                        })}
-                                    </View>
-                                </View>
-                            )}
-
+                            <View style={styles.filterSectionCard}>
                             <Text style={styles.filterSectionLabel}>{t('feed.nearby')}</Text>
-                            <Text style={styles.filterHint}>{t('feed.nearbyPickRadius')}</Text>
                             <View style={styles.chipWrap}>
                                 <TouchableOpacity
                                     style={[styles.filterChip, nearbyKm == null && styles.filterChipActive]}
@@ -1364,20 +1749,15 @@ export default function HomeScreen() {
                                         {t('feed.nearbyAny')}
                                     </Text>
                                 </TouchableOpacity>
-                                {([5, 10, 25] as const).map((n) => {
-                                    const active = nearbyKm === n;
-                                    return (
-                                        <TouchableOpacity
-                                            key={n}
-                                            style={[styles.filterChip, active && styles.filterChipActive]}
-                                            onPress={() => void enableNearby(n)}
-                                        >
-                                            <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
-                                                {t('feed.nearbyKm', { n })}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
+                                <TouchableOpacity
+                                    style={[styles.filterChip, nearbyKm === 4 && styles.filterChipActive]}
+                                    onPress={() => void enableNearby(4)}
+                                >
+                                    <Text style={[styles.filterChipText, nearbyKm === 4 && styles.filterChipTextActive]}>
+                                        {t('feed.nearbyNear')}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
                             </View>
                         </ScrollView>
 
@@ -1385,7 +1765,6 @@ export default function HomeScreen() {
                             style={styles.applyFiltersBtn}
                             onPress={() => {
                                 setShowFiltersModal(false);
-                                setShowProvincePicker(false);
                             }}
                         >
                             <Text style={styles.applyFiltersBtnText}>{t('feed.applyFilters')}</Text>
@@ -1394,136 +1773,7 @@ export default function HomeScreen() {
                 </View>
             </Modal>
 
-            <Modal
-                visible={showZoneModal}
-                animationType="slide"
-                onRequestClose={() => {
-                    setShowZoneModal(false);
-                    setMapSelectedId(null);
-                }}
-            >
-                <View style={styles.mapModalContainer}>
-                    {showZoneModal ? (
-                    <NexoMapView
-                        ref={zoneMapRef}
-                        style={StyleSheet.absoluteFill}
-                        loadingEnabled
-                        showsUserLocation={!!userCoords}
-                        moveOnMarkerPress={false}
-                        toolbarEnabled={false}
-                        pitchEnabled={false}
-                        rotateEnabled={false}
-                        initialRegion={{
-                            latitude: Number(
-                                userCoords?.latitude
-                                    ?? zoneMapPlans[0]?.latitud
-                                    ?? 40.4168,
-                            ),
-                            longitude: Number(
-                                userCoords?.longitude
-                                    ?? zoneMapPlans[0]?.longitud
-                                    ?? -3.7038,
-                            ),
-                            latitudeDelta: nearbyKm != null ? 0.35 : 0.22,
-                            longitudeDelta: nearbyKm != null ? 0.35 : 0.22,
-                        }}
-                        onMapReady={() => {
-                            if (zoneMapPlans.length === 0) return;
-                            const coords = zoneMapPlans
-                                .map((p) => ({
-                                    latitude: Number(p.latitud),
-                                    longitude: Number(p.longitud),
-                                }))
-                                .filter(
-                                    (c) => Number.isFinite(c.latitude) && Number.isFinite(c.longitude),
-                                );
-                            if (coords.length === 0) return;
-                            try {
-                                zoneMapRef.current?.fitToCoordinates(coords, {
-                                    edgePadding: { top: 90, right: 48, bottom: 160, left: 48 },
-                                    animated: false,
-                                });
-                            } catch {
-                                /* fitToCoordinates a veces falla en Expo Go */
-                            }
-                        }}
-                    >
-                        {zoneMapPlans.map((p) => {
-                            const lat = Number(p.latitud);
-                            const lng = Number(p.longitud);
-                            return (
-                                <Marker
-                                    key={String(p.id)}
-                                    identifier={String(p.id)}
-                                    coordinate={{ latitude: lat, longitude: lng }}
-                                    // Color fijo: mutar pinColor al tocar remonta el Marker nativo y crashea en Expo Go.
-                                    pinColor={theme.colors.primary}
-                                    tracksViewChanges={false}
-                                    stopPropagation
-                                    onPress={(e) => {
-                                        e?.stopPropagation?.();
-                                        selectMapPlan(String(p.id));
-                                    }}
-                                />
-                            );
-                        })}
-                    </NexoMapView>
-                    ) : null}
-
-                    <View style={styles.mapModalHeader}>
-                        <TouchableOpacity
-                            style={styles.mapCloseBtn}
-                            onPress={() => {
-                                setShowZoneModal(false);
-                                setMapSelectedId(null);
-                            }}
-                        >
-                            <Ionicons name="chevron-back" size={24} color={INK} />
-                        </TouchableOpacity>
-                    </View>
-
-                    {zoneMapPlans.length === 0 ? (
-                        <View style={styles.mapModalFooter}>
-                            <Text style={styles.mapFooterHint}>{t('feed.filterZoneEmpty')}</Text>
-                        </View>
-                    ) : mapSelectedPlan ? (
-                        <View style={styles.mapPreviewCard} pointerEvents="box-none">
-                            <PlanImage
-                                source={resolvePlanImageSource(mapSelectedPlan.imagen_url)}
-                                style={styles.mapPreviewImage}
-                                recyclingKey={String(mapSelectedPlan.id)}
-                            />
-                            <View style={styles.mapPreviewBody}>
-                                <Text style={styles.mapPreviewTitle} numberOfLines={2}>
-                                    {mapSelectedPlan.titulo}
-                                </Text>
-                                <Text style={styles.mapPreviewMeta} numberOfLines={1}>
-                                    {mapSelectedPlan.nombre_ubicacion || t('card.location')}
-                                    {planDistanceLabel(mapSelectedPlan)
-                                        ? ` · ${planDistanceLabel(mapSelectedPlan)}`
-                                        : ''}
-                                </Text>
-                                <View style={styles.mapPreviewActions}>
-                                    <TouchableOpacity
-                                        style={styles.mapPreviewSecondary}
-                                        onPress={() => scrollToPlanInFeed(mapSelectedPlan.id)}
-                                    >
-                                        <Text style={styles.mapPreviewSecondaryText}>{t('feed.mapShowInList')}</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={styles.mapPreviewPrimary}
-                                        onPress={() => openPlanFromMap(mapSelectedPlan)}
-                                    >
-                                        <Text style={styles.mapPreviewPrimaryText}>{t('feed.mapOpenPlan')}</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-                        </View>
-                    ) : null}
-                </View>
-            </Modal>
             </View>
             </View>
-        </TouchableWithoutFeedback>
     );
 }

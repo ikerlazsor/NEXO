@@ -7,6 +7,7 @@ export async function signOutAndClearLocalData(
   options?: SignOutOptions,
 ): Promise<{ error: string | null }> {
   const { error } = await supabase.auth.signOut(options);
-  await clearLocalUserData();
+  // Misma cuenta en este dispositivo: conservar lecturas de chat y valoraciones cerradas.
+  await clearLocalUserData({ preserveSessionMemory: true });
   return { error: error?.message ?? null };
 }

@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { ResizeMode, Video } from "expo-av";
 import { Image, Modal, TouchableOpacity, View } from "react-native";
-import { styles } from "./chatStyles";
+import { createChatStyles } from "./chatStyles";
+import { useThemedStyles } from "../../lib/appTheme";
 
 export function ChatMediaModals({
   imageUrl,
@@ -14,6 +15,7 @@ export function ChatMediaModals({
   onCloseImage: () => void;
   onCloseVideo: () => void;
 }) {
+  const styles = useThemedStyles(createChatStyles);
   return (
     <>
       <Modal

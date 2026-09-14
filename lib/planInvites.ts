@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { canJoinMorePlans } from './planLimits';
-import { invalidateProfileNotificationCount } from './notifications';
+import { invalidateProfileNotificationCount } from './profileNotificationBus';
+import { isUserOrganizer } from './organizer';
 
 export type PlanInviteType = 'plan' | 'grupo';
 
@@ -73,6 +74,8 @@ export async function sendPlanInvite(
 
     if (pending) return { error: 'already_invited' };
 
+    if (await isUserOrganizer(invitadoId)) return { error: 'organizer_cannot_join' };
+
     const { error } = await supabase.from('invitaciones_planes').insert({
         plan_id: planId,
         invitador_id: invitadorId,
@@ -90,6 +93,26 @@ export async function sendPlanInvite(
     return { error: error?.message ?? null };
 }
 
+/** Quita invitaciones pendientes cuando el usuario ya está en el plan (p. ej. se unió desde el feed). */
+export async function clearPendingPlanInvitesForMember(
+    planId: string,
+    userId: string,
+): Promise<void> {
+    const { noteFeedInviteCleared } = await import('./feedReload');
+    noteFeedInviteCleared(planId);
+    const { cacheInvalidate } = await import('./ttlCache');
+    const { screenCacheKey } = await import('./screenCaches');
+    cacheInvalidate(screenCacheKey.friends(userId));
+
+    const { error } = await supabase
+        .from('invitaciones_planes')
+        .delete()
+        .eq('plan_id', planId)
+        .eq('invitado_id', userId)
+        .eq('estado', 'pendiente');
+    if (!error) invalidateProfileNotificationCount(userId);
+}
+
 export async function getIncomingPlanInvites(userId: string): Promise<PlanInvite[]> {
     const { data, error } = await supabase
         .from('invitaciones_planes')
@@ -100,28 +123,75 @@ export async function getIncomingPlanInvites(userId: string): Promise<PlanInvite
 
     if (error) throw error;
 
-    return (data ?? []).map((row: any) => ({
-        id: row.id,
-        plan_id: row.plan_id,
-        invitador_id: row.invitador_id,
-        invitado_id: row.invitado_id,
-        tipo: row.tipo,
-        estado: row.estado,
-        creado_en: row.creado_en,
-        plan: firstRow(row.planes),
-        invitador: firstRow(row.invitador),
-    }));
+    const rows = data ?? [];
+    if (!rows.length) return [];
+
+    const planIds = [...new Set(rows.map((r: any) => r.plan_id as string))];
+    const { data: memberRows } = await supabase
+        .from('participantes')
+        .select('plan_id, estado')
+        .eq('usuario_id', userId)
+        .in('plan_id', planIds)
+        .in('estado', ['aceptado', 'pendiente', 'lista_espera']);
+
+    const alreadyIn = new Set((memberRows ?? []).map((r) => r.plan_id as string));
+    if (alreadyIn.size > 0) {
+        void supabase
+            .from('invitaciones_planes')
+            .delete()
+            .eq('invitado_id', userId)
+            .eq('estado', 'pendiente')
+            .in('plan_id', [...alreadyIn])
+            .then(({ error: delErr }) => {
+                if (!delErr) invalidateProfileNotificationCount(userId);
+            });
+    }
+
+    return rows
+        .filter((row: any) => !alreadyIn.has(row.plan_id as string))
+        .map((row: any) => ({
+            id: row.id,
+            plan_id: row.plan_id,
+            invitador_id: row.invitador_id,
+            invitado_id: row.invitado_id,
+            tipo: row.tipo,
+            estado: row.estado,
+            creado_en: row.creado_en,
+            plan: firstRow(row.planes),
+            invitador: firstRow(row.invitador),
+        }));
 }
 
 export async function acceptPlanInvite(
     invite: PlanInvite,
     userId: string
-): Promise<{ error: string | null; chatId?: string; estado?: string; max?: number }> {
+): Promise<{ error: string | null; chatId?: string; estado?: string; max?: number; alreadyMember?: boolean }> {
     const plan = invite.plan;
     if (!plan) return { error: 'no_plan' };
+    if (await isUserOrganizer(userId)) return { error: 'organizer_cannot_join' };
+
+    const { data: existing } = await supabase
+        .from('participantes')
+        .select('id, estado')
+        .eq('plan_id', invite.plan_id)
+        .eq('usuario_id', userId)
+        .maybeSingle();
+
+    if (existing) {
+        await clearPendingPlanInvitesForMember(invite.plan_id, userId);
+        return {
+            error: null,
+            chatId: invite.plan_id,
+            estado: (existing.estado as string) || 'aceptado',
+            alreadyMember: true,
+        };
+    }
 
     const limitCheck = await canJoinMorePlans(userId, invite.plan_id);
-    if (!limitCheck.allowed) return { error: 'limit', max: limitCheck.max };
+    if (!limitCheck.allowed) {
+        if (limitCheck.reason === 'organizer') return { error: 'organizer_cannot_join' };
+        return { error: 'limit', max: limitCheck.max };
+    }
 
     const { count } = await supabase
         .from('participantes')
@@ -142,7 +212,14 @@ export async function acceptPlanInvite(
         estado,
     });
 
-    if (partError) return { error: partError.message };
+    if (partError) {
+        const msg = String(partError.message || '').toLowerCase();
+        if (msg.includes('duplicate') || msg.includes('unique') || msg.includes('already')) {
+            await clearPendingPlanInvitesForMember(invite.plan_id, userId);
+            return { error: null, chatId: invite.plan_id, estado, alreadyMember: true };
+        }
+        return { error: partError.message };
+    }
 
     await supabase.from('invitaciones_planes').update({ estado: 'aceptado' }).eq('id', invite.id);
 
@@ -150,7 +227,7 @@ export async function acceptPlanInvite(
     notifyPlanJoin(invite.plan_id, estado);
     invalidateProfileNotificationCount(userId);
 
-    return { error: null, chatId: invite.plan_id, estado };
+    return { error: null, chatId: invite.plan_id, estado, alreadyMember: false };
 }
 
 export async function rejectPlanInvite(inviteId: string): Promise<{ error: string | null }> {
@@ -170,13 +247,23 @@ export async function rejectPlanInvite(inviteId: string): Promise<{ error: strin
 }
 
 export async function countPendingPlanInvites(userId: string): Promise<number> {
-    const { count, error } = await supabase
+    const { data, error } = await supabase
         .from('invitaciones_planes')
-        .select('id', { count: 'exact', head: true })
+        .select('plan_id')
         .eq('invitado_id', userId)
         .eq('estado', 'pendiente');
-    if (error) return 0;
-    return count ?? 0;
+    if (error || !data?.length) return 0;
+
+    const planIds = [...new Set(data.map((r) => r.plan_id as string))];
+    const { data: memberRows } = await supabase
+        .from('participantes')
+        .select('plan_id')
+        .eq('usuario_id', userId)
+        .in('plan_id', planIds)
+        .in('estado', ['aceptado', 'pendiente', 'lista_espera']);
+
+    const alreadyIn = new Set((memberRows ?? []).map((r) => r.plan_id as string));
+    return data.filter((r) => !alreadyIn.has(r.plan_id as string)).length;
 }
 
 export type PlanInvitee = {

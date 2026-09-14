@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(31);
+select plan(36);
 
 select is(
   (
@@ -44,8 +44,8 @@ select is(
       and p.prosecdef
       and has_function_privilege('anon', p.oid, 'execute')
   ),
-  1::bigint,
-  'anon can execute only the reviewed signed-out username check'
+    3::bigint,
+  'anon can execute only the reviewed signed-out username and guest feed RPCs'
 );
 
 select ok(
@@ -55,6 +55,35 @@ select ok(
     'execute'
   ),
   'signed-out registration can check a public username'
+);
+
+select ok(
+  has_function_privilege('anon', 'public.get_guest_feed()', 'execute')
+  or has_function_privilege('anon', 'public.get_guest_feed(double precision, double precision, integer)', 'execute'),
+  'signed-out clients can load the public guest feed'
+);
+
+select ok(
+  has_function_privilege('anon', 'public.get_guest_plan(uuid)', 'execute'),
+  'signed-out clients can load a public guest plan'
+);
+
+select ok(
+  has_function_privilege(
+    'authenticated',
+    'public.get_feed_plan_people(uuid[])',
+    'execute'
+  ),
+  'authenticated users can load feed people in one round trip'
+);
+
+select ok(
+  not has_function_privilege(
+    'anon',
+    'public.get_feed_plan_people(uuid[])',
+    'execute'
+  ),
+  'signed-out clients cannot call the authenticated feed people RPC'
 );
 
 select is(
@@ -315,6 +344,15 @@ select ok(
     where enum_value::text = 'video'
   ),
   'video messages are accepted by the database enum'
+);
+
+select ok(
+  not has_function_privilege(
+    'anon',
+    'public.get_owner_analytics_dashboard(integer)',
+    'execute'
+  ),
+  'owner analytics cannot be invoked by anonymous clients'
 );
 
 select * from finish();

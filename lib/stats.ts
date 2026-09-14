@@ -1,8 +1,13 @@
 import { cacheGet, cacheInvalidate, cacheSet } from './ttlCache';
+import { screenCacheKey, ScreenCacheTTL } from './screenCaches';
 import { supabase } from './supabase';
 
-/** Con ≥1 valoración recibida ya se muestra la reputación extendida. */
-export const MIN_DISTINCT_RATERS_FOR_REPUTATION = 1;
+/** Cumplido / rasgo: con 1 voto ya se puede mostrar «la gente te ve». */
+export const MIN_DISTINCT_RATERS_FOR_TRAIT = 1;
+/** % de «repetirían»: hace falta un mínimo para no publicar un 100% de una sola persona. */
+export const MIN_DISTINCT_RATERS_FOR_REPEAT = 3;
+/** @deprecated Usar MIN_DISTINCT_RATERS_FOR_TRAIT / REPEAT */
+export const MIN_DISTINCT_RATERS_FOR_REPUTATION = MIN_DISTINCT_RATERS_FOR_TRAIT;
 
 export interface UserStats {
     valoracionMedia: number;
@@ -30,16 +35,61 @@ export const EMPTY_STATS: UserStats = {
     numeroExpulsiones: 0,
 };
 
-const STATS_TTL_MS = 60_000;
+const STATS_TTL_MS = 180_000;
 
 function statsCacheKey(userId: string) {
     return `userStats:${userId}`;
 }
 
-/** True cuando hay al menos 1 valoración recibida. */
+function distinctRaterCount(stats: UserStats): number {
+    return stats.numeroEvaluadoresDistintos || stats.numeroValoraciones;
+}
+
+/** % público de «repetirían plan contigo». */
+export function hasPublicRepeatStats(stats: UserStats): boolean {
+    return distinctRaterCount(stats) >= MIN_DISTINCT_RATERS_FOR_REPEAT;
+}
+
+/** Rasgo «Spoiler» solo con el umbral de votantes. */
+export function hasPublicTraitStats(stats: UserStats): boolean {
+    return (
+        !!stats.aspectoPositivoMasVotado &&
+        distinctRaterCount(stats) >= MIN_DISTINCT_RATERS_FOR_TRAIT
+    );
+}
+
+/** Sección de reputación: rasgo positivo o ya hay masa para el % . */
 export function hasPublicReputationStats(stats: UserStats): boolean {
-    const count = stats.numeroValoraciones || stats.numeroEvaluadoresDistintos;
-    return count >= MIN_DISTINCT_RATERS_FOR_REPUTATION;
+    return hasPublicRepeatStats(stats) || hasPublicTraitStats(stats);
+}
+
+/** Columna del medio en perfil persona: % o «Nuevo / Nueva». */
+export function personRepeatStat(
+    stats: UserStats,
+    opts: { isSelf: boolean; genero?: string | null; t: (k: string, params?: Record<string, string | number>) => string },
+): { middleText?: string; repeatPct: number | null; label: string } {
+    if (hasPublicRepeatStats(stats)) {
+        const label = opts.isSelf
+            ? opts.t('profile.rep.wouldRepeatWithYou')
+            : opts.genero === 'femenino'
+              ? opts.t('profile.rep.wouldRepeatWithHer')
+              : opts.t('profile.rep.wouldRepeatWithHim');
+        return {
+            repeatPct: Math.max(0, Math.min(100, Math.round(stats.porcentajeRepetiria))),
+            label,
+        };
+    }
+    const newKey =
+        opts.genero === 'femenino'
+            ? 'profile.rep.newF'
+            : opts.genero === 'masculino'
+              ? 'profile.rep.newM'
+              : 'profile.rep.newN';
+    return {
+        middleText: opts.t(newKey),
+        repeatPct: null,
+        label: opts.t('profile.rep.warmingShort'),
+    };
 }
 
 /** Entero si es .0 (3 → "3"); un decimal si no (3.4 → "3.4"). */
@@ -157,5 +207,41 @@ async function applyLowRatingCooling(userId: string, stats: UserStats): Promise<
 
 export function invalidateUserStatsCache(userId: string): void {
     cacheInvalidate(statsCacheKey(userId));
+    cacheInvalidate(`badgeStats:v2:${userId}`);
     cacheInvalidate(`badgeStats:${userId}`);
+}
+
+/** Sube o baja el contador de planes hechos en caché (perfil + stats) al instante. */
+export function bumpPlansDoneOptimistic(userId: string, delta = 1): void {
+    if (!delta) return;
+
+    const statsKey = statsCacheKey(userId);
+    const profileKey = screenCacheKey.profileUI(userId);
+    const profileSnap = cacheGetStale<{ stats?: UserStats; badgeStats?: UserStats }>(profileKey);
+    const statsCached = cacheGet<UserStats>(statsKey);
+    const base = profileSnap?.stats ?? statsCached ?? EMPTY_STATS;
+    const nextCount = Math.max(0, base.numeroPlanesRealizados + delta);
+    const nextStats: UserStats = { ...base, numeroPlanesRealizados: nextCount };
+
+    cacheSet(statsKey, nextStats, STATS_TTL_MS);
+
+    const badgeKey = `badgeStats:v2:${userId}`;
+    const badgeCached = cacheGet<UserStats>(badgeKey);
+    if (badgeCached) {
+        cacheSet(badgeKey, { ...badgeCached, numeroPlanesRealizados: nextCount }, STATS_TTL_MS);
+    }
+
+    if (profileSnap) {
+        cacheSet(
+            profileKey,
+            {
+                ...profileSnap,
+                stats: { ...(profileSnap.stats ?? EMPTY_STATS), numeroPlanesRealizados: nextCount },
+                badgeStats: profileSnap.badgeStats
+                    ? { ...profileSnap.badgeStats, numeroPlanesRealizados: nextCount }
+                    : profileSnap.badgeStats,
+            },
+            ScreenCacheTTL.profileUI,
+        );
+    }
 }

@@ -17,6 +17,11 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { seedUserProfilePeek, prefetchUserProfile } from '../lib/userProfileCache';
+import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../lib/planDetailCache';
+import { broadcastPlanMembership } from '../lib/membershipBroadcast';
+import { markFeedNeedsRefresh, noteFeedInviteCleared } from '../lib/feedReload';
+import { rememberFriendsSet, rememberFriendStatus } from '../lib/friendStatusPeek';
 import { Alert } from '../lib/nexoAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '../components/ProfileAvatar';
@@ -27,18 +32,19 @@ import {
     getIncomingRequests,
     getOutgoingRequests,
     rejectFriendRequest,
-    removeFriend,
     sendFriendRequest,
     type FriendProfile,
     type FriendRequest,
 } from '../lib/friends';
 import {
     dismissFriendSuggestion,
+    friendSuggestionsCacheKey,
     getFriendSuggestions,
+    FRIEND_SUGGESTIONS_MAX,
     type FriendSuggestion,
 } from '../lib/friendSuggestions';
-import { ensureDirectConversation } from '../lib/directChat';
 import { hapticError, hapticLight, hapticSelection, hapticSuccess } from '../lib/haptics';
+import { dismissPushForFriends } from '../lib/presentedPush';
 import { useT } from '../lib/i18n';
 import { FLASH_LIST_DRAW_DISTANCE } from '../lib/listConfig';
 import { ScreenKeys } from '../lib/screenState';
@@ -50,10 +56,20 @@ import {
     rejectPlanInvite,
     type PlanInvite,
 } from '../lib/planInvites';
+import {
+    acceptPlanJoinRequest,
+    fetchIncomingPlanJoinRequests,
+    invalidatePlanJoinRequestCaches,
+    rejectPlanJoinRequest,
+    type PlanJoinRequest,
+} from '../lib/planJoinRequests';
 import { getAuthUser } from '../lib/auth';
-import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
+import { useAuthSession } from '../lib/authSession';
+import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
 import { cacheGetStale, cacheInvalidate, cacheIsFresh, cacheSet } from '../lib/ttlCache';
 import { supabase } from '../lib/supabase';
+import { useAppTheme, useThemedStyles } from '../lib/appTheme';
+import { type ThemeColors } from '../theme';
 
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
@@ -64,38 +80,90 @@ const DANGER = '#EF4444';
 
 type TabKey = 'friends' | 'requests';
 
+type FriendsScreenSnapshot = {
+    friends: (FriendProfile & { friendshipId: string })[];
+    incoming: FriendRequest[];
+    outgoing: FriendRequest[];
+    planInvites: PlanInvite[];
+    planJoinRequests: PlanJoinRequest[];
+};
+
 export default function FriendsScreen() {
     const router = useRouter();
     const { t } = useT();
+    const { userId: sessionUserId } = useAuthSession();
+    const { colors } = useAppTheme();
+    const styles = useThemedStyles(createFriendsStyles);
     const { tab } = useLocalSearchParams<{ tab?: string }>();
     const [activeTab, setActiveTab] = useState<TabKey>('friends');
-    const [loading, setLoading] = useState(true);
+    const cachedFriends = sessionUserId
+        ? cacheGetStale<FriendsScreenSnapshot>(screenCacheKey.friends(sessionUserId))
+        : null;
+    const [loading, setLoading] = useState(() => !cachedFriends);
     const [refreshing, setRefreshing] = useState(false);
     const { listRef, onScroll, scrollEventThrottle } = useListScrollRestore<FriendProfile & { friendshipId: string }>(ScreenKeys.FRIENDS);
     const { scrollRef: requestsScrollRef, onScroll: onRequestsScroll, scrollEventThrottle: requestsScrollThrottle } =
         useScrollViewRestore(`${ScreenKeys.FRIENDS}-requests`);
-    const [friends, setFriends] = useState<(FriendProfile & { friendshipId: string })[]>([]);
-    const [incoming, setIncoming] = useState<FriendRequest[]>([]);
-    const [outgoing, setOutgoing] = useState<FriendRequest[]>([]);
-    const [planInvites, setPlanInvites] = useState<PlanInvite[]>([]);
+    const [friends, setFriends] = useState<(FriendProfile & { friendshipId: string })[]>(
+        () => cachedFriends?.friends ?? [],
+    );
+    const [incoming, setIncoming] = useState<FriendRequest[]>(() => cachedFriends?.incoming ?? []);
+    const [outgoing, setOutgoing] = useState<FriendRequest[]>(() => cachedFriends?.outgoing ?? []);
+    const [planInvites, setPlanInvites] = useState<PlanInvite[]>(() => cachedFriends?.planInvites ?? []);
+    const [planJoinRequests, setPlanJoinRequests] = useState<PlanJoinRequest[]>(
+        () => cachedFriends?.planJoinRequests ?? [],
+    );
     const [suggestions, setSuggestions] = useState<FriendSuggestion[]>([]);
     const [suggestBusyId, setSuggestBusyId] = useState<string | null>(null);
     const [suggestSentIds, setSuggestSentIds] = useState<Set<string>>(new Set());
     /** Solo para aceptar invitación a plan (hay que validar cupo/límite antes de cambiar UI). */
     const [inviteAcceptId, setInviteAcceptId] = useState<string | null>(null);
-    const hasLoadedRef = useRef(false);
-    const userIdRef = useRef<string | null>(null);
+    const hasLoadedRef = useRef(!!cachedFriends);
+    const userIdRef = useRef<string | null>(sessionUserId);
     const loadGenRef = useRef(0);
     const refreshingRef = useRef(false);
+    const joinRequestBusyRef = useRef<Set<string>>(new Set());
+
+    const joinRequestKey = (req: Pick<PlanJoinRequest, 'planId' | 'userId'>) => `${req.planId}:${req.userId}`;
+
+    const filterActiveJoinRequests = useCallback(
+        (rows: PlanJoinRequest[]) =>
+            rows.filter((r) => !joinRequestBusyRef.current.has(joinRequestKey(r))),
+        [],
+    );
+
+    const syncFriendsCache = useCallback((patch: Partial<FriendsScreenSnapshot>) => {
+        const uid = userIdRef.current;
+        if (!uid) return;
+        const key = screenCacheKey.friends(uid);
+        const cached = cacheGetStale<FriendsScreenSnapshot>(key);
+        if (!cached) return;
+        cacheSet(key, { ...cached, ...patch }, ScreenCacheTTL.friends);
+    }, []);
+
+    const openPersonProfile = useCallback(
+        (person: { id: string; nombre?: string | null; nombre_usuario?: string | null; avatar_url?: string | null }) => {
+            seedUserProfilePeek({
+                id: person.id,
+                nombre: person.nombre,
+                nombre_usuario: person.nombre_usuario,
+                avatar_url: person.avatar_url,
+            });
+            prefetchUserProfile(person.id);
+            router.push({ pathname: '/user-profile/[id]', params: { id: person.id } });
+        },
+        [router],
+    );
 
     const loadData = useCallback(async (opts?: { force?: boolean }) => {
         const gen = ++loadGenRef.current;
         try {
-            const user = await getAuthUser();
-            if (!user) {
+            const userId = sessionUserId ?? (await getAuthUser())?.id ?? null;
+            if (!userId) {
                 router.replace('/login');
                 return;
             }
+            const user = { id: userId };
 
             const cacheKey = screenCacheKey.friends(user.id);
             const cached = cacheGetStale<{
@@ -103,12 +171,15 @@ export default function FriendsScreen() {
                 incoming: FriendRequest[];
                 outgoing: FriendRequest[];
                 planInvites: PlanInvite[];
+                planJoinRequests: PlanJoinRequest[];
             }>(cacheKey);
             if (cached && !hasLoadedRef.current) {
                 setFriends(cached.friends);
+                rememberFriendsSet(cached.friends.map((f) => f.id));
                 setIncoming(cached.incoming);
                 setOutgoing(cached.outgoing);
                 setPlanInvites(cached.planInvites);
+                setPlanJoinRequests(cached.planJoinRequests ?? []);
                 hasLoadedRef.current = true;
                 setLoading(false);
             } else if (!refreshingRef.current && !hasLoadedRef.current) {
@@ -121,7 +192,8 @@ export default function FriendsScreen() {
                 (cached?.friends?.length ?? 0) > 0
                 || (cached?.incoming?.length ?? 0) > 0
                 || (cached?.outgoing?.length ?? 0) > 0
-                || (cached?.planInvites?.length ?? 0) > 0;
+                || (cached?.planInvites?.length ?? 0) > 0
+                || (cached?.planJoinRequests?.length ?? 0) > 0;
 
             // Caché vacía “fresca” no debe saltarse la red (semilla antigua / sin amigos aún).
             if (
@@ -133,34 +205,61 @@ export default function FriendsScreen() {
                 setLoading(false);
                 setRefreshing(false);
                 refreshingRef.current = false;
-                void getFriendSuggestions(user.id, 10)
+                void getFriendSuggestions(user.id, FRIEND_SUGGESTIONS_MAX)
                     .then((rows) => {
                         if (gen === loadGenRef.current) setSuggestions(rows);
+                    })
+                    .catch(() => {});
+                void fetchIncomingPlanJoinRequests(user.id)
+                    .then((rows) => {
+                        if (gen === loadGenRef.current) {
+                            setPlanJoinRequests(filterActiveJoinRequests(rows));
+                        }
                     })
                     .catch(() => {});
                 return;
             }
 
             // Si la caché estaba vacía, fuerza red siempre al enfocar.
-            const [friendsData, incomingData, outgoingData, invitesData, suggestData] = await Promise.all([
+            const [friendsData, incomingData, outgoingData, invitesData, joinReqData, suggestData] = await Promise.all([
                 getFriends(user.id),
                 getIncomingRequests(user.id),
                 getOutgoingRequests(user.id),
                 getIncomingPlanInvites(user.id).catch(() => [] as PlanInvite[]),
-                getFriendSuggestions(user.id, 10).catch(() => [] as FriendSuggestion[]),
+                fetchIncomingPlanJoinRequests(user.id).catch(() => [] as PlanJoinRequest[]),
+                getFriendSuggestions(user.id, FRIEND_SUGGESTIONS_MAX).catch(() => [] as FriendSuggestion[]),
             ]);
             if (gen !== loadGenRef.current) return;
 
             setFriends(friendsData);
+            rememberFriendsSet(friendsData.map((f) => f.id));
             setIncoming(incomingData);
             setOutgoing(outgoingData);
             setPlanInvites(invitesData);
+            const visibleJoinReqData = filterActiveJoinRequests(joinReqData);
+            setPlanJoinRequests(visibleJoinReqData);
             setSuggestions(suggestData);
+            for (const f of friendsData.slice(0, 8)) prefetchUserProfile(f.id);
+            for (const s of suggestData.slice(0, 6)) prefetchUserProfile(s.id);
+            for (const inv of invitesData.slice(0, 4)) {
+                if (inv.plan) {
+                    seedPlanDetailFromFeed({
+                        id: inv.plan_id,
+                        titulo: inv.plan.titulo,
+                        imagen_url: inv.plan.imagen_url,
+                        maximo_participantes: inv.plan.maximo_participantes,
+                        requiere_aprobacion: inv.plan.requiere_aprobacion,
+                        categoria: inv.plan.categoria ?? '',
+                    });
+                    prefetchPlanDetail(inv.plan_id);
+                }
+            }
             cacheSet(cacheKey, {
                 friends: friendsData,
                 incoming: incomingData,
                 outgoing: outgoingData,
                 planInvites: invitesData,
+                planJoinRequests: visibleJoinReqData,
             }, ScreenCacheTTL.friends);
         } catch {
             if (gen === loadGenRef.current) {
@@ -174,10 +273,11 @@ export default function FriendsScreen() {
                 refreshingRef.current = false;
             }
         }
-    }, [router, t]);
+    }, [router, sessionUserId, t, filterActiveJoinRequests]);
 
     useFocusEffect(
         useCallback(() => {
+            dismissPushForFriends();
             if (tab === 'requests') setActiveTab('requests');
             else if (tab === 'friends') setActiveTab('friends');
             void loadData();
@@ -215,6 +315,10 @@ export default function FriendsScreen() {
                 }
                 hapticError();
                 Alert.alert(t('profile.error'), error.message);
+            } else {
+                markFeedNeedsRefresh();
+                rememberFriendStatus(removed?.perfil.id, 'friends', requestId);
+                if (userIdRef.current) cacheInvalidate(screenCacheKey.friends(userIdRef.current));
             }
         });
     };
@@ -247,41 +351,83 @@ export default function FriendsScreen() {
         });
     };
 
-    const handleAcceptPlanInvite = async (invite: PlanInvite) => {
-        // Validar cupo/límite antes de quitar la invitación de la UI.
+    const handleAcceptPlanInvite = (invite: PlanInvite) => {
+        if (inviteAcceptId) return;
         setInviteAcceptId(invite.id);
-        try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
-            const { error, chatId, max } = await acceptPlanInvite(invite, user.id);
-            if (error === 'full') {
-                hapticError();
-                Alert.alert(t('profile.error'), t('friends.inviteFull'));
-                return;
-            }
-            if (error === 'limit') {
-                hapticError();
-                Alert.alert(t('profile.error'), t('feed.planLimitReached', { max: max ?? 3 }));
-                return;
-            }
-            if (error) {
-                hapticError();
-                Alert.alert(t('profile.error'), error);
-                return;
-            }
-            hapticSuccess();
-            setPlanInvites((prev) => prev.filter((i) => i.id !== invite.id));
-            invalidatePlanMembershipCaches(user.id);
-            if (chatId) router.push(`/chat/${chatId}`);
-        } finally {
-            setInviteAcceptId(null);
+        const removed = invite;
+        // UI + navegación al instante; validar cupo en segundo plano.
+        setPlanInvites((prev) => prev.filter((i) => i.id !== invite.id));
+        const requiere = !!invite.plan?.requiere_aprobacion;
+        const optimisticMembership = requiere ? 'requested' : 'joined';
+        broadcastPlanMembership(invite.plan_id, optimisticMembership, {
+            bumpJoined: optimisticMembership === 'joined',
+            clearInvite: true,
+        });
+        if (invite.plan) {
+            seedPlanDetailFromFeed(
+                {
+                    id: invite.plan_id,
+                    titulo: invite.plan.titulo,
+                    imagen_url: invite.plan.imagen_url,
+                    maximo_participantes: invite.plan.maximo_participantes,
+                    requiere_aprobacion: invite.plan.requiere_aprobacion,
+                    categoria: invite.plan.categoria ?? '',
+                },
+                { membership: optimisticMembership },
+            );
         }
+        prefetchPlanDetail(invite.plan_id);
+        router.push({ pathname: '/plan/[id]', params: { id: invite.plan_id } });
+        setInviteAcceptId(null);
+
+        void (async () => {
+            try {
+                const user = await getAuthUser();
+                if (!user) {
+                    setPlanInvites((prev) => [removed, ...prev]);
+                    broadcastPlanMembership(invite.plan_id, 'none', { dropJoined: true });
+                    return;
+                }
+                const { error, max, estado, alreadyMember } = await acceptPlanInvite(invite, user.id);
+                if (error === 'full' || error === 'limit' || error === 'organizer_cannot_join' || error) {
+                    hapticError();
+                    setPlanInvites((prev) => [removed, ...prev]);
+                    broadcastPlanMembership(invite.plan_id, 'none', {
+                        userId: user.id,
+                        dropJoined: true,
+                        invalidateFriends: true,
+                    });
+                    if (error === 'full') Alert.alert(t('profile.error'), t('friends.inviteFull'));
+                    else if (error === 'limit') {
+                        Alert.alert(t('profile.error'), t('feed.planLimitReached', { max: max ?? 5 }));
+                    } else if (error === 'organizer_cannot_join') {
+                        Alert.alert(t('profile.error'), t('organizer.cannotJoin'));
+                    } else if (error) Alert.alert(t('profile.error'), error);
+                    return;
+                }
+                hapticSuccess();
+                const membership =
+                    estado === 'pendiente' ? 'requested' : estado === 'lista_espera' ? 'waitlist' : 'joined';
+                const bumpJoined = !alreadyMember && estado === 'aceptado';
+                broadcastPlanMembership(invite.plan_id, membership, {
+                    userId: user.id,
+                    bumpJoined,
+                    clearInvite: true,
+                    invalidateFriends: true,
+                });
+            } catch {
+                setPlanInvites((prev) => [removed, ...prev]);
+                broadcastPlanMembership(invite.plan_id, 'none', { dropJoined: true });
+                hapticError();
+            }
+        })();
     };
 
     const handleRejectPlanInvite = (inviteId: string) => {
         hapticLight();
         const removed = planInvites.find((i) => i.id === inviteId);
         setPlanInvites((prev) => prev.filter((i) => i.id !== inviteId));
+        if (removed?.plan_id) noteFeedInviteCleared(removed.plan_id);
         void rejectPlanInvite(inviteId).then(({ error }) => {
             if (error) {
                 if (removed) setPlanInvites((prev) => [removed, ...prev]);
@@ -291,42 +437,19 @@ export default function FriendsScreen() {
         });
     };
 
-    const handleRemoveFriend = (friend: FriendProfile & { friendshipId: string }) => {
-        Alert.alert(
-            t('userprofile.unfriendTitle'),
-            t('friends.removeConfirmName', { name: friend.nombre }),
-            [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: t('friends.removeBtn'),
-                    style: 'destructive',
-                    onPress: () => {
-                        setFriends((prev) => prev.filter((f) => f.friendshipId !== friend.friendshipId));
-                        invalidatePeerProfile(friend.id);
-                        void removeFriend(friend.friendshipId).then(({ error }) => {
-                            if (error) {
-                                setFriends((prev) => [friend, ...prev]);
-                                Alert.alert(t('profile.error'), error.message);
-                            }
-                        });
-                    },
-                },
-            ]
-        );
-    };
-
-    const handleOpenChat = (friendId: string) => {
-        // Los chats 1:1 ya no crean "planes falsos": van directos a mensajes con receptor_id.
+    const refillSuggestions = useCallback(async () => {
         const uid = userIdRef.current;
-        if (uid) {
-            void ensureDirectConversation(uid, friendId).then(() => {
-                cacheInvalidate(screenCacheKey.chatsList(uid));
-            });
+        if (!uid) return;
+        cacheInvalidate(friendSuggestionsCacheKey(uid));
+        try {
+            const rows = await getFriendSuggestions(uid, FRIEND_SUGGESTIONS_MAX);
+            setSuggestions(rows);
+        } catch {
+            /* ignore */
         }
-        router.push(`/direct-chat/${friendId}`);
-    };
+    }, []);
 
-    const pendingCount = incoming.length + planInvites.length;
+    const pendingCount = incoming.length + planInvites.length + planJoinRequests.length;
 
     const renderFriend = ({ item, index }: { item: FriendProfile & { friendshipId: string }; index: number }) => {
         const accentPair =
@@ -347,16 +470,15 @@ export default function FriendsScreen() {
                     >
                         <TouchableOpacity
                             style={styles.premiumHeaderTouch}
-                            onPress={() =>
-                                router.push({ pathname: '/user-profile/[id]', params: { id: item.id } })
-                            }
+                            onPress={() => openPersonProfile(item)}
+                            onPressIn={() => prefetchUserProfile(item.id)}
                             activeOpacity={0.9}
                         >
                             <View style={styles.avatarRingWrap}>
-                                <ProfileAvatar
+                                    <ProfileAvatar
                                     uri={item.avatar_url}
                                     name={item.nombre}
-                                    size={54}
+                                    size={46}
                                     recyclingKey={item.id}
                                 />
                             </View>
@@ -371,34 +493,6 @@ export default function FriendsScreen() {
                             </View>
                         </TouchableOpacity>
                     </LinearGradient>
-
-                    <View style={styles.premiumBody}>
-                        <View style={styles.premiumActions}>
-                            <TouchableOpacity
-                                style={styles.premiumChatWrap}
-                                onPress={() => handleOpenChat(item.id)}
-                                activeOpacity={0.88}
-                            >
-                                <LinearGradient
-                                    colors={[accentPair[0], accentPair[1]]}
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 0 }}
-                                    style={styles.premiumChatBtn}
-                                >
-                                    <Ionicons name="chatbubble-ellipses" size={18} color="#FFF" />
-                                    <Text style={styles.premiumChatText}>{t('friends.message')}</Text>
-                                </LinearGradient>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                style={styles.premiumRemoveBtn}
-                                onPress={() => handleRemoveFriend(item)}
-                                activeOpacity={0.85}
-                            >
-                                <Ionicons name="heart-dislike-outline" size={20} color={DANGER} />
-                            </TouchableOpacity>
-                        </View>
-                    </View>
                 </View>
             </View>
         );
@@ -409,7 +503,8 @@ export default function FriendsScreen() {
             <View key={item.id} style={styles.card}>
                 <TouchableOpacity
                     style={styles.rowMain}
-                    onPress={() => router.push({ pathname: '/user-profile/[id]', params: { id: item.perfil.id } })}
+                    onPress={() => openPersonProfile(item.perfil)}
+                    onPressIn={() => prefetchUserProfile(item.perfil.id)}
                     activeOpacity={0.85}
                 >
                     <ProfileAvatar
@@ -439,7 +534,7 @@ export default function FriendsScreen() {
                         style={[styles.iconCircle, styles.iconMuted]}
                         onPress={() => handleReject(item.id)}
                     >
-                        <Ionicons name="close" size={22} color="#64748B" />
+                        <Ionicons name="close" size={22} color={colors.textMuted} />
                     </TouchableOpacity>
                 </View>
             </View>
@@ -451,7 +546,8 @@ export default function FriendsScreen() {
             <View key={item.id} style={styles.outgoingRow}>
                 <TouchableOpacity
                     style={styles.outgoingProfileTap}
-                    onPress={() => router.push(`/user-profile/${item.perfil.id}`)}
+                    onPress={() => openPersonProfile(item.perfil)}
+                    onPressIn={() => prefetchUserProfile(item.perfil.id)}
                     activeOpacity={0.85}
                 >
                     <ProfileAvatar
@@ -475,6 +571,124 @@ export default function FriendsScreen() {
         );
     };
 
+    const handleRejectPlanJoin = (req: PlanJoinRequest) => {
+        hapticLight();
+        const uid = userIdRef.current;
+        const busyKey = joinRequestKey(req);
+        joinRequestBusyRef.current.add(busyKey);
+        setPlanJoinRequests((prev) => {
+            const next = prev.filter((r) => !(r.planId === req.planId && r.userId === req.userId));
+            syncFriendsCache({ planJoinRequests: next });
+            return next;
+        });
+        void rejectPlanJoinRequest(req.planId, req.userId).then(({ ok, error }) => {
+            if (!ok) {
+                joinRequestBusyRef.current.delete(busyKey);
+                setPlanJoinRequests((prev) => {
+                    if (prev.some((r) => r.planId === req.planId && r.userId === req.userId)) return prev;
+                    const next = [req, ...prev];
+                    syncFriendsCache({ planJoinRequests: next });
+                    return next;
+                });
+                hapticError();
+                if (error) Alert.alert(t('profile.error'), error);
+                return;
+            }
+            joinRequestBusyRef.current.delete(busyKey);
+            if (uid) invalidatePlanJoinRequestCaches(uid, req.planId);
+        });
+    };
+
+    const handleAcceptPlanJoin = (req: PlanJoinRequest) => {
+        const uid = userIdRef.current;
+        const busyKey = joinRequestKey(req);
+        hapticSuccess();
+        joinRequestBusyRef.current.add(busyKey);
+        setPlanJoinRequests((prev) => {
+            const next = prev.filter((r) => !(r.planId === req.planId && r.userId === req.userId));
+            syncFriendsCache({ planJoinRequests: next });
+            return next;
+        });
+        void (async () => {
+            try {
+                const { data: planRow } = await supabase
+                    .from('planes')
+                    .select('maximo_participantes')
+                    .eq('id', req.planId)
+                    .maybeSingle();
+                const max = Number(planRow?.maximo_participantes) || 0;
+                const result = await acceptPlanJoinRequest(req.planId, req.userId, max);
+                if (!result.ok) {
+                    joinRequestBusyRef.current.delete(busyKey);
+                    setPlanJoinRequests((prev) => {
+                        if (prev.some((r) => r.planId === req.planId && r.userId === req.userId)) return prev;
+                        const next = [req, ...prev];
+                        syncFriendsCache({ planJoinRequests: next });
+                        return next;
+                    });
+                    hapticError();
+                    Alert.alert(
+                        t('profile.error'),
+                        result.code === 'full'
+                            ? t('friends.inviteFull')
+                            : result.code === 'rls'
+                              ? t('myplans.rlsHint')
+                              : result.error,
+                    );
+                    return;
+                }
+                if (uid) invalidatePlanJoinRequestCaches(uid, req.planId);
+            } finally {
+                joinRequestBusyRef.current.delete(busyKey);
+            }
+        })();
+    };
+
+    const renderPlanJoinRequest = (req: PlanJoinRequest) => {
+        const key = `${req.planId}:${req.userId}`;
+        return (
+            <View key={key} style={styles.card}>
+                <TouchableOpacity
+                    style={styles.rowMain}
+                    onPress={() => router.push({ pathname: '/plan/[id]', params: { id: req.planId } })}
+                    activeOpacity={0.85}
+                >
+                    <ProfileAvatar
+                        uri={req.avatar_url}
+                        name={req.nombre || 'U'}
+                        size={54}
+                        recyclingKey={req.userId}
+                    />
+                    <View style={styles.rowText}>
+                        <Text style={styles.name} numberOfLines={1}>{req.nombre || t('profile.user')}</Text>
+                        <View style={styles.hintPill}>
+                            <Ionicons name="calendar" size={12} color={PRIMARY_DARK} />
+                            <Text style={styles.hintPillText} numberOfLines={2}>
+                                {t('friends.wantsToJoinPlan', { plan: req.planTitulo || '—' })}
+                            </Text>
+                        </View>
+                    </View>
+                </TouchableOpacity>
+                <View style={styles.rowActions}>
+                    <TouchableOpacity
+                        style={[styles.actionBtn, styles.actionSuccess]}
+                        onPress={() => handleAcceptPlanJoin(req)}
+                        activeOpacity={0.85}
+                    >
+                        <Ionicons name="checkmark" size={18} color="#FFF" />
+                        <Text style={styles.actionSuccessText}>{t('friends.accept')}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.iconCircle, styles.iconMuted]}
+                        onPress={() => handleRejectPlanJoin(req)}
+                    >
+                        <Ionicons name="close" size={22} color={colors.textMuted} />
+                    </TouchableOpacity>
+                </View>
+            </View>
+        );
+    };
+
     const renderPlanInvite = (invite: PlanInvite) => {
         const busy = inviteAcceptId === invite.id;
         const title = invite.plan?.titulo || '—';
@@ -482,6 +696,28 @@ export default function FriendsScreen() {
         const isGroup = invite.tipo === 'grupo';
 
         const openPlanInvite = () => {
+            if (invite.plan) {
+                seedPlanDetailFromFeed({
+                    id: invite.plan_id,
+                    titulo: invite.plan.titulo,
+                    imagen_url: invite.plan.imagen_url,
+                    maximo_participantes: invite.plan.maximo_participantes,
+                    requiere_aprobacion: invite.plan.requiere_aprobacion,
+                    categoria: invite.plan.categoria ?? '',
+                    creador_id: invite.invitador_id,
+                    host: invite.invitador
+                        ? {
+                              id: invite.invitador_id,
+                              nombre: invite.invitador.nombre ?? 'Usuario',
+                              avatar_url: invite.invitador.avatar_url ?? null,
+                              isCreator: true,
+                          }
+                        : null,
+                });
+            } else {
+                seedPlanDetailFromFeed({ id: invite.plan_id });
+            }
+            prefetchPlanDetail(invite.plan_id);
             router.push({
                 pathname: '/plan/[id]',
                 params: {
@@ -497,7 +733,24 @@ export default function FriendsScreen() {
 
         return (
             <View key={invite.id} style={styles.inviteCard}>
-                <TouchableOpacity style={styles.inviteTop} onPress={openPlanInvite} activeOpacity={0.85}>
+                <TouchableOpacity
+                    style={styles.inviteTop}
+                    onPress={openPlanInvite}
+                    onPressIn={() => {
+                        if (invite.plan) {
+                            seedPlanDetailFromFeed({
+                                id: invite.plan_id,
+                                titulo: invite.plan.titulo,
+                                imagen_url: invite.plan.imagen_url,
+                                maximo_participantes: invite.plan.maximo_participantes,
+                                requiere_aprobacion: invite.plan.requiere_aprobacion,
+                                categoria: invite.plan.categoria ?? '',
+                            });
+                        }
+                        prefetchPlanDetail(invite.plan_id);
+                    }}
+                    activeOpacity={0.85}
+                >
                     <ProfileAvatar
                         uri={invite.invitador?.avatar_url}
                         name={inviterName}
@@ -558,13 +811,16 @@ export default function FriendsScreen() {
             setSuggestBusyId(null);
             if (error) {
                 hapticError();
-                Alert.alert(t('profile.error'), error);
+                Alert.alert(
+                    t('profile.error'),
+                    error === 'organizer_no_friends' ? t('friends.organizerNoFriends') : error,
+                );
                 return;
             }
             hapticSuccess();
             setSuggestSentIds((prev) => new Set(prev).add(person.id));
             setSuggestions((prev) => prev.filter((s) => s.id !== person.id));
-            cacheInvalidate(`friendSuggestions:${uid}`);
+            void refillSuggestions();
         });
     };
 
@@ -573,10 +829,10 @@ export default function FriendsScreen() {
         if (!uid) return;
         hapticLight();
         setSuggestions((prev) => prev.filter((s) => s.id !== person.id));
-        void dismissFriendSuggestion(uid, person.id);
+        void dismissFriendSuggestion(uid, person.id).then(() => refillSuggestions());
     };
 
-    const suggestionsHeader =
+    const suggestionsBlock =
         suggestions.length === 0 ? null : (
             <View style={styles.suggestBlock}>
                 <Text style={styles.suggestTitle}>{t('friends.suggested')}</Text>
@@ -584,6 +840,14 @@ export default function FriendsScreen() {
                 {suggestions.map((person, index) => {
                     const sent = suggestSentIds.has(person.id);
                     const busy = suggestBusyId === person.id;
+                    const reasonKey =
+                        person.reason === 'coincided_fof'
+                            ? 'friends.suggestedReasonFofMet'
+                            : person.reason === 'friend_of_friend'
+                                ? 'friends.suggestedReasonFof'
+                                : person.reason === 'affinity'
+                                    ? 'friends.suggestedReasonAffinity'
+                                    : 'friends.suggestedReason';
                     return (
                         <View
                             key={person.id}
@@ -592,9 +856,8 @@ export default function FriendsScreen() {
                             <TouchableOpacity
                                 style={styles.suggestProfile}
                                 activeOpacity={0.85}
-                                onPress={() =>
-                                    router.push({ pathname: '/user-profile/[id]', params: { id: person.id } })
-                                }
+                                onPress={() => openPersonProfile(person)}
+                                onPressIn={() => prefetchUserProfile(person.id)}
                             >
                                 <ProfileAvatar
                                     uri={person.avatar_url}
@@ -607,9 +870,7 @@ export default function FriendsScreen() {
                                         {person.nombre}
                                     </Text>
                                     <Text style={styles.suggestHint} numberOfLines={1}>
-                                        {person.nombre_usuario
-                                            ? `@${person.nombre_usuario}`
-                                            : t('friends.suggestedReason')}
+                                        {t(reasonKey)}
                                     </Text>
                                 </View>
                             </TouchableOpacity>
@@ -649,7 +910,7 @@ export default function FriendsScreen() {
             </LinearGradient>
             <Text style={styles.emptyTitle}>{t('friends.noFriends')}</Text>
             <Text style={styles.emptySub}>{t('friends.noFriendsSub')}</Text>
-            {suggestionsHeader}
+            {suggestionsBlock}
         </View>
     );
 
@@ -681,11 +942,11 @@ export default function FriendsScreen() {
 
     return (
         <SafeAreaView style={styles.safe} edges={['top']}>
-            <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={StyleSheet.absoluteFill} />
+            <LinearGradient colors={[colors.gradientTop, colors.gradientBottom]} style={StyleSheet.absoluteFill} />
 
             <View style={styles.topBar}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} activeOpacity={0.8}>
-                    <Ionicons name="chevron-back" size={24} color={INK} />
+                    <Ionicons name="chevron-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.topTitle}>{t('friends.title')}</Text>
                 <View style={styles.iconBtnPlaceholder} />
@@ -718,13 +979,14 @@ export default function FriendsScreen() {
                     onPress={() => {
                         hapticSelection();
                         setActiveTab('friends');
+                        router.setParams({ tab: 'friends' });
                     }}
                     activeOpacity={0.85}
                 >
                     <Ionicons
                         name="people"
                         size={16}
-                        color={activeTab === 'friends' ? '#FFF' : '#64748B'}
+                        color={activeTab === 'friends' ? '#FFF' : colors.textMuted}
                     />
                     <Text style={[styles.tabText, activeTab === 'friends' && styles.tabTextActive]}>
                         {t('friends.tabFriends')}
@@ -735,13 +997,14 @@ export default function FriendsScreen() {
                     onPress={() => {
                         hapticSelection();
                         setActiveTab('requests');
+                        router.setParams({ tab: 'requests' });
                     }}
                     activeOpacity={0.85}
                 >
                     <Ionicons
                         name="notifications"
                         size={16}
-                        color={activeTab === 'requests' ? '#FFF' : '#64748B'}
+                        color={activeTab === 'requests' ? '#FFF' : colors.textMuted}
                     />
                     <Text style={[styles.tabText, activeTab === 'requests' && styles.tabTextActive]}>
                         {t('friends.tabRequests')}
@@ -776,7 +1039,7 @@ export default function FriendsScreen() {
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />
                     }
-                    ListHeaderComponent={friends.length > 0 ? suggestionsHeader : null}
+                    ListFooterComponent={friends.length > 0 ? suggestionsBlock : null}
                     ListEmptyComponent={<EmptyFriends />}
                     showsVerticalScrollIndicator={false}
                 />
@@ -786,11 +1049,39 @@ export default function FriendsScreen() {
                     onScroll={onRequestsScroll}
                     scrollEventThrottle={requestsScrollThrottle}
                     contentContainerStyle={styles.listRequests}
+                    keyboardShouldPersistTaps="handled"
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_DARK} />
                     }
                     showsVerticalScrollIndicator={false}
                 >
+                    {planJoinRequests.length > 0 && (
+                        <View style={styles.invitesBlock}>
+                            <LinearGradient
+                                colors={['#ECFDF5', '#EFF6FF']}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 1 }}
+                                style={styles.invitesGradient}
+                            >
+                                <View style={styles.invitesHeader}>
+                                    <View style={styles.invitesHeaderLeft}>
+                                        <View style={styles.invitesIconWrap}>
+                                            <Ionicons name="hand-left" size={20} color="#047857" />
+                                        </View>
+                                        <View>
+                                            <Text style={styles.invitesTitle}>{t('friends.planJoinRequests')}</Text>
+                                            <Text style={styles.invitesSub}>{t('friends.planJoinRequestsSub')}</Text>
+                                        </View>
+                                    </View>
+                                    <View style={styles.invitesCount}>
+                                        <Text style={styles.invitesCountText}>{planJoinRequests.length}</Text>
+                                    </View>
+                                </View>
+                                {planJoinRequests.map(renderPlanJoinRequest)}
+                            </LinearGradient>
+                        </View>
+                    )}
+
                     {planInvites.length > 0 && (
                         <View style={styles.invitesBlock}>
                             <LinearGradient
@@ -849,8 +1140,10 @@ export default function FriendsScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: BG_BOTTOM },
+function createFriendsStyles(c: ThemeColors) {
+    const INK = c.text;
+    return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: c.backgroundAlt },
     topBar: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -862,7 +1155,7 @@ const styles = StyleSheet.create({
         width: 42,
         height: 42,
         borderRadius: 14,
-        backgroundColor: 'rgba(255,255,255,0.88)',
+        backgroundColor: c.surface,
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
@@ -878,7 +1171,7 @@ const styles = StyleSheet.create({
         marginHorizontal: 20,
         marginTop: 0,
         marginBottom: 0,
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderRadius: 18,
         paddingVertical: 14,
         borderWidth: 1,
@@ -896,7 +1189,7 @@ const styles = StyleSheet.create({
     statLabel: {
         fontSize: 11,
         fontWeight: '700',
-        color: '#64748B',
+        color: c.textMuted,
         marginTop: 4,
         textTransform: 'uppercase',
     },
@@ -922,13 +1215,13 @@ const styles = StyleSheet.create({
         borderRadius: 12,
     },
     tabActive: { backgroundColor: PRIMARY_DARK },
-    tabText: { fontSize: 13, fontWeight: '800', color: '#64748B' },
+    tabText: { fontSize: 13, fontWeight: '800', color: c.textMuted },
     tabTextActive: { color: '#FFF' },
     tabBadge: {
         minWidth: 18,
         height: 18,
         borderRadius: 9,
-        backgroundColor: DANGER,
+        backgroundColor: PRIMARY_DARK,
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: 4,
@@ -939,24 +1232,24 @@ const styles = StyleSheet.create({
     listFriends: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 36 },
     listRequests: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 36 },
     premiumCardOuter: {
-        marginBottom: 18,
-        borderRadius: 22,
+        marginBottom: 12,
+        borderRadius: 20,
         shadowColor: '#0F2A4A',
-        shadowOpacity: 0.2,
-        shadowRadius: 16,
-        shadowOffset: { width: 0, height: 10 },
-        elevation: 8,
+        shadowOpacity: 0.16,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+        elevation: 6,
     },
     premiumCard: {
-        borderRadius: 22,
+        borderRadius: 20,
         overflow: 'hidden',
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderWidth: 1.5,
         borderColor: '#BFDBFE',
     },
     premiumHeaderBand: {
-        paddingVertical: 16,
-        paddingHorizontal: 16,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
     },
     premiumHeaderTouch: {
         flexDirection: 'row',
@@ -964,9 +1257,9 @@ const styles = StyleSheet.create({
         gap: 14,
     },
     avatarRingWrap: {
-        width: 58,
-        height: 58,
-        borderRadius: 29,
+        width: 50,
+        height: 50,
+        borderRadius: 25,
         overflow: 'hidden',
         justifyContent: 'center',
         alignItems: 'center',
@@ -982,15 +1275,15 @@ const styles = StyleSheet.create({
     },
     premiumHeaderText: { flex: 1 },
     premiumNameLight: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '900',
         color: '#FFF',
         letterSpacing: -0.3,
     },
     premiumSubLight: {
-        fontSize: 12,
+        fontSize: 11,
         color: 'rgba(255,255,255,0.82)',
-        marginTop: 4,
+        marginTop: 2,
         fontWeight: '600',
     },
     premiumChevronLight: {
@@ -1026,14 +1319,14 @@ const styles = StyleSheet.create({
         width: 48,
         height: 48,
         borderRadius: 16,
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderWidth: 1.5,
         borderColor: '#FECACA',
         justifyContent: 'center',
         alignItems: 'center',
     },
     card: {
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderRadius: 20,
         marginBottom: 12,
         borderWidth: 1,
@@ -1079,7 +1372,7 @@ const styles = StyleSheet.create({
     actionSuccessText: { color: '#FFF', fontWeight: '800', fontSize: 13 },
     actionOutlineDanger: {
         flex: 1,
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderWidth: 1.5,
         borderColor: '#FECACA',
     },
@@ -1126,12 +1419,12 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         borderRadius: 12,
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         justifyContent: 'center',
         alignItems: 'center',
     },
     invitesTitle: { fontSize: 16, fontWeight: '900', color: INK },
-    invitesSub: { fontSize: 12, color: '#64748B', marginTop: 3, lineHeight: 17 },
+    invitesSub: { fontSize: 12, color: c.textMuted, marginTop: 3, lineHeight: 17 },
     invitesCount: {
         minWidth: 28,
         height: 28,
@@ -1143,7 +1436,7 @@ const styles = StyleSheet.create({
     },
     invitesCountText: { color: '#FFF', fontSize: 13, fontWeight: '900' },
     inviteCard: {
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderRadius: 18,
         padding: 14,
         marginBottom: 10,
@@ -1166,7 +1459,7 @@ const styles = StyleSheet.create({
     typeGroup: { backgroundColor: '#F3E8FF' },
     typePillText: { fontSize: 10, fontWeight: '800', color: PRIMARY_DARK, textTransform: 'uppercase' },
     inviteTitle: { fontSize: 17, fontWeight: '900', color: INK, marginBottom: 4 },
-    inviteFrom: { fontSize: 13, color: '#64748B', fontWeight: '600' },
+    inviteFrom: { fontSize: 13, color: c.textMuted, fontWeight: '600' },
     inviteActions: { flexDirection: 'row', gap: 10 },
     sectionHeader: {
         flexDirection: 'row',
@@ -1180,7 +1473,7 @@ const styles = StyleSheet.create({
     sectionTitle: {
         fontSize: 12,
         fontWeight: '800',
-        color: '#64748B',
+        color: c.textMuted,
         textTransform: 'uppercase',
         letterSpacing: 0.6,
     },
@@ -1192,7 +1485,7 @@ const styles = StyleSheet.create({
     },
     sectionCountText: { color: DANGER, fontSize: 11, fontWeight: '900' },
     sectionEmpty: {
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderRadius: 18,
         padding: 24,
         alignItems: 'center',
@@ -1206,7 +1499,7 @@ const styles = StyleSheet.create({
         marginTop: 22,
     },
     outgoingCard: {
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderRadius: 18,
         padding: 8,
         marginBottom: 20,
@@ -1233,7 +1526,7 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         backgroundColor: '#F1F5F9',
     },
-    cancelChipText: { color: '#64748B', fontWeight: '700', fontSize: 12 },
+    cancelChipText: { color: c.textMuted, fontWeight: '700', fontSize: 12 },
     emptyWrap: { alignItems: 'center', paddingTop: 40, paddingHorizontal: 16, width: '100%' },
     emptyIcon: {
         width: 96,
@@ -1246,19 +1539,19 @@ const styles = StyleSheet.create({
         borderColor: '#BFDBFE',
     },
     emptyTitle: { fontSize: 19, fontWeight: '900', color: INK, marginBottom: 8 },
-    emptySub: { fontSize: 14, color: '#64748B', textAlign: 'center', lineHeight: 21, paddingHorizontal: 16 },
+    emptySub: { fontSize: 14, color: c.textMuted, textAlign: 'center', lineHeight: 21, paddingHorizontal: 16 },
     suggestBlock: {
         width: '100%',
         marginTop: 4,
         marginBottom: 8,
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderRadius: 20,
         padding: 14,
         borderWidth: 1,
         borderColor: '#E0EFFF',
     },
     suggestTitle: { fontSize: 16, fontWeight: '900', color: INK },
-    suggestSub: { fontSize: 12, color: '#64748B', fontWeight: '600', marginTop: 3, marginBottom: 12 },
+    suggestSub: { fontSize: 12, color: c.textMuted, fontWeight: '600', marginTop: 3, marginBottom: 12 },
     suggestRow: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1287,4 +1580,5 @@ const styles = StyleSheet.create({
     },
     suggestAddBtnSent: { backgroundColor: '#BBF7D0' },
     suggestAddText: { color: '#FFF', fontWeight: '800', fontSize: 13 },
-});
+    });
+}

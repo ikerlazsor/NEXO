@@ -38,6 +38,47 @@ export function membershipFromJoinEstado(estado: ParticipantEstado): Participant
     return 'joined';
 }
 
+type PersonCard = {
+    id: string;
+    es_organizador?: boolean;
+};
+
+export function formatPlanPeople<T extends PersonCard>(input: {
+    creadorId: string;
+    creatorProfile: T | null | undefined;
+    acceptedUserIds: string[];
+    profileOf: (id: string) => T | undefined;
+}): {
+    host: (T & { isCreator: boolean }) | null;
+    participantsList: Array<T & { isCreator: boolean }>;
+    joinedCount: number;
+    es_organizador: boolean;
+} {
+    const host = input.creatorProfile
+        ? { ...input.creatorProfile, isCreator: true }
+        : null;
+    const es_organizador = host?.es_organizador === true;
+    const attendeeIds = input.acceptedUserIds.filter((id) => id && id !== input.creadorId);
+    const participantsList: Array<T & { isCreator: boolean }> = [];
+    if (host && !es_organizador) {
+        participantsList.push(host);
+    }
+    const seen = new Set(participantsList.map((p) => p.id));
+    for (const id of attendeeIds) {
+        if (seen.has(id)) continue;
+        const prof = input.profileOf(id);
+        if (!prof) continue;
+        seen.add(id);
+        participantsList.push({ ...prof, isCreator: false });
+    }
+    return {
+        host,
+        participantsList,
+        joinedCount: es_organizador ? attendeeIds.length : input.acceptedUserIds.length,
+        es_organizador,
+    };
+}
+
 /** True si aún se puede unir a la lista de espera (más de 2h antes del evento). */
 export function canJoinWaitlist(fechaEvento: string | null | undefined): boolean {
     if (!fechaEvento) return true;

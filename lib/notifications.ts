@@ -1,16 +1,17 @@
 import { getPendingRequestsCount } from './friends';
 import { isFeedPlan } from './feedPlans';
 import { countPendingPlanInvites } from './planInvites';
+import {
+    invalidateProfileNotificationCount,
+    peekProfileNotificationCountCache,
+    profileNotifKey,
+    subscribeProfileNotifications,
+} from './profileNotificationBus';
 import { countOpenRatings } from './ratings';
 import { supabase } from './supabase';
-import { cacheGetOrFetch, cacheGetStale, cacheInvalidate } from './ttlCache';
+import { cacheGetOrFetch } from './ttlCache';
 
 const NOTIF_TTL_MS = 40_000;
-const listeners = new Set<() => void>();
-
-function notifKey(userId: string) {
-    return `notifCount:${userId}`;
-}
 
 export type ProfileNotificationCount = {
     total: number;
@@ -19,6 +20,8 @@ export type ProfileNotificationCount = {
     planInvites: number;
     openRatings: number;
 };
+
+export { invalidateProfileNotificationCount, subscribeProfileNotifications };
 
 export async function getPlanJoinRequestCount(userId: string): Promise<number> {
     const { data: myPlans } = await supabase
@@ -49,23 +52,7 @@ export async function getPlanJoinRequestCount(userId: string): Promise<number> {
 }
 
 export function peekProfileNotificationCount(userId: string): ProfileNotificationCount | null {
-    return cacheGetStale<ProfileNotificationCount>(notifKey(userId));
-}
-
-export function subscribeProfileNotifications(listener: () => void): () => void {
-    listeners.add(listener);
-    return () => {
-        listeners.delete(listener);
-    };
-}
-
-function emitProfileNotificationsChanged() {
-    listeners.forEach((l) => l());
-}
-
-export function invalidateProfileNotificationCount(userId: string): void {
-    cacheInvalidate(notifKey(userId));
-    emitProfileNotificationsChanged();
+    return peekProfileNotificationCountCache<ProfileNotificationCount>(userId);
 }
 
 export async function getProfileNotificationCount(
@@ -73,7 +60,7 @@ export async function getProfileNotificationCount(
     opts?: { force?: boolean },
 ): Promise<ProfileNotificationCount> {
     return cacheGetOrFetch(
-        notifKey(userId),
+        profileNotifKey(userId),
         NOTIF_TTL_MS,
         async () => {
             const [friendRequests, planRequests, planInvites, openRatings] = await Promise.all([

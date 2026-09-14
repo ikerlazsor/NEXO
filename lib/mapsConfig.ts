@@ -2,11 +2,13 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Platform } from 'react-native';
 import { PROVIDER_GOOGLE } from 'react-native-maps';
 
-/** Expo Go ya trae credenciales de mapas; el APK/standalone necesita API key en el build. */
+/** Expo Go ya trae credenciales de mapas; Android standalone necesita API key de Google. */
 export function isNativeMapsAvailable(): boolean {
     if (Constants.executionEnvironment === ExecutionEnvironment.StoreClient) {
         return true;
     }
+    if (Platform.OS === 'ios') return true;
+    if (Platform.OS !== 'android') return false;
     return Boolean(
         (Constants.expoConfig?.extra as { googleMapsConfigured?: boolean } | undefined)
             ?.googleMapsConfigured,

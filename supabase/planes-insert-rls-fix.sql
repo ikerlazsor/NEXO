@@ -73,7 +73,7 @@ BEGIN
 
     -- Límite de planes activos (si existe la función)
     IF to_regprocedure('public.count_user_active_plans(uuid)') IS NOT NULL THEN
-        IF public.count_user_active_plans(v_uid) >= 3 THEN
+        IF public.count_user_active_plans(v_uid) >= 5 THEN
             RAISE EXCEPTION 'active_plan_limit_reached' USING ERRCODE = 'P0001';
         END IF;
     END IF;

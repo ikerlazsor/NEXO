@@ -33,6 +33,7 @@ import {
     type SupportTicket,
     type UserReportRow,
 } from '../../lib/moderation';
+import { fetchOrganizerRequests, organizerTypeKey, type OrganizerRequest } from '../../lib/organizer';
 import { fetchAccountAccess } from '../../lib/roles';
 
 const PRIMARY = '#4DA6FF';
@@ -41,7 +42,7 @@ const INK = '#0F2A4A';
 const MUTED = '#64748B';
 const DANGER = '#DC2626';
 
-type TabKey = 'soporte' | 'planes' | 'usuarios' | 'mensajes';
+type TabKey = 'soporte' | 'planes' | 'usuarios' | 'mensajes' | 'organizadores';
 
 function estadoColor(estado: string) {
     if (estado === 'abierto') return DANGER;
@@ -61,6 +62,7 @@ export default function AdminInboxScreen() {
     const [planReports, setPlanReports] = useState<PlanReportRow[]>([]);
     const [userReports, setUserReports] = useState<UserReportRow[]>([]);
     const [messageReports, setMessageReports] = useState<MessageReportRow[]>([]);
+    const [organizerRequests, setOrganizerRequests] = useState<OrganizerRequest[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [showAll, setShowAll] = useState(false);
@@ -74,18 +76,20 @@ export default function AdminInboxScreen() {
         }
         setAllowed(true);
         const filter = showAll ? undefined : 'pendientes';
-        const [c, s, p, u, m] = await Promise.all([
+        const [c, s, p, u, m, o] = await Promise.all([
             fetchModerationCounts(),
             fetchSupportTickets(filter),
             fetchPlanReports(filter),
             fetchUserReports(filter),
             fetchMessageReports(filter),
+            fetchOrganizerRequests(!showAll),
         ]);
         setCounts(c);
         setTickets(s);
         setPlanReports(p);
         setUserReports(u);
         setMessageReports(m);
+        setOrganizerRequests(o);
         setLoading(false);
     }, [showAll]);
 
@@ -138,6 +142,7 @@ export default function AdminInboxScreen() {
         { key: 'planes', label: t('admin.tabPlans'), count: counts?.reportes_planes ?? 0 },
         { key: 'usuarios', label: t('admin.tabUsers'), count: counts?.reportes_usuarios ?? 0 },
         { key: 'mensajes', label: t('admin.tabMessages'), count: counts?.reportes_mensajes ?? 0 },
+        { key: 'organizadores', label: t('admin.tabOrganizers'), count: counts?.organizadores ?? 0 },
     ];
 
     return (
@@ -231,7 +236,7 @@ export default function AdminInboxScreen() {
                                             {item.mensaje}
                                         </Text>
                                         <Text style={styles.cardMeta}>
-                                            @{item.perfil?.nombre_usuario || '—'} ·{' '}
+                                            {item.perfil?.nombre || '—'} ·{' '}
                                             {new Date(item.creado_en).toLocaleString()}
                                         </Text>
                                     </Pressable>
@@ -276,7 +281,7 @@ export default function AdminInboxScreen() {
                                             {item.mensaje ? ` — ${item.mensaje}` : ''}
                                         </Text>
                                         <Text style={styles.cardMeta}>
-                                            @{item.reportador?.nombre_usuario || '—'} ·{' '}
+                                            {item.reportador?.nombre || '—'} ·{' '}
                                             {new Date(item.creado_en).toLocaleString()}
                                         </Text>
                                     </Pressable>
@@ -311,14 +316,14 @@ export default function AdminInboxScreen() {
                                             <EstadoPill estado={item.estado} label={t(`admin.estado.${item.estado}`)} />
                                         </View>
                                         <Text style={styles.cardTitle} numberOfLines={1}>
-                                            @{item.denunciado?.nombre_usuario || item.denunciado_id.slice(0, 8)}
+                                            {item.denunciado?.nombre || item.denunciado_id.slice(0, 8)}
                                         </Text>
                                         <Text style={styles.cardBody} numberOfLines={2}>
                                             {item.motivo}
                                             {item.mensaje ? ` — ${item.mensaje}` : ''}
                                         </Text>
                                         <Text style={styles.cardMeta}>
-                                            @{item.reportador?.nombre_usuario || '—'} ·{' '}
+                                            {item.reportador?.nombre || '—'} ·{' '}
                                             {new Date(item.creado_en).toLocaleString()}
                                         </Text>
                                     </Pressable>
@@ -353,13 +358,13 @@ export default function AdminInboxScreen() {
                                             <EstadoPill estado={item.estado} label={t(`admin.estado.${item.estado}`)} />
                                         </View>
                                         <Text style={styles.cardTitle} numberOfLines={1}>
-                                            @{item.denunciado_usuario_snapshot || item.denunciado_nombre_snapshot || '—'}
+                                            {item.denunciado_nombre_snapshot || item.denunciado_usuario_snapshot || '—'}
                                         </Text>
                                         <Text style={styles.cardBody} numberOfLines={2}>
                                             {item.contenido_snapshot || `[${item.tipo_snapshot}]`}
                                         </Text>
                                         <Text style={styles.cardMeta}>
-                                            @{item.reportador?.nombre_usuario || '—'} ·{' '}
+                                            {item.reportador?.nombre || '—'} ·{' '}
                                             {new Date(item.creado_en).toLocaleString()}
                                         </Text>
                                     </Pressable>
@@ -370,6 +375,42 @@ export default function AdminInboxScreen() {
                                     >
                                         <Ionicons name="trash-outline" size={18} color={DANGER} />
                                         <Text style={styles.deleteBtnText}>{t('admin.removeFromInbox')}</Text>
+                                    </Pressable>
+                                </View>
+                            ))
+                        ))}
+
+                    {tab === 'organizadores' &&
+                        (organizerRequests.length === 0 ? (
+                            <Empty label={t('admin.empty')} />
+                        ) : (
+                            organizerRequests.map((item) => (
+                                <View key={item.id} style={styles.card}>
+                                    <Pressable
+                                        onPress={() =>
+                                            router.push({
+                                                pathname: '/admin/organizer/[id]',
+                                                params: { id: item.id },
+                                            })
+                                        }
+                                    >
+                                        <View style={styles.cardTop}>
+                                            <Text style={styles.cardType}>{t(organizerTypeKey(item.tipo))}</Text>
+                                            <EstadoPill
+                                                estado={item.estado === 'pendiente' ? 'abierto' : item.estado === 'aprobado' ? 'resuelto' : 'descartado'}
+                                                label={item.estado}
+                                            />
+                                        </View>
+                                        <Text style={styles.cardTitle} numberOfLines={1}>
+                                            {item.nombre_org}
+                                        </Text>
+                                        <Text style={styles.cardBody} numberOfLines={2}>
+                                            {item.descripcion}
+                                        </Text>
+                                        <Text style={styles.cardMeta}>
+                                            {item.perfil?.nombre || '—'} ·{' '}
+                                            {new Date(item.creado_en).toLocaleString()}
+                                        </Text>
                                     </Pressable>
                                 </View>
                             ))
@@ -413,9 +454,10 @@ const styles = StyleSheet.create({
     filterChipOn: { backgroundColor: PRIMARY_DARK, borderColor: PRIMARY_DARK },
     filterText: { fontSize: 13, fontWeight: '700', color: MUTED },
     filterTextOn: { color: '#FFF' },
-    tabs: { flexDirection: 'row', gap: 8, paddingHorizontal: 20, marginBottom: 12 },
+    tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 20, marginBottom: 12 },
     tab: {
-        flex: 1,
+        minWidth: '30%',
+        flexGrow: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',

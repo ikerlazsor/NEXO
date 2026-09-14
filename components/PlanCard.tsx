@@ -1,6 +1,7 @@
 import {
     Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Image as ExpoImage } from 'expo-image';
 import { useCallback,
     useEffect,
     useMemo,
@@ -9,9 +10,8 @@ import { useCallback,
     memo } from 'react';
 import {
     Animated,
+    Dimensions,
     Easing,
-    Image,
-    LayoutAnimation,
     Linking,
     Modal,
     Platform,
@@ -25,29 +25,43 @@ import {
 import { Alert } from '../lib/nexoAlert';
 import { Marker } from 'react-native-maps';
 import { NexoMapView } from './NexoMapView';
-import { resolvePlanImageSource, resolvePlanCategories } from '../lib/sports';
 import { canJoinWaitlist, type Membership } from '../lib/participants';
 import { canJoinPlanByGender, isSoloChicasPlan } from '../lib/soloChicas';
 import { allFemaleGenero } from '../lib/profileFields';
 import { kickParticipant } from '../lib/kickParticipant';
 import { hapticMedium, hapticSelection } from '../lib/haptics';
 import { useT } from '../lib/i18n';
-import { buildPlanShareMessage } from '../lib/shareLinks';
+import { buildFootballShareMessage, buildPlanShareMessage } from '../lib/shareLinks';
+import { resolvePlanSport } from '../lib/sports';
 import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../lib/planInvites';
 import { formatSocialJoinedBanner } from '../lib/socialJoinedBanner';
-import { PlanImage } from './PlanImage';
+import { feedFitPercent, type FeedTaste } from '../lib/feedAffinity';
+import { FitMatchBanner } from './FitMatchBanner';
+import { PlanCoverCarousel } from './PlanCoverCarousel';
 import { InvitePeopleSheet, type InviteProfile } from './InvitePeopleSheet';
+import { TranslatedText } from './TranslatedText';
+import { seedUserProfilePeek, prefetchUserProfile } from '../lib/userProfileCache';
+import { seedPlanDetailFromFeed, prefetchPlanDetail } from '../lib/planDetailCache';
+import { planCoverList } from '../lib/planCovers';
+import { planIsOrganizer } from '../lib/organizer';
+import { useAppTheme, useThemedStyles } from '../lib/appTheme';
+import { type ThemeColors } from '../theme';
 
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const SUCCESS = '#22C55E';
+const JOINED_VIVID = '#10B981';
+const JOINED_VIVID_BG = '#D1FAE5';
+const JOINED_VIVID_BORDER = '#34D399';
 const DANGER = '#EF4444';
 const DANGER_DARK = '#DC2626';
 const DANGER_BG = '#FEF2F2';
 const GOLD = '#D4AF37';
 
-const MAX_VISIBLE_AVATARS = 4;
+const MAX_VISIBLE_AVATARS = 5;
+/** Feed listContent paddingHorizontal 20 + 20 */
+const COVER_W = Dimensions.get('window').width - 40;
 
 const avatarFallback = (name?: string) =>
     `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'N')}&background=4DA6FF&color=fff`;
@@ -69,6 +83,7 @@ const AvatarStack = ({
     dark?: boolean;
 }) => {
     const { t } = useT();
+    const styles = useThemedStyles(createPlanCardStyles);
     if (!participants || participants.length === 0) {
         return (
             <View style={styles.avatarStackRow}>
@@ -87,11 +102,15 @@ const AvatarStack = ({
                     {visible.map((p, index) => (
                         <View
                             key={p.id ?? index}
-                            style={[styles.stackAvatarWrap, { marginLeft: index === 0 ? 0 : -12, zIndex: visible.length - index }]}
+                            style={[styles.stackAvatarWrap, { marginLeft: index === 0 ? 0 : -15, zIndex: visible.length - index }]}
                         >
-                            <Image
+                            <ExpoImage
                                 source={{ uri: p.avatar_url || avatarFallback(p.nombre) }}
                                 style={[styles.stackAvatar, p.isCreator && styles.stackAvatarCreator]}
+                                contentFit="cover"
+                                cachePolicy="memory-disk"
+                                recyclingKey={p.id ?? p.avatar_url}
+                                transition={0}
                             />
                             {p.isCreator && (
                                 <View style={styles.creatorDot}>
@@ -101,7 +120,7 @@ const AvatarStack = ({
                         </View>
                     ))}
                     {extra > 0 && (
-                        <View style={[styles.stackAvatarWrap, styles.extraBubble, { marginLeft: -12, zIndex: 0 }]}>
+                        <View style={[styles.stackAvatarWrap, styles.extraBubble, { marginLeft: -15, zIndex: 0 }]}>
                             <Text style={styles.extraBubbleText}>+{extra}</Text>
                         </View>
                     )}
@@ -124,8 +143,11 @@ interface PlanCardProps {
     isSaved: boolean;
     friendIds?: Set<string>;
     coincidedIds?: Set<string>;
+    feedTaste?: FeedTaste | null;
     /** Solo el owner: puede eliminar cualquier plan del feed. */
     isOwner?: boolean;
+    /** La cuenta que mira el feed es organizador: no puede unirse a planes de otros. */
+    viewerIsOrganizer?: boolean;
     onJoin: (id: string) => void;
     joining?: boolean;
     onLeave: (id: string) => void;
@@ -133,8 +155,11 @@ interface PlanCardProps {
     onEdit: (id: string) => void;
     onToggleSave: (id: string) => void;
     onOpenDetail?: (id: string) => void;
+    onOpenProfile?: (userId: string) => void;
     onParticipantsChanged?: () => void;
     distanceLabel?: string;
+    /** Animación de entrada en el feed (desactivar mejora scroll). */
+    animateEntrance?: boolean;
     router: any;
 }
 
@@ -147,6 +172,7 @@ function PlanCardInner({
     isSaved,
     friendIds,
     coincidedIds,
+    feedTaste,
     isOwner,
     onJoin,
     joining = false,
@@ -155,11 +181,16 @@ function PlanCardInner({
     onEdit,
     onToggleSave,
     onOpenDetail,
+    onOpenProfile,
     onParticipantsChanged,
     distanceLabel,
+    viewerIsOrganizer = false,
+    animateEntrance = false,
     router,
 }: PlanCardProps) {
     const { t, lang } = useT();
+    const { colors } = useAppTheme();
+    const styles = useThemedStyles(createPlanCardStyles);
     const [expanded, setExpanded] = useState(false);
     const [showRoster, setShowRoster] = useState(false);
     const [showInviteSheet, setShowInviteSheet] = useState(false);
@@ -168,7 +199,7 @@ function PlanCardInner({
     const scale = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
-        if (index > 4) {
+        if (!animateEntrance || index > 4) {
             entrance.setValue(1);
             return;
         }
@@ -179,7 +210,7 @@ function PlanCardInner({
             easing: Easing.out(Easing.cubic),
             useNativeDriver: true,
         }).start();
-    }, [entrance, index]);
+    }, [animateEntrance, entrance, index]);
 
     const isCreator = currentUserId && String(item.creador_id) === String(currentUserId);
     const isFull = item.joinedCount >= item.maximo_participantes;
@@ -188,13 +219,15 @@ function PlanCardInner({
     const eventDate = item.fecha_evento ? new Date(item.fecha_evento) : null;
     const isToday = eventDate ? isSameCalendarDay(eventDate, new Date()) : false;
     const isPast = eventDate ? eventDate.getTime() < Date.now() : false;
-    const friendParticipants = friendIds
-        ? participants.filter((p: { id?: string }) => p.id && friendIds.has(p.id))
-        : [];
+    const friendParticipants =
+        !viewerIsOrganizer && friendIds
+            ? participants.filter((p: { id?: string }) => p.id && friendIds.has(p.id))
+            : [];
     const friendsInPlan = friendParticipants.length;
     // Conocidos = coincidencia previa; no en planes ya pasados ni solapados con amigos.
+    // Cuentas de comunidad: sin amigos/conocidos ni % encaja.
     const coincidedParticipants =
-        !isPast && coincidedIds
+        !viewerIsOrganizer && !isPast && coincidedIds
             ? participants.filter(
                 (p: { id?: string }) =>
                     p.id &&
@@ -206,23 +239,41 @@ function PlanCardInner({
     const coincidedInPlan = coincidedParticipants.length;
     const friendsAllFemale = allFemaleGenero(friendParticipants);
     const coincidedAllFemale = allFemaleGenero(coincidedParticipants);
-    const socialJoinedText = formatSocialJoinedBanner({
-        friendsCount: friendsInPlan,
-        coincidedCount: coincidedInPlan,
-        friendsAllFemale,
-        coincidedAllFemale,
-        t,
-    });
-
-    const { main: mainCategory, sub: subCategory } = resolvePlanCategories(item);
-    const mainCategoryLabel = mainCategory ? t(`cat.main.${mainCategory}`) : '';
-    const subCategoryLabel = subCategory ? t(`cat.sub.${subCategory}`) : '';
+    const socialJoinedText =
+        isCreator || viewerIsOrganizer
+            ? null
+            : formatSocialJoinedBanner({
+                  friendsCount: friendsInPlan,
+                  coincidedCount: coincidedInPlan,
+                  friendsAllFemale,
+                  coincidedAllFemale,
+                  t,
+              });
+    const fitPct =
+        !viewerIsOrganizer && !isCreator && !socialJoinedText && feedTaste && currentUserId
+            ? feedFitPercent(
+                  {
+                      categoria: item.categoria,
+                      tipo_deporte: item.tipo_deporte,
+                      fecha_evento: item.fecha_evento,
+                      solo_chicas: item.solo_chicas,
+                  },
+                  {
+                      personalityTags: feedTaste.personalityTags,
+                      viewerAge: feedTaste.viewerAge,
+                      viewerGenero: userGenero,
+                  },
+                  item.id,
+              )
+            : null;
 
     const isSoloChicas = isSoloChicasPlan(item);
     const isFriendsOnly = !!item.solo_amigos && !item.modo_privado;
     const isPrivate = !!item.modo_privado;
     const canInvite = isCreator && isPrivate && !isPast;
     const genderBlocked = !canJoinPlanByGender(item, userGenero as any);
+    const isOrganizerPlan = planIsOrganizer(item);
+    const coverList = planCoverList(item);
     const isCalmPremium = !isToday && !isFull && !isSoloChicas && !isFriendsOnly && !isPrivate;
     const dateString = eventDate ? eventDate.toLocaleDateString() : t('card.noDate');
     const timeString = eventDate ? eventDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
@@ -232,14 +283,35 @@ function PlanCardInner({
             onOpenDetail(item.id);
             return;
         }
-        LayoutAnimation.configureNext(LayoutAnimation.create(260, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity));
         setExpanded(prev => !prev);
     };
-    const toggleExpand = openDetail;
-    const pressIn = () => Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
+    const pressIn = () => {
+        Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
+        // Calentar detalle/perfil en el finger-down (estilo Instagram).
+        try {
+            seedPlanDetailFromFeed(item as Record<string, unknown>, {
+                membership: membership || 'none',
+            });
+            prefetchPlanDetail(String(item.id));
+            const host = item.host || item.participantsList?.find((p: { isCreator?: boolean }) => p.isCreator);
+            if (host?.id) {
+                seedUserProfilePeek({
+                    id: host.id,
+                    nombre: host.nombre,
+                    avatar_url: host.avatar_url,
+                    es_organizador: planIsOrganizer(item),
+                });
+                prefetchUserProfile(host.id);
+            }
+        } catch {
+            /* ignore */
+        }
+    };
     const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
 
-    const creator = participants.find((p: { isCreator?: boolean }) => p.isCreator) || participants[0];
+    const creator = item.host
+        || participants.find((p: { isCreator?: boolean }) => p.isCreator)
+        || (!isOrganizerPlan ? participants[0] : null);
     // Una sola etiqueta especial en la card (menos ruido visual).
     const specialTag: 'private' | 'friends' | 'soloChicas' | null = isPrivate
         ? 'private'
@@ -249,15 +321,28 @@ function PlanCardInner({
             ? 'soloChicas'
             : null;
 
-    const buildShareMessage = () =>
-        buildPlanShareMessage({
+    const buildShareMessage = () => {
+        const when = eventDate ? `${dateString}${timeString ? ` · ${timeString}` : ''}` : null;
+        const sport = resolvePlanSport(item);
+        if (sport?.tipo === 'futbol') {
+            return buildFootballShareMessage({
+                title: item.titulo,
+                location: item.nombre_ubicacion,
+                when,
+                planId: item.id,
+                spotsLeft: Math.max(0, item.maximo_participantes - item.joinedCount),
+                lang,
+            });
+        }
+        return buildPlanShareMessage({
             title: item.titulo,
             location: item.nombre_ubicacion,
-            when: eventDate ? `${dateString}${timeString ? ` · ${timeString}` : ''}` : null,
+            when,
             planId: item.id,
             hint: t('planDetail.shareHint'),
             lang,
         });
+    };
 
     const openNativeShare = async () => {
         try {
@@ -284,8 +369,6 @@ function PlanCardInner({
             { text: t('common.cancel'), style: 'cancel' },
         ]);
     };
-
-    const getPlanImageSource = (): string | number => resolvePlanImageSource(item.imagen_url);
 
     const openInviteSheet = async () => {
         setShowInviteSheet(true);
@@ -345,7 +428,7 @@ function PlanCardInner({
                     ) : null}
                     <View style={styles.creatorFooterRow}>
                         <View style={[styles.creatorBadge, isPrivate && styles.creatorBadgePrivate]}>
-                            <Ionicons name="star" size={15} color={isPrivate ? '#0F172A' : PRIMARY_DARK} />
+                            <Ionicons name="star" size={15} color={isPrivate ? colors.text : PRIMARY_DARK} />
                             <Text style={[styles.creatorBadgeText, isPrivate && styles.creatorBadgeTextPrivate]}>{t('card.myPlan')}</Text>
                         </View>
                         <TouchableOpacity style={[styles.iconActionBtn, { backgroundColor: PRIMARY }]} onPress={() => onEdit(item.id)}>
@@ -355,6 +438,14 @@ function PlanCardInner({
                             <Ionicons name="trash" size={20} color="#FFF" />
                         </TouchableOpacity>
                     </View>
+                </View>
+            );
+        }
+        if (viewerIsOrganizer) {
+            return (
+                <View style={styles.organizerBlockedRow}>
+                    <Ionicons name="briefcase-outline" size={18} color={PRIMARY_DARK} />
+                    <Text style={styles.organizerBlockedText}>{t('organizer.cannotJoinHint')}</Text>
                 </View>
             );
         }
@@ -375,7 +466,7 @@ function PlanCardInner({
                     hapticSelection();
                     onLeave(item.id);
                 }}>
-                    <Ionicons name="checkmark-circle" size={18} color={SUCCESS} />
+                    <Ionicons name="checkmark-circle" size={18} color={JOINED_VIVID} />
                     <Text style={styles.joinedButtonText}>
                         {t(userGenero === 'femenino' ? 'card.joinedF' : 'card.joined')}
                     </Text>
@@ -438,16 +529,15 @@ function PlanCardInner({
                 activeOpacity={0.85}
             >
                 <Text style={styles.joinButtonText}>{requiresApproval ? t('card.request') : t('card.join')}</Text>
-                <Ionicons name={requiresApproval ? 'shield-checkmark' : 'arrow-forward'} size={18} color="#FFF" />
             </TouchableOpacity>
         );
     };
 
     return (
         <Animated.View style={{ opacity: entrance, transform: [{ scale }, { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }] }}>
-            <Pressable onPressIn={pressIn} onPressOut={pressOut} onPress={onOpenDetail ? () => onOpenDetail(item.id) : undefined}>
-                <View style={[
-                    styles.card,
+            <View style={[
+                        styles.card,
+                        { backgroundColor: colors.surface },
                     isToday && styles.cardToday,
                     isSoloChicas && styles.cardSoloChicas,
                     isFriendsOnly && styles.cardFriends,
@@ -512,47 +602,47 @@ function PlanCardInner({
                         isCalmPremium && styles.cardInnerPremium,
                         isFull && styles.cardInnerFull,
                     ]}>
-                    <View style={styles.imageWrap}>
-                        <PlanImage
-                            source={getPlanImageSource()}
-                            style={styles.cardImage}
+                    <View style={styles.imageWrap} pointerEvents="box-none">
+                        <PlanCoverCarousel
+                            covers={coverList}
+                            fallback={item.imagen_url}
+                            height={222}
+                            width={COVER_W}
                             recyclingKey={String(item.id)}
                             priority={index < 3 ? 'high' : 'normal'}
+                            deferExtraSlides
+                            onPress={onOpenDetail ? () => onOpenDetail(item.id) : openDetail}
                         />
                         <LinearGradient
+                            pointerEvents="none"
                             colors={
                                 isPrivate
-                                    ? ['rgba(15,23,42,0)', 'rgba(15,23,42,0.45)']
+                                    ? ['rgba(15,23,42,0)', 'rgba(15,23,42,0)', 'rgba(15,23,42,0.5)']
                                     : isFriendsOnly
-                                      ? ['rgba(21,128,61,0)', 'rgba(21,128,61,0.28)']
+                                      ? ['rgba(21,128,61,0)', 'rgba(21,128,61,0)', 'rgba(21,128,61,0.32)']
                                       : isToday
-                                        ? ['rgba(180,83,9,0)', 'rgba(120,53,15,0.65)']
-                                        : ['rgba(15,42,74,0)', 'rgba(15,42,74,0.55)']
+                                        ? ['rgba(180,83,9,0)', 'rgba(180,83,9,0)', 'rgba(120,53,15,0.7)']
+                                        : ['rgba(15,42,74,0)', 'rgba(15,42,74,0)', 'rgba(15,42,74,0.58)']
                             }
+                            locations={[0, 0.42, 1]}
                             style={styles.imageShade}
                         />
-                        {isFull && <View style={styles.fullVeil} />}
+                        {isFull && <View pointerEvents="none" style={styles.fullVeil} />}
+                        {isFull && (
+                            <View style={styles.fullBadgeTop} pointerEvents="none">
+                                <Ionicons name="ban" size={12} color="#FFF" />
+                                <Text style={styles.fullBadgeTopText}>{t('card.fullShort')}</Text>
+                            </View>
+                        )}
                         {isToday && !isFull && (
-                            <View style={styles.todayBadge}>
+                            <View style={styles.todayBadge} pointerEvents="none">
                                 <Ionicons name="flash" size={14} color="#FFF" />
                                 <Text style={styles.todayBadgeText}>{t('card.todayBadge')}</Text>
                             </View>
                         )}
 
-                        <View style={styles.topRow}>
-                            <View style={styles.topLeftTags}>
-                                {mainCategoryLabel ? (
-                                    <View style={styles.mainCategoryTag}>
-                                        <Text style={styles.mainCategoryText}>{mainCategoryLabel}</Text>
-                                    </View>
-                                ) : null}
-                                {subCategoryLabel ? (
-                                    <View style={styles.subCategoryTag}>
-                                        <Text style={styles.subCategoryText} numberOfLines={1}>
-                                            {subCategoryLabel}
-                                        </Text>
-                                    </View>
-                                ) : null}
+                        <View style={styles.topRow} pointerEvents="box-none">
+                            <View style={styles.topLeftTags} pointerEvents="none">
                                 {specialTag === 'soloChicas' ? (
                                     <View style={styles.soloChicasTag}>
                                         <Ionicons name="female" size={11} color="#FFF" />
@@ -582,23 +672,18 @@ function PlanCardInner({
                             </View>
                         </View>
 
-                        {isFull && (
-                            <View style={styles.fullBadgeCenter}>
-                                <Ionicons name="ban" size={18} color="#FFF" />
-                                <Text style={styles.fullBadgeCenterText}>{t('card.full')}</Text>
+                        <View style={styles.imageBottomRow} pointerEvents="none">
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.cardTitleOnImage} numberOfLines={2}>{item.titulo}</Text>
                             </View>
-                        )}
-
-                        <View style={styles.imageBottomRow}>
-                            <Text style={styles.cardTitleOnImage} numberOfLines={2}>{item.titulo}</Text>
                         </View>
                     </View>
 
+                    <Pressable onPressIn={pressIn} onPressOut={pressOut} onPress={onOpenDetail ? () => onOpenDetail(item.id) : openDetail}>
                     <View style={[styles.cardContent, isPrivate && styles.cardContentPrivate, isFriendsOnly && styles.cardContentFriends]}>
                         <AvatarStack
                             participants={participants}
                             maxPeople={item.maximo_participantes}
-                            dark={false}
                             onOpenRoster={() => {
                                 if (onOpenDetail) onOpenDetail(item.id);
                                 else if (participants.length > 0) setShowRoster(true);
@@ -609,7 +694,18 @@ function PlanCardInner({
                             <TouchableOpacity
                                 style={styles.hostRow}
                                 activeOpacity={0.85}
-                                onPress={() => creator.id && router.push(`/user-profile/${creator.id}`)}
+                                onPress={() => {
+                                    if (!creator.id) return;
+                                    seedUserProfilePeek({
+                                        id: creator.id,
+                                        nombre: creator.nombre,
+                                        avatar_url: creator.avatar_url,
+                                        es_organizador: planIsOrganizer(item) || creator.es_organizador === true,
+                                    });
+                                    prefetchUserProfile(creator.id);
+                                    if (onOpenProfile) onOpenProfile(creator.id);
+                                    else router.push(`/user-profile/${creator.id}`);
+                                }}
                             >
                                 <Text style={styles.hostText} numberOfLines={1}>
                                     {t('card.hostedBy', { name: creator.nombre })}
@@ -624,6 +720,12 @@ function PlanCardInner({
                                     {socialJoinedText}
                                 </Text>
                             </View>
+                        ) : fitPct != null ? (
+                            <FitMatchBanner
+                                pct={fitPct}
+                                label={t('card.fitMatch', { pct: fitPct })}
+                                compact
+                            />
                         ) : null}
 
                         <View style={styles.metaRow}>
@@ -631,7 +733,7 @@ function PlanCardInner({
                                 <Ionicons
                                     name="calendar-outline"
                                     size={15}
-                                    color={isPrivate ? INK : isFriendsOnly ? '#15803D' : isToday ? '#B45309' : PRIMARY_DARK}
+                                    color={isPrivate ? colors.text : isFriendsOnly ? '#15803D' : isToday ? '#B45309' : PRIMARY_DARK}
                                 />
                                 <Text style={[
                                     styles.metaText,
@@ -646,7 +748,7 @@ function PlanCardInner({
                                 <Ionicons
                                     name="location-outline"
                                     size={15}
-                                    color={isPrivate ? INK : isFriendsOnly ? '#15803D' : PRIMARY_DARK}
+                                    color={isPrivate ? colors.text : isFriendsOnly ? '#15803D' : PRIMARY_DARK}
                                 />
                                 <Text style={[
                                     styles.metaText,
@@ -663,7 +765,12 @@ function PlanCardInner({
                         {expanded && !onOpenDetail && (
                             <View style={styles.expandedSection}>
                                 <Text style={[styles.descLabel, isPrivate && styles.descLabelPrivate]}>{t('card.aboutPlan')}</Text>
-                                <Text style={[styles.descriptionText, isPrivate && styles.descriptionTextPrivate]}>{item.descripcion || t('card.noDescription')}</Text>
+                                <TranslatedText
+                                    text={item.descripcion?.trim() || null}
+                                    empty={t('card.noDescription')}
+                                    style={[styles.descriptionText, isPrivate && styles.descriptionTextPrivate]}
+                                    showHint={false}
+                                />
                                 <View style={styles.miniMapContainer}>
                                     <NexoMapView
                                         key={`mini-${item.id}-${item.latitud}-${item.longitud}`}
@@ -693,13 +800,6 @@ function PlanCardInner({
                             </View>
                         )}
 
-                        <TouchableOpacity style={styles.expandHint} onPress={toggleExpand} activeOpacity={0.7}>
-                            <Text style={[styles.expandHintText, isPrivate && styles.expandHintTextPrivate]}>
-                                {onOpenDetail ? t('card.tapDetail') : expanded ? t('card.tapCollapse') : t('card.tapExpand')}
-                            </Text>
-                            <Ionicons name={onOpenDetail ? 'open-outline' : expanded ? 'chevron-up' : 'chevron-down'} size={16} color={isPrivate ? '#334155' : '#94A3B8'} />
-                        </TouchableOpacity>
-
                         <View style={styles.cardFooter}>
                             {renderFooter()}
                             {isOwner && !isCreator ? (
@@ -714,9 +814,9 @@ function PlanCardInner({
                             ) : null}
                         </View>
                     </View>
+                    </Pressable>
                     </View>
                 </View>
-            </Pressable>
 
             <Modal visible={showRoster} transparent animationType="fade" onRequestClose={() => setShowRoster(false)}>
                 <Pressable style={styles.rosterOverlay} onPress={() => setShowRoster(false)}>
@@ -732,15 +832,29 @@ function PlanCardInner({
                                     activeOpacity={0.8}
                                     onPress={() => {
                                         setShowRoster(false);
-                                        router.push({
-                                            pathname: '/user-profile/[id]',
-                                            params: { id: p.id },
+                                        seedUserProfilePeek({
+                                            id: p.id,
+                                            nombre: p.nombre,
+                                            avatar_url: p.avatar_url,
+                                            es_organizador: p.es_organizador === true,
                                         });
+                                        prefetchUserProfile(p.id);
+                                        if (onOpenProfile) onOpenProfile(p.id);
+                                        else {
+                                            router.push({
+                                                pathname: '/user-profile/[id]',
+                                                params: { id: p.id },
+                                            });
+                                        }
                                     }}
                                 >
-                                    <Image
+                                    <ExpoImage
                                         source={{ uri: p.avatar_url || avatarFallback(p.nombre) }}
                                         style={[styles.rosterAvatar, p.isCreator && styles.stackAvatarCreator]}
+                                        contentFit="cover"
+                                        cachePolicy="memory-disk"
+                                        recyclingKey={p.id ?? p.avatar_url}
+                                        transition={0}
                                     />
                                     <View style={{ flex: 1 }}>
                                         <Text style={styles.rosterName}>{p.nombre || t('profile.user')}</Text>
@@ -809,23 +923,32 @@ function PlanCardInner({
     );
 }
 
-const styles = StyleSheet.create({
-    card: { borderRadius: 26, marginBottom: 22, overflow: 'hidden', elevation: 10, shadowColor: '#1E3A8A', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 10 } },
-    cardFull: { padding: 3, overflow: 'visible', elevation: 12, shadowColor: DANGER_DARK, shadowOpacity: 0.28, borderRadius: 28 },
+function createPlanCardStyles(c: ThemeColors) {
+    const INK = c.text;
+    const PRIMARY = c.brand;
+    const PRIMARY_DARK = c.primary;
+    const SUCCESS = c.success;
+    const DANGER = c.danger;
+    const DANGER_DARK = c.dangerDark;
+    const DANGER_BG = c.dangerSoft;
+    const isDark = c.statusBar === 'light';
+    return StyleSheet.create({
+    card: { borderRadius: 26, marginBottom: 22, overflow: 'hidden', elevation: 10, shadowColor: isDark ? '#000' : '#1E3A8A', shadowOpacity: isDark ? 0.45 : 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, backgroundColor: c.surface },
+    cardFull: { padding: 3, overflow: 'visible', elevation: 10, shadowColor: DANGER_DARK, shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderRadius: 28 },
     fullBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInnerFull: { borderColor: DANGER, borderWidth: 2, backgroundColor: DANGER_BG },
-    cardToday: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#D97706', shadowOpacity: 0.35, borderRadius: 28 },
+    cardInnerFull: { borderColor: DANGER, borderWidth: 1.5, backgroundColor: DANGER_BG },
+    cardToday: { padding: 3, overflow: 'visible', elevation: 10, shadowColor: '#D97706', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderRadius: 28 },
     cardSoloChicas: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#DB2777', shadowOpacity: 0.35, borderRadius: 28 },
     soloChicasBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInnerSoloChicas: { backgroundColor: '#FDF2F8', borderColor: '#F9A8D4', borderWidth: 1.5 },
+    cardInnerSoloChicas: { backgroundColor: isDark ? '#3B1120' : '#FDF2F8', borderColor: isDark ? '#9D174D' : '#F9A8D4', borderWidth: 1.5 },
     cardFriends: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#16A34A', shadowOpacity: 0.32, borderRadius: 28 },
     friendsBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInnerFriends: { backgroundColor: '#FAFDFB', borderColor: '#86EFAC', borderWidth: 1.5 },
+    cardInnerFriends: { backgroundColor: isDark ? c.successSoft : '#FAFDFB', borderColor: isDark ? '#166534' : '#86EFAC', borderWidth: 1.5 },
     cardPrivate: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#020617', shadowOpacity: 0.45, borderRadius: 28 },
     privateBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInnerPrivate: { backgroundColor: '#EEF2F7', borderColor: '#64748B', borderWidth: 1.5 },
-    cardContentFriends: { backgroundColor: '#FAFDFB' },
-    cardContentPrivate: { backgroundColor: '#EEF2F7' },
+    cardInnerPrivate: { backgroundColor: isDark ? c.surfaceSubtle : '#EEF2F7', borderColor: isDark ? c.borderStrong : '#64748B', borderWidth: 1.5 },
+    cardContentFriends: { backgroundColor: isDark ? c.successSoft : '#FAFDFB' },
+    cardContentPrivate: { backgroundColor: isDark ? c.surfaceSubtle : '#EEF2F7' },
     friendsOnlyTag: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -848,42 +971,74 @@ const styles = StyleSheet.create({
         borderColor: 'rgba(148,163,184,0.35)',
     },
     privateTagText: { color: '#F8FAFC', fontSize: 9, fontWeight: '800' },
-    metaTextFriends: { color: '#166534', fontWeight: '700' },
-    metaTextPrivate: { color: '#0F172A', fontWeight: '800' },
-    friendsBannerOnFriends: { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' },
-    friendsBannerTextFriends: { color: '#15803D' },
-    friendsBannerOnPrivate: { backgroundColor: '#E0E7FF', borderColor: '#A5B4FC' },
-    friendsBannerTextPrivate: { color: '#3730A3' },
-    coincidedBannerOnPrivate: { backgroundColor: '#EDE9FE', borderColor: '#C4B5FD' },
-    expandHintTextPrivate: { color: '#1E293B', fontWeight: '800' },
-    descLabelPrivate: { color: '#0F172A' },
-    descriptionTextPrivate: { color: '#334155' },
+    metaTextFriends: { color: isDark ? c.success : '#166534', fontWeight: '700' },
+    metaTextPrivate: { color: c.text, fontWeight: '800' },
+    friendsBannerOnFriends: { backgroundColor: isDark ? c.successSoft : '#F0FDF4', borderColor: isDark ? '#166534' : '#BBF7D0' },
+    friendsBannerTextFriends: { color: isDark ? c.success : '#15803D' },
+    friendsBannerOnPrivate: { backgroundColor: isDark ? c.primarySoft : '#E0E7FF', borderColor: isDark ? c.primaryBorder : '#A5B4FC' },
+    friendsBannerTextPrivate: { color: isDark ? c.brand : '#3730A3' },
+    coincidedBannerOnPrivate: { backgroundColor: c.primarySoft, borderColor: c.primaryBorder },
+    expandHintTextPrivate: { color: c.text, fontWeight: '800' },
+    descLabelPrivate: { color: c.text },
+    descriptionTextPrivate: { color: c.textMuted },
     cardPremium: { padding: 2, overflow: 'visible', elevation: 12, shadowColor: '#2563EB', shadowOpacity: 0.2, borderRadius: 28 },
+    cardOrganizer: {
+        padding: 3,
+        overflow: 'visible',
+        elevation: 10,
+        shadowColor: '#C9A227',
+        shadowOpacity: 0.18,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 7 },
+        borderRadius: 28,
+    },
+    organizerBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
+    cardInnerOrganizer: { backgroundColor: isDark ? '#1C1910' : '#FFFDF8', borderColor: 'transparent', borderWidth: 0 },
+    imageWrapOrganizer: { height: 222 },
+    cardContentOrganizer: { backgroundColor: isDark ? '#1C1910' : '#FFFDF8' },
+    orgHostText: { color: isDark ? '#F5D76E' : '#7A5A12', fontWeight: '800' },
+    orgBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: 'rgba(255,248,232,0.96)',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: 'rgba(201,162,39,0.45)',
+    },
+    orgBadgeText: { color: isDark ? '#F5D76E' : '#7A5A12', fontSize: 10, fontWeight: '800' },
+    mainCategoryTagOrg: { backgroundColor: 'rgba(245,215,142,0.95)' },
+    mainCategoryTextOrg: { color: isDark ? '#F5D76E' : '#7A5A12' },
+    subCategoryTagOrg: { backgroundColor: isDark ? 'rgba(28,25,16,0.94)' : 'rgba(255,255,255,0.94)', borderWidth: 1, borderColor: 'rgba(201,162,39,0.35)' },
+    subCategoryTextOrg: { color: isDark ? c.textMuted : '#334155' },
     todayBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
     premiumBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInner: { borderRadius: 24, overflow: 'hidden', backgroundColor: '#FFF', borderWidth: 1, borderColor: 'rgba(37,99,235,0.06)' },
-    cardInnerToday: { backgroundColor: '#FFFBEB', borderColor: '#FCD34D', borderWidth: 1.5 },
-    cardInnerPremium: { backgroundColor: '#FAFCFF', borderColor: 'rgba(96,165,250,0.35)', borderWidth: 1 },
-    todayBadge: { position: 'absolute', top: 14, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#D97706', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, zIndex: 5, elevation: 6, shadowColor: '#92400E', shadowOpacity: 0.4, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
-    todayBadgeText: { color: '#FFF', fontSize: 12, fontWeight: '900', letterSpacing: 1.2 },
-    todayBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEF3C7', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: '#FCD34D' },
-    todayBannerText: { color: '#B45309', fontWeight: '800', fontSize: 14 },
-    metaTextToday: { color: '#92400E', fontWeight: '800' },
+    cardInner: { borderRadius: 24, overflow: 'hidden', backgroundColor: c.surface, borderWidth: 1, borderColor: isDark ? c.border : 'rgba(37,99,235,0.06)' },
+    cardInnerToday: { backgroundColor: c.warningSoft, borderColor: c.warning, borderWidth: 1.25 },
+    cardInnerPremium: { backgroundColor: isDark ? c.surface : '#FAFCFF', borderColor: isDark ? c.primaryBorder : 'rgba(96,165,250,0.35)', borderWidth: 1 },
+    todayBadge: { position: 'absolute', top: 14, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#D97706', paddingHorizontal: 13, paddingVertical: 5, borderRadius: 18, zIndex: 5, elevation: 4, shadowColor: '#92400E', shadowOpacity: 0.22, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+    todayBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '900', letterSpacing: 1.1 },
+    todayBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: c.warningSoft, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: c.warning },
+    todayBannerText: { color: isDark ? c.warning : '#B45309', fontWeight: '800', fontSize: 14 },
+    metaTextToday: { color: isDark ? c.warning : '#B45309', fontWeight: '800' },
+    metaTextOrganizer: { color: isDark ? '#F5D76E' : '#8A6D1A', fontWeight: '700' },
     avatarStackTouchable: { flexDirection: 'row', alignItems: 'center' },
-    rosterOverlay: { flex: 1, backgroundColor: 'rgba(15,42,74,0.45)', justifyContent: 'flex-end' },
-    rosterSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingBottom: 28, maxHeight: '55%' },
-    rosterHandle: { width: 40, height: 4, backgroundColor: '#E2E8F0', borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 14 },
+    rosterOverlay: { flex: 1, backgroundColor: c.overlay, justifyContent: 'flex-end' },
+    rosterSheet: { backgroundColor: c.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingBottom: 28, maxHeight: '55%' },
+    rosterHandle: { width: 40, height: 4, backgroundColor: c.border, borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 14 },
     rosterTitle: { fontSize: 16, fontWeight: '900', color: INK, marginBottom: 12 },
-    rosterRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
-    rosterRowWrap: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+    rosterRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+    rosterRowWrap: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
     rosterKickBtn: { padding: 10 },
-    rosterAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: '#E3ECFB' },
+    rosterAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: c.surfaceSubtle },
     rosterName: { fontSize: 16, fontWeight: '700', color: INK },
     rosterCreatorLabel: { fontSize: 11, fontWeight: '700', color: '#B45309', marginTop: 2 },
-    imageWrap: { width: '100%', height: 240, position: 'relative' },
+    imageWrap: { width: COVER_W, height: 222, position: 'relative', overflow: 'hidden' },
     cardImage: { width: '100%', height: '100%' },
-    imageShade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '70%' },
-    fullVeil: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(185,28,28,0.28)' },
+    imageShade: { ...StyleSheet.absoluteFillObject },
+    fullVeil: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(185,28,28,0.18)' },
     topRow: { position: 'absolute', top: 12, left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', zIndex: 4 },
     topLeftTags: { flexDirection: 'column', alignItems: 'flex-start', gap: 5, flexShrink: 1, maxWidth: '62%' },
     topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0 },
@@ -906,7 +1061,7 @@ const styles = StyleSheet.create({
         paddingVertical: 4,
         borderRadius: 10,
     },
-    subCategoryText: { color: '#334155', fontSize: 11, fontWeight: '700' },
+    subCategoryText: { color: INK, fontSize: 11, fontWeight: '700' },
     soloChicasTag: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -918,19 +1073,19 @@ const styles = StyleSheet.create({
     },
     soloChicasTagText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
     circleBtn: { backgroundColor: 'rgba(15,42,74,0.4)', width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-    fullBadgeCenter: { position: 'absolute', top: 60, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: DANGER_DARK, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, transform: [{ rotate: '-4deg' }], elevation: 4, borderWidth: 2, borderColor: '#FFF' },
-    fullBadgeCenterText: { color: '#FFF', fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
+    fullBadgeTop: { position: 'absolute', top: 14, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: DANGER_DARK, paddingHorizontal: 11, paddingVertical: 5, borderRadius: 18, zIndex: 5, elevation: 4, shadowColor: DANGER_DARK, shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+    fullBadgeTopText: { color: '#FFF', fontSize: 10.5, fontWeight: '900', letterSpacing: 1 },
     imageBottomRow: { position: 'absolute', left: 16, right: 16, bottom: 14, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
-    cardTitleOnImage: { flex: 1, color: '#FFF', fontSize: 22, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.4)', textShadowRadius: 6, textShadowOffset: { width: 0, height: 1 } },
+    cardTitleOnImage: { flex: 1, color: '#FFF', fontSize: 24, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.55)', textShadowRadius: 8, textShadowOffset: { width: 0, height: 1 } },
 
-    cardContent: { padding: 18 },
-    avatarStackRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' },
+    cardContent: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 16 },
+    avatarStackRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' },
     avatarStack: { flexDirection: 'row', alignItems: 'center' },
     stackAvatarWrap: { position: 'relative' },
-    stackAvatar: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#FFF', backgroundColor: '#E3ECFB' },
+    stackAvatar: { width: 41, height: 41, borderRadius: 21, borderWidth: 2, borderColor: c.surface, backgroundColor: c.surfaceSubtle },
     stackAvatarCreator: { borderColor: GOLD },
     creatorDot: { position: 'absolute', bottom: -1, right: -1, backgroundColor: GOLD, borderRadius: 6, width: 13, height: 13, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#FFF' },
-    extraBubble: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#FFF', backgroundColor: PRIMARY_DARK, justifyContent: 'center', alignItems: 'center' },
+    extraBubble: { width: 41, height: 41, borderRadius: 21, borderWidth: 2, borderColor: c.surface, backgroundColor: PRIMARY_DARK, justifyContent: 'center', alignItems: 'center' },
     extraBubbleText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
     goingText: { marginLeft: 10, fontSize: 13, fontWeight: '800', color: INK },
     goingTextDark: { color: '#F1F5F9' },
@@ -939,22 +1094,22 @@ const styles = StyleSheet.create({
     beFirstText: { fontSize: 13, fontWeight: '600', color: '#94A3B8' },
     beFirstTextDark: { color: '#CBD5E1' },
 
-    futbolChip: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, backgroundColor: '#EAF3E9', borderRadius: 16, paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: '#CDE7CB' },
+    futbolChip: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, backgroundColor: isDark ? c.successSoft : '#EAF3E9', borderRadius: 16, paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: isDark ? '#14532D' : '#CDE7CB' },
     futbolBall: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#2E9E5B', justifyContent: 'center', alignItems: 'center' },
-    futbolFormatText: { fontSize: 16, fontWeight: '900', color: '#1B7A42' },
-    futbolChipHint: { flex: 1, fontSize: 13, fontWeight: '700', color: '#3E7A52' },
-    fieldModal: { flex: 1, backgroundColor: '#F2F7FF' },
-    fieldModalHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 56, paddingBottom: 14, backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#EEF3FB' },
-    fieldCloseBtn: { width: 44, height: 44, borderRadius: 15, backgroundColor: '#EEF3FB', justifyContent: 'center', alignItems: 'center' },
+    futbolFormatText: { fontSize: 16, fontWeight: '900', color: isDark ? c.success : '#1B7A42' },
+    futbolChipHint: { flex: 1, fontSize: 13, fontWeight: '700', color: isDark ? c.success : '#3E7A52' },
+    fieldModal: { flex: 1, backgroundColor: c.backgroundAlt },
+    fieldModalHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 56, paddingBottom: 14, backgroundColor: c.surface, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+    fieldCloseBtn: { width: 44, height: 44, borderRadius: 15, backgroundColor: c.surfaceSubtle, justifyContent: 'center', alignItems: 'center' },
     fieldModalTitle: { fontSize: 18, fontWeight: '900', color: INK },
-    fieldModalSub: { fontSize: 13, fontWeight: '600', color: '#64748B' },
+    fieldModalSub: { fontSize: 13, fontWeight: '600', color: c.textMuted },
     fieldModalBody: { flex: 1, padding: 18 },
-    fieldModalHint: { textAlign: 'center', color: '#64748B', fontWeight: '600', fontSize: 13, marginTop: 14 },
-    hostRow: { gap: 6, marginTop: 2 },
-    hostText: { fontSize: 13, fontWeight: '700', color: '#334155' },
+    fieldModalHint: { textAlign: 'center', color: c.textMuted, fontWeight: '600', fontSize: 13, marginTop: 14 },
+    hostRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+    hostText: { fontSize: 13, fontWeight: '700', color: c.text },
     hostTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
     hostTag: {
-        backgroundColor: '#EFF6FF',
+        backgroundColor: c.primarySoft,
         borderRadius: 999,
         paddingHorizontal: 8,
         paddingVertical: 3,
@@ -962,15 +1117,15 @@ const styles = StyleSheet.create({
     hostTagText: { fontSize: 11, fontWeight: '700', color: PRIMARY_DARK, maxWidth: 120 },
     metaRow: { gap: 8, marginTop: 6 },
     metaItem: { flexDirection: 'row', alignItems: 'center' },
-    metaText: { marginLeft: 7, fontSize: 14, color: '#475569', fontWeight: '600', flexShrink: 1 },
+    metaText: { marginLeft: 7, fontSize: 14, color: c.textMuted, fontWeight: '600', flexShrink: 1 },
 
-    expandedSection: { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: '#EEF3FB' },
-    descLabel: { fontSize: 11, fontWeight: '800', color: '#94A3B8', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.3 },
-    descriptionText: { fontSize: 14, color: '#475569', lineHeight: 21 },
-    miniMapContainer: { height: 180, width: '100%', borderRadius: 16, overflow: 'hidden', marginTop: 14, borderWidth: 1, borderColor: '#E3ECFB' },
+    expandedSection: { marginTop: 14, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
+    descLabel: { fontSize: 11, fontWeight: '800', color: c.textSubtle, textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.3 },
+    descriptionText: { fontSize: 14, color: c.textMuted, lineHeight: 21 },
+    miniMapContainer: { height: 180, width: '100%', borderRadius: 16, overflow: 'hidden', marginTop: 14, borderWidth: 1, borderColor: c.border },
     miniMap: { flex: 1 },
     expandHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 12 },
-    expandHintText: { fontSize: 12, color: '#94A3B8', fontWeight: '600' },
+    expandHintText: { fontSize: 12, color: c.textSubtle, fontWeight: '600' },
 
     cardFooter: { marginTop: 12, gap: 8 },
     ownerDeleteBtn: {
@@ -985,12 +1140,23 @@ const styles = StyleSheet.create({
     ownerDeleteBtnText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
     joinButton: { backgroundColor: PRIMARY_DARK, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16 },
     joinButtonText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
-    joinedButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: SUCCESS + '18', borderWidth: 1, borderColor: SUCCESS },
-    joinedButtonText: { color: SUCCESS, fontWeight: '800', fontSize: 14 },
-    requestedButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FCD34D' },
-    requestedButtonText: { color: '#B45309', fontWeight: '800', fontSize: 14 },
+    requestHint: { fontSize: 12, fontWeight: '600', color: c.textMuted, textAlign: 'center', lineHeight: 16 },
+    joinedButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 14,
+        borderRadius: 16,
+        backgroundColor: JOINED_VIVID_BG,
+        borderWidth: 2,
+        borderColor: JOINED_VIVID_BORDER,
+    },
+    joinedButtonText: { color: JOINED_VIVID, fontWeight: '800', fontSize: 15 },
+    requestedButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: c.warningSoft, borderWidth: 1, borderColor: c.warning },
+    requestedButtonText: { color: isDark ? c.warning : '#B45309', fontWeight: '800', fontSize: 14 },
     fullButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: DANGER_BG, borderWidth: 1, borderColor: DANGER },
-    waitlistButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: '#C4B5FD' },
+    waitlistButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: c.accentSoft, borderWidth: 1, borderColor: c.accent },
     waitlistButtonText: { color: '#6D28D9', fontWeight: '800', fontSize: 15 },
     waitlistJoinButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, backgroundColor: '#7C3AED' },
     waitlistJoinText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
@@ -1003,11 +1169,24 @@ const styles = StyleSheet.create({
         gap: 8,
         paddingVertical: 14,
         borderRadius: 16,
-        backgroundColor: '#FDF2F8',
+        backgroundColor: isDark ? '#3B1120' : '#FDF2F8',
         borderWidth: 1,
-        borderColor: '#FBCFE8',
+        borderColor: isDark ? '#9D174D' : '#FBCFE8',
     },
     genderBlockedText: { color: '#DB2777', fontWeight: '800', fontSize: 14, flex: 1, textAlign: 'center' },
+    organizerBlockedRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 14,
+        paddingHorizontal: 12,
+        borderRadius: 16,
+        backgroundColor: c.primarySoft,
+        borderWidth: 1,
+        borderColor: c.primaryBorder,
+    },
+    organizerBlockedText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 14, flex: 1, textAlign: 'center' },
     bannerStack: {
         gap: 6,
         marginBottom: 12,
@@ -1016,12 +1195,12 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        backgroundColor: '#EFF6FF',
+        backgroundColor: c.primarySoft,
         borderRadius: 12,
         paddingVertical: 8,
         paddingHorizontal: 12,
         borderWidth: 1,
-        borderColor: '#BFDBFE',
+        borderColor: c.primaryBorder,
         marginTop: 10,
         marginBottom: 10,
     },
@@ -1030,14 +1209,14 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        backgroundColor: '#F5F3FF',
+        backgroundColor: c.primarySoft,
         borderRadius: 10,
         paddingHorizontal: 10,
         paddingVertical: 7,
         borderWidth: 1,
-        borderColor: '#DDD6FE',
+        borderColor: c.primaryBorder,
     },
-    coincidedBannerText: { color: '#6D28D9', fontWeight: '700', fontSize: 12, flex: 1 },
+    coincidedBannerText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 12, flex: 1 },
     fullButtonText: { color: DANGER_DARK, fontWeight: '800', fontSize: 14 },
     creatorFooterCol: { gap: 10 },
     creatorInviteBtn: {
@@ -1045,21 +1224,50 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        backgroundColor: '#1E293B',
+        backgroundColor: isDark ? c.surfaceSubtle : '#1E293B',
         paddingVertical: 12,
         borderRadius: 16,
     },
     creatorInviteBtnText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
     creatorFooterRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    creatorBadge: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 13, borderRadius: 16, backgroundColor: '#EEF3FB' },
+    creatorBadge: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 13, borderRadius: 16, backgroundColor: c.surfaceSubtle },
     creatorBadgePrivate: {
-        backgroundColor: '#FFF',
+        backgroundColor: c.surface,
         borderWidth: 2,
-        borderColor: '#0F172A',
+        borderColor: c.text,
     },
     creatorBadgeText: { color: PRIMARY_DARK, fontWeight: '800', fontSize: 14 },
-    creatorBadgeTextPrivate: { color: '#0F172A' },
+    creatorBadgeTextPrivate: { color: c.text },
     iconActionBtn: { width: 48, height: 48, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
-});
+    });
+}
 
-export const PlanCard = memo(PlanCardInner);
+export const PlanCard = memo(PlanCardInner, (prev, next) => {
+    if (prev.item.id !== next.item.id) return false;
+    if (prev.membership !== next.membership) return false;
+    if (prev.isSaved !== next.isSaved) return false;
+    if (prev.joining !== next.joining) return false;
+    if (prev.distanceLabel !== next.distanceLabel) return false;
+    if (prev.viewerIsOrganizer !== next.viewerIsOrganizer) return false;
+    if (prev.isOwner !== next.isOwner) return false;
+    if (prev.currentUserId !== next.currentUserId) return false;
+    if (prev.userGenero !== next.userGenero) return false;
+    if (prev.item.joinedCount !== next.item.joinedCount) return false;
+    if (prev.item.titulo !== next.item.titulo) return false;
+    if (prev.item.imagen_url !== next.item.imagen_url) return false;
+    const prevCovers = Array.isArray(prev.item.imagenes_url) ? prev.item.imagenes_url.join('\0') : '';
+    const nextCovers = Array.isArray(next.item.imagenes_url) ? next.item.imagenes_url.join('\0') : '';
+    if (prevCovers !== nextCovers) return false;
+    if (prev.item.fecha_evento !== next.item.fecha_evento) return false;
+    if (prev.item.participantsList !== next.item.participantsList) return false;
+    if (prev.onJoin !== next.onJoin) return false;
+    if (prev.onLeave !== next.onLeave) return false;
+    if (prev.onDelete !== next.onDelete) return false;
+    if (prev.onEdit !== next.onEdit) return false;
+    if (prev.onToggleSave !== next.onToggleSave) return false;
+    if (prev.onOpenDetail !== next.onOpenDetail) return false;
+    if (prev.friendIds !== next.friendIds) return false;
+    if (prev.coincidedIds !== next.coincidedIds) return false;
+    if (prev.feedTaste !== next.feedTaste) return false;
+    return true;
+});

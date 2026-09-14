@@ -14,6 +14,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { SupportEmailLink } from '../components/SupportEmailLink';
+import { LegalWebLink } from '../components/LegalWebLink';
+import { NEXO_SUPPORT_URL } from '../lib/brand';
 import { useT } from '../lib/i18n';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -56,6 +59,7 @@ const FAQ: FaqItem[] = [
     { id: 'ratings', titleKey: 'help.faq.ratings.title', bodyKey: 'help.faq.ratings.body', section: 'account' },
     { id: 'block', titleKey: 'help.faq.block.title', bodyKey: 'help.faq.block.body', section: 'safety' },
     { id: 'report', titleKey: 'help.faq.report.title', bodyKey: 'help.faq.report.body', section: 'safety' },
+    { id: 'age', titleKey: 'help.faq.age.title', bodyKey: 'help.faq.age.body', section: 'safety' },
 ];
 
 const ACTIONS: ActionItem[] = [
@@ -216,7 +220,8 @@ export default function HelpCenterScreen() {
                     >
                         <Text style={styles.footerBtnText}>{t('help.contactBtn')}</Text>
                     </TouchableOpacity>
-                    <Text style={styles.footerEmail}>{t('help.contactEmailHint')}</Text>
+                    <SupportEmailLink prefix={t('help.contactEmailHint')} style={styles.footerEmail} />
+                    <LegalWebLink url={NEXO_SUPPORT_URL} label={t('help.openSupportPage')} />
                 </View>
             </ScrollView>
         </View>

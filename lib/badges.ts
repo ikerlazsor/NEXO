@@ -55,11 +55,11 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
         nombre: 'Primeros pasos',
         shape: 'medal_welcome',
         kind: 'welcome',
-        welcomeText: 'Bienvenido a la comunidad Nexo',
+        welcomeText: 'Bienvenido a la comunidad Nexo!',
     },
     {
         id: 'foodie',
-        nombre: 'Foodie',
+        nombre: 'Picoteo',
         shape: 'medal_round',
         kind: 'tiered',
         thresholds: [5, 20, 50],
@@ -169,7 +169,7 @@ export const BADGE_FAMILIES: BadgeFamily[] = [
     },
     {
         id: 'embajador_nexo',
-        nombre: 'Embajador Nexo',
+        nombre: 'Embajador Nexo!',
         shape: 'crown_spike',
         kind: 'legendary',
         legendaryText:

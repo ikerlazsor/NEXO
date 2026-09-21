@@ -1,11 +1,11 @@
-# Publica la web estática de appnexo.es (carpeta site/).
-# En Cloudflare (Workers Builds):
-#   Root directory: /
-#   Deploy command: npx wrangler deploy
+# Web estática appnexo.es (carpeta site/) vía Worker + assets.
+# Cloudflare Builds → Deploy command: npx wrangler deploy
 name = "appnexo-site"
+main = "site-worker.js"
 compatibility_date = "2025-08-01"
+workers_dev = true
 
 [assets]
 directory = "./site"
+binding = "ASSETS"
 html_handling = "auto"
-not_found_handling = "404-page"

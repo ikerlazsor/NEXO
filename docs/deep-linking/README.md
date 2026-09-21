@@ -1,38 +1,26 @@
 # Deep linking — `appnexo.es`
 
-## Estado
+La web pública vive en **`site/`** (HTML estático) del mismo repo `ikerlazsor/NEXO`.
+No es un Next.js aparte. Vercel está enlazado al repo, pero el sitio usa `_headers` / `_redirects` (estilo Cloudflare Pages).
 
-| Plataforma | App (Expo) | Web (`.well-known`) |
-|---|---|---|
-| **iOS** Universal Links | `applinks:appnexo.es` en `app.json` | AASA listo con Team ID `WR5J2G5FV5` |
-| **Android** App Links | `intentFilters` en `app.json` | `assetlinks.json` pendiente de SHA-256 |
+## iOS (listo en código)
 
-Puedes publicar **solo iOS** ahora. Android lo completas más adelante con el SHA-256 + un build solo Android (no hace falta rebuild de iOS).
+- `site/.well-known/apple-app-site-association` → Team ID `WR5J2G5FV5`
+- `site/plan/` + redirect `/plan/*`
+- App: `applinks:appnexo.es` en `app.json`
 
-## Qué hacer ahora (iOS)
-
-1. En el repo **Next.js**, copia:
-   - `docs/deep-linking/public/.well-known/apple-app-site-association` → `public/.well-known/apple-app-site-association`
-   - (Opcional) `assetlinks.json` aún con placeholder; Android no verificará hasta poner el SHA-256 real.
-
-2. Asegura ruta web `/plan/[id]` (aunque sea “Abrir en Nexo!”).
-
-3. Despliega la web y comprueba:
-   - `https://appnexo.es/.well-known/apple-app-site-association`
-   - [CDN de Apple](https://app-site-association.cdn-apple.com/a/v1/appnexo.es)
-
-4. Build nativo iOS (OTA no vale para associated domains):
+## Publicar la web
 
 ```bash
-eas build --platform ios --profile production --auto-submit
+git add site/
+git commit -m "AASA Universal Links para appnexo.es"
+git push
 ```
 
-## Más adelante (Android)
+Luego comprueba: `https://appnexo.es/.well-known/apple-app-site-association`
 
-1. Obtén el SHA-256 (Play Console → App integrity → App signing key certificate).
-2. Ponlo en `assetlinks.json` y redeploy de la web.
-3. Solo Android:
+Si tras el push sigue 404, en Cloudflare Pages / el host que sirva `site/` lanza un redeploy (Root Directory = `site`).
 
-```bash
-eas build --platform android --profile production
-```
+## Android (más adelante)
+
+Pon el SHA-256 en `site/.well-known/assetlinks.json` y un build solo Android.

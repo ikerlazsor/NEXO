@@ -183,6 +183,8 @@ export function FeedMapHost() {
     const [visible, setVisible] = useState(false);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    /** Plan centrado en el carrusel (borde de color aunque no haya selección). */
+    const [peekPlanId, setPeekPlanId] = useState<string | null>(null);
     const [tick, setTick] = useState(0);
     const [remotePlans, setRemotePlans] = useState<MapPlan[] | null>(null);
     const [loadingPlans, setLoadingPlans] = useState(false);
@@ -207,6 +209,7 @@ export function FeedMapHost() {
     const resetAfterClose = useCallback(() => {
         setVisible(false);
         setSelectedId(null);
+        setPeekPlanId(null);
         selectedIdRef.current = null;
         didInitCarousel.current = false;
         userEngagedRef.current = false;
@@ -326,6 +329,7 @@ export function FeedMapHost() {
         userEngagedRef.current = false;
         selectedIdRef.current = null;
         setSelectedId(null);
+        setPeekPlanId(null);
         scrollOffsetRef.current = 0;
         consumePendingOpenFeedMap();
 
@@ -504,6 +508,7 @@ export function FeedMapHost() {
                 selectedIdRef.current = planId;
                 setSelectedId(planId);
             }
+            setPeekPlanId(planId);
             const plan = plans.find((p) => String(p.id) === planId);
             if (plan) animateMapToPlan(plan, opts?.mapDuration ?? MAP_FOCUS_MS);
             if (opts?.scroll !== false) {
@@ -521,6 +526,8 @@ export function FeedMapHost() {
         userEngagedRef.current = false;
         selectedIdRef.current = null;
         setSelectedId(null);
+        const midPlan = plans[0];
+        if (midPlan) setPeekPlanId(String(midPlan.id));
         const target = middleBlock;
         scrollOffsetRef.current = target * mapCardInterval;
         requestAnimationFrame(() => {
@@ -596,11 +603,12 @@ export function FeedMapHost() {
             const offsetX = e.nativeEvent.contentOffset.x;
             scrollOffsetRef.current = offsetX;
             const snappedIdx = Math.round(offsetX / mapCardInterval);
-            if (userEngagedRef.current) {
-                const realIdx = ((snappedIdx % plans.length) + plans.length) % plans.length;
-                const plan = plans[realIdx];
-                if (plan) {
-                    const planId = String(plan.id);
+            const realIdx = ((snappedIdx % plans.length) + plans.length) % plans.length;
+            const plan = plans[realIdx];
+            if (plan) {
+                const planId = String(plan.id);
+                setPeekPlanId(planId);
+                if (userEngagedRef.current) {
                     if (selectedIdRef.current !== planId) {
                         selectedIdRef.current = planId;
                         setSelectedId(planId);
@@ -703,6 +711,11 @@ export function FeedMapHost() {
                             onScrollToIndexFailed={() => {}}
                             renderItem={({ item }) => {
                                 const selected = selectedId != null && String(item.id) === String(selectedId);
+                                const peeked =
+                                    selectedId == null &&
+                                    peekPlanId != null &&
+                                    String(item.id) === String(peekPlanId);
+                                const showAccent = selected || peeked;
                                 const count = Number(item.joinedCount ?? item.participantsList?.length ?? 0);
                                 const max = Number(item.maximo_participantes) || 0;
                                 const people = Array.isArray(item.participantsList)
@@ -737,7 +750,7 @@ export function FeedMapHost() {
                                             styles.mapMiniCard,
                                             { width: mapCardWidth, marginRight: mapCardGap },
                                             selected && styles.mapMiniCardOn,
-                                            selected && { borderColor: catColor },
+                                            showAccent && { borderColor: catColor },
                                         ]}
                                     >
                                         <View>

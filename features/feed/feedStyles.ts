@@ -9,7 +9,7 @@ export function createFeedStyles(c: ThemeColors) {
 
   return StyleSheet.create({
   container: { flex: 1, backgroundColor: "transparent" },
-  searchWrapper: { paddingLeft: 20, marginBottom: 8 },
+  searchWrapper: { paddingLeft: 20, marginBottom: 4 },
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -36,9 +36,46 @@ export function createFeedStyles(c: ThemeColors) {
   quickFiltersRow: {
     flexDirection: "row",
     gap: 8,
-    paddingHorizontal: 20,
     marginTop: 2,
-    paddingBottom: 2,
+    marginBottom: 0,
+  },
+  feedChromeHeader: {
+    height: 46,
+    marginBottom: 10,
+    justifyContent: "center",
+  },
+  feedChromeSlot: {
+    height: 46,
+    marginBottom: 10,
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  listWrap: { flex: 1, position: "relative" },
+  refreshBannerOverlay: {
+    position: "absolute",
+    top: 6,
+    left: 0,
+    right: 0,
+    zIndex: 30,
+    alignItems: "center",
+  },
+  loadMoreFooter: {
+    paddingVertical: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  loadMoreDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: PRIMARY_DARK,
+    opacity: 0.35,
+  },
+  loadMoreDotMid: {
+    opacity: 0.7,
+    transform: [{ scale: 1.15 }],
   },
   quickFilterPill: {
     flexDirection: "row",
@@ -73,7 +110,6 @@ export function createFeedStyles(c: ThemeColors) {
     marginTop: 10,
     marginBottom: 8,
   },
-  listWrap: { flex: 1 },
   listLoadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: BG_BOTTOM,
@@ -208,7 +244,9 @@ export function createFeedStyles(c: ThemeColors) {
     borderTopRightRadius: 28,
     paddingTop: 10,
     paddingHorizontal: 18,
-    maxHeight: "88%",
+    /** Un poco más alta: tapa más feed, sigue dejando aire arriba. */
+    height: "72%",
+    maxHeight: "72%",
     width: "100%",
     shadowColor: "#0F2A4A",
     shadowOpacity: 0.14,
@@ -216,13 +254,18 @@ export function createFeedStyles(c: ThemeColors) {
     shadowOffset: { width: 0, height: -4 },
     elevation: 16,
   },
+  filtersGrabberHit: {
+    alignItems: "center",
+    paddingTop: 4,
+    paddingBottom: 14,
+  },
   filtersGrabber: {
     alignSelf: "center",
     width: 44,
     height: 5,
     borderRadius: 999,
     backgroundColor: c.border,
-    marginBottom: 14,
+    marginBottom: 6,
   },
   filtersHeader: {
     flexDirection: "row",
@@ -238,8 +281,8 @@ export function createFeedStyles(c: ThemeColors) {
     marginTop: 4,
   },
   clearFiltersText: { color: PRIMARY_DARK, fontWeight: "700", fontSize: 13, marginTop: 4 },
-  filtersScroll: { flexGrow: 0, flexShrink: 1 },
-  filtersScrollContent: { paddingBottom: 8, flexGrow: 0, gap: 12 },
+  filtersScroll: { flex: 1 },
+  filtersScrollContent: { paddingBottom: 8, flexGrow: 1, gap: 12 },
   filterSectionCard: {
     backgroundColor: c.backgroundAlt,
     borderRadius: 18,

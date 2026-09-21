@@ -1,3 +1,5 @@
+import { isLegacyPlanCreatedNotice } from "../../lib/chatSystem";
+
 export const PAGE_SIZE = 50;
 export const PLAN_CHAT_TTL_MS = 15 * 60 * 1000;
 export const DIRECT_CHAT_TTL_MS = 15 * 60 * 1000;
@@ -58,7 +60,10 @@ export function mapMessageRow(row: Record<string, unknown>): Message {
 
 export function mergeMessages(a: Message[], b: Message[]): Message[] {
   const map = new Map<string, Message>();
-  for (const m of [...a, ...b]) map.set(m.id, m);
+  for (const m of [...a, ...b]) {
+    if (m.tipo === "texto" && isLegacyPlanCreatedNotice(m.contenido)) continue;
+    map.set(m.id, m);
+  }
   return Array.from(map.values()).sort(
     (x, y) => new Date(y.creado_en).getTime() - new Date(x.creado_en).getTime(),
   );

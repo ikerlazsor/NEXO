@@ -28,7 +28,7 @@ import { useT } from '../lib/i18n';
 import { FLASH_LIST_DRAW_DISTANCE } from '../lib/listConfig';
 import { broadcastPlanMembership } from '../lib/membershipBroadcast';
 import { Alert } from '../lib/nexoAlert';
-import { persistJoinWithWaitlistFallback, persistLeave } from '../lib/offlineActions';
+import { persistJoinWithWaitlistFallback, persistLeave, subscribeSaveState } from '../lib/offlineActions';
 import { peekViewerIsOrganizer, rememberViewerIsOrganizer } from '../lib/organizer';
 import {
     canJoinWaitlist,
@@ -87,16 +87,28 @@ export default function SavedPlansScreen() {
         const saveUnsub = subscribeSaveState((evt) => {
             setSavedPlans((prev) => {
                 if (evt.saved) {
-                    // Si se guarda, añadir si no existe
-                    return prev.some((p) => p.id === evt.planId) ? prev : prev;
-                } else {
-                    // Si se quita, eliminar de la lista
-                    return prev.filter((p) => p.id !== evt.planId);
+                    // Añadir solo si ya tenemos el plan en lista; si no, el focus refetch lo trae.
+                    return prev;
                 }
+                return prev.filter((p) => String(p.id) !== evt.planId);
             });
+            if (!evt.saved && sessionUserId) {
+                const cacheKey = screenCacheKey.savedPlans(sessionUserId);
+                const cached = cacheGetStale<SavedPlansSnapshot>(cacheKey);
+                if (cached?.savedPlans) {
+                    cacheSet(
+                        cacheKey,
+                        {
+                            ...cached,
+                            savedPlans: cached.savedPlans.filter((p) => String(p.id) !== evt.planId),
+                        },
+                        ScreenCacheTTL.savedPlans,
+                    );
+                }
+            }
         });
         return saveUnsub;
-    }, []);
+    }, [sessionUserId]);
 
     const fetchSavedData = useCallback(async () => {
         const gen = ++fetchGenRef.current;
@@ -392,7 +404,7 @@ export default function SavedPlansScreen() {
                         !loading ? (
                         <View style={styles.center}>
                             <View style={styles.emptyIconWrap}>
-                                <Ionicons name="heart-outline" size={48} color={PRIMARY} />
+                                <Ionicons name="bookmark-outline" size={48} color={PRIMARY} />
                             </View>
                             <Text style={styles.emptyTitle}>{t('saved.empty')}</Text>
                             <TouchableOpacity style={styles.exploreBtn} onPress={() => router.navigate('/')}>

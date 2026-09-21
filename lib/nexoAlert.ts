@@ -20,8 +20,10 @@ export type NexoAlertRequest = {
 };
 
 type Presenter = (req: NexoAlertRequest) => void;
+type ClearFn = () => void;
 
 let presentAlert: Presenter | null = null;
+let clearAlerts: ClearFn | null = null;
 const pending: NexoAlertRequest[] = [];
 
 export function registerNexoAlertPresenter(fn: Presenter | null) {
@@ -32,6 +34,16 @@ export function registerNexoAlertPresenter(fn: Presenter | null) {
             if (next) fn(next);
         }
     }
+}
+
+export function registerNexoAlertClear(fn: ClearFn | null) {
+    clearAlerts = fn;
+}
+
+/** Cierra cualquier alerta en cola (p. ej. al salir de un modal nativo). */
+export function dismissAllNexoAlerts() {
+    pending.length = 0;
+    clearAlerts?.();
 }
 
 function normalizeButtons(buttons?: NexoAlertButton[]): NexoAlertButton[] {

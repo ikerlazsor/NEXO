@@ -5,13 +5,22 @@ interface Props {
     uri?: string | null;
     name?: string;
     size?: number;
+    /** Por defecto círculo (size/2). Pasa un valor menor para cuadrado redondeado. */
+    borderRadius?: number;
     recyclingKey?: string;
     priority?: 'low' | 'normal' | 'high';
 }
 
-export function ProfileAvatar({ uri, name = 'U', size = 100, recyclingKey, priority = 'high' }: Props) {
+export function ProfileAvatar({
+    uri,
+    name = 'U',
+    size = 100,
+    borderRadius,
+    recyclingKey,
+    priority = 'high',
+}: Props) {
     const source = uri || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=E2E8F0&color=475569&size=${size}`;
-    const radius = size / 2;
+    const radius = borderRadius ?? size / 2;
 
     return (
         <View style={[styles.wrap, { width: size, height: size, borderRadius: radius }]}>

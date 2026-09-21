@@ -63,6 +63,8 @@ import { fetchOrganizerInsights } from './organizerInsights';
 import { getPublicAttendedPlans } from './profileSocial';
 import { runWhenIdle } from './runWhenIdle';
 import { warmMapRegion, warmMapRegionsFromPlans, warmMapsForSignedInUser } from './mapWarm';
+import { syncNotificationCategoryPrefsFromServer } from './notificationPrefs';
+import { syncPushPreferenceFromServer } from './push';
 
 const FEED_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHATS_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -162,6 +164,11 @@ async function prefetchProfile(userId: string, authUser: Awaited<ReturnType<type
         organizer: parseOrganizerMeta(row.data?.organizador),
     }, ScreenCacheTTL.profileUI);
     rememberChromeAvatar(userId, profile.avatar_url ?? null);
+    if (profile.avatar_url) {
+        void import('expo-image').then(({ Image }) => {
+            void Image.prefetch(profile.avatar_url as string);
+        });
+    }
     warmPendingRatings(ratings);
     if (organizer) {
         void prefetchOrganizerExtras(userId);
@@ -594,6 +601,13 @@ async function prefetchFeed(userId: string | null): Promise<void> {
     warmFeedImages(snapshot);
 }
 
+async function warmSettingsPrefs(userId: string): Promise<void> {
+    await Promise.allSettled([
+        syncPushPreferenceFromServer(userId),
+        syncNotificationCategoryPrefsFromServer(userId),
+    ]);
+}
+
 async function runPrefetch(userId: string, authUser: User) {
     adoptPublicRankings(userId);
     seedEmptyPersonalCaches(userId);
@@ -607,6 +621,7 @@ async function runPrefetch(userId: string, authUser: User) {
         prefetchFriends(userId),
         prefetchSavedPlans(userId),
         prefetchSearchRankings(userId),
+        warmSettingsPrefs(userId),
     ]);
     if (peekViewerIsOrganizer()) {
         void prefetchOrganizerExtras(userId);

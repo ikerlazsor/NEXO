@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Alert } from '../lib/nexoAlert';
+import { authRedirectPath, ingestAuthDeepLink } from '../lib/authDeepLink';
 import { getAuthUser } from '../lib/auth';
 import {
     clearPendingVerifyEmail,
@@ -32,22 +33,6 @@ const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const MUTED = '#64748B';
 const OTP_LEN = 6;
-
-function parseAuthParams(url: string): Record<string, string> {
-    const out: Record<string, string> = {};
-    const collect = (str?: string) => {
-        if (!str) return;
-        str.split('&').forEach((pair) => {
-            const [k, v] = pair.split('=');
-            if (k) out[decodeURIComponent(k)] = decodeURIComponent(v || '');
-        });
-    };
-    const qIndex = url.indexOf('?');
-    const hIndex = url.indexOf('#');
-    if (qIndex !== -1) collect(url.substring(qIndex + 1, hIndex !== -1 ? hIndex : undefined));
-    if (hIndex !== -1) collect(url.substring(hIndex + 1));
-    return out;
-}
 
 function digitsOnly(value: string) {
     return value.replace(/\D/g, '').slice(0, OTP_LEN);
@@ -74,35 +59,7 @@ export default function VerifyEmailScreen() {
         router.replace('/onboarding');
     }, [router]);
 
-    const ingestUrl = useCallback(
-        async (url: string | null) => {
-            if (!url) return false;
-            const params = parseAuthParams(url);
-            if (params.access_token && params.refresh_token) {
-                const { error } = await supabase.auth.setSession({
-                    access_token: params.access_token,
-                    refresh_token: params.refresh_token,
-                });
-                if (error) throw error;
-                return true;
-            }
-            if (params.code) {
-                const { error } = await supabase.auth.exchangeCodeForSession(params.code);
-                if (error) throw error;
-                return true;
-            }
-            if (params.token_hash && (params.type === 'signup' || params.type === 'email')) {
-                const { error } = await supabase.auth.verifyOtp({
-                    type: 'signup',
-                    token_hash: params.token_hash,
-                });
-                if (error) throw error;
-                return true;
-            }
-            return false;
-        },
-        [],
-    );
+    const ingestUrl = useCallback(async (url: string | null) => ingestAuthDeepLink(url), []);
 
     const refreshStatus = useCallback(async () => {
         const user = await getAuthUser();
@@ -207,7 +164,7 @@ export default function VerifyEmailScreen() {
         }
         setResending(true);
         try {
-            const redirectTo = Linking.createURL('verify-email');
+            const redirectTo = authRedirectPath('verify-email');
             const { error } = await supabase.auth.resend({
                 type: 'signup',
                 email,

@@ -19,6 +19,7 @@ import { renderRatingStars } from '../../lib/profileRating';
 import { formatRatingScore } from '../../lib/stats';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { resolveProfileCoverSource } from '../../lib/profileCover';
+import { countryCodeToFlagEmoji } from '../../lib/countryFlags';
 import { getInterestAccent, getInterestIcon, INTEREST_VISIBLE_MAX } from '../../lib/profileInterests';
 import { stripPlanTitleSuffix } from '../../lib/planDisplay';
 import {
@@ -109,6 +110,9 @@ export function ProfileHero({
     coverUrl,
     avatarUrl,
     name,
+    age,
+    genero,
+    flagCode,
     verified,
     overlay,
     variant,
@@ -123,6 +127,12 @@ export function ProfileHero({
     coverUrl?: string | null;
     avatarUrl?: string | null;
     name: string;
+    /** Edad visible (ya filtrada por privacidad). */
+    age?: number | null;
+    /** Género visible (ya filtrado por privacidad). Solo ♀/♂ muestran icono. */
+    genero?: string | null;
+    /** Código ISO país (bandera); solo si privacidad lo permite. */
+    flagCode?: string | null;
     verified?: boolean;
     overlay?: ReactNode;
     variant: 'person' | 'organizer';
@@ -140,10 +150,17 @@ export function ProfileHero({
     const heroH =
         variant === 'organizer'
             ? Math.round(height * 0.28)
-            : Math.round(height * 0.5);
+            : Math.round(height * 0.6);
     const source = resolveProfileCoverSource(coverUrl, avatarUrl, {
         allowAvatarFallback: variant === 'person',
     });
+
+    const showAge = typeof age === 'number' && age > 0;
+    const genderIcon =
+        genero === 'femenino' ? ('female' as const) : genero === 'masculino' ? ('male' as const) : null;
+    const genderColor = genero === 'femenino' ? '#F472B6' : genero === 'masculino' ? '#60A5FA' : undefined;
+    const flagEmoji = countryCodeToFlagEmoji(flagCode);
+    const showMeta = showAge || genderIcon != null || !!flagEmoji;
 
     return (
         <View style={[styles.heroShell, { width }]}>
@@ -200,11 +217,22 @@ export function ProfileHero({
                 {variant === 'person' ? (
                     <View style={styles.heroCopy}>
                         <View style={styles.nameRow}>
-                            <Text style={styles.heroName} numberOfLines={1}>{name}</Text>
+                            <Text style={styles.heroName} numberOfLines={1}>
+                                {name}
+                            </Text>
                             {verified ? (
                                 <Ionicons name="checkmark-circle" size={24} color="#60A5FA" />
                             ) : null}
                         </View>
+                        {showMeta ? (
+                            <View style={styles.heroMetaRow}>
+                                {genderIcon ? (
+                                    <Ionicons name={genderIcon} size={15} color={genderColor} />
+                                ) : null}
+                                {showAge ? <Text style={styles.heroMetaText}>{age}</Text> : null}
+                                {flagEmoji ? <Text style={styles.heroMetaFlag}>{flagEmoji}</Text> : null}
+                            </View>
+                        ) : null}
                         {overlay}
                     </View>
                 ) : null}
@@ -318,14 +346,18 @@ export function ProfileStatsCard({
         <View style={[styles.statsCard, !overlapHero && styles.statsCardBelow]}>
             <Pressable style={styles.statCol} onPress={onLeftPress} disabled={!onLeftPress}>
                 <View style={styles.statNumberWrap}>
-                    <Text style={styles.statNumber}>{leftValue}</Text>
+                    <Text style={styles.statNumber} numberOfLines={1}>
+                        {leftValue}
+                    </Text>
                     {leftBadge > 0 ? (
                         <View style={styles.statBadge}>
                             <Text style={styles.statBadgeText}>{leftBadge > 9 ? '9+' : leftBadge}</Text>
                         </View>
                     ) : null}
                 </View>
-                <Text style={styles.statLabel}>{leftLabel}</Text>
+                <Text style={styles.statLabel} numberOfLines={2}>
+                    {leftLabel}
+                </Text>
             </Pressable>
             <View style={styles.statRule} />
             <View style={styles.statCol}>
@@ -334,29 +366,39 @@ export function ProfileStatsCard({
                         <Text style={styles.statNumber} numberOfLines={1}>
                             {middleText ?? (repeatPct == null ? '—' : `${repeatPct}%`)}
                         </Text>
-                        <Text style={styles.statLabel}>{reviewsLabel}</Text>
+                        <Text style={styles.statLabel} numberOfLines={2}>
+                            {reviewsLabel}
+                        </Text>
                     </>
                 ) : (
                     <>
                         <View style={styles.ratingHead}>
-                            <Text style={styles.statNumber}>{formatRatingScore(rating)}</Text>
-                            <View style={styles.stars}>{renderRatingStars(rating, 16)}</View>
+                            <Text style={styles.statNumber} numberOfLines={1}>
+                                {formatRatingScore(rating)}
+                            </Text>
+                            <View style={styles.stars}>{renderRatingStars(rating, 17)}</View>
                         </View>
-                        <Text style={styles.statLabel}>{reviewsLabel}</Text>
+                        <Text style={styles.statLabel} numberOfLines={2}>
+                            {reviewsLabel}
+                        </Text>
                     </>
                 )}
             </View>
             <View style={styles.statRule} />
             <Pressable style={styles.statCol} onPress={onRightPress} disabled={!onRightPress}>
                 <View style={styles.statNumberWrap}>
-                    <Text style={styles.statNumber}>{rightValue}</Text>
+                    <Text style={styles.statNumber} numberOfLines={1}>
+                        {rightValue}
+                    </Text>
                     {rightBadge > 0 ? (
                         <View style={styles.statBadge}>
                             <Text style={styles.statBadgeText}>{rightBadge > 9 ? '9+' : rightBadge}</Text>
                         </View>
                     ) : null}
                 </View>
-                <Text style={styles.statLabel}>{rightLabel}</Text>
+                <Text style={styles.statLabel} numberOfLines={2}>
+                    {rightLabel}
+                </Text>
             </Pressable>
         </View>
     );
@@ -869,6 +911,23 @@ function createProfileUiStyles(c: ThemeColors) {
         fontWeight: '800',
         letterSpacing: -0.4,
     },
+    heroMetaRow: {
+        marginTop: 6,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    heroMetaText: {
+        color: 'rgba(255,255,255,0.9)',
+        fontSize: 15,
+        fontWeight: '600',
+        letterSpacing: 0.2,
+    },
+    heroMetaFlag: {
+        fontSize: 16,
+        lineHeight: 20,
+        marginLeft: 2,
+    },
     heroUsername: {
         marginTop: 4,
         color: 'rgba(255,255,255,0.86)',
@@ -916,11 +975,11 @@ function createProfileUiStyles(c: ThemeColors) {
     followExtraText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
     statsCard: {
         marginTop: -28,
-        marginHorizontal: 16,
+        marginHorizontal: 14,
         backgroundColor: c.surface,
         borderRadius: 22,
-        paddingVertical: 16,
-        paddingHorizontal: 8,
+        paddingVertical: 10,
+        paddingHorizontal: 6,
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: StyleSheet.hairlineWidth,
@@ -931,10 +990,10 @@ function createProfileUiStyles(c: ThemeColors) {
     statsCardBelow: {
         marginTop: 16,
     },
-    statCol: { flex: 1, alignItems: 'center', paddingHorizontal: 4 },
-    statRule: { width: StyleSheet.hairlineWidth, height: 42, backgroundColor: c.border },
+    statCol: { flex: 1, alignItems: 'center', paddingHorizontal: 3, minWidth: 0 },
+    statRule: { width: StyleSheet.hairlineWidth, height: 34, backgroundColor: c.border },
     statNumberWrap: { position: 'relative', alignItems: 'center', justifyContent: 'center' },
-    statNumber: { fontSize: 22, fontWeight: '800', color: INK, letterSpacing: -0.4 },
+    statNumber: { fontSize: 25, fontWeight: '800', color: INK, letterSpacing: -0.5 },
     statBadge: {
         position: 'absolute',
         top: -4,
@@ -950,7 +1009,15 @@ function createProfileUiStyles(c: ThemeColors) {
         borderColor: c.surface,
     },
     statBadgeText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
-    statLabel: { marginTop: 4, fontSize: 11, fontWeight: '700', color: MUTED, textAlign: 'center' },
+    statLabel: {
+        marginTop: 1,
+        fontSize: 12.5,
+        lineHeight: 14,
+        fontWeight: '700',
+        color: MUTED,
+        textAlign: 'center',
+        paddingHorizontal: 1,
+    },
     ratingHead: { alignItems: 'center', gap: 2 },
     stars: { flexDirection: 'row', gap: 1 },
     chipWrap: {

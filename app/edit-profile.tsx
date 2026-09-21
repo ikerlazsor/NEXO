@@ -6,6 +6,7 @@ import { useCallback, useState } from 'react';
 import {
     ActivityIndicator,
     KeyboardAvoidingView,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -19,6 +20,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CoverPresetPicker } from '../components/profile-ui/CoverPresetPicker';
 import { GalleryThumb } from '../components/profile-ui/ProfileRedesign';
+import { AvatarCropModal } from '../components/AvatarCropModal';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { PersonalityPickerModal } from '../features/profile/PersonalityPickerModal';
@@ -53,10 +55,27 @@ import {
     updateProfileFields,
 } from '../lib/profile';
 import { ORGANIZER_COVER_PRESETS, readCoverUrl, saveProfileCover, uploadCoverFromUri } from '../lib/profileCover';
-import { getPersonalityLabel, mergePerfilGustosPrivacy, parsePrivacy, type Genero, type ProfilePrivacy } from '../lib/profileFields';
+import {
+    getPersonalityLabel,
+    mergePerfilGustosPrivacy,
+    parsePrivacy,
+    calcAge,
+    isValidAge,
+    type Genero,
+    type ProfilePrivacy,
+} from '../lib/profileFields';
 import { getInterestAccent, getInterestIcon, PERSONALITY_MAX } from '../lib/profileInterests';
-import { invalidateProfilePresentationCaches } from '../lib/screenCaches';
+import {
+    COUNTRY_FLAGS,
+    countryCodeToFlagEmoji,
+    mergePerfilGustosCountry,
+    parseCountryCode,
+} from '../lib/countryFlags';
+import { noteProfileOptimisticWrite } from '../lib/profileOptimistic';
+import { invalidateProfilePresentationCaches, screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
 import { theme, type ThemeColors } from '../theme';
+import { cacheGetStale, cacheInvalidate, cacheInvalidatePrefix, cacheSet } from '../lib/ttlCache';
+import type { ProfileUiSnapshot } from '../features/profile/types';
 
 const INK = theme.colors.text;
 const PRIMARY_DARK = theme.colors.primary;
@@ -72,6 +91,7 @@ export default function EditProfileScreen() {
     const [isOrganizer, setIsOrganizer] = useState(false);
     const [organizerMeta, setOrganizerMeta] = useState<OrganizerMeta>({});
     const [nombre, setNombre] = useState('');
+    const [ageYears, setAgeYears] = useState(22);
     const [aboutMe, setAboutMe] = useState('');
     const [organizerInfo, setOrganizerInfo] = useState('');
     const [organizerWeb, setOrganizerWeb] = useState('');
@@ -84,9 +104,15 @@ export default function EditProfileScreen() {
     const [genero, setGenero] = useState<Genero | null>(null);
     const [privacy, setPrivacy] = useState<ProfilePrivacy>(parsePrivacy(null));
     const [perfilGustos, setPerfilGustos] = useState<unknown>(null);
+    const [countryCode, setCountryCode] = useState<string | null>(null);
+    const [showFlagPicker, setShowFlagPicker] = useState(false);
     const [showAficionModal, setShowAficionModal] = useState(false);
     const [galleryBusy, setGalleryBusy] = useState(false);
     const [avatarUploading, setAvatarUploading] = useState(false);
+    const [editingName, setEditingName] = useState(false);
+    const [cropUri, setCropUri] = useState<string | null>(null);
+    const [cropWidth, setCropWidth] = useState<number | null>(null);
+    const [cropHeight, setCropHeight] = useState<number | null>(null);
 
     const aboutMax = isOrganizer ? ORGANIZER_DESC_MAX : 400;
     const galleryItems = organizerMeta.galeria ?? [];
@@ -105,6 +131,8 @@ export default function EditProfileScreen() {
         setIsOrganizer(data?.es_organizador === true);
         setOrganizerMeta(org);
         setNombre(data?.nombre?.trim() || resolveDisplayName(user, t('profile.user')));
+        const loadedAge = calcAge(data?.fecha_nacimiento);
+        setAgeYears(loadedAge && isValidAge(loadedAge) ? loadedAge : 22);
         if (data?.es_organizador) {
             const copy = organizerProfileCopy(data?.descripcion, org);
             setAboutMe(copy.description);
@@ -122,6 +150,7 @@ export default function EditProfileScreen() {
         setGenero((data?.genero as Genero) || null);
         setPerfilGustos(data?.perfil_gustos ?? null);
         setPrivacy(parsePrivacy(data?.perfil_gustos));
+        setCountryCode(parseCountryCode(data?.perfil_gustos));
         setReady(true);
     }, [router, t]);
 
@@ -152,17 +181,30 @@ export default function EditProfileScreen() {
             const result = useCamera
                 ? await ImagePicker.launchCameraAsync({
                     mediaTypes: ['images'],
-                    allowsEditing: Platform.OS === 'ios',
-                    aspect: [1, 1],
-                    quality: 0.4,
+                    allowsEditing: false,
+                    quality: 0.85,
                 })
                 : await ImagePicker.launchImageLibraryAsync({
                     mediaTypes: ['images'],
                     allowsEditing: false,
-                    quality: 0.55,
+                    quality: 0.85,
                 });
             if (result.canceled || !result.assets[0]?.uri) return;
-            const uri = result.assets[0].uri;
+            const asset = result.assets[0];
+            setCropUri(asset.uri);
+            setCropWidth(asset.width ?? null);
+            setCropHeight(asset.height ?? null);
+        } catch {
+            Alert.alert(t('profile.error'), t('onboarding.photoError'));
+        }
+    };
+
+    const uploadCroppedAvatar = async (uri: string) => {
+        if (!userId || avatarUploading) return;
+        setCropUri(null);
+        setCropWidth(null);
+        setCropHeight(null);
+        try {
             setAvatarUrl(uri);
             setAvatarUploading(true);
             const { url, error } = await uploadAvatarFromUri(userId, uri);
@@ -182,8 +224,67 @@ export default function EditProfileScreen() {
         setPrivacy(next);
         const merged = mergePerfilGustosPrivacy(perfilGustos, next) as Record<string, unknown>;
         if (coverUrl) merged.cover_url = coverUrl;
+        if (countryCode) merged.pais = countryCode;
         setPerfilGustos(merged);
-        if (userId) void updateProfileFields(userId, { perfil_gustos: merged });
+        if (!userId) return;
+
+        const profileKey = screenCacheKey.profileUI(userId);
+        const prevSnap = cacheGetStale<ProfileUiSnapshot>(profileKey);
+        if (prevSnap) {
+            cacheSet(
+                profileKey,
+                { ...prevSnap, privacy: next, perfilGustos: merged },
+                ScreenCacheTTL.profileUI,
+            );
+        }
+        noteProfileOptimisticWrite(8_000);
+
+        void (async () => {
+            const { error } = await updateProfileFields(userId, { perfil_gustos: merged });
+            if (error) {
+                Alert.alert(t('profile.error'), error);
+                return;
+            }
+            noteProfileOptimisticWrite(8_000);
+            // Actualizar caché pública sin invalidar el snapshot propio (evita race al volver).
+            cacheInvalidate(`userProfile:${userId}`);
+            cacheInvalidate(screenCacheKey.feedSnapshot);
+            cacheInvalidatePrefix('planDetail:');
+        })();
+    };
+
+    const persistCountry = (nextCode: string | null) => {
+        setCountryCode(nextCode);
+        setShowFlagPicker(false);
+        const merged = mergePerfilGustosCountry(
+            mergePerfilGustosPrivacy(perfilGustos, privacy),
+            nextCode,
+        );
+        if (coverUrl) merged.cover_url = coverUrl;
+        setPerfilGustos(merged);
+        if (!userId) return;
+
+        const profileKey = screenCacheKey.profileUI(userId);
+        const prevSnap = cacheGetStale<ProfileUiSnapshot>(profileKey);
+        if (prevSnap) {
+            cacheSet(
+                profileKey,
+                { ...prevSnap, perfilGustos: merged },
+                ScreenCacheTTL.profileUI,
+            );
+        }
+        noteProfileOptimisticWrite(8_000);
+        void (async () => {
+            const { error } = await updateProfileFields(userId, { perfil_gustos: merged });
+            if (error) {
+                Alert.alert(t('profile.error'), error);
+                return;
+            }
+            noteProfileOptimisticWrite(8_000);
+            cacheInvalidate(`userProfile:${userId}`);
+            cacheInvalidate(screenCacheKey.feedSnapshot);
+            cacheInvalidatePrefix('planDetail:');
+        })();
     };
 
     const addAficion = (tag: string) => {
@@ -334,7 +435,10 @@ export default function EditProfileScreen() {
             return;
         }
         setSaving(true);
-        const gustos = mergePerfilGustosPrivacy(perfilGustos, privacy) as Record<string, unknown>;
+        const gustos = mergePerfilGustosCountry(
+            mergePerfilGustosPrivacy(perfilGustos, privacy),
+            countryCode,
+        ) as Record<string, unknown>;
         if (isOrganizer && coverUrl) gustos.cover_url = coverUrl;
 
         const uid = userId;
@@ -354,11 +458,34 @@ export default function EditProfileScreen() {
 
         // Salir ya; persistir en segundo plano (antes el Save esperaba toda la red).
         setSaving(false);
-        invalidateProfilePresentationCaches(uid);
+        // Parchear perfil en caché YA para que al volver se vea el cambio al instante.
+        const profileKey = screenCacheKey.profileUI(uid);
+        const prevSnap = cacheGetStale<ProfileUiSnapshot>(profileKey);
+        if (prevSnap) {
+            cacheSet(
+                profileKey,
+                {
+                    ...prevSnap,
+                    nombre: name,
+                    aboutMe: about,
+                    avatarUrl: avatarUrl ?? prevSnap.avatarUrl,
+                    coverUrl: cover ?? prevSnap.coverUrl ?? null,
+                    aficiones: aficiones.length ? aficiones : prevSnap.aficiones,
+                    perfilGustos: gustos as Record<string, unknown>,
+                    privacy,
+                    genero: genero ?? prevSnap.genero,
+                    age: prevSnap.age,
+                    organizer: nextMeta ?? prevSnap.organizer,
+                },
+                ScreenCacheTTL.profileUI,
+            );
+        }
+        rememberChromeAvatar(uid, avatarUrl);
+        noteProfileOptimisticWrite();
         invalidateAllPlanDetailCaches();
-        // Invalidar caches adicionales para actualización instantánea en toda la app
         cacheInvalidate(screenCacheKey.feedSnapshot);
         cacheInvalidate(screenCacheKey.friends(uid));
+        cacheInvalidate(`userProfile:${uid}`);
         router.back();
 
         void (async () => {
@@ -424,42 +551,68 @@ export default function EditProfileScreen() {
                                 </>
                             ) : null}
 
-                            <Text style={[styles.label, !isOrganizer && styles.labelFirst]}>{t('profile.photoTitle')}</Text>
-                            <View style={styles.avatarWrap}>
-                                <ProfileAvatar uri={avatarUrl} name={nombre} size={88} recyclingKey={userId ?? 'edit'} />
-                                {avatarUploading ? <ActivityIndicator style={StyleSheet.absoluteFill} color={colors.primary} /> : null}
-                            </View>
-                            <View style={styles.photoActions}>
+                            <TouchableOpacity
+                                style={[styles.avatarWrap, !isOrganizer && styles.avatarWrapFirst]}
+                                onPress={() => {
+                                    Alert.alert(t('profile.photoTitle'), undefined, [
+                                        {
+                                            text: t('profile.camera'),
+                                            onPress: () => {
+                                                void pickAvatar(true);
+                                            },
+                                        },
+                                        {
+                                            text: t('profile.gallery'),
+                                            onPress: () => {
+                                                void pickAvatar(false);
+                                            },
+                                        },
+                                        { text: t('common.cancel'), style: 'cancel' },
+                                    ]);
+                                }}
+                                activeOpacity={0.88}
+                                disabled={avatarUploading}
+                            >
+                                <ProfileAvatar uri={avatarUrl} name={nombre} size={176} recyclingKey={userId ?? 'edit'} />
+                                {avatarUploading ? (
+                                    <ActivityIndicator style={StyleSheet.absoluteFill} color={colors.primary} />
+                                ) : (
+                                    <View style={styles.avatarEditBadge}>
+                                        <Ionicons name="camera" size={16} color="#FFF" />
+                                    </View>
+                                )}
+                            </TouchableOpacity>
+
+                            <View style={styles.nameEditBlock}>
+                                {editingName ? (
+                                    <TextInput
+                                        style={styles.nameInput}
+                                        value={nombre}
+                                        onChangeText={(text) => setNombre(text.slice(0, DISPLAY_NAME_MAX_LENGTH))}
+                                        maxLength={DISPLAY_NAME_MAX_LENGTH}
+                                        autoCapitalize="words"
+                                        autoFocus
+                                        onBlur={() => setEditingName(false)}
+                                        onSubmitEditing={() => setEditingName(false)}
+                                        returnKeyType="done"
+                                    />
+                                ) : (
+                                    <Text style={styles.nameDisplay} numberOfLines={1}>
+                                        {nombre || t('profile.user')}
+                                    </Text>
+                                )}
                                 <TouchableOpacity
-                                    style={styles.photoActionBtn}
-                                    onPress={() => void pickAvatar(true)}
-                                    disabled={avatarUploading}
+                                    style={styles.namePencilBtn}
+                                    onPress={() => setEditingName((v) => !v)}
                                     activeOpacity={0.85}
+                                    hitSlop={8}
+                                    accessibilityLabel={t('profile.displayName')}
                                 >
-                                    <Ionicons name="camera" size={18} color={colors.primary} />
-                                    <Text style={styles.photoActionText}>{t('profile.camera')}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={styles.photoActionBtn}
-                                    onPress={() => void pickAvatar(false)}
-                                    disabled={avatarUploading}
-                                    activeOpacity={0.85}
-                                >
-                                    <Ionicons name="images" size={18} color={colors.primary} />
-                                    <Text style={styles.photoActionText}>{t('profile.gallery')}</Text>
+                                    <Ionicons name="brush" size={18} color={PRIMARY_DARK} />
                                 </TouchableOpacity>
                             </View>
 
-                            <Text style={styles.label}>{t('profile.displayName')}</Text>
-                            <TextInput
-                                style={styles.input}
-                                value={nombre}
-                                onChangeText={(text) => setNombre(text.slice(0, DISPLAY_NAME_MAX_LENGTH))}
-                                maxLength={DISPLAY_NAME_MAX_LENGTH}
-                                autoCapitalize="words"
-                            />
-
-                            <Text style={styles.label}>
+                            <Text style={[styles.label, styles.labelAfterHero]}>
                                 {isOrganizer ? t('organizer.fieldAbout') : t('profile.aboutMe')}
                             </Text>
                             <TextInput
@@ -509,43 +662,44 @@ export default function EditProfileScreen() {
 
                             {!isOrganizer ? (
                                 <>
-                                    <Text style={styles.label}>{t('userprofile.interests')}</Text>
-                                    <View style={styles.interestRow}>
-                                        {aficiones.map((tag) => {
-                                            const accent = getInterestAccent(tag);
-                                            return (
-                                            <View key={tag} style={styles.interestTile}>
-                                                <View
-                                                    style={[
-                                                        styles.interestIcon,
-                                                        { backgroundColor: accent.bg, borderColor: accent.border },
-                                                    ]}
-                                                >
-                                                    <Ionicons name={getInterestIcon(tag)} size={24} color={accent.icon} />
-                                                    <Pressable
-                                                        onPress={() => removeAficion(tag)}
-                                                        hitSlop={8}
-                                                        style={styles.interestX}
+                                    <View style={styles.interestSection}>
+                                        <View style={styles.interestRow}>
+                                            {aficiones.map((tag) => {
+                                                const accent = getInterestAccent(tag);
+                                                return (
+                                                <View key={tag} style={styles.interestTile}>
+                                                    <View
+                                                        style={[
+                                                            styles.interestIcon,
+                                                            { backgroundColor: accent.bg, borderColor: accent.border },
+                                                        ]}
                                                     >
-                                                        <Ionicons name="close" size={12} color="#FFF" />
-                                                    </Pressable>
+                                                        <Ionicons name={getInterestIcon(tag)} size={24} color={accent.icon} />
+                                                        <Pressable
+                                                            onPress={() => removeAficion(tag)}
+                                                            hitSlop={8}
+                                                            style={styles.interestX}
+                                                        >
+                                                            <Ionicons name="close" size={12} color="#FFF" />
+                                                        </Pressable>
+                                                    </View>
+                                                    <Text style={styles.interestLabel} numberOfLines={1}>
+                                                        {getPersonalityLabel(tag, genero, t)}
+                                                    </Text>
                                                 </View>
-                                                <Text style={styles.interestLabel} numberOfLines={1}>
-                                                    {getPersonalityLabel(tag, genero, t)}
-                                                </Text>
-                                            </View>
-                                            );
-                                        })}
-                                        {aficiones.length < PERSONALITY_MAX ? (
-                                            <TouchableOpacity style={styles.interestTile} onPress={() => setShowAficionModal(true)}>
-                                                <View style={styles.interestAdd}>
-                                                    <Ionicons name="add" size={26} color={colors.primary} />
-                                                </View>
-                                                <Text style={styles.interestLabel}>{t('profile.addPersonality')}</Text>
-                                            </TouchableOpacity>
-                                        ) : null}
+                                                );
+                                            })}
+                                            {aficiones.length < PERSONALITY_MAX ? (
+                                                <TouchableOpacity style={styles.interestTile} onPress={() => setShowAficionModal(true)}>
+                                                    <View style={styles.interestAdd}>
+                                                        <Ionicons name="add" size={26} color={colors.primary} />
+                                                    </View>
+                                                    <Text style={styles.interestLabel}>{t('profile.addPersonality')}</Text>
+                                                </TouchableOpacity>
+                                            ) : null}
+                                        </View>
                                     </View>
-                                    <Text style={styles.label}>{t('profilev.attendedPlansSelf')}</Text>
+
                                     <View style={styles.privacyRow}>
                                         <Text style={styles.privacyLabel}>{t('profile.showOnProfile')}</Text>
                                         <Switch
@@ -554,6 +708,74 @@ export default function EditProfileScreen() {
                                             trackColor={{ true: colors.primary, false: colors.borderStrong }}
                                             thumbColor="#FFF"
                                         />
+                                    </View>
+
+                                    <View style={styles.ageGenderCard}>
+                                        <View
+                                            style={[
+                                                styles.ageGenderCardInner,
+                                                !(privacy.mostrar_edad && privacy.mostrar_genero) && styles.ageGenderCardBlurred,
+                                            ]}
+                                            pointerEvents={
+                                                privacy.mostrar_edad && privacy.mostrar_genero ? 'auto' : 'none'
+                                            }
+                                        >
+                                            <View style={styles.ageControls}>
+                                                <Text style={styles.ageValue}>{ageYears}</Text>
+                                            </View>
+                                            <View
+                                                style={[
+                                                    styles.genderChip,
+                                                    genero === 'femenino' && styles.genderChipF,
+                                                    genero === 'masculino' && styles.genderChipM,
+                                                ]}
+                                            >
+                                                {genero === 'femenino' || genero === 'masculino' ? (
+                                                    <Ionicons
+                                                        name={genero === 'femenino' ? 'female' : 'male'}
+                                                        size={22}
+                                                        color={genero === 'femenino' ? '#DB2777' : PRIMARY_DARK}
+                                                    />
+                                                ) : (
+                                                    <Ionicons name="remove-outline" size={18} color={colors.textSubtle} />
+                                                )}
+                                            </View>
+                                            <TouchableOpacity
+                                                style={[
+                                                    styles.flagSlot,
+                                                    !countryCode && styles.flagSlotEmpty,
+                                                ]}
+                                                onPress={() => setShowFlagPicker(true)}
+                                                activeOpacity={0.85}
+                                                accessibilityLabel={t('profile.flagPick')}
+                                            >
+                                                {(() => {
+                                                    const emoji = countryCodeToFlagEmoji(countryCode);
+                                                    return emoji ? (
+                                                        <Text style={styles.flagEmoji}>{emoji}</Text>
+                                                    ) : (
+                                                        <Ionicons name="flag-outline" size={18} color={colors.textSubtle} />
+                                                    );
+                                                })()}
+                                            </TouchableOpacity>
+                                        </View>
+                                        {!(privacy.mostrar_edad && privacy.mostrar_genero) ? (
+                                            <View pointerEvents="none" style={styles.ageGenderFrost} />
+                                        ) : null}
+                                        <View style={styles.ageGenderSwitchWrap}>
+                                            <Switch
+                                                value={privacy.mostrar_edad && privacy.mostrar_genero}
+                                                onValueChange={(value) =>
+                                                    persistPrivacy({
+                                                        ...privacy,
+                                                        mostrar_edad: value,
+                                                        mostrar_genero: value,
+                                                    })
+                                                }
+                                                trackColor={{ true: colors.primary, false: colors.borderStrong }}
+                                                thumbColor="#FFF"
+                                            />
+                                        </View>
                                     </View>
                                 </>
                             ) : (
@@ -607,6 +829,68 @@ export default function EditProfileScreen() {
                 onAdd={addAficion}
                 onClose={() => setShowAficionModal(false)}
             />
+            <AvatarCropModal
+                visible={!!cropUri}
+                uri={cropUri}
+                imageWidth={cropWidth}
+                imageHeight={cropHeight}
+                onCancel={() => {
+                    setCropUri(null);
+                    setCropWidth(null);
+                    setCropHeight(null);
+                }}
+                onConfirm={(cropped) => {
+                    void uploadCroppedAvatar(cropped);
+                }}
+            />
+            <Modal
+                visible={showFlagPicker}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowFlagPicker(false)}
+            >
+                <View style={styles.flagModalOverlay}>
+                    <Pressable style={styles.flagModalBackdrop} onPress={() => setShowFlagPicker(false)} />
+                    <View style={[styles.flagModalSheet, { paddingBottom: Math.max(20, 24) }]}>
+                        <Text style={styles.flagModalTitle}>{t('profile.flagPick')}</Text>
+                        <ScrollView
+                            style={styles.flagModalScroll}
+                            contentContainerStyle={styles.flagModalGrid}
+                            showsVerticalScrollIndicator={false}
+                        >
+                            <TouchableOpacity
+                                style={[styles.flagPickItem, !countryCode && styles.flagPickItemOn]}
+                                onPress={() => persistCountry(null)}
+                                activeOpacity={0.85}
+                            >
+                                <View style={styles.flagPickEmptyIcon}>
+                                    <Ionicons name="close" size={16} color={colors.textSubtle} />
+                                </View>
+                                <Text style={styles.flagPickName} numberOfLines={1}>
+                                    {t('profile.flagNone')}
+                                </Text>
+                            </TouchableOpacity>
+                            {COUNTRY_FLAGS.map((country) => {
+                                const active = countryCode === country.code;
+                                const emoji = countryCodeToFlagEmoji(country.code);
+                                return (
+                                    <TouchableOpacity
+                                        key={country.code}
+                                        style={[styles.flagPickItem, active && styles.flagPickItemOn]}
+                                        onPress={() => persistCountry(country.code)}
+                                        activeOpacity={0.85}
+                                    >
+                                        <Text style={styles.flagPickEmoji}>{emoji}</Text>
+                                        <Text style={styles.flagPickName} numberOfLines={1}>
+                                            {country.nameEs}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -619,6 +903,7 @@ function createEditProfileStyles(c: ThemeColors) {
     content: { paddingHorizontal: 20, paddingBottom: 40 },
     label: { color: INK, fontWeight: '800', fontSize: 13, marginBottom: 8, marginTop: 22 },
     labelFirst: { marginTop: 4 },
+    labelAfterHero: { marginTop: 28 },
     input: {
         backgroundColor: c.surface,
         borderRadius: 14,
@@ -636,7 +921,65 @@ function createEditProfileStyles(c: ThemeColors) {
     counter: { marginTop: 6, color: c.textSubtle, fontWeight: '700', fontSize: 12 },
     userRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     at: { fontSize: 18, fontWeight: '800', color: INK },
-    avatarWrap: { alignSelf: 'flex-start' },
+    avatarWrap: { alignSelf: 'center', marginTop: 12 },
+    avatarWrapFirst: { marginTop: 8 },
+    avatarEditBadge: {
+        position: 'absolute',
+        right: 6,
+        bottom: 6,
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        backgroundColor: PRIMARY_DARK,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 2,
+        borderColor: '#FFF',
+    },
+    nameEditBlock: {
+        marginTop: 16,
+        width: '100%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        position: 'relative',
+        minHeight: 44,
+        paddingHorizontal: 52,
+    },
+    nameDisplay: {
+        fontSize: 26,
+        fontWeight: '800',
+        color: INK,
+        letterSpacing: -0.4,
+        textAlign: 'center',
+        width: '100%',
+    },
+    nameInput: {
+        width: '100%',
+        backgroundColor: c.surface,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: c.border,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        color: INK,
+        fontSize: 22,
+        fontWeight: '800',
+        textAlign: 'center',
+    },
+    namePencilBtn: {
+        position: 'absolute',
+        right: 8,
+        top: '50%',
+        marginTop: -20,
+        width: 40,
+        height: 40,
+        borderRadius: 14,
+        backgroundColor: c.primarySoft,
+        borderWidth: 1,
+        borderColor: c.primaryBorder,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     photoActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
     photoActionBtn: {
         flex: 1,
@@ -653,6 +996,7 @@ function createEditProfileStyles(c: ThemeColors) {
     photoActionText: { fontSize: 14, fontWeight: '800', color: PRIMARY_DARK },
     linkBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
     linkBtnText: { color: PRIMARY_DARK, fontWeight: '800' },
+    interestSection: { marginTop: 22 },
     interestRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
     interestTile: { width: 82, alignItems: 'center', gap: 8 },
     interestIcon: {
@@ -693,7 +1037,168 @@ function createEditProfileStyles(c: ThemeColors) {
         justifyContent: 'center',
     },
     interestLabel: { fontSize: 12, fontWeight: '800', color: INK, textAlign: 'center' },
+    ageGenderCard: {
+        marginTop: 22,
+        backgroundColor: c.surface,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: c.border,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        overflow: 'hidden',
+        position: 'relative',
+        minHeight: 68,
+    },
+    ageGenderCardInner: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        minHeight: 44,
+    },
+    ageGenderCardBlurred: {
+        opacity: 0.28,
+    },
+    ageGenderFrost: {
+        ...StyleSheet.absoluteFillObject,
+        right: 68,
+        backgroundColor: 'rgba(255,255,255,0.55)',
+        borderRadius: 18,
+    },
+    ageGenderSwitchWrap: {
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 2,
+        height: 44,
+    },
+    flagSlot: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: c.surfaceSubtle,
+        borderWidth: 1,
+        borderColor: c.border,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    flagSlotEmpty: {
+        borderStyle: 'dashed',
+        borderColor: c.primaryBorder,
+        backgroundColor: c.primarySoft,
+    },
+    flagEmoji: {
+        fontSize: 22,
+        lineHeight: 28,
+    },
+    flagModalOverlay: {
+        flex: 1,
+        justifyContent: 'flex-end',
+    },
+    flagModalBackdrop: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: c.overlay,
+    },
+    flagModalSheet: {
+        backgroundColor: c.surface,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        maxHeight: '72%',
+        paddingTop: 16,
+        paddingHorizontal: 16,
+    },
+    flagModalTitle: {
+        fontSize: 17,
+        fontWeight: '800',
+        color: INK,
+        marginBottom: 12,
+        textAlign: 'center',
+    },
+    flagModalScroll: {
+        maxHeight: 420,
+    },
+    flagModalGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 10,
+        paddingBottom: 12,
+    },
+    flagPickItem: {
+        width: '30%',
+        flexGrow: 1,
+        maxWidth: '32%',
+        alignItems: 'center',
+        gap: 6,
+        paddingVertical: 10,
+        paddingHorizontal: 6,
+        borderRadius: 14,
+        backgroundColor: c.backgroundAlt,
+        borderWidth: 1.5,
+        borderColor: c.border,
+    },
+    flagPickItemOn: {
+        borderColor: c.primary,
+        backgroundColor: c.primarySoft,
+    },
+    flagPickEmoji: {
+        fontSize: 28,
+        lineHeight: 34,
+    },
+    flagPickEmptyIcon: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: c.surfaceSubtle,
+    },
+    flagPickName: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: c.textMuted,
+        textAlign: 'center',
+    },
+    ageControls: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    genderChip: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: c.surfaceSubtle,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    genderChipF: {
+        backgroundColor: '#FDF2F8',
+    },
+    genderChipM: {
+        backgroundColor: '#EFF6FF',
+    },
+    ageBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 12,
+        backgroundColor: c.primarySoft,
+        borderWidth: 1,
+        borderColor: c.primaryBorder,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    ageValue: {
+        minWidth: 36,
+        textAlign: 'center',
+        fontSize: 22,
+        fontWeight: '800',
+        color: INK,
+        letterSpacing: -0.5,
+    },
     privacyRow: {
+        marginTop: 22,
         backgroundColor: c.surface,
         borderRadius: 14,
         borderWidth: 1,
@@ -706,19 +1211,6 @@ function createEditProfileStyles(c: ThemeColors) {
         gap: 12,
     },
     privacyLabel: { flex: 1, color: INK, fontWeight: '700', fontSize: 14 },
-    visRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
-    visChip: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: c.surfaceSubtle,
-        borderRadius: 12,
-        paddingVertical: 10,
-        paddingHorizontal: 6,
-    },
-    visChipOn: { backgroundColor: INK },
-    visChipText: { color: c.textMuted, fontWeight: '800', fontSize: 12, textAlign: 'center' },
-    visChipTextOn: { color: c.onPrimary },
     momentsHead: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
     moment: { width: 88, height: 88, borderRadius: 14, overflow: 'hidden' },
     momentImg: { width: 88, height: 88 },

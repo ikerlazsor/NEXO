@@ -4,6 +4,7 @@ import { useFocusEffect,
     useRouter } from 'expo-router';
 import { useCallback,
     useEffect,
+    useMemo,
     useRef,
     useState } from 'react';
 import { FlashList } from '@shopify/flash-list';
@@ -47,6 +48,11 @@ import { getAuthUser } from '../../lib/auth';
 import { useAuthSession } from '../../lib/authSession';
 import { GuestLockedPanel } from '../../components/GuestLockedPanel';
 import { useChromeHeaderLayout } from '../../components/MainChrome';
+
+const PENGUIN_CHATS_EMPTY = require('../../assets/images/Pinguino vacio chats.png');
+void import('expo-asset').then(({ Asset }) => {
+    void Asset.fromModule(PENGUIN_CHATS_EMPTY).downloadAsync().catch(() => {});
+});
 import { markDirectChatRead, markPlanChatRead, subscribeChatUnread } from '../../lib/chatUnread';
 import { isPlanChatAlive, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
 import { filterHiddenPlanChats, hidePlanChat } from '../../lib/planChatHide';
@@ -626,30 +632,35 @@ export default function MyChatsScreen() {
         }
     };
 
+    const chatsEmpty = useMemo(
+        () => (
+            <NexoEmptyState
+                {...(loadError
+                    ? { icon: 'cloud-offline-outline' as const }
+                    : { image: PENGUIN_CHATS_EMPTY, imageSize: 188 })}
+                title={loadError ? t('chats.loadError') : t('chats.empty')}
+                description={loadError ? undefined : t('chats.emptySub')}
+                actionLabel={loadError ? t('chats.retry') : t('chats.explore')}
+                onAction={() => {
+                    if (loadError) {
+                        setLoadError(false);
+                        void fetchMyChats({ force: true });
+                    } else {
+                        router.navigate('/');
+                    }
+                }}
+                secondaryLabel={loadError ? undefined : t('chats.createGroup')}
+                onSecondaryAction={loadError ? undefined : openCreateGroup}
+                style={{ paddingTop: 72 }}
+            />
+        ),
+        [loadError, t, router],
+    );
+
     const onRefresh = () => {
         setRefreshing(true);
         void fetchMyChats({ force: true });
     };
-
-    const renderEmpty = () => (
-        <NexoEmptyState
-            icon={loadError ? 'cloud-offline-outline' : 'chatbubbles-outline'}
-            title={loadError ? t('chats.loadError') : t('chats.empty')}
-            description={loadError ? undefined : t('chats.emptySub')}
-            actionLabel={loadError ? t('chats.retry') : t('chats.explore')}
-            onAction={() => {
-                if (loadError) {
-                    setLoadError(false);
-                    void fetchMyChats({ force: true });
-                } else {
-                    router.navigate('/');
-                }
-            }}
-            secondaryLabel={loadError ? undefined : t('chats.createGroup')}
-            onSecondaryAction={loadError ? undefined : openCreateGroup}
-            style={{ paddingTop: 48 }}
-        />
-    );
 
     if (isGuest) {
         return (
@@ -698,7 +709,7 @@ export default function MyChatsScreen() {
                     data={chats}
                     keyExtractor={(item) => item.id.toString()}
                     getItemType={(item) => item.kind}
-                    ListEmptyComponent={!loading ? renderEmpty : null}
+                    ListEmptyComponent={!loading ? chatsEmpty : null}
                     contentContainerStyle={styles.listContent}
                     onScroll={onScroll}
                     scrollEventThrottle={scrollEventThrottle}

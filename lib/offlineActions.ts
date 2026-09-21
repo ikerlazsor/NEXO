@@ -222,23 +222,66 @@ function emitSaveStateChange(planId: string, saved: boolean): void {
 
 export async function persistSave(planId: string, userId: string, saved: boolean): Promise<{ queued: boolean; error?: { message?: string } | null }> {
     ensureNetworkHook();
+    // Emitir ya: card ↔ detalle ↔ guardados sin esperar a la red.
+    emitSaveStateChange(planId, saved);
+    try {
+        void import('./planDetailCache').then(({ planDetailKey, PLAN_DETAIL_TTL_MS }) =>
+            import('./ttlCache').then(({ cacheGetStale, cacheSet }) => {
+                const key = planDetailKey(planId);
+                const stale = cacheGetStale<{ isSaved?: boolean }>(key);
+                if (stale) {
+                    cacheSet(key, { ...stale, isSaved: saved }, PLAN_DETAIL_TTL_MS);
+                }
+            }),
+        );
+        void import('./screenCaches').then(({ screenCacheKey, ScreenCacheTTL }) =>
+            import('./ttlCache').then(({ cacheGetStale, cacheSet }) => {
+                const key = screenCacheKey.savedPlans(userId);
+                const snap = cacheGetStale<{
+                    savedPlans?: { id?: string }[];
+                    membershipMap?: Record<string, unknown>;
+                    currentUserGenero?: unknown;
+                }>(key);
+                if (!snap?.savedPlans) return;
+                if (saved) return;
+                cacheSet(
+                    key,
+                    {
+                        ...snap,
+                        savedPlans: snap.savedPlans.filter((p) => String(p.id) !== planId),
+                    },
+                    ScreenCacheTTL.savedPlans,
+                );
+            }),
+        );
+        void import('./feedCache').then(({ FEED_CACHE_KEY, FEED_CACHE_TTL_MS }) =>
+            import('./ttlCache').then(({ cacheGetStale, cacheSet }) => {
+                const snap = cacheGetStale<{ savedPlans?: string[] }>(FEED_CACHE_KEY);
+                if (!snap?.savedPlans) return;
+                const next = saved
+                    ? (snap.savedPlans.includes(planId) ? snap.savedPlans : [...snap.savedPlans, planId])
+                    : snap.savedPlans.filter((id) => id !== planId);
+                cacheSet(FEED_CACHE_KEY, { ...snap, savedPlans: next }, FEED_CACHE_TTL_MS);
+            }),
+        );
+    } catch {
+        /* ignore */
+    }
     if (!getIsOnline()) {
         await enqueueSaveAction(planId, userId, saved);
-        emitSaveStateChange(planId, saved);
         return { queued: true };
     }
     const { error } = saved
         ? await supabase.from('planes_guardados').insert({ plan_id: planId, usuario_id: userId })
         : await supabase.from('planes_guardados').delete().eq('plan_id', planId).eq('usuario_id', userId);
     if (!error || (saved && isUniqueViolation(error))) {
-        emitSaveStateChange(planId, saved);
         return { queued: false };
     }
     if (!getIsOnline()) {
         await enqueueSaveAction(planId, userId, saved);
-        emitSaveStateChange(planId, saved);
         return { queued: true };
     }
+    emitSaveStateChange(planId, !saved);
     return { queued: false, error };
 }
 

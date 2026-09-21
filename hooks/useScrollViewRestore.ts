@@ -13,9 +13,10 @@ export function useScrollViewRestore(
 
     const onScroll = useCallback(
         (event: { nativeEvent: { contentOffset: { y: number } } }) => {
+            if (!restoreEnabled) return;
             setScreenScrollOffset(screenKey, event.nativeEvent.contentOffset.y);
         },
-        [screenKey],
+        [screenKey, restoreEnabled],
     );
 
     const restoreScroll = useCallback(() => {
@@ -32,8 +33,15 @@ export function useScrollViewRestore(
         useCallback(() => {
             focusedRef.current = true;
             if (!restoreEnabled) {
+                setScreenScrollOffset(screenKey, 0);
+                scrollRef.current?.scrollTo({ y: 0, animated: false });
+                const task = InteractionManager.runAfterInteractions(() => {
+                    if (!focusedRef.current) return;
+                    scrollRef.current?.scrollTo({ y: 0, animated: false });
+                });
                 return () => {
                     focusedRef.current = false;
+                    task.cancel();
                 };
             }
 
@@ -49,7 +57,7 @@ export function useScrollViewRestore(
                 focusedRef.current = false;
                 task.cancel();
             };
-        }, [restoreScroll, restoreEnabled]),
+        }, [restoreScroll, restoreEnabled, screenKey]),
     );
 
     return { scrollRef, onScroll, restoreScroll, scrollEventThrottle: 16 as const };

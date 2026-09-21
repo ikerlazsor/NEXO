@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
-  Pressable,
   StyleSheet,
   Text,
   type PressableProps,
@@ -10,6 +9,8 @@ import {
 } from 'react-native';
 import { theme, type ThemeColors } from '../../theme';
 import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
+import { hapticMedium, hapticSoft, hapticWarning } from '../../lib/haptics';
+import { PressScale } from '../PressScale';
 
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 
@@ -49,16 +50,21 @@ export function NexoButton({
           : styles.ghostLabel;
 
   return (
-    <Pressable
-      accessibilityRole="button"
+    <PressScale
       accessibilityLabel={accessibilityLabel ?? label}
-      accessibilityState={{ disabled: unavailable, busy }}
       disabled={unavailable}
-      onPress={onPress}
-      style={({ pressed }) => [
+      haptic={false}
+      pressedScale={0.96}
+      onPress={(e) => {
+        if (unavailable) return;
+        if (variant === 'danger') hapticWarning();
+        else if (variant === 'primary') hapticMedium();
+        else hapticSoft();
+        onPress?.(e);
+      }}
+      style={[
         styles.base,
         styles[variant],
-        pressed && !unavailable ? styles.pressed : null,
         unavailable ? styles.disabled : null,
         style,
       ]}
@@ -71,7 +77,7 @@ export function NexoButton({
       >
         {label}
       </Text>
-    </Pressable>
+    </PressScale>
   );
 }
 
@@ -96,7 +102,6 @@ function createButtonStyles(c: ThemeColors) {
     },
     danger: { backgroundColor: c.danger },
     ghost: { backgroundColor: 'transparent' },
-    pressed: { opacity: 0.78 },
     disabled: { opacity: 0.5 },
     label: {
       ...theme.typography.bodySmall,

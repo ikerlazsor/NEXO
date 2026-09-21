@@ -22,6 +22,8 @@ import { supabase } from './supabase';
 
 const PREF_KEY = '@nexo_push_enabled';
 
+let pushPrefMemory: boolean | null = null;
+
 export const ANDROID_CHANNELS = {
     messages: 'messages',
     social: 'social',
@@ -45,14 +47,26 @@ function projectId(): string | undefined {
     );
 }
 
+/** Valor en memoria (ajustes listos al instante). */
+export function peekPushPreference(): boolean {
+    return pushPrefMemory ?? true;
+}
+
 export async function getPushPreference(): Promise<boolean> {
     try {
         const local = await AsyncStorage.getItem(PREF_KEY);
-        if (local === '0') return false;
-        if (local === '1') return true;
+        if (local === '0') {
+            pushPrefMemory = false;
+            return false;
+        }
+        if (local === '1') {
+            pushPrefMemory = true;
+            return true;
+        }
     } catch {
         /* ignore */
     }
+    pushPrefMemory = true;
     return true;
 }
 
@@ -61,10 +75,12 @@ export async function syncPushPreferenceFromServer(userId: string): Promise<bool
     const { data } = await getMyProfile();
     if (data?.id !== userId) return getPushPreference();
     if (data && data.notificaciones_push === false) {
+        pushPrefMemory = false;
         await AsyncStorage.setItem(PREF_KEY, '0');
         return false;
     }
     if (data && data.notificaciones_push === true) {
+        pushPrefMemory = true;
         await AsyncStorage.setItem(PREF_KEY, '1');
         return true;
     }
@@ -72,6 +88,7 @@ export async function syncPushPreferenceFromServer(userId: string): Promise<bool
 }
 
 export async function setPushPreference(enabled: boolean, userId?: string): Promise<void> {
+    pushPrefMemory = enabled;
     await AsyncStorage.setItem(PREF_KEY, enabled ? '1' : '0');
     if (userId) {
         await supabase.from('perfiles').update({ notificaciones_push: enabled }).eq('id', userId);

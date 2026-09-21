@@ -1,17 +1,23 @@
 /**
- * Texto unificado del aviso social en tarjetas de plan (amigos + conocidos).
+ * Partes del aviso social en tarjetas de plan (amigos + conocidos).
+ * El UI pone en negrita `friends` / `coincided` y añade "en este plan".
  */
+export type SocialJoinedParts = {
+    friends: string | null;
+    coincided: string | null;
+};
+
 export function formatSocialJoinedBanner(opts: {
     friendsCount: number;
     coincidedCount: number;
     friendsAllFemale: boolean;
     coincidedAllFemale: boolean;
     t: (key: string, params?: Record<string, string | number>) => string;
-}): string | null {
+}): SocialJoinedParts | null {
     const { friendsCount, coincidedCount, friendsAllFemale, coincidedAllFemale, t } = opts;
     if (friendsCount <= 0 && coincidedCount <= 0) return null;
 
-    const friendPart =
+    const friends =
         friendsCount <= 0
             ? null
             : friendsCount === 1
@@ -20,7 +26,7 @@ export function formatSocialJoinedBanner(opts: {
                     n: friendsCount,
                 });
 
-    const coincidedPart =
+    const coincided =
         coincidedCount <= 0
             ? null
             : coincidedCount === 1
@@ -29,20 +35,5 @@ export function formatSocialJoinedBanner(opts: {
                     n: coincidedCount,
                 });
 
-    const allFemale =
-        (friendsCount <= 0 || friendsAllFemale) &&
-        (coincidedCount <= 0 || coincidedAllFemale);
-
-    if (friendPart && coincidedPart) {
-        return t(allFemale ? 'card.socialJoinedBothF' : 'card.socialJoinedBoth', {
-            friends: friendPart,
-            coincided: coincidedPart,
-        });
-    }
-    const who = friendPart ?? coincidedPart!;
-    const onlyCount = friendPart ? friendsCount : coincidedCount;
-    if (onlyCount === 1) {
-        return t(allFemale ? 'card.socialJoinedOnlyOneF' : 'card.socialJoinedOnlyOne', { who });
-    }
-    return t(allFemale ? 'card.socialJoinedOnlyF' : 'card.socialJoinedOnly', { who });
+    return { friends, coincided };
 }

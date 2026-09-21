@@ -3,7 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { usePathname, useRouter } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
@@ -104,32 +104,43 @@ function createChromeStyles(c: ThemeColors) {
     body: { flex: 1 },
     floatingBar: {
         position: 'absolute',
-        left: 28,
-        right: 28,
+        left: 36,
+        right: 36,
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: c.tabBar,
         borderRadius: 26,
-        paddingVertical: 3,
+        paddingVertical: 2,
         paddingHorizontal: 4,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.78)',
+        backgroundColor: 'rgba(255,255,255,0.88)',
         elevation: 14,
-        shadowColor: c.tabBar,
-        shadowOpacity: 0.35,
-        shadowRadius: 14,
+        shadowColor: '#0F2A4A',
+        shadowOpacity: 0.16,
+        shadowRadius: 16,
         shadowOffset: { width: 0, height: 6 },
+    },
+    floatingBarSheen: {
+        ...StyleSheet.absoluteFillObject,
+        borderRadius: 26,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.55)',
+        backgroundColor: 'rgba(242,247,255,0.22)',
     },
     floatingBtn: {
         flex: 1,
         minWidth: 0,
-        minHeight: 46,
+        minHeight: 42,
         borderRadius: 18,
         overflow: 'hidden',
         justifyContent: 'center',
         alignItems: 'center',
-        paddingTop: 3,
-        paddingBottom: 3,
+        paddingTop: 2,
+        paddingBottom: 2,
         gap: 1,
         position: 'relative',
+        zIndex: 1,
     },
     floatingIconSlot: {
         height: 24,
@@ -139,14 +150,14 @@ function createChromeStyles(c: ThemeColors) {
         position: 'relative',
     },
     floatingBtnActive: {
-        backgroundColor: 'rgba(255,255,255,0.16)',
+        backgroundColor: 'rgba(15,42,74,0.16)',
     },
     floatingBtnLabel: {
-        color: c.onTabBar,
+        color: '#0F2A4A',
         fontSize: 10,
         fontWeight: '700',
         letterSpacing: -0.2,
-        opacity: 0.78,
+        opacity: 0.72,
         lineHeight: 12,
     },
     floatingBtnLabelActive: {
@@ -165,7 +176,7 @@ function createChromeStyles(c: ThemeColors) {
         alignItems: 'center',
         paddingHorizontal: 3,
         borderWidth: 2,
-        borderColor: c.tabBar,
+        borderColor: 'rgba(255,255,255,0.9)',
         zIndex: 2,
     },
     chatNotifText: { color: c.onPrimary, fontSize: 9, fontWeight: '800' },
@@ -285,6 +296,11 @@ export function MainChrome({ active: activeProp, children }: Props) {
             profileRes.data?.avatar_url || user.user_metadata?.avatar_url || null;
         rememberChromeAvatar(user.id, nextAvatar);
         setAvatarUrl(nextAvatar);
+        if (nextAvatar) {
+            void import('expo-image').then(({ Image }) => {
+                void Image.prefetch(nextAvatar);
+            });
+        }
         setNotifCount(notifs.total);
         setOpenRatingsCount(notifs.openRatings);
         setChatUnreadCount(unread);
@@ -344,6 +360,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
 
     const go = useCallback(
         (tab: MainTab) => {
+            // Invitado: chats y mis planes piden cuenta (modal).
             if (isGuest && tab !== 'feed') {
                 requireAccount(
                     tab === 'chats' ? { type: 'chats' } : { type: 'my-plans' },
@@ -379,11 +396,19 @@ export function MainChrome({ active: activeProp, children }: Props) {
     const openCreate = useCallback(() => {
         if (pathname.includes('create-plan')) return;
         if (requireAccount({ type: 'create-plan' })) return;
-        hapticMedium();
+        // Navegar ya: el háptico después no bloquea el arranque del modal.
         router.push('/create-plan');
+        requestAnimationFrame(() => hapticMedium());
     }, [pathname, requireAccount, router]);
 
     useEffect(() => subscribeCreatePlan(openCreate), [openCreate]);
+
+    // Precarga el módulo/ruta para que el + no espere al primer import.
+    useEffect(() => {
+        void import('../app/create-plan');
+        const r = router as { prefetch?: (href: string) => void };
+        r.prefetch?.('/create-plan');
+    }, [router]);
 
     const wasCreateRef = useRef(pathname.includes('create-plan'));
     useEffect(() => {
@@ -437,10 +462,10 @@ export function MainChrome({ active: activeProp, children }: Props) {
                                     hapticMedium();
                                     requireAccount({ type: 'generic' });
                                 }}
-                                accessibilityLabel={t('login.tabRegister')}
+                                accessibilityLabel={t('login.access')}
                                 activeOpacity={0.88}
                             >
-                                <Text style={styles.guestCtaText}>{t('login.tabRegister')}</Text>
+                                <Text style={styles.guestCtaText}>{t('login.access')}</Text>
                             </TouchableOpacity>
                         </>
                     ) : (
@@ -488,15 +513,18 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     },
                 ]}
             >
-                <PressScale
+                <View pointerEvents="none" style={styles.floatingBarSheen} />
+                <TouchableOpacity
                     style={[styles.floatingBtn, active === 'feed' && styles.floatingBtnActive]}
-                    onPress={() => go('feed')}
+                    onPress={() => {
+                        hapticSelection();
+                        go('feed');
+                    }}
                     accessibilityLabel={t('tabs.feed')}
-                    haptic={false}
-                    pressedScale={0.94}
+                    activeOpacity={0.88}
                 >
                     <View style={styles.floatingIconSlot}>
-                    <Ionicons name="compass" size={24} color={colors.onTabBar} />
+                    <Ionicons name="compass" size={24} color="#0F2A4A" />
                     </View>
                     <Text
                         style={[styles.floatingBtnLabel, active === 'feed' && styles.floatingBtnLabelActive]}
@@ -504,32 +532,36 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     >
                         {t('tabs.feed')}
                     </Text>
-                </PressScale>
+                </TouchableOpacity>
 
-                <PressScale
+                <TouchableOpacity
                     style={styles.floatingBtn}
-                    onPress={openMap}
+                    onPress={() => {
+                        hapticSelection();
+                        openMap();
+                    }}
                     accessibilityLabel={t('tabs.map')}
-                    haptic={false}
-                    pressedScale={0.94}
+                    activeOpacity={0.88}
                 >
                     <View style={styles.floatingIconSlot}>
-                    <Ionicons name="map" size={24} color={colors.onTabBar} />
+                    <Ionicons name="map" size={24} color="#0F2A4A" />
                     </View>
                     <Text style={styles.floatingBtnLabel} numberOfLines={1}>
                         {t('tabs.map')}
                     </Text>
-                </PressScale>
+                </TouchableOpacity>
 
-                <PressScale
+                <TouchableOpacity
                     style={[styles.floatingBtn, active === 'chats' && styles.floatingBtnActive]}
-                    onPress={() => go('chats')}
+                    onPress={() => {
+                        hapticSelection();
+                        go('chats');
+                    }}
                     accessibilityLabel={t('chats.title')}
-                    haptic={false}
-                    pressedScale={0.94}
+                    activeOpacity={0.88}
                 >
                     <View style={styles.floatingIconSlot}>
-                        <Ionicons name="chatbubbles" size={24} color={colors.onTabBar} />
+                        <Ionicons name="chatbubbles" size={24} color="#0F2A4A" />
                         {chatUnreadCount > 0 && (
                             <View style={styles.chatNotifBadge}>
                                 <Text style={styles.chatNotifText}>
@@ -544,22 +576,24 @@ export function MainChrome({ active: activeProp, children }: Props) {
                     >
                         {t('tabs.chats')}
                     </Text>
-                </PressScale>
+                </TouchableOpacity>
 
-                <PressScale
+                <TouchableOpacity
                     style={styles.floatingBtn}
-                    haptic={false}
-                    onPress={openCreate}
+                    onPress={() => {
+                        hapticMedium();
+                        openCreate();
+                    }}
                     accessibilityLabel={t('feed.create')}
-                    pressedScale={0.94}
+                    activeOpacity={0.88}
                 >
                     <View style={styles.floatingIconSlot}>
-                    <Ionicons name="add-circle" size={24} color={colors.onTabBar} />
+                    <Ionicons name="add-circle" size={24} color="#0F2A4A" />
                     </View>
                     <Text style={styles.floatingBtnLabel} numberOfLines={1}>
                         {t('tabs.create')}
                     </Text>
-                </PressScale>
+                </TouchableOpacity>
             </View>
         </View>
         </ChromeHeaderLayoutContext.Provider>

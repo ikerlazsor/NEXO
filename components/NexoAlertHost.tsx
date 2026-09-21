@@ -13,6 +13,7 @@ import {
     View,
 } from 'react-native';
 import {
+    registerNexoAlertClear,
     registerNexoAlertPresenter,
     type NexoAlertButton,
     type NexoAlertRequest,
@@ -36,7 +37,15 @@ export function NexoAlertHost({ children }: Props) {
             hapticAlert(hasDestructive ? 'danger' : 'info');
             setQueue((prev) => [...prev, req]);
         });
-        return () => registerNexoAlertPresenter(null);
+        registerNexoAlertClear(() => {
+            closingRef.current = false;
+            setBusy(false);
+            setQueue([]);
+        });
+        return () => {
+            registerNexoAlertPresenter(null);
+            registerNexoAlertClear(null);
+        };
     }, []);
 
     const dismiss = useCallback(() => {

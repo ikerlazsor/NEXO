@@ -90,6 +90,21 @@ export function removePendingRatingOptimistic(userId: string, planId: string): v
     }
     emitRatingSession({ type: 'removed', userId, planId });
     try {
+        const myKey = screenCacheKey.myPlans(userId);
+        const mySnap = cacheGetStale<{
+            plans?: unknown[];
+            pendingCount?: number;
+            ratingByPlan?: Record<string, unknown>;
+        }>(myKey);
+        if (mySnap?.ratingByPlan && planId in mySnap.ratingByPlan) {
+            const ratingByPlan = { ...mySnap.ratingByPlan };
+            delete ratingByPlan[planId];
+            cacheSet(myKey, { ...mySnap, ratingByPlan }, ScreenCacheTTL.myPlans);
+        }
+    } catch {
+        /* ignore */
+    }
+    try {
         invalidatePlanDetailCache(planId);
     } catch {
         /* ignore */

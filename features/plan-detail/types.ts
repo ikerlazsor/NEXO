@@ -49,6 +49,8 @@ export type PlanDetailSnapshot = {
   openRating: PendingRatingPlan | null;
   currentUserId: string | null;
   organizerFollowers?: number | null;
+  /** Compatibilidad precargada desde el feed / seed. */
+  fitPct?: number | null;
   /** Semilla incompleta del feed: no salta el fetch real. */
   partial?: boolean;
 };

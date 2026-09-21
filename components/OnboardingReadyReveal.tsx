@@ -18,7 +18,6 @@ import Animated, {
 import { ProfileAvatar } from './ProfileAvatar';
 
 const INK = '#0F2A4A';
-const MUTED = '#64748B';
 const PRIMARY_DARK = '#2563EB';
 
 type Props = {
@@ -28,6 +27,7 @@ type Props = {
     retryLabel: string;
     busy: boolean;
     onFinish: () => void;
+    avatarSize?: number;
 };
 
 export function OnboardingReadyReveal({
@@ -37,6 +37,7 @@ export function OnboardingReadyReveal({
     retryLabel,
     busy,
     onFinish,
+    avatarSize = 112,
 }: Props) {
     const [started, setStarted] = useState(false);
     const pulse = useSharedValue(0);
@@ -65,16 +66,29 @@ export function OnboardingReadyReveal({
     }));
 
     const pending = busy || !started;
+    const ringPad = Math.max(4, Math.round(avatarSize * 0.04));
 
     return (
         <Animated.View entering={FadeIn.duration(280)} style={styles.wrap}>
-            <Animated.View style={[styles.avatarRing, avatarPulse]}>
-                <ProfileAvatar uri={avatarUri} name={name} size={112} />
+            <Animated.View
+                style={[
+                    styles.avatarRing,
+                    avatarPulse,
+                    {
+                        borderRadius: (avatarSize + ringPad * 2) / 2,
+                        padding: ringPad,
+                    },
+                ]}
+            >
+                <ProfileAvatar uri={avatarUri} name={name} size={avatarSize} />
             </Animated.View>
             <Text style={styles.name} numberOfLines={2}>
                 {name}
             </Text>
-            <Text style={styles.hint}>{preparingLabel}</Text>
+            <View style={styles.hintCard}>
+                <View style={styles.hintAccent} />
+                <Text style={styles.hint}>{preparingLabel}</Text>
+            </View>
             {pending ? (
                 <ActivityIndicator color={PRIMARY_DARK} style={styles.spinner} />
             ) : (
@@ -92,6 +106,9 @@ export function OnboardingReadyReveal({
 
 const styles = StyleSheet.create({
     wrap: {
+        flex: 1,
+        justifyContent: 'center',
+        width: '100%',
         alignItems: 'center',
         paddingVertical: 28,
         paddingHorizontal: 8,
@@ -109,15 +126,38 @@ const styles = StyleSheet.create({
         fontWeight: '900',
         color: INK,
         textAlign: 'center',
-        marginBottom: 10,
+        marginBottom: 16,
         paddingHorizontal: 8,
     },
+    hintCard: {
+        flexDirection: 'row',
+        alignItems: 'stretch',
+        maxWidth: 340,
+        width: '100%',
+        backgroundColor: '#F8FAFC',
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        overflow: 'hidden',
+        marginBottom: 22,
+        paddingVertical: 14,
+        paddingRight: 16,
+    },
+    hintAccent: {
+        width: 4,
+        backgroundColor: PRIMARY_DARK,
+        borderRadius: 2,
+        marginRight: 14,
+        marginLeft: 0,
+    },
     hint: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: MUTED,
-        textAlign: 'center',
-        marginBottom: 20,
+        flex: 1,
+        fontSize: 18,
+        fontWeight: '800',
+        color: INK,
+        textAlign: 'left',
+        lineHeight: 26,
+        letterSpacing: -0.2,
     },
     spinner: { marginTop: 4 },
     retryBtn: {

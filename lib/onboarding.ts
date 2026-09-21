@@ -11,6 +11,7 @@ export type OnboardingData = {
     avatar_url: string;
     ambientes_preferidos: string[];
     descripcion?: string;
+    nombre?: string;
 };
 
 export async function fetchOnboardingStatus(
@@ -81,7 +82,9 @@ export async function saveOnboardingPreferences(
     data: OnboardingData
 ): Promise<{ error: string | null }> {
     const session = await getAuthSession();
-    const nombre = readNombreFromUser(session?.user ?? {});
+    const nombre =
+        (data.nombre && data.nombre.trim()) ||
+        readNombreFromUser(session?.user ?? {});
 
     const preferencePayload: Record<string, unknown> = {
         fecha_nacimiento: data.fecha_nacimiento,

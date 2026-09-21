@@ -6,6 +6,7 @@ import {
     PLACEHOLDER_COVER_URI,
     SUBCATEGORIES,
     getCoverImages,
+    type MainCategoryId,
 } from './categories';
 
 let started = false;
@@ -44,6 +45,23 @@ export function scheduleCoverPrefetch(): void {
             await Promise.allSettled(remote.map((uri) => Image.prefetch(uri)));
         })();
     });
+}
+
+/** Precarga inmediata las portadas de una categoría/subcategoría (crear plan). */
+export function warmCoverImages(main: MainCategoryId, sub: string): void {
+    const images = getCoverImages(main, sub);
+    const modules: number[] = [];
+    const remote: string[] = [];
+    for (const src of images) {
+        if (typeof src === 'number') modules.push(src);
+        else if (typeof src === 'string' && src.startsWith('http')) remote.push(src);
+    }
+    if (modules.length) {
+        void Asset.loadAsync(modules);
+    }
+    if (remote.length) {
+        void Promise.allSettled(remote.map((uri) => Image.prefetch(uri)));
+    }
 }
 
 /** Precarga URLs remotas (portadas/avatares del feed) en la caché de expo-image. */

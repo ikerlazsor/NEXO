@@ -1,5 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { StyleSheet, Text, View, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useT } from '../lib/i18n';
@@ -7,15 +6,35 @@ import { useThemedStyles } from '../lib/appTheme';
 import { type ThemeColors } from '../theme';
 import { getAspectLabel } from '../lib/ratings';
 import { topAttendedCategory, type BadgeStats } from '../lib/badgeStats';
-import { MAIN_CATEGORY_ICONS, type MainCategoryId } from '../lib/categories';
+import { type MainCategoryId } from '../lib/categories';
 import { hasPublicTraitStats, type UserStats } from '../lib/stats';
 import type { AffinityLevel } from '../lib/profileAffinity';
+import { ProfileAvatar } from './ProfileAvatar';
 
-const INK = '#0F172A';
-const MUTED = '#64748B';
 const SUCCESS = '#059669';
 
-const CAT_THEME: Record<MainCategoryId, { bg: string; fg: string; iconBg: string }> = {
+const TRAIT_IMAGES: Record<string, number> = {
+    agradable: require('../assets/images/buen rollo.png'),
+    puntual: require('../assets/images/puntual.png'),
+    respetuoso: require('../assets/images/respetuoso.png'),
+    cercano: require('../assets/images/cercano.png'),
+    divertido: require('../assets/images/divertido.png'),
+    social: require('../assets/images/social.png'),
+};
+
+const CAT_IMAGES: Record<MainCategoryId, number> = {
+    FOODIES: require('../assets/images/foodie.png'),
+    DEPORTES: require('../assets/images/deporte.png'),
+    AIRE_LIBRE: require('../assets/images/aire libre.png'),
+    SHOWTIME: require('../assets/images/showtime.png'),
+    DESCUBRIR: require('../assets/images/descubrir.png'),
+    VIBES: require('../assets/images/ocio.png'),
+};
+
+const CAT_THEME: Record<
+    MainCategoryId,
+    { bg: string; fg: string; iconBg: string }
+> = {
     FOODIES: { bg: '#FFF7ED', fg: '#C2410C', iconBg: '#FFEDD5' },
     DEPORTES: { bg: '#EFF6FF', fg: '#1D4ED8', iconBg: '#DBEAFE' },
     AIRE_LIBRE: { bg: '#ECFDF5', fg: '#047857', iconBg: '#D1FAE5' },
@@ -24,17 +43,41 @@ const CAT_THEME: Record<MainCategoryId, { bg: string; fg: string; iconBg: string
     VIBES: { bg: '#FDF2F8', fg: '#BE185D', iconBg: '#FCE7F3' },
 };
 
-const THERMO_COLORS = ['#DC2626', '#F97316', '#2DD4BF', '#22C55E', '#F5C542'] as const;
-const SUPER_GOLD = '#F5C542';
-const SUPER_GOLD_DEEP = '#B45309';
+const EMPTY_TRAIT_IMAGE = require('../assets/images/no hay votos en la gente destaca.png');
+const EMPTY_CAT_IMAGE = require('../assets/images/Vacio lo tuyo.png');
+
+/** Avatares laterales; burbuja de afinidad fija a 116px. */
+const AFF_AVATAR = 140;
+const AFF_BUBBLE = 116;
+
+const AFF_COLORS = [
+    '#F87171',
+    '#FB7185',
+    '#FB923C',
+    '#FBBF24',
+    '#A3E635',
+    '#2DD4BF',
+    '#22C55E',
+    '#16A34A',
+    '#F5C542',
+    '#EAB308',
+] as const;
+
+const AFF_TITLE_DARK = new Set<string>(['#FBBF24', '#A3E635', '#F5C542', '#EAB308']);
 
 type Props = {
     stats: UserStats | BadgeStats;
     isSelf?: boolean;
     genero?: string | null;
     affinityLevel?: AffinityLevel;
+    affinityScore?: number;
+    showAffinity?: boolean;
+    /** @deprecated Usar showAffinity */
     showThermo?: boolean;
-    /** Comunidad: solo rasgos (sin termómetro ni «lo suyo»). */
+    viewerAvatarUrl?: string | null;
+    viewerName?: string | null;
+    targetAvatarUrl?: string | null;
+    targetName?: string | null;
     variant?: 'person' | 'organizer';
 };
 
@@ -43,75 +86,24 @@ function upperFirst(value: string): string {
     return value.charAt(0).toLocaleUpperCase('es') + value.slice(1);
 }
 
-function AffinityThermo({ level }: { level: AffinityLevel }) {
-    const { t } = useT();
-    const styles = useThemedStyles(createRepStyles);
-    const isSuper = level === 4;
-    const color = isSuper ? SUPER_GOLD : THERMO_COLORS[level];
-    const tubeInnerH = 76;
-    const fillH = level <= 0 ? 0 : Math.max(10, Math.round((level / 4) * tubeInnerH));
+function traitBlurbKey(traitKey: string, own: boolean, genero?: string | null): string {
+    const who = own ? 'self' : genero === 'femenino' ? 'her' : 'him';
+    return `profile.rep.traitBlurb.${traitKey}.${who}`;
+}
 
-    return (
-        <View style={styles.thermoCol}>
-            <View style={styles.thermoStack}>
-                {isSuper ? (
-                    <View style={styles.superSparkle} pointerEvents="none">
-                        <Ionicons name="sparkles" size={13} color={SUPER_GOLD} />
-                    </View>
-                ) : null}
-                <View style={[styles.thermoTubeOuter, isSuper && styles.thermoTubeOuterSuper]}>
-                    <View style={[styles.thermoTubeInner, { height: tubeInnerH }]}>
-                        <View style={styles.thermoFillTrack}>
-                            {isSuper ? (
-                                <LinearGradient
-                                    colors={['#FFF4C4', SUPER_GOLD, '#D97706']}
-                                    start={{ x: 0.5, y: 0 }}
-                                    end={{ x: 0.5, y: 1 }}
-                                    style={[styles.thermoFill, { height: fillH }]}
-                                />
-                            ) : (
-                                <View
-                                    style={[
-                                        styles.thermoFill,
-                                        { height: fillH, backgroundColor: color },
-                                    ]}
-                                />
-                            )}
-                        </View>
-                        <View style={styles.thermoTicks} pointerEvents="none">
-                            {[0.25, 0.5, 0.75].map((mark) => (
-                                <View
-                                    key={mark}
-                                    style={[styles.thermoTick, { bottom: Math.round(mark * tubeInnerH) }]}
-                                />
-                            ))}
-                        </View>
-                    </View>
-                </View>
-                {isSuper ? (
-                    <LinearGradient
-                        colors={['#FFE58A', SUPER_GOLD, '#B45309']}
-                        start={{ x: 0.2, y: 0 }}
-                        end={{ x: 0.8, y: 1 }}
-                        style={[styles.thermoBulb, styles.thermoBulbSuper]}
-                    />
-                ) : (
-                    <View style={[styles.thermoBulb, { backgroundColor: color }]} />
-                )}
-            </View>
-            <Text style={styles.thermoKicker} numberOfLines={2}>{t('profile.aff.kicker')}</Text>
-            <Text
-                style={[
-                    styles.thermoTitle,
-                    { color: isSuper ? SUPER_GOLD_DEEP : color },
-                    isSuper && styles.thermoTitleSuper,
-                ]}
-                numberOfLines={2}
-            >
-                {t(`profile.aff.other.${level}`)}
-            </Text>
-        </View>
-    );
+function catBlurbText(
+    cat: string,
+    own: boolean,
+    t: (k: string) => string,
+): string {
+    const specific = own ? `profile.rep.catBlurb.${cat}.self` : `profile.rep.catBlurb.${cat}.other`;
+    const specificVal = t(specific);
+    if (specificVal !== specific) return specificVal;
+    return t(`profile.rep.catBlurb.${cat}`);
+}
+
+function ArtImage({ source }: { source: number }) {
+    return <Image source={source} style={stylesStatic.artImage} resizeMode="contain" />;
 }
 
 export function ProfileReputationStats({
@@ -119,16 +111,24 @@ export function ProfileReputationStats({
     isSelf,
     genero,
     affinityLevel = 0,
+    affinityScore,
+    showAffinity,
     showThermo,
+    viewerAvatarUrl,
+    viewerName,
+    targetAvatarUrl,
+    targetName,
     variant = 'person',
 }: Props) {
     const { t } = useT();
     const styles = useThemedStyles(createRepStyles);
     const badgeStats = stats as BadgeStats;
     const isOrganizer = variant === 'organizer';
-    const posLabel = hasPublicTraitStats(badgeStats) && badgeStats.aspectoPositivoMasVotado
-        ? upperFirst(getAspectLabel('pos', badgeStats.aspectoPositivoMasVotado, genero, t))
-        : null;
+    const posKey =
+        hasPublicTraitStats(badgeStats) && badgeStats.aspectoPositivoMasVotado
+            ? badgeStats.aspectoPositivoMasVotado
+            : null;
+    const posLabel = posKey ? upperFirst(getAspectLabel('pos', posKey, genero, t)) : null;
     const negLabel =
         posLabel && hasPublicTraitStats(badgeStats) && badgeStats.aspectoNegativoMasVotado
             ? upperFirst(getAspectLabel('neg', badgeStats.aspectoNegativoMasVotado, genero, t))
@@ -136,319 +136,248 @@ export function ProfileReputationStats({
     const loSuyo = isOrganizer ? null : topAttendedCategory(badgeStats);
     const catTheme = loSuyo ? CAT_THEME[loSuyo] : null;
     const own = !!isSelf;
-    const thermo = isOrganizer ? false : (showThermo ?? !own);
+    const affinityOn = isOrganizer
+        ? false
+        : (showAffinity ?? showThermo ?? !own);
+
+    const pct =
+        typeof affinityScore === 'number' && Number.isFinite(affinityScore)
+            ? Math.max(0, Math.min(100, Math.round(affinityScore)))
+            : null;
+    const affColor = AFF_COLORS[affinityLevel] ?? AFF_COLORS[0];
+    const traitImage = posKey ? TRAIT_IMAGES[posKey] : null;
+    const catImage = loSuyo ? CAT_IMAGES[loSuyo] : null;
 
     return (
         <View style={styles.wrap}>
-            <View style={[styles.card, (!thermo || isOrganizer) && styles.cardSelf]}>
-                {thermo ? <AffinityThermo level={affinityLevel} /> : null}
+            <View style={[styles.highlightCard, styles.highlightGreen]}>
+                <View style={styles.highlightCopy}>
+                    <Text style={styles.highlightKicker}>
+                        {t(own ? 'profile.rep.peopleSee' : 'profile.rep.peopleSeeOther')}
+                    </Text>
+                    {posLabel && posKey ? (
+                        <>
+                            <Text style={styles.highlightTrait}>{posLabel}</Text>
+                            <Text style={styles.highlightBlurb}>
+                                {t(traitBlurbKey(posKey, own, genero))}
+                            </Text>
+                        </>
+                    ) : (
+                        <Text style={styles.highlightEmpty}>{t('profile.rep.peopleSeeEmpty')}</Text>
+                    )}
+                </View>
+                <ArtImage source={traitImage ?? EMPTY_TRAIT_IMAGE} />
+            </View>
 
-                <View style={[styles.traits, (!thermo || isOrganizer) && !negLabel && styles.traitsSelf]}>
-                    <View style={[styles.block, styles.blockSpoiler, (!thermo || isOrganizer) && styles.blockSelf]}>
-                        <View style={styles.blockTopRow}>
-                            <View style={styles.spoilerIcon}>
-                                <Ionicons name="sparkles" size={15} color={SUCCESS} />
-                            </View>
-                            <View style={styles.kickerPillSpoiler}>
-                                <Text style={[styles.kicker, styles.kickerSpoiler]}>
-                                    {t(own ? 'profile.rep.peopleSee' : 'profile.rep.peopleSeeOther')}
+            {!isOrganizer ? (
+                <View
+                    style={[
+                        styles.highlightCard,
+                        catTheme
+                            ? { backgroundColor: catTheme.bg, borderColor: `${catTheme.fg}33` }
+                            : styles.catFallback,
+                    ]}
+                >
+                    <View style={styles.highlightCopy}>
+                        <Text style={[styles.highlightKicker, catTheme && { color: catTheme.fg }]}>
+                            {t(own ? 'profile.rep.loTuyo' : 'profile.rep.loSuyo')}
+                        </Text>
+                        {loSuyo && catTheme ? (
+                            <>
+                                <Text style={styles.highlightTrait}>{t(`cat.main.${loSuyo}`)}</Text>
+                                <Text style={[styles.highlightBlurb, { color: `${catTheme.fg}CC` }]}>
+                                    {catBlurbText(loSuyo, own, t)}
                                 </Text>
-                            </View>
-                        </View>
-                        <View style={styles.blockBody}>
-                            {posLabel ? (
-                                <Text style={styles.blockTitle}>{posLabel}</Text>
-                            ) : (
-                                <Text style={styles.blockMuted}>{t('profile.rep.peopleSeeEmpty')}</Text>
-                            )}
-                        </View>
+                            </>
+                        ) : (
+                            <Text style={styles.highlightEmpty}>
+                                {t(own ? 'profile.rep.loTuyoEmpty' : 'profile.rep.loSuyoEmpty')}
+                            </Text>
+                        )}
                     </View>
+                    <ArtImage source={catImage ?? EMPTY_CAT_IMAGE} />
+                </View>
+            ) : null}
 
-                    {!isOrganizer ? (
-                    <View
+            {affinityOn && pct != null ? (
+                <View style={styles.affinityBlock}>
+                    <View style={styles.affinityAvatars}>
+                        <ProfileAvatar
+                            uri={viewerAvatarUrl}
+                            name={viewerName || 'Tú'}
+                            size={AFF_AVATAR}
+                            recyclingKey="aff-viewer"
+                        />
+                        <View style={[styles.pctBubble, { backgroundColor: affColor }]}>
+                            <Text style={styles.pctText}>{pct}%</Text>
+                            <Text style={styles.pctLabel}>{t('profile.aff.bubble')}</Text>
+                        </View>
+                        <ProfileAvatar
+                            uri={targetAvatarUrl}
+                            name={targetName || 'U'}
+                            size={AFF_AVATAR}
+                            recyclingKey="aff-target"
+                        />
+                    </View>
+                    <Text
                         style={[
-                            styles.block,
-                            catTheme && { backgroundColor: catTheme.bg, borderColor: `${catTheme.fg}22` },
-                            !thermo && styles.blockSelf,
+                            styles.affTitle,
+                            { color: AFF_TITLE_DARK.has(affColor) ? '#B45309' : affColor },
                         ]}
                     >
-                        <View style={styles.blockTopRow}>
-                            <View
-                                style={[
-                                    styles.catIcon,
-                                    { backgroundColor: catTheme?.iconBg ?? '#EEF2FF' },
-                                ]}
-                            >
-                                <Ionicons
-                                    name={(loSuyo ? MAIN_CATEGORY_ICONS[loSuyo] : 'compass-outline') as keyof typeof Ionicons.glyphMap}
-                                    size={15}
-                                    color={catTheme?.fg ?? '#4F46E5'}
-                                />
-                            </View>
-                            <View style={[styles.kickerPill, catTheme && { backgroundColor: `${catTheme.fg}14` }]}>
-                                <Text style={[styles.kicker, catTheme && { color: catTheme.fg }]}>
-                                    {t(own ? 'profile.rep.loTuyo' : 'profile.rep.loSuyo')}
-                                </Text>
-                            </View>
-                        </View>
-                        <View style={styles.blockBody}>
-                            {loSuyo ? (
-                                <Text style={styles.blockTitle}>{t(`cat.main.${loSuyo}`)}</Text>
-                            ) : (
-                                <Text style={styles.blockMuted}>
-                                    {t(own ? 'profile.rep.loTuyoEmpty' : 'profile.rep.loSuyoEmpty')}
-                                </Text>
-                            )}
-                        </View>
-                    </View>
-                    ) : null}
-
-                    {negLabel ? (
-                        <View style={[styles.block, styles.blockNeg, (!thermo || isOrganizer) && styles.blockSelf]}>
-                            <View style={styles.blockTopRow}>
-                                <View style={styles.negIcon}>
-                                    <MaterialCommunityIcons name="emoticon-frown-outline" size={16} color="#B45309" />
-                                </View>
-                                <View style={styles.kickerPillNeg}>
-                                    <Text style={[styles.kicker, styles.kickerNeg]}>
-                                        {t(own ? 'profile.rep.improve' : 'profile.rep.improveOtherShort')}
-                                    </Text>
-                                </View>
-                            </View>
-                            <View style={styles.blockBody}>
-                                <Text style={styles.blockTitle}>{negLabel}</Text>
-                            </View>
-                        </View>
-                    ) : null}
+                        {t(`profile.aff.title.${affinityLevel}`)}
+                    </Text>
+                    <Text style={styles.affBlurb}>{t(`profile.aff.blurb.${affinityLevel}`)}</Text>
                 </View>
-            </View>
+            ) : null}
+
+            {negLabel ? (
+                <View style={[styles.highlightCard, styles.improveCard]}>
+                    <View style={styles.highlightCopy}>
+                        <Text style={[styles.highlightKicker, styles.improveKicker]}>
+                            {t(own ? 'profile.rep.improve' : 'profile.rep.improveOtherShort')}
+                        </Text>
+                        <Text style={styles.highlightTrait}>{negLabel}</Text>
+                    </View>
+                    <View style={stylesStatic.improveIcon}>
+                        <MaterialCommunityIcons name="emoticon-frown-outline" size={40} color="#B45309" />
+                    </View>
+                </View>
+            ) : null}
         </View>
     );
 }
+
+const stylesStatic = StyleSheet.create({
+    artImage: {
+        width: 134,
+        height: 134,
+    },
+    improveIcon: {
+        width: 72,
+        height: 72,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+});
 
 function createRepStyles(c: ThemeColors) {
     const INK = c.text;
     const MUTED = c.textMuted;
     return StyleSheet.create({
-    wrap: {
-        width: '100%',
-        marginTop: 24,
-        paddingHorizontal: 20,
-    },
-    card: {
-        backgroundColor: c.surface,
-        borderRadius: 22,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: c.border,
-        paddingVertical: 14,
-        paddingHorizontal: 12,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        shadowColor: '#000',
-        shadowOpacity: 0.12,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 2,
-    },
-    cardSelf: {
-        alignItems: 'stretch',
-        paddingVertical: 12,
-        paddingHorizontal: 12,
-    },
-    thermoCol: {
-        width: 108,
-        alignItems: 'center',
-        gap: 6,
-    },
-    thermoStack: {
-        alignItems: 'center',
-        position: 'relative',
-    },
-    superSparkle: {
-        position: 'absolute',
-        top: -10,
-        right: -4,
-        zIndex: 3,
-    },
-    thermoTubeOuter: {
-        width: 22,
-        borderRadius: 11,
-        borderBottomLeftRadius: 6,
-        borderBottomRightRadius: 6,
-        backgroundColor: c.surfaceSubtle,
-        borderWidth: 1.5,
-        borderColor: c.border,
-        padding: 3,
-        marginBottom: -7,
-        zIndex: 1,
-        shadowColor: '#0F172A',
-        shadowOpacity: 0.06,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 1 },
-    },
-    thermoTubeOuterSuper: {
-        borderColor: '#F5C542',
-        backgroundColor: '#FFFBEB',
-    },
-    thermoTubeInner: {
-        width: '100%',
-        borderRadius: 8,
-        overflow: 'hidden',
-        backgroundColor: c.border,
-        position: 'relative',
-    },
-    thermoFillTrack: {
-        ...StyleSheet.absoluteFillObject,
-        justifyContent: 'flex-end',
-    },
-    thermoFill: {
-        width: '100%',
-        borderTopLeftRadius: 6,
-        borderTopRightRadius: 6,
-        minHeight: 0,
-    },
-    thermoTicks: {
-        ...StyleSheet.absoluteFillObject,
-    },
-    thermoTick: {
-        position: 'absolute',
-        left: 1,
-        right: 1,
-        height: StyleSheet.hairlineWidth,
-        backgroundColor: 'rgba(15,23,42,0.12)',
-    },
-    thermoBulb: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        borderWidth: 3,
-        borderColor: c.background,
-        zIndex: 2,
-        shadowColor: '#0F172A',
-        shadowOpacity: 0.12,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 1 },
-    },
-    thermoBulbSuper: {
-        borderColor: '#FFF4C4',
-        shadowColor: '#F59E0B',
-        shadowOpacity: 0.85,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 0 },
-        elevation: 6,
-    },
-    thermoKicker: {
-        fontSize: 10,
-        fontWeight: '800',
-        color: MUTED,
-        letterSpacing: 0.15,
-        textAlign: 'center',
-        marginTop: 4,
-    },
-    thermoTitle: {
-        fontSize: 13,
-        fontWeight: '800',
-        textAlign: 'center',
-        lineHeight: 16,
-    },
-    thermoTitleSuper: {
-        fontSize: 14,
-        letterSpacing: 0.2,
-        textShadowColor: 'rgba(245, 197, 66, 0.55)',
-        textShadowOffset: { width: 0, height: 0 },
-        textShadowRadius: 8,
-    },
-    traits: { flex: 1, gap: 7, minWidth: 0 },
-    traitsSelf: {
-        flexDirection: 'column',
-        gap: 10,
-        flex: 1,
-    },
-    block: {
-        flexDirection: 'column',
-        alignItems: 'stretch',
-        gap: 8,
-        borderRadius: 18,
-        paddingVertical: 12,
-        paddingHorizontal: 12,
-        backgroundColor: c.surface,
-        borderWidth: 1,
-        borderColor: c.border,
-    },
-    blockSelf: {
-        flex: undefined,
-        width: '100%',
-        minWidth: 0,
-    },
-    blockSpoiler: {
-        backgroundColor: '#F0FDF9',
-        borderColor: '#A7F3D0',
-    },
-    blockNeg: {
-        backgroundColor: '#FFFBEB',
-        borderColor: '#FDE68A',
-    },
-    blockTopRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    spoilerIcon: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: '#D1FAE5',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    negIcon: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: '#FFEDD5',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    catIcon: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    kickerPill: {
-        alignSelf: 'flex-start',
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 999,
-        backgroundColor: c.surfaceSubtle,
-    },
-    kickerPillSpoiler: {
-        alignSelf: 'flex-start',
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 999,
-        backgroundColor: '#D1FAE5',
-    },
-    kickerPillNeg: {
-        alignSelf: 'flex-start',
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 999,
-        backgroundColor: '#FFEDD5',
-    },
-    blockBody: { flex: 1, minWidth: 0, paddingLeft: 2 },
-    kicker: {
-        fontSize: 10,
-        fontWeight: '800',
-        color: MUTED,
-        letterSpacing: 0.35,
-        textTransform: 'uppercase',
-    },
-    kickerSpoiler: { color: SUCCESS },
-    kickerNeg: { color: '#B45309' },
-    blockTitle: { fontSize: 15, fontWeight: '800', color: INK, lineHeight: 20 },
-    blockMuted: { fontSize: 13, fontWeight: '600', color: MUTED, lineHeight: 18 },
+        wrap: {
+            width: '100%',
+            marginTop: 24,
+            paddingHorizontal: 20,
+            gap: 12,
+        },
+        highlightCard: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            borderRadius: 22,
+            paddingVertical: 16,
+            paddingHorizontal: 14,
+            borderWidth: 1,
+            overflow: 'hidden',
+        },
+        highlightGreen: {
+            backgroundColor: '#ECFDF5',
+            borderColor: '#A7F3D0',
+        },
+        catFallback: {
+            backgroundColor: c.surfaceSubtle,
+            borderColor: c.border,
+        },
+        improveCard: {
+            backgroundColor: '#FFFBEB',
+            borderColor: '#FDE68A',
+        },
+        highlightCopy: {
+            flex: 1,
+            minWidth: 0,
+            gap: 4,
+            paddingRight: 2,
+        },
+        highlightKicker: {
+            fontSize: 13,
+            fontWeight: '800',
+            color: SUCCESS,
+            letterSpacing: 0.6,
+            textTransform: 'uppercase',
+        },
+        improveKicker: {
+            color: '#B45309',
+        },
+        highlightTrait: {
+            fontSize: 23,
+            fontWeight: '800',
+            color: INK,
+            letterSpacing: -0.4,
+            lineHeight: 28,
+        },
+        highlightBlurb: {
+            fontSize: 14,
+            fontWeight: '600',
+            color: MUTED,
+            lineHeight: 19,
+        },
+        highlightEmpty: {
+            fontSize: 15,
+            fontWeight: '700',
+            color: MUTED,
+            marginTop: 2,
+        },
+        affinityBlock: {
+            marginTop: 8,
+            alignItems: 'center',
+            paddingVertical: 8,
+        },
+        affinityAvatars: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 0,
+            marginBottom: 14,
+        },
+        pctBubble: {
+            width: AFF_BUBBLE,
+            height: AFF_BUBBLE,
+            borderRadius: AFF_BUBBLE / 2,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 0,
+            marginHorizontal: -18,
+            zIndex: 2,
+        },
+        pctText: {
+            fontSize: 28,
+            fontWeight: '900',
+            color: '#FFF',
+            letterSpacing: -0.5,
+        },
+        pctLabel: {
+            fontSize: 12,
+            fontWeight: '800',
+            color: 'rgba(255,255,255,0.92)',
+            textTransform: 'uppercase',
+            letterSpacing: 0.35,
+            marginTop: 2,
+        },
+        affTitle: {
+            fontSize: 22,
+            fontWeight: '800',
+            textAlign: 'center',
+            letterSpacing: -0.3,
+        },
+        affBlurb: {
+            marginTop: 6,
+            fontSize: 14,
+            fontWeight: '600',
+            color: MUTED,
+            textAlign: 'center',
+            lineHeight: 20,
+            paddingHorizontal: 12,
+        },
     });
 }

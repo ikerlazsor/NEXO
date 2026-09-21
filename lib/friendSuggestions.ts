@@ -263,6 +263,8 @@ async function rankByAffinity(
             const { score } = resolveProfileAffinity({
                 viewer,
                 target,
+                viewerId: userId,
+                targetId: row.id,
                 isFriends: false,
                 mutualFriends: 0,
                 sharedCommunities: sharedMap.get(row.id) ?? 0,

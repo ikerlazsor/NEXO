@@ -59,18 +59,25 @@ import { getAuthUser } from '../lib/auth';
 import { useAuthSession } from '../lib/authSession';
 import { formatCountdown, resolveRatingUiPhase } from '../lib/planLifecycle';
 import { warmFriendsAndSavedPlans } from '../lib/prefetchHome';
-import { getPendingRatingPlans, mergeAttendedPlansOptimistic, subscribeRatingSession, type PendingRatingPlan } from '../lib/ratings';
+import {
+    getPendingRatingPlans,
+    mergeAttendedPlansOptimistic,
+    subscribeRatingSession,
+    type PendingRatingPlan,
+} from '../lib/ratings';
+import { subscribeMyPlanHide } from '../lib/myPlansHide';
 import {
     getPublicAttendedPlans,
     type PublicAttendedPlan,
 } from '../lib/profileSocial';
+import { shouldPreferProfileCache } from '../lib/profileOptimistic';
 import {
     loadProfileRow,
     resolveDisplayName,
     syncProfileFromAuth,
 } from '../lib/profile';
 import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
-import { rememberChromeAvatar } from '../lib/chromeAvatar';
+import { rememberChromeAvatar, peekChromeAvatar } from '../lib/chromeAvatar';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 import { EMPTY_STATS, getUserStats, personRepeatStat, type UserStats } from '../lib/stats';
 import { EMPTY_BADGE_STATS, getBadgeStats, type BadgeStats } from '../lib/badgeStats';
@@ -85,6 +92,7 @@ import {
     type HabitoConsumo,
     type ProfilePrivacy,
 } from '../lib/profileFields';
+import { parseCountryCode } from '../lib/countryFlags';
 import { readCoverUrl } from '../lib/profileCover';
 import { theme } from '../theme';
 import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
@@ -101,7 +109,14 @@ export default function ProfileScreen() {
     const cachedProfile = userId ? cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(userId)) : null;
     const [user, setUser] = useState<any>(() => session?.user ?? null);
     const [nombre, setNombre] = useState(() => cachedProfile?.nombre ?? '');
-    const [avatarUrl, setAvatarUrl] = useState<string | null>(() => cachedProfile?.avatarUrl ?? null);
+    const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
+        const fromCache = cachedProfile?.avatarUrl ?? null;
+        if (fromCache) return fromCache;
+        const fromChrome = userId ? peekChromeAvatar(userId) : null;
+        if (fromChrome) return fromChrome;
+        const meta = session?.user?.user_metadata?.avatar_url;
+        return typeof meta === 'string' ? meta : null;
+    });
     const [coverUrl, setCoverUrl] = useState<string | null>(() => cachedProfile?.coverUrl ?? null);
     const [attendedPlans, setAttendedPlans] = useState<PublicAttendedPlan[]>([]);
     const [upcomingPlans, setUpcomingPlans] = useState<OrganizerUpcomingPlan[]>([]);
@@ -128,7 +143,9 @@ export default function ProfileScreen() {
     const [privacy, setPrivacy] = useState<ProfilePrivacy>(() => cachedProfile?.privacy ?? DEFAULT_PRIVACY);
     const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>(() => cachedProfile?.perfilGustos ?? {});
     const hasHydratedRef = useRef(!!cachedProfile);
-    const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(ScreenKeys.PROFILE);
+    const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(ScreenKeys.PROFILE, {
+        restore: false,
+    });
 
     const applyProfileSnapshot = useCallback((snap: ProfileUiSnapshot) => {
         setNombre(snap.nombre);
@@ -181,6 +198,16 @@ export default function ProfileScreen() {
         });
     }, [userId]);
 
+    useEffect(() => {
+        if (!userId) return;
+        return subscribeMyPlanHide((evt) => {
+            if (evt.userId !== userId) return;
+            if (evt.type === 'attended' || evt.type === 'my-list') {
+                setAttendedPlans((prev) => prev.filter((p) => p.id !== evt.planId));
+            }
+        });
+    }, [userId]);
+
     // Badges de amigos / solicitudes de plan: si se atienden en Amigos o en el detalle del plan, bajan aquí también.
     useEffect(() => {
         if (!userId) return;
@@ -202,6 +229,12 @@ export default function ProfileScreen() {
         const stale = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
         if (stale && stale.userId === authUser.id) {
             applyProfileSnapshot(stale);
+            if (shouldPreferProfileCache()) {
+                // Edit reciente: no pisar con red hasta que el write termine.
+                hasHydratedRef.current = true;
+                perfEnd('profile.total');
+                return;
+            }
         }
 
         const applyProfileFields = (profile: {
@@ -372,7 +405,7 @@ export default function ProfileScreen() {
         : [
             { key: 'friends', icon: 'people', labelKey: 'profile.friends', route: '/friends', color: INK, bg: theme.colors.surfaceSubtle, badge: friendsNotifCount },
             { key: 'search', icon: 'search', labelKey: 'profile.searchUsers', route: '/search-profiles', color: INK, bg: theme.colors.surfaceSubtle },
-            { key: 'saved', icon: 'heart', labelKey: 'profile.saved', route: '/saved-plans', color: INK, bg: theme.colors.surfaceSubtle },
+            { key: 'saved', icon: 'bookmark', labelKey: 'profile.saved', route: '/saved-plans', color: INK, bg: theme.colors.surfaceSubtle },
         ];
 
     const displayName = nombre.trim() || (user ? resolveDisplayName(user, t('profile.user')) : t('profile.user'));
@@ -403,6 +436,13 @@ export default function ProfileScreen() {
                         coverUrl={coverUrl}
                         avatarUrl={avatarUrl}
                         name={displayName}
+                        age={isOrganizer || privacy.mostrar_edad === false ? null : age}
+                        genero={isOrganizer || privacy.mostrar_genero === false ? null : genero}
+                        flagCode={
+                            isOrganizer || privacy.mostrar_edad === false || privacy.mostrar_genero === false
+                                ? null
+                                : parseCountryCode(perfilGustos)
+                        }
                         verified={isOrganizer}
                         onBack={() => router.back()}
                         onCoverPress={undefined}
@@ -484,10 +524,10 @@ export default function ProfileScreen() {
                     />
 
                     {pendingRatings.length > 0 ? (
-                        <View style={styles.ratingsHighlight}>
-                            <View style={styles.ratingsHighlightHead}>
+                        <View style={styles.ratingsHighlight} pointerEvents="box-none">
+                            <View style={styles.ratingsHighlightHead} pointerEvents="none">
                                 <View style={styles.ratingsHighlightIcon}>
-                                    <Ionicons name="star" size={18} color={colors.onPrimary} />
+                                    <Ionicons name="star" size={14} color={colors.onPrimary} />
                                 </View>
                                 <View style={{ flex: 1 }}>
                                     <Text style={styles.ratingsHighlightTitle}>{t('ratings.section')}</Text>
@@ -511,6 +551,8 @@ export default function ProfileScreen() {
                                             style={[styles.ratingCard, waiting ? styles.ratingCardWait : styles.ratingCardOpen]}
                                             activeOpacity={waiting ? 1 : 0.85}
                                             disabled={waiting}
+                                            accessibilityRole="button"
+                                            accessibilityHint={waiting ? undefined : t('ratings.sectionCardCta')}
                                             onPress={() =>
                                                 router.push({ pathname: '/rate-plan', params: { planId: item.planId } })
                                             }
@@ -528,7 +570,9 @@ export default function ProfileScreen() {
                                                     <Text style={styles.ratingCardSub}>
                                                         {t('ratings.unlockIn', { time: formatCountdown(remaining) })}
                                                     </Text>
-                                                ) : null}
+                                                ) : (
+                                                    <Text style={styles.ratingCardSub}>{t('ratings.sectionCardCta')}</Text>
+                                                )}
                                             </View>
                                             {!waiting && <Ionicons name="chevron-forward" size={16} color={colors.primary} />}
                                         </TouchableOpacity>
@@ -558,7 +602,7 @@ export default function ProfileScreen() {
                                 <ProfileSection title={t('profile.aboutMe')}>
                                     <TranslatedText
                                         text={aboutMe.trim()}
-                                        style={{ color: colors.textMuted, fontSize: 16, lineHeight: 24, fontWeight: '500' }}
+                                        style={{ color: '#1E293B', fontSize: 16, lineHeight: 24, fontWeight: '500' }}
                                     />
                                 </ProfileSection>
                             ) : null}

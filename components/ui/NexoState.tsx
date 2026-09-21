@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image, type ImageSource } from 'expo-image';
 import type { ComponentProps } from 'react';
 import {
   ActivityIndicator,
@@ -15,7 +16,9 @@ import { NexoButton } from './NexoButton';
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
 type EmptyProps = {
-  icon: IconName;
+  icon?: IconName;
+  image?: ImageSource;
+  imageSize?: number;
   title: string;
   description?: string;
   actionLabel?: string;
@@ -27,6 +30,8 @@ type EmptyProps = {
 
 export function NexoEmptyState({
   icon,
+  image,
+  imageSize = 168,
   title,
   description,
   actionLabel,
@@ -39,13 +44,24 @@ export function NexoEmptyState({
   const { colors } = useAppTheme();
   return (
     <View style={[styles.container, style]}>
-      <View style={styles.iconWrap}>
-        <Ionicons name={icon} size={48} color={colors.primary} />
-      </View>
+      {image ? (
+        <Image
+          source={image}
+          style={{ width: imageSize, height: imageSize }}
+          contentFit="contain"
+          cachePolicy="memory-disk"
+          recyclingKey={typeof image === 'number' ? `local-${image}` : undefined}
+          transition={0}
+        />
+      ) : icon ? (
+        <View style={styles.iconWrap}>
+          <Ionicons name={icon} size={48} color={colors.primary} />
+        </View>
+      ) : null}
       <Text
         allowFontScaling
         maxFontSizeMultiplier={theme.accessibility.maximumTextScale}
-        style={styles.title}
+        style={[styles.title, image ? styles.titleAfterImage : null]}
       >
         {title}
       </Text>
@@ -124,6 +140,9 @@ function createStateStyles(c: ThemeColors) {
       color: c.text,
       textAlign: 'center',
       marginTop: theme.spacing.lg,
+    },
+    titleAfterImage: {
+      marginTop: theme.spacing.sm,
     },
     description: {
       ...theme.typography.bodySmall,

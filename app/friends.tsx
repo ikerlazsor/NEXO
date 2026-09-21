@@ -389,6 +389,17 @@ export default function FriendsScreen() {
                     return;
                 }
                 const { error, max, estado, alreadyMember } = await acceptPlanInvite(invite, user.id);
+                if (error === 'plan_ended') {
+                    // Plan ya terminado: no restaurar la invitación
+                    hapticError();
+                    broadcastPlanMembership(invite.plan_id, 'none', {
+                        userId: user.id,
+                        dropJoined: true,
+                        invalidateFriends: true,
+                    });
+                    Alert.alert(t('profile.error'), t('friends.invitePlanEnded'));
+                    return;
+                }
                 if (error === 'full' || error === 'limit' || error === 'organizer_cannot_join' || error) {
                     hapticError();
                     setPlanInvites((prev) => [removed, ...prev]);

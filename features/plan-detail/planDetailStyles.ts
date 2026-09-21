@@ -1,8 +1,10 @@
 import { Dimensions, Platform, StyleSheet } from "react-native";
 import { palettes, theme, type ThemeColors } from "../../theme";
 
-const { width: SCREEN_W } = Dimensions.get("window");
-const HERO_H = Math.min(440, SCREEN_W * 1.08);
+const { height: SCREEN_H } = Dimensions.get("window");
+/** Portada del detalle: ~40% de la altura de pantalla. */
+export const PLAN_DETAIL_HERO_H = Math.round(SCREEN_H * 0.4);
+const HERO_H = PLAN_DETAIL_HERO_H;
 
 export function createPlanDetailStyles(c: ThemeColors) {
   const PRIMARY_DARK = c.primary;
@@ -20,6 +22,7 @@ export function createPlanDetailStyles(c: ThemeColors) {
   const ACQUAINTANCE_BORDER = c.primaryBorder;
   const GOLD = c.warning;
   const WAITLIST = c.accent;
+  const isDark = c.statusBar === "light";
 
   return StyleSheet.create({
   root: { flex: 1, backgroundColor: c.surfaceSubtle },
@@ -92,26 +95,61 @@ export function createPlanDetailStyles(c: ThemeColors) {
     paddingHorizontal: 16,
     zIndex: 2,
   },
+  fixedBackBar: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    paddingHorizontal: 16,
+    zIndex: 40,
+    elevation: 12,
+  },
+  glassBtnPlaceholder: {
+    width: theme.accessibility.minimumTouchTarget,
+    height: theme.accessibility.minimumTouchTarget,
+  },
   heroTopRight: { flexDirection: "row", gap: 6 },
   glassBtn: {
     width: theme.accessibility.minimumTouchTarget,
     height: theme.accessibility.minimumTouchTarget,
     borderRadius: theme.radii.md,
-    backgroundColor: "rgba(15,42,74,0.45)",
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.25)",
+    borderColor: "rgba(15,42,74,0.08)",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#0F172A",
+        shadowOpacity: 0.18,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+      },
+      android: { elevation: 3 },
+    }),
   },
   glassBtnSm: {
     width: 36,
     height: 36,
     borderRadius: 12,
-    backgroundColor: "rgba(15,42,74,0.45)",
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.25)",
+    borderColor: "rgba(15,42,74,0.08)",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#0F172A",
+        shadowOpacity: 0.18,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+      },
+      android: { elevation: 3 },
+    }),
+  },
+  heartHost: {
+    width: 36,
+    height: 36,
+    overflow: "visible",
   },
 
   sheet: {
@@ -182,19 +220,38 @@ export function createPlanDetailStyles(c: ThemeColors) {
   },
   sportChipLightText: { color: INK, fontSize: 13, fontWeight: "600" },
 
-  dateRow: { flexDirection: "row", gap: 10, marginBottom: 4 },
-  dateCard: {
-    flex: 1,
+  dateRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: c.background,
+    marginTop: 4,
+    marginBottom: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: c.primarySoft,
     borderRadius: 16,
-    padding: 14,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: c.primaryBorder,
   },
-  dateValue: { flex: 1, fontSize: 15, fontWeight: "700", color: INK },
+  dateCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    borderWidth: 0,
+  },
+  dateValue: { fontSize: 16, fontWeight: "800", color: INK, letterSpacing: -0.2, flexShrink: 1 },
+  dateDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: PRIMARY_DARK,
+    opacity: 0.45,
+  },
+  dateTimeValue: { fontSize: 16, fontWeight: "800", color: INK, letterSpacing: -0.2 },
 
   section: { marginTop: 28 },
   sectionAfterFit: { marginTop: 14 },
@@ -234,12 +291,11 @@ export function createPlanDetailStyles(c: ThemeColors) {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: c.surface,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: c.border,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    borderWidth: 0,
     paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 0,
   },
   joinRequestUser: {
     flex: 1,
@@ -279,10 +335,9 @@ export function createPlanDetailStyles(c: ThemeColors) {
   },
   mapCard: {
     height: 280,
-    borderRadius: 20,
+    borderRadius: 18,
     overflow: "hidden",
-    borderWidth: 1,
-    borderColor: BORDER,
+    borderWidth: 0,
   },
   map: { width: "100%", height: "100%" },
   mapPlaceholder: {
@@ -378,21 +433,20 @@ export function createPlanDetailStyles(c: ThemeColors) {
   directionsBtnText: { color: c.surface, fontSize: 13, fontWeight: "800" },
 
   creatorCard: {
-    marginTop: 12,
-    backgroundColor: c.primarySoft,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: c.primaryBorder,
-    overflow: "hidden",
+    marginTop: 8,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    borderWidth: 0,
+    overflow: "visible",
   },
   creatorCardFriend: {
-    backgroundColor: FRIEND_BG,
-    borderColor: FRIEND_BORDER,
+    backgroundColor: "transparent",
+    borderColor: "transparent",
   },
   creatorMain: {
     flexDirection: "row",
-    paddingVertical: 14,
-    paddingHorizontal: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 0,
     gap: 12,
     alignItems: "center",
   },
@@ -425,12 +479,34 @@ export function createPlanDetailStyles(c: ThemeColors) {
     gap: 6,
     marginTop: 6,
   },
+  repeatStatRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    flexShrink: 1,
+  },
   ratingText: { fontSize: 12, color: MUTED, fontWeight: "500" },
   membersText: {
     marginTop: 4,
     fontSize: 12,
     fontWeight: "700",
     color: MUTED,
+  },
+  personFitRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginTop: 6,
+  },
+  personFitText: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: MUTED,
+    flexShrink: 1,
+  },
+  personFitPct: {
+    fontWeight: "800",
+    color: "#059669",
   },
   personalityRow: {
     flexDirection: "row",
@@ -449,7 +525,7 @@ export function createPlanDetailStyles(c: ThemeColors) {
   personalityChipText: { fontSize: 11, fontWeight: "700", color: PRIMARY_DARK },
 
   participantCount: { fontSize: 14, fontWeight: "700", color: MUTED },
-  participantsScroll: { paddingVertical: 4, gap: 16, paddingRight: 8 },
+  participantsScroll: { paddingVertical: 4, gap: 6, paddingRight: 8 },
   participantBubbleWrap: { alignItems: "center", position: "relative" },
   kickBtn: {
     position: "absolute",
@@ -458,18 +534,17 @@ export function createPlanDetailStyles(c: ThemeColors) {
     backgroundColor: c.surface,
     borderRadius: 12,
   },
-  personBubble: { width: 80, alignItems: "center" },
+  personBubble: { width: 78, alignItems: "center" },
   personAvatarRing: {
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
     borderColor: BORDER,
-    backgroundColor: SURFACE,
+    overflow: "hidden",
   },
-  personAvatarRingFriend: { borderColor: FRIEND, backgroundColor: FRIEND_BG },
+  personAvatarRingFriend: { borderColor: FRIEND },
   personAvatarRingAcquaintance: {
-    borderColor: ACQUAINTANCE,
-    backgroundColor: ACQUAINTANCE_BG,
+    borderColor: BORDER,
   },
   creatorStar: {
     position: "absolute",
@@ -526,16 +601,26 @@ export function createPlanDetailStyles(c: ThemeColors) {
 
   emptyParticipants: {
     alignItems: "center",
-    paddingVertical: 24,
-    backgroundColor: c.background,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: BORDER,
-    borderStyle: "dashed",
+    paddingVertical: 20,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    borderWidth: 0,
   },
   emptyParticipantsText: { marginTop: 8, color: MUTED, fontWeight: "600" },
 
-  description: { fontSize: 15, lineHeight: 24, color: MUTED, marginTop: 8 },
+  description: { fontSize: 15, lineHeight: 24, color: isDark ? c.text : "#1E293B", marginTop: 6 },
+  aboutCard: {
+    backgroundColor: isDark ? c.surfaceSubtle : "#F1F5F9",
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  aboutCardTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: INK,
+    marginBottom: 2,
+  },
   rateBanner: {
     flexDirection: "row",
     alignItems: "center",
@@ -578,18 +663,18 @@ export function createPlanDetailStyles(c: ThemeColors) {
     right: 0,
     bottom: 0,
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingTop: 12,
     backgroundColor: "rgba(255,255,255,0.98)",
-    borderTopWidth: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: BORDER,
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOffset: { width: 0, height: -3 },
-        shadowOpacity: 0.06,
-        shadowRadius: 8,
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 6,
       },
-      android: { elevation: 12 },
+      android: { elevation: 10 },
     }),
   },
   joinBtn: { borderRadius: 16, overflow: "hidden" },

@@ -1,0 +1,8 @@
+# Keep EAS uploads small and avoid packaging local artifacts
+builds/
+.tmp-ios-bundle/
+.tmp-eas-log.txt
+.tmp-eas-log-plain.txt
+dist/
+.expo-bundle/
+.test-dist/

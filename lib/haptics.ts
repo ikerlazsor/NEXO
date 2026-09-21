@@ -104,6 +104,27 @@ export function hapticToggle(enabled?: boolean): void {
     void run(() => Haptics.selectionAsync());
 }
 
+/** Guardar / quitar de guardados (corazón). */
+export function hapticSave(saved: boolean): void {
+    if (saved) {
+        if (!throttle('save_on', 90)) return;
+        void run(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success));
+        return;
+    }
+    if (!throttle('save_off', 70)) return;
+    void run(() => Haptics.impactAsync(softStyle()));
+}
+
+/** Doble tick de celebración (crear plan, unirse…). */
+export function hapticCelebrate(): void {
+    if (!throttle('celebrate', 200)) return;
+    void run(async () => {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        await new Promise((r) => setTimeout(r, 70));
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    });
+}
+
 /**
  * Al abrir un diálogo / sheet importante.
  * `kind`: info suave | aviso | peligro.

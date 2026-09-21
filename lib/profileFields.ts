@@ -23,6 +23,9 @@ export const AFICIONES_OPTIONS = [
     'Foodie', 'Fiestero', 'Lectura', 'De terraceo', 'Más de noche', 'Más de día',
 ] as const;
 
+/** Intereses del onboarding (sin Yoga → 2 columnas × 5). */
+export const ONBOARDING_AFICIONES_OPTIONS = AFICIONES_OPTIONS.filter((t) => t !== 'Yoga');
+
 export type Aficion = (typeof AFICIONES_OPTIONS)[number];
 
 type TranslateFn = (key: string, params?: Record<string, string | number>) => string;

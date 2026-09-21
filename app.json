@@ -2,7 +2,7 @@
   "expo": {
     "name": "Nexo!",
     "slug": "nexo",
-    "version": "1.0.1",
+    "version": "1.0.4",
     "runtimeVersion": "1.0.0",
     "updates": {
       "url": "https://u.expo.dev/edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e",
@@ -24,6 +24,10 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.ikerlazsor.nexo",
       "usesAppleSignIn": true,
+      "associatedDomains": [
+        "applinks:appnexo.es",
+        "applinks:www.appnexo.es"
+      ],
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Nexo! usa tu ubicación para calcular la distancia a los planes y mostrarte cómo llegar.",
         "NSMicrophoneUsageDescription": "Nexo! usa el micrófono para que puedas enviar notas de voz en el chat.",
@@ -51,6 +55,28 @@
         "resizeMode": "contain",
         "backgroundColor": "#E2EBF2"
       },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "appnexo.es",
+              "pathPrefix": "/plan"
+            },
+            {
+              "scheme": "https",
+              "host": "www.appnexo.es",
+              "pathPrefix": "/plan"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ],
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
@@ -78,7 +104,7 @@
           "resizeMode": "contain",
           "backgroundColor": "#E2EBF2",
           "dark": {
-            "backgroundColor": "#0B1220",
+            "backgroundColor": "#E2EBF2",
             "image": "./assets/images/nexo-splash-logo.png"
           }
         }

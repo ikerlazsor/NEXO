@@ -15,9 +15,11 @@ import {
     ActivityIndicator,
     Dimensions,
     Image,
+    InteractionManager,
     Keyboard,
     KeyboardAvoidingView,
     Platform,
+    Modal,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -32,6 +34,7 @@ import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { InvitePeopleSheet, type InviteProfile } from '../components/InvitePeopleSheet';
 import { PlanCoverPicker } from '../components/PlanCoverPicker';
+import { PlanDayCalendar } from '../components/PlanDayCalendar';
 import { PlanLocationPicker } from '../components/PlanLocationPicker';
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { getAuthUser } from '../lib/auth';
@@ -51,14 +54,14 @@ import {
 } from '../lib/categories';
 import { FEED_CACHE_KEY } from '../lib/feedCache';
 import { injectOptimisticFeedPlan, markFeedNeedsRefresh } from '../lib/feedReload';
-import { hapticError, hapticMedium, hapticSelection, hapticSuccess, hapticToggle } from '../lib/haptics';
+import { hapticCelebrate, hapticError, hapticLight, hapticMedium, hapticSelection, hapticSuccess, hapticToggle } from '../lib/haptics';
 import { useT } from '../lib/i18n';
 import { broadcastPlanMembership } from '../lib/membershipBroadcast';
-import { Alert } from '../lib/nexoAlert';
+import { Alert, dismissAllNexoAlerts } from '../lib/nexoAlert';
 import { MAX_ORGANIZER_COVERS, uploadOrganizerCover } from '../lib/planCovers';
 import { cancelPlanInvite, getPlanPendingInvitees, sendPlanInvite } from '../lib/planInvites';
 import { canCreateMorePlans, maxActivePlansFor } from '../lib/planLimits';
-import { scheduleCoverPrefetch } from '../lib/prefetchCovers';
+import { scheduleCoverPrefetch, warmCoverImages } from '../lib/prefetchCovers';
 import { getMyProfile } from '../lib/profileData';
 import type { Genero } from '../lib/profileFields';
 import { PLAN_DESCRIPTION_MAX } from '../lib/profileSocial';
@@ -109,7 +112,11 @@ export default function CreatePlanScreen() {
     }, [isGuest, requireAccount, router]);
 
     useEffect(() => {
-        scheduleCoverPrefetch();
+        const task = InteractionManager.runAfterInteractions(() => {
+            scheduleCoverPrefetch();
+            warmCoverImages(MAIN_CATEGORIES[0], SUBCATEGORIES[MAIN_CATEGORIES[0]][0]);
+        });
+        return () => task.cancel();
     }, []);
     const { editId, duplicateId } = useLocalSearchParams<{ editId?: string; duplicateId?: string }>();
     const sourcePlanId = editId ? String(editId) : duplicateId ? String(duplicateId) : null;
@@ -270,7 +277,8 @@ export default function CreatePlanScreen() {
     } | null>(null);
 
     const [date, setDate] = useState(() => defaultPlanDate());
-    const [isPickerVisible, setPickerVisible] = useState(false); 
+    const [isPickerVisible, setPickerVisible] = useState(false);
+    const [dayCalendarOpen, setDayCalendarOpen] = useState(false);
     const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
 
     /** Si al editar falta <30 min (o ya pasó), se bloquean título y categoría. */
@@ -402,14 +410,6 @@ export default function CreatePlanScreen() {
         void loadPlanData();
     }, [sourcePlanId, editId, isDuplicate]);
 
-    useEffect(() => {
-        if (!editId && !isDuplicate) {
-            const covers = getCoverImages(category, subcategory);
-            const n = Math.max(1, covers.length);
-            setCoverIndex(Math.floor(Math.random() * n));
-        }
-    }, [category, subcategory, editId, isDuplicate]);
-
     const peopleCap = isOrganizer ? MAX_PEOPLE_ORGANIZER : MAX_PEOPLE;
     const minEditableMax = Math.max(MIN_PEOPLE, joinedCount || 0);
 
@@ -456,15 +456,28 @@ export default function CreatePlanScreen() {
 
     const selectMainCategory = (main: MainCategoryId) => {
         if (nearStartLock) return;
-        hapticSelection();
+        const sub = SUBCATEGORIES[main][0];
         setCategory(main);
-        setSubcategory(SUBCATEGORIES[main][0]);
+        setSubcategory(sub);
+        requestAnimationFrame(() => {
+            if (!editId && !isDuplicate) {
+                const covers = getCoverImages(main, sub);
+                setCoverIndex(Math.floor(Math.random() * Math.max(1, covers.length)));
+            }
+            warmCoverImages(main, sub);
+        });
     };
 
     const selectSubcategory = (sub: string) => {
         if (nearStartLock) return;
-        hapticSelection();
         setSubcategory(sub);
+        requestAnimationFrame(() => {
+            if (!editId && !isDuplicate) {
+                const covers = getCoverImages(category, sub);
+                setCoverIndex(Math.floor(Math.random() * Math.max(1, covers.length)));
+            }
+            warmCoverImages(category, sub);
+        });
     };
 
     const categoryLabel = getPlanCategoryDisplay({ categoria: category, tipo_deporte: subcategory }, t);
@@ -512,14 +525,17 @@ export default function CreatePlanScreen() {
         if (selectedDate.getTime() < min.getTime()) {
             setDate(min);
             setPickerVisible(false);
-            Alert.alert(t('createplan.incomplete'), t('createplan.minLeadTime'));
+            showFormError(t('createplan.minLeadTime'));
             return;
         }
+        hapticSelection();
         setDate(selectedDate);
         setPickerVisible(false);
     };
 
     const showMode = (mode: 'date' | 'time') => {
+        Keyboard.dismiss();
+        hapticMedium();
         setPickerMode(mode);
         setPickerVisible(true);
     };
@@ -529,6 +545,7 @@ export default function CreatePlanScreen() {
 
     const addCustomCover = async () => {
         if (customCovers.length >= MAX_ORGANIZER_COVERS) return;
+        hapticMedium();
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) return;
         const result = await ImagePicker.launchImageLibraryAsync({
@@ -543,14 +560,34 @@ export default function CreatePlanScreen() {
     };
 
     const removeCustomCover = (uri: string) => {
+        hapticSelection();
         setCustomCovers((prev) => prev.filter((item) => item !== uri));
     };
 
     const showFormError = (message: string) => {
         hapticError();
         setFormBanner(message);
-        // El create-plan es modal nativo: Alert queda detrás. Aun así lo encolamos por si cierran.
-        Alert.alert(t('createplan.incomplete'), message);
+        // No Alert.alert: create-plan es modal nativo y un Modal encima congela al volver al feed.
+    };
+
+    const dismissCreatePlanChrome = () => {
+        Keyboard.dismiss();
+        setPickerVisible(false);
+        setDayCalendarOpen(false);
+        setShowInviteSheet(false);
+        dismissAllNexoAlerts();
+    };
+
+    const leaveCreatePlan = () => {
+        publishingRef.current = false;
+        mountedRef.current = false;
+        dismissCreatePlanChrome();
+        try {
+            if (router.canGoBack()) router.back();
+            else router.replace('/(tabs)');
+        } catch {
+            router.replace('/(tabs)');
+        }
     };
 
     const handleCreatePlan = async () => {
@@ -738,7 +775,7 @@ export default function CreatePlanScreen() {
                 }
 
                 hapticSuccess();
-                setPickerVisible(false);
+                dismissCreatePlanChrome();
                 publishingRef.current = false;
                 if (mountedRef.current) setLoading(false);
 
@@ -804,8 +841,8 @@ export default function CreatePlanScreen() {
                 visibility === 'private' && pendingInvites.length > 0 ? [...pendingInvites] : [];
 
             // UI al instante: nada de awaits ni InteractionManager aquí (congelaban el modal).
-            hapticSuccess();
-            setPickerVisible(false);
+            hapticCelebrate();
+            dismissCreatePlanChrome();
             publishingRef.current = false;
             if (mountedRef.current) setLoading(false);
 
@@ -832,7 +869,7 @@ export default function CreatePlanScreen() {
                 host: null,
                 es_organizador: isOrganizer,
             });
-            cacheInvalidate(FEED_CACHE_KEY);
+            // No invalidar el snapshot: inject ya lo parchea; invalidar dejaba el feed vacío un instante.
             broadcastPlanMembership(createdPlanId, isOrganizer ? 'none' : 'joined', {
                 userId: uid,
                 bumpJoined: !isOrganizer,
@@ -846,7 +883,7 @@ export default function CreatePlanScreen() {
                 else router.replace('/(tabs)');
             }
 
-            // Todo lo pesado DESPUÉS, con margen para que el modal ya esté cerrado.
+            // Todo lo pesado DESPUÉS, con margen para que el modal ya esté cerrado y el feed estable.
             setTimeout(() => {
                 markFeedNeedsRefresh({ urgent: true });
                 void (async () => {
@@ -860,7 +897,7 @@ export default function CreatePlanScreen() {
                         /* best-effort */
                     }
                 })();
-            }, 500);
+            }, 1100);
 
             setTimeout(() => {
                 void schedulePlanLifecycleReminders({
@@ -893,11 +930,7 @@ export default function CreatePlanScreen() {
             >
                 <View style={styles.header}>
                     <Pressable
-                        onPress={() => {
-                            publishingRef.current = false;
-                            mountedRef.current = false;
-                            router.back();
-                        }}
+                        onPress={leaveCreatePlan}
                         style={styles.closeBtn}
                     >
                         <Ionicons name="close" size={28} color={colors.text} />
@@ -1007,7 +1040,7 @@ export default function CreatePlanScreen() {
                                 <TouchableOpacity
                                     style={[styles.coverModeBtn, coverMode === 'preset' && styles.coverModeBtnOn]}
                                     onPress={() => {
-                                        hapticSelection();
+                                        hapticMedium();
                                         setCoverMode('preset');
                                     }}
                                     activeOpacity={0.85}
@@ -1019,7 +1052,7 @@ export default function CreatePlanScreen() {
                                 <TouchableOpacity
                                     style={[styles.coverModeBtn, coverMode === 'custom' && styles.coverModeBtnOn]}
                                     onPress={() => {
-                                        hapticSelection();
+                                        hapticMedium();
                                         setCoverMode('custom');
                                     }}
                                     activeOpacity={0.85}
@@ -1137,46 +1170,90 @@ export default function CreatePlanScreen() {
                     <View style={[styles.section, styles.whenSection]}>
                         <Text style={styles.sectionTitle}>{t('createplan.when')}</Text>
                         <View style={styles.whenCard}>
-                        <View style={styles.dateTimeContainer}>
-                            <TouchableOpacity style={styles.dateTimeBtn} onPress={() => showMode('date')}>
-                                <View style={styles.dateTimeIconWrap}>
-                                    <Ionicons name="calendar-outline" size={22} color={PRIMARY} />
-                                </View>
-                                <Text style={styles.dateTimeDateText} numberOfLines={1}>
-                                    {`${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`}
-                                </Text>
-                            </TouchableOpacity>
+                            <View style={[styles.dateTimeContainer, { paddingHorizontal: 20 }]}>
+                                <TouchableOpacity
+                                    style={styles.dateTimeBtn}
+                                    onPress={() => {
+                                        Keyboard.dismiss();
+                                        hapticMedium();
+                                        setDayCalendarOpen(true);
+                                    }}
+                                >
+                                    <View style={styles.dateTimeIconWrap}>
+                                        <Ionicons name="calendar-outline" size={22} color={PRIMARY} />
+                                    </View>
+                                    <Text style={styles.dateTimeTimeText}>
+                                        {date.toLocaleDateString(lang === 'en' ? 'en-GB' : 'es-ES', {
+                                            weekday: 'short',
+                                            day: 'numeric',
+                                            month: 'short',
+                                        })}
+                                    </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.dateTimeBtn} onPress={() => showMode('time')}>
+                                    <View style={styles.dateTimeIconWrap}>
+                                        <Ionicons name="time-outline" size={22} color={PRIMARY} />
+                                    </View>
+                                    <Text style={styles.dateTimeTimeText}>
+                                        {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
 
-                            <TouchableOpacity style={styles.dateTimeBtn} onPress={() => showMode('time')}>
-                                <View style={styles.dateTimeIconWrap}>
-                                    <Ionicons name="time-outline" size={22} color={PRIMARY} />
-                                </View>
-                                <Text style={styles.dateTimeTimeText}>
-                                    {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
-                        </View>
+                            <Modal
+                                visible={dayCalendarOpen}
+                                transparent
+                                animationType="fade"
+                                onRequestClose={() => setDayCalendarOpen(false)}
+                            >
+                                <Pressable
+                                    style={styles.dayCalBackdrop}
+                                    onPress={() => setDayCalendarOpen(false)}
+                                >
+                                    <Pressable style={styles.dayCalSheet} onPress={(e) => e.stopPropagation()}>
+                                        <Text style={styles.dayCalTitle}>{t('createplan.when')}</Text>
+                                        <ScrollView
+                                            showsVerticalScrollIndicator={false}
+                                            bounces={false}
+                                            keyboardShouldPersistTaps="handled"
+                                        >
+                                            <PlanDayCalendar
+                                                value={date}
+                                                onChange={(next) => {
+                                                    hapticMedium();
+                                                    const min = minPlanDate();
+                                                    setDate(next.getTime() < min.getTime() ? min : next);
+                                                    setDayCalendarOpen(false);
+                                                }}
+                                                days={30}
+                                                locale={lang === 'en' ? 'en-GB' : 'es-ES'}
+                                                minDate={minPlanDate()}
+                                            />
+                                        </ScrollView>
+                                    </Pressable>
+                                </Pressable>
+                            </Modal>
 
-                        <DateTimePickerModal
-                            isVisible={isPickerVisible}
-                            mode={pickerMode}
-                            onConfirm={handleConfirm}
-                            onCancel={() => setPickerVisible(false)}
-                            date={date}
-                            is24Hour={true}
-                            locale={lang === 'en' ? 'en-GB' : 'es-ES'}
-                            isDarkModeEnabled={scheme === 'dark'}
-                            themeVariant={scheme}
-                            textColor={colors.text}
-                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                            pickerContainerStyleIOS={{ backgroundColor: colors.surface }}
-                            minimumDate={minPlanDate()}
-                            maximumDate={maxDate}
-                            confirmTextIOS={t('createplan.confirmDate')}
-                            cancelTextIOS={t('createplan.cancelDate')}
-                            buttonTextColorIOS={PRIMARY}
-                        />
+                            <DateTimePickerModal
+                                isVisible={isPickerVisible}
+                                mode="time"
+                                onConfirm={handleConfirm}
+                                onCancel={() => setPickerVisible(false)}
+                                date={date}
+                                is24Hour={true}
+                                locale={lang === 'en' ? 'en-GB' : 'es-ES'}
+                                isDarkModeEnabled={scheme === 'dark'}
+                                themeVariant={scheme}
+                                textColor={colors.text}
+                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                pickerContainerStyleIOS={{ backgroundColor: colors.surface }}
+                                minimumDate={minPlanDate()}
+                                maximumDate={maxDate}
+                                confirmTextIOS={t('createplan.confirmDate')}
+                                cancelTextIOS={t('createplan.cancelDate')}
+                                buttonTextColorIOS={PRIMARY}
+                            />
+                        </View>
                     </View>
 
                     <PlanLocationPicker
@@ -1360,7 +1437,10 @@ export default function CreatePlanScreen() {
                         {visibility === 'private' ? (
                             <TouchableOpacity
                                 style={styles.inviteOpenBtn}
-                                onPress={() => setShowInviteSheet(true)}
+                                onPress={() => {
+                                    hapticMedium();
+                                    setShowInviteSheet(true);
+                                }}
                                 activeOpacity={0.85}
                             >
                                 <Ionicons name="person-add" size={20} color="#FFF" />
@@ -1472,7 +1552,7 @@ function createPlanFormStyles(c: ThemeColors) {
     categorySection: {
         paddingHorizontal: 20,
         paddingTop: 22,
-        paddingBottom: 22,
+        paddingBottom: 28,
         backgroundColor: c.backgroundAlt,
         borderBottomWidth: 4,
         borderColor: c.background,
@@ -1576,6 +1656,32 @@ function createPlanFormStyles(c: ThemeColors) {
         shadowRadius: 10,
         shadowOffset: { width: 0, height: 4 },
         elevation: 3,
+    },
+    dayCalBackdrop: {
+        flex: 1,
+        backgroundColor: 'rgba(15,42,74,0.45)',
+        justifyContent: 'center',
+        paddingHorizontal: 18,
+    },
+    dayCalSheet: {
+        backgroundColor: c.surface,
+        borderRadius: 24,
+        paddingHorizontal: 16,
+        paddingTop: 18,
+        paddingBottom: 20,
+        maxHeight: '78%',
+        shadowColor: '#0F2A4A',
+        shadowOpacity: 0.18,
+        shadowRadius: 24,
+        shadowOffset: { width: 0, height: 12 },
+        elevation: 12,
+    },
+    dayCalTitle: {
+        fontSize: 18,
+        fontWeight: '900',
+        color: c.text,
+        marginBottom: 14,
+        letterSpacing: -0.3,
     },
     inputError: { borderColor: DANGER, color: DANGER },
     titleBadHint: {

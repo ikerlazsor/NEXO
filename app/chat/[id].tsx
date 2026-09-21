@@ -19,10 +19,8 @@ import {
     FlatList,
     Keyboard,
     KeyboardAvoidingView,
-    Linking,
     Modal,
     Platform,
-    Share,
     Text,
     TextInput,
     TouchableOpacity,
@@ -48,6 +46,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
 import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
 import { PlanImage } from '../../components/PlanImage';
+import { PressScale } from '../../components/PressScale';
 import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import {
     isSameChatFile,
@@ -56,6 +55,7 @@ import {
     uploadChatFile,
 } from '../../lib/chatUpload';
 import { markPlanChatRead } from '../../lib/chatUnread';
+import { clearChatOpenedFromPlan, wasChatOpenedFromPlan } from '../../lib/chatFromPlan';
 import { getCoincidedUserIds } from '../../lib/coincidences';
 import { getAvatarUri, getFriends, type FriendProfile } from '../../lib/friends';
 import { kickParticipant } from '../../lib/kickParticipant';
@@ -66,6 +66,7 @@ import {
     subscribeOutboxFlush,
 } from '../../lib/chatOutbox';
 import { encodeReplyContent, previewForReply, type ReplyQuote } from '../../lib/chatReply';
+import { isLegacyPlanCreatedNotice } from '../../lib/chatSystem';
 import { isPlanChatMuted, setPlanChatMuted } from '../../lib/chatMute';
 import { hapticLight, hapticMedium, hapticToggle } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
@@ -86,7 +87,7 @@ import {
     isPlanChatAlive,
     runPlanLifecycleMaintenance,
 } from '../../lib/planLifecycle';
-import { buildPlanShareMessage } from '../../lib/shareLinks';
+import { PlanShareModal, buildPlanSharePayload, type PlanSharePayload } from '../../components/PlanShareModal';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
 import { useAuthSession } from '../../lib/authSession';
@@ -99,8 +100,9 @@ import { getPublicProfileCards } from '../../lib/profileData';
 const PRIMARY = theme.colors.brand;
 const DANGER = theme.colors.danger;
 export default function ChatScreen() {
-    const { id } = useLocalSearchParams<{ id: string | string[] }>();
+    const { id, fromPlan } = useLocalSearchParams<{ id: string | string[]; fromPlan?: string | string[] }>();
     const planId = Array.isArray(id) ? id[0] : id;
+    const openedFromPlan = (Array.isArray(fromPlan) ? fromPlan[0] : fromPlan) === '1';
     const router = useRouter();
     const { t, lang } = useT();
     const { userId: sessionUserId } = useAuthSession();
@@ -776,6 +778,13 @@ export default function ChatScreen() {
                                 perfiles: perfil,
                             };
 
+                            if (
+                                newMessage.tipo === 'texto'
+                                && isLegacyPlanCreatedNotice(newMessage.contenido)
+                            ) {
+                                return;
+                            }
+
                             if (isMountedRef.current) {
                                 setMessages((prev) => {
                                     if (prev.some((m) => m.id === newMessage.id)) return prev;
@@ -1292,10 +1301,12 @@ export default function ChatScreen() {
         }
     }, [currentUserId, planId, creatorId, isSaved, planFechaEvento, t]);
 
+    const [sharePayload, setSharePayload] = useState<PlanSharePayload | null>(null);
+
     const handleSharePlan = useCallback(() => {
         if (!planId) return;
         const title = planName.trim() || 'Plan';
-        let when: string | null = null;
+        let when = '';
         if (planFechaEvento) {
             const d = new Date(planFechaEvento);
             if (Number.isFinite(d.getTime())) {
@@ -1308,39 +1319,29 @@ export default function ChatScreen() {
                 });
             }
         }
-        const message = buildPlanShareMessage({
-            title,
-            location: planLocationName,
-            when,
-            planId,
-            hint: t('planDetail.shareHint'),
-            lang,
-        });
-        const shareViaWhatsApp = async () => {
-            const url = `whatsapp://send?text=${encodeURIComponent(message)}`;
-            try {
-                await Linking.openURL(url);
-            } catch {
-                try {
-                    await Share.share({ message });
-                } catch {
-                    // cancelado
-                }
-            }
-        };
-        const openNativeShare = async () => {
-            try {
-                await Share.share({ message });
-            } catch {
-                // cancelado
-            }
+        const start = () => {
+            setSharePayload(
+                buildPlanSharePayload({
+                    planId,
+                    title,
+                    coverUrl: planImage,
+                    when,
+                    location: planLocationName,
+                    participants: members.map((m) => ({
+                        id: m.id,
+                        nombre: m.nombre,
+                        avatar_url: m.avatar_url,
+                    })),
+                    maxPeople: members.length,
+                }),
+            );
         };
         Alert.alert(t('card.share'), `"${title}"`, [
-            { text: t('card.shareWhats'), onPress: () => void shareViaWhatsApp() },
-            { text: t('card.shareOther'), onPress: () => void openNativeShare() },
+            { text: t('card.shareWhats'), onPress: start },
+            { text: t('card.shareOther'), onPress: start },
             { text: t('common.cancel'), style: 'cancel' },
         ]);
-    }, [planId, planName, planFechaEvento, planLocationName, t, lang]);
+    }, [planId, planName, planFechaEvento, planLocationName, planImage, members, t]);
 
     const relationFor = useCallback(
         (userId: string): 'friend' | 'acquaintance' | null => {
@@ -1393,8 +1394,30 @@ export default function ChatScreen() {
     const openPlanFromChat = useCallback(() => {
         if (!planId) return;
         seedPlanFromChat();
-        router.navigate({ pathname: '/plan/[id]', params: { id: planId } });
-    }, [planId, router, seedPlanFromChat]);
+        const fromPlanNav =
+            openedFromPlan ||
+            wasChatOpenedFromPlan(planId);
+        // Nunca apilar otro plan/[id] encima del chat si venimos del mismo detalle:
+        // eso duplica la ruta y puede expulsar/cerrar la app.
+        if (fromPlanNav) {
+            clearChatOpenedFromPlan(planId);
+            if (router.canGoBack()) {
+                router.back();
+                return;
+            }
+            router.replace({ pathname: '/plan/[id]', params: { id: planId, from: 'chat' } });
+            return;
+        }
+        router.replace({ pathname: '/plan/[id]', params: { id: planId, from: 'chat' } });
+    }, [planId, router, seedPlanFromChat, openedFromPlan]);
+
+    const openChatHeaderInfo = useCallback(() => {
+        if (isCreatedGroupChat) {
+            setShowMembers(true);
+            return;
+        }
+        openPlanFromChat();
+    }, [isCreatedGroupChat, openPlanFromChat]);
 
     const onPickMessageReaction = useCallback(
         (messageId: string, emoji: string) => {
@@ -1464,7 +1487,13 @@ export default function ChatScreen() {
     return (
         <View style={styles.container}>
             <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                <TouchableOpacity
+                    onPress={() => {
+                        clearChatOpenedFromPlan(planId);
+                        router.back();
+                    }}
+                    style={styles.backBtn}
+                >
                     <Ionicons name="chevron-back" size={28} color={PRIMARY} />
                 </TouchableOpacity>
 
@@ -1472,9 +1501,9 @@ export default function ChatScreen() {
                     onPress={
                         canEditGroupPhoto
                             ? showGroupPhotoMenu
-                            : openPlanFromChat
+                            : openChatHeaderInfo
                     }
-                    onPressIn={canEditGroupPhoto ? undefined : seedPlanFromChat}
+                    onPressIn={canEditGroupPhoto || isCreatedGroupChat ? undefined : seedPlanFromChat}
                     activeOpacity={0.7}
                     disabled={uploadingGroupPhoto}
                     style={styles.planHeaderImageWrap}
@@ -1511,8 +1540,8 @@ export default function ChatScreen() {
                 <TouchableOpacity
                     style={styles.headerTitleContainer}
                     activeOpacity={0.7}
-                    onPressIn={seedPlanFromChat}
-                    onPress={openPlanFromChat}
+                    onPressIn={isCreatedGroupChat ? undefined : seedPlanFromChat}
+                    onPress={openChatHeaderInfo}
                 >
                     <Text style={styles.headerTitle} numberOfLines={1}>
                         {planName || (loading ? t('chat.loading') : '')}
@@ -1647,7 +1676,7 @@ export default function ChatScreen() {
                         />
                     </View>
 
-                    <TouchableOpacity
+                    <PressScale
                         testID="group-chat-send"
                         accessibilityLabel="Enviar mensaje"
                         onPress={handleActionPress}
@@ -1657,9 +1686,12 @@ export default function ChatScreen() {
                             inputDisabled && styles.sendCircleDisabled,
                         ]}
                         disabled={inputDisabled && !recording}
+                        pressedScale={0.86}
+                        minTouch={false}
+                        haptic={false}
                     >
                         <Ionicons name={actionIcon} size={18} color="white" />
-                    </TouchableOpacity>
+                    </PressScale>
                 </View>
             </KeyboardAvoidingView>
 
@@ -1901,6 +1933,8 @@ export default function ChatScreen() {
                     </View>
                 </View>
             </Modal>
+
+            <PlanShareModal payload={sharePayload} onDone={() => setSharePayload(null)} />
         </View>
     );
 }

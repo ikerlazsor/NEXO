@@ -152,11 +152,16 @@ export function prefetchUserProfile(userId: string): void {
             if (!profile) return;
 
             const isOrg = profile.es_organizador === true;
-            const [badgeStats, orgFollow, upcoming, orgPlansCount] = await Promise.all([
+            const [badgeStats, orgFollow, upcoming, orgPlansCount, attendedPlans] = await Promise.all([
                 isOrg ? Promise.resolve(EMPTY_BADGE_STATS) : getBadgeStats(userId),
                 isOrg ? getOrganizerFollowStats(userId) : Promise.resolve({ followers: 0, following: false }),
                 isOrg ? getOrganizerUpcomingPlans(userId, 8) : Promise.resolve([]),
                 isOrg ? getOrganizerPlansCount(userId) : Promise.resolve(0),
+                isOrg
+                    ? Promise.resolve([])
+                    : import('./profileSocial').then(({ getPublicAttendedPlans }) =>
+                          getPublicAttendedPlans(userId, 12),
+                      ),
             ]);
 
             if (friendSt) {
@@ -205,6 +210,7 @@ export function prefetchUserProfile(userId: string): void {
                     followingOrganizer: orgFollow.following === true,
                     organizerPlansCount: orgPlansCount,
                     upcomingPlans: upcoming,
+                    attendedPlans,
                     viewerAffinity: isOrg ? null : viewerAffinity,
                     currentUserId: me?.id ?? null,
                 },

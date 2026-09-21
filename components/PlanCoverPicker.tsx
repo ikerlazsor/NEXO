@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useCallback, useEffect, useRef } from 'react';
 import { Image } from 'expo-image';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
     Dimensions,
     FlatList,
@@ -21,7 +21,9 @@ const { width: SCREEN_W } = Dimensions.get('window');
 const H_PAD = 20;
 const PREVIEW_W = SCREEN_W - H_PAD * 2;
 const PREVIEW_H = 248;
-const THUMB_GAP = 8;
+const THUMB = 60;
+const THUMB_GAP = 10;
+const LOOP_COPIES = 7;
 
 interface Props {
     category: string;
@@ -33,79 +35,149 @@ interface Props {
     hideTitle?: boolean;
 }
 
-export function PlanCoverPicker({ category, coverKey, categoryLabel: _categoryLabel, images, selectedIndex, onSelectIndex, hideTitle = false }: Props) {
+export function PlanCoverPicker({
+    category,
+    coverKey,
+    categoryLabel: _categoryLabel,
+    images,
+    selectedIndex,
+    onSelectIndex,
+    hideTitle = false,
+}: Props) {
     const { t } = useT();
     const listRef = useRef<FlatList>(null);
     const listKey = coverKey ?? category;
-    const thumbScrollRef = useRef(false);
+    const thumbTapRef = useRef(false);
     const programmaticScrollRef = useRef(false);
+    const n = Math.max(1, images.length);
+    const midCopy = Math.floor(LOOP_COPIES / 2);
 
+    const looped = useMemo(() => {
+        if (images.length === 0) return [];
+        const out: { src: any; real: number; key: string }[] = [];
+        for (let copy = 0; copy < LOOP_COPIES; copy++) {
+            images.forEach((src, real) => {
+                out.push({ src, real, key: `${listKey}-${copy}-${real}` });
+            });
+        }
+        return out;
+    }, [images, listKey]);
+
+    const absoluteIndex = (real: number) => midCopy * n + real;
+    const ignoreScrollUntilRef = useRef(0);
+
+    // Tras cambiar cat/sub, el FlatList se remonta; ignoramos scroll fantasma
+    // que reescribía coverIndex un frame después.
     useEffect(() => {
-        const idx = Math.max(0, Math.min(images.length - 1, selectedIndex));
+        ignoreScrollUntilRef.current = Date.now() + 200;
+        if (!looped.length) return;
+        const idx = absoluteIndex(Math.max(0, Math.min(n - 1, selectedIndex)));
         programmaticScrollRef.current = true;
-        listRef.current?.scrollToOffset({ offset: idx * PREVIEW_W, animated: false });
-        const tmr = setTimeout(() => {
-            programmaticScrollRef.current = false;
-        }, 80);
-        return () => clearTimeout(tmr);
-    }, [listKey, images.length, selectedIndex]);
+        requestAnimationFrame(() => {
+            listRef.current?.scrollToOffset({ offset: idx * PREVIEW_W, animated: false });
+            setTimeout(() => {
+                programmaticScrollRef.current = false;
+            }, 120);
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [listKey, n]);
 
-    const onScrollEnd = useCallback(
-        (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-            if (thumbScrollRef.current || programmaticScrollRef.current) return;
-            const idx = Math.round(e.nativeEvent.contentOffset.x / PREVIEW_W);
-            const clamped = Math.max(0, Math.min(images.length - 1, idx));
-            if (clamped !== selectedIndex) onSelectIndex(clamped);
+    const recenterIfNeeded = useCallback(
+        (raw: number, real: number) => {
+            if (raw < n || raw >= n * (LOOP_COPIES - 1)) {
+                programmaticScrollRef.current = true;
+                listRef.current?.scrollToOffset({
+                    offset: absoluteIndex(real) * PREVIEW_W,
+                    animated: false,
+                });
+                setTimeout(() => {
+                    programmaticScrollRef.current = false;
+                }, 40);
+            }
         },
-        [images.length, selectedIndex, onSelectIndex],
+        [n],
+    );
+
+    const onPreviewScrollEnd = useCallback(
+        (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+            if (thumbTapRef.current || programmaticScrollRef.current || n <= 0) return;
+            if (Date.now() < ignoreScrollUntilRef.current) return;
+            const raw = Math.round(e.nativeEvent.contentOffset.x / PREVIEW_W);
+            const real = ((raw % n) + n) % n;
+            if (real !== selectedIndex) onSelectIndex(real);
+            recenterIfNeeded(raw, real);
+        },
+        [n, selectedIndex, onSelectIndex, recenterIfNeeded],
     );
 
     const pickThumb = (index: number) => {
         if (index === selectedIndex) return;
-        thumbScrollRef.current = true;
+        thumbTapRef.current = true;
         onSelectIndex(index);
-        listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 });
+        programmaticScrollRef.current = true;
+        listRef.current?.scrollToOffset({
+            offset: absoluteIndex(index) * PREVIEW_W,
+            animated: true,
+        });
         setTimeout(() => {
-            thumbScrollRef.current = false;
+            thumbTapRef.current = false;
+            programmaticScrollRef.current = false;
         }, 350);
     };
+
+    const safeIndex = Math.max(0, Math.min(n - 1, selectedIndex));
+    const underlaySrc = images[safeIndex];
 
     return (
         <View style={styles.wrap}>
             {hideTitle ? null : (
-            <View style={styles.headerRow}>
-                <Text style={styles.title}>{t('createplan.coverPhoto')}</Text>
-            </View>
+                <View style={styles.headerRow}>
+                    <Text style={styles.title}>{t('createplan.coverPhoto')}</Text>
+                </View>
             )}
 
             <View style={styles.previewShadow}>
                 <View style={styles.previewCard}>
+                    {underlaySrc != null ? (
+                        <Image
+                            source={typeof underlaySrc === 'number' ? underlaySrc : { uri: underlaySrc }}
+                            style={[styles.previewImage, StyleSheet.absoluteFillObject]}
+                            contentFit="cover"
+                            cachePolicy="memory-disk"
+                            priority="high"
+                            transition={0}
+                        />
+                    ) : null}
                     <FlatList
-                        ref={listRef}
                         key={listKey}
-                        data={images}
+                        ref={listRef}
+                        data={looped}
                         horizontal
                         pagingEnabled
                         decelerationRate="fast"
                         snapToInterval={PREVIEW_W}
                         snapToAlignment="start"
+                        disableIntervalMomentum
                         showsHorizontalScrollIndicator={false}
-                        extraData={selectedIndex}
-                        keyExtractor={(_, i) => `${listKey}-${i}`}
-                        onMomentumScrollEnd={onScrollEnd}
-                        onScrollEndDrag={onScrollEnd}
+                        extraData={`${listKey}:${selectedIndex}`}
+                        keyExtractor={(item) => item.key}
+                        onMomentumScrollEnd={onPreviewScrollEnd}
+                        onScrollEndDrag={onPreviewScrollEnd}
                         getItemLayout={(_, index) => ({
                             length: PREVIEW_W,
                             offset: PREVIEW_W * index,
                             index,
                         })}
+                        initialScrollIndex={absoluteIndex(Math.max(0, Math.min(n - 1, selectedIndex)))}
                         renderItem={({ item }) => (
                             <Image
-                                source={typeof item === 'number' ? item : { uri: item }}
+                                source={typeof item.src === 'number' ? item.src : { uri: item.src }}
                                 style={styles.previewImage}
                                 contentFit="cover"
                                 cachePolicy="memory-disk"
-                                recyclingKey={`${listKey}-${String(item)}`}
+                                recyclingKey={item.key}
+                                priority="high"
+                                transition={0}
                             />
                         )}
                     />
@@ -118,39 +190,28 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel: _categoryLa
 
                     <View style={styles.swipeHint} pointerEvents="none">
                         <Ionicons name="swap-horizontal" size={14} color="rgba(255,255,255,0.85)" />
-                        <Text style={styles.swipeHintText}>{t('createplan.coverSwipe')}</Text>
+                        <Text style={styles.swipeHintText}>{t('createplan.coverPhotoSub')}</Text>
                     </View>
                 </View>
             </View>
 
-            <View style={styles.thumbRow}>
-                {images.map((img, i) => {
-                    const active = i === selectedIndex;
-                    const n = Math.max(images.length, 1);
-                    const thumbSize = Math.floor(
-                        (SCREEN_W - H_PAD * 2 - THUMB_GAP * (n - 1)) / n,
-                    );
+            <View style={styles.thumbsRow}>
+                {images.map((img, index) => {
+                    const active = index === selectedIndex;
                     return (
                         <Pressable
-                            key={`${listKey}-thumb-${i}`}
-                            onPress={() => pickThumb(i)}
-                            style={[
-                                styles.thumbWrap,
-                                { width: thumbSize, height: thumbSize },
-                                active && styles.thumbWrapActive,
-                            ]}
+                            key={`${listKey}-thumb-${index}`}
+                            onPress={() => pickThumb(index)}
+                            style={[styles.thumbWrap, active && styles.thumbWrapActive]}
                         >
                             <Image
                                 source={typeof img === 'number' ? img : { uri: img }}
-                                style={styles.thumbImage}
+                                style={styles.thumb}
                                 contentFit="cover"
                                 cachePolicy="memory-disk"
+                                priority="high"
+                                transition={0}
                             />
-                            {active && (
-                                <View style={styles.thumbCheck}>
-                                    <Ionicons name="checkmark" size={14} color="#FFF" />
-                                </View>
-                            )}
                         </Pressable>
                     );
                 })}
@@ -160,35 +221,31 @@ export function PlanCoverPicker({ category, coverKey, categoryLabel: _categoryLa
 }
 
 const styles = StyleSheet.create({
-    wrap: {
-        paddingTop: 28,
-        paddingBottom: 8,
-        backgroundColor: '#F2F7FF',
-        borderBottomWidth: 4,
-        borderBottomColor: '#E8F0FE',
-    },
+    wrap: { marginBottom: 8, marginTop: 10 },
     headerRow: {
         paddingHorizontal: H_PAD,
-        marginBottom: 14,
+        marginBottom: 10,
+        marginTop: 6,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
     },
-    title: { fontSize: 17, fontWeight: '800', color: INK, letterSpacing: -0.3 },
+    title: { fontSize: 16, fontWeight: '800', color: INK },
     previewShadow: {
         marginHorizontal: H_PAD,
-        borderRadius: 24,
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.22,
+        borderRadius: 22,
+        shadowColor: '#0F172A',
+        shadowOpacity: 0.14,
         shadowRadius: 16,
         shadowOffset: { width: 0, height: 8 },
-        elevation: 8,
+        elevation: 6,
     },
     previewCard: {
         width: PREVIEW_W,
         height: PREVIEW_H,
-        borderRadius: 24,
+        borderRadius: 22,
         overflow: 'hidden',
-        backgroundColor: '#CBD5E1',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.6)',
+        backgroundColor: '#E2E8F0',
     },
     previewImage: { width: PREVIEW_W, height: PREVIEW_H },
     previewGradient: {
@@ -196,59 +253,37 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         bottom: 0,
-        height: PREVIEW_H * 0.45,
+        height: 72,
     },
     swipeHint: {
         position: 'absolute',
         bottom: 14,
-        right: 14,
+        alignSelf: 'center',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
-        backgroundColor: 'rgba(0,0,0,0.35)',
+        gap: 6,
+        backgroundColor: 'rgba(15,42,74,0.35)',
         paddingHorizontal: 10,
         paddingVertical: 5,
-        borderRadius: 12,
+        borderRadius: 999,
     },
-    swipeHintText: { color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: '600' },
-    thumbRow: {
-        flexDirection: 'row',
-        flexWrap: 'nowrap',
-        gap: THUMB_GAP,
+    swipeHintText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+    thumbsRow: {
+        marginTop: 12,
         paddingHorizontal: H_PAD,
-        paddingTop: 16,
-        paddingBottom: 20,
-        justifyContent: 'flex-start',
-        alignItems: 'center',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: THUMB_GAP,
+        justifyContent: 'center',
     },
     thumbWrap: {
-        borderRadius: 14,
+        width: THUMB,
+        height: THUMB,
+        borderRadius: 12,
         overflow: 'hidden',
-        borderWidth: 2.5,
+        borderWidth: 2,
         borderColor: 'transparent',
-        backgroundColor: '#E2E8F0',
-        flexShrink: 0,
     },
-    thumbWrapActive: {
-        borderColor: PRIMARY_DARK,
-        shadowColor: PRIMARY_DARK,
-        shadowOpacity: 0.3,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 3,
-    },
-    thumbImage: { width: '100%', height: '100%' },
-    thumbCheck: {
-        position: 'absolute',
-        top: 4,
-        right: 4,
-        width: 22,
-        height: 22,
-        borderRadius: 11,
-        backgroundColor: PRIMARY_DARK,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 1.5,
-        borderColor: '#FFF',
-    },
+    thumbWrapActive: { borderColor: PRIMARY_DARK },
+    thumb: { width: '100%', height: '100%' },
 });

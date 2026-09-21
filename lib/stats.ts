@@ -1,4 +1,4 @@
-import { cacheGet, cacheInvalidate, cacheSet } from './ttlCache';
+import { cacheGet, cacheGetStale, cacheInvalidate, cacheSet } from './ttlCache';
 import { screenCacheKey, ScreenCacheTTL } from './screenCaches';
 import { supabase } from './supabase';
 
@@ -39,6 +39,12 @@ const STATS_TTL_MS = 180_000;
 
 function statsCacheKey(userId: string) {
     return `userStats:${userId}`;
+}
+
+/** Stats ya cacheadas (detalle de plan / perfil) sin red. */
+export function peekUserStats(userId: string): UserStats | null {
+    if (!userId) return null;
+    return cacheGetStale<UserStats>(statsCacheKey(userId));
 }
 
 function distinctRaterCount(stats: UserStats): number {

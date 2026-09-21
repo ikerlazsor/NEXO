@@ -10,6 +10,7 @@ import { ThemeProvider } from '@react-navigation/native';
 import { Session } from '@supabase/supabase-js';
 import * as SplashScreen from 'expo-splash-screen';
 import { hideNativeSplashOnce } from '../lib/nativeSplash';
+import * as Linking from 'expo-linking';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
@@ -19,7 +20,6 @@ import { Asset } from 'expo-asset';
 import { AndroidSwipeBack } from '../components/AndroidSwipeBack';
 import { NexoAlertHost } from '../components/NexoAlertHost';
 import { InAppToastHost } from '../components/InAppToastHost';
-import { OfflineBanner } from '../components/OfflineBanner';
 import { PushBootstrap } from '../components/PushBootstrap';
 import { NexoButton } from '../components/ui/NexoButton';
 import { NexoLoadingState } from '../components/ui/NexoState';
@@ -43,6 +43,7 @@ import { LAUNCH_SPLASH_BG } from '../components/LaunchMaskReveal';
 import { AuthSessionProvider } from '../lib/authSession';
 import { takePendingAuthRoute } from '../lib/authIntent';
 import { I18nProvider } from '../lib/i18n';
+import { ingestAuthDeepLink } from '../lib/authDeepLink';
 import { isPasswordRecoveryPending, setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { fetchAccountAccess } from '../lib/roles';
 import {
@@ -276,6 +277,13 @@ function AuthGate({ children }: { children: ReactNode }) {
 
     void runStartup();
 
+    void Linking.getInitialURL()
+      .then((url) => ingestAuthDeepLink(url))
+      .catch(() => undefined);
+    const authLinkSub = Linking.addEventListener('url', ({ url }) => {
+      void ingestAuthDeepLink(url).catch(() => undefined);
+    });
+
     const unsubNet = subscribeNetwork((online) => {
       if (!online) return;
       void flushOfflineActions();
@@ -295,8 +303,10 @@ function AuthGate({ children }: { children: ReactNode }) {
       if (event === 'PASSWORD_RECOVERY') {
         void (async () => {
           await setPasswordRecoveryPending(true);
+          setSession(s);
           router.replace('/reset-password');
         })();
+        return;
       }
 
       if (
@@ -318,6 +328,7 @@ function AuthGate({ children }: { children: ReactNode }) {
       mounted = false;
       retryRef.current = () => {};
       coordinator.cancel();
+      authLinkSub.remove();
       unsubNet();
       authListener.subscription.unsubscribe();
     };
@@ -514,7 +525,6 @@ function RootLayout() {
             <AuthGate>
               <RootStack />
               <AndroidSwipeBack />
-              <OfflineBanner />
             </AuthGate>
           </ThemedNavigation>
           </InAppToastHost>
@@ -590,6 +600,10 @@ function RootStack() {
                 />
                 <Stack.Screen
                   name="settings"
+                  options={{ animation: 'slide_from_right', freezeOnBlur: false }}
+                />
+                <Stack.Screen
+                  name="notification-settings"
                   options={{ animation: 'slide_from_right', freezeOnBlur: false }}
                 />
                 <Stack.Screen name="organizer-apply" options={{ animation: 'slide_from_right' }} />

@@ -4,6 +4,8 @@ import { guestCopyKeys } from '../lib/authIntent';
 import { useT } from '../lib/i18n';
 import { NexoEmptyState } from './ui/NexoState';
 
+const PENGUIN_CHATS_EMPTY = require('../assets/images/Pinguino vacio chats.png');
+
 type Props = {
     intent: Extract<AuthIntent, { type: 'chats' | 'my-plans' | 'search' | 'create-plan' | 'generic' }>;
 };
@@ -16,14 +18,15 @@ export function GuestLockedPanel({ intent }: Props) {
 
     return (
         <NexoEmptyState
-            icon="person-add-outline"
+            {...(isChats
+                ? { image: PENGUIN_CHATS_EMPTY, imageSize: 188 }
+                : { icon: 'person-add-outline' as const })}
             title={t(copy.title)}
-            description={isChats ? undefined : t(copy.body)}
-            actionLabel={t('login.tabRegister')}
+            actionLabel={t('login.access')}
             onAction={() => {
                 requireAccount(intent);
             }}
-            style={{ flex: 1, justifyContent: 'flex-start', paddingTop: isChats ? 72 : 48 }}
+            style={{ flex: 1, justifyContent: 'flex-start', paddingTop: isChats ? 96 : 48 }}
         />
     );
 }

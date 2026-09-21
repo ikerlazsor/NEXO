@@ -315,6 +315,8 @@ export async function deleteUserAdmin(userId: string): Promise<{ error: string |
 
 export async function deletePlanAdmin(planId: string): Promise<{ error: string | null }> {
     try {
+        const { noteFeedPlanDeleted } = await import('./feedReload');
+        noteFeedPlanDeleted(planId);
         const { data, error } = await supabase.functions.invoke('delete-plan', {
             body: { planId },
         });

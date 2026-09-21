@@ -1,8 +1,11 @@
 import { getAuthUser } from './auth';
 import { getCoincidedUserIds } from './coincidences';
+import { FEED_CACHE_KEY } from './feedCache';
+import { feedFitPercent } from './feedAffinity';
 import { getFriends } from './friends';
 import { fetchGuestPlanDetail } from './guestFeed';
 import { getOrganizerFollowStats } from './organizer';
+import { prefetchPairAffinity } from './pairAffinityCache';
 import { formatPlanPeople, isAcceptedParticipant, mapEstadoToMembership, type Membership } from './participants';
 import { getMyProfile, getPublicProfileCards } from './profileData';
 import { EMPTY_STATS, getUserStats, type UserStats } from './stats';
@@ -75,18 +78,60 @@ export function seedPlanDetailFromFeed(
         currentUserId?: string | null;
         currentUserGenero?: string | null;
         isSaved?: boolean;
+        fitPct?: number | null;
     },
 ): void {
+    try {
     const id = String(plan.id ?? '');
     if (!id) return;
     const key = planDetailKey(id);
     const existing = cacheGetStale<PlanDetailSnapshot>(key);
-    // No pisar un detalle completo ya cargado (salvo que traigamos membership más reciente).
+
+    const resolveFitPct = (): number | null => {
+        if (opts?.fitPct != null) return opts.fitPct;
+        if (existing?.fitPct != null) return existing.fitPct;
+        const uid = opts?.currentUserId ?? existing?.currentUserId ?? null;
+        const genero = opts?.currentUserGenero ?? existing?.currentUserGenero ?? null;
+        if (!uid || !genero) return null;
+        const feedTaste = cacheGetStale<{ feedTaste?: { personalityTags?: string[]; viewerAge?: number | null } }>(
+            FEED_CACHE_KEY,
+        )?.feedTaste;
+        const tags = feedTaste?.personalityTags;
+        if (!tags?.length) return null;
+        try {
+            return feedFitPercent(
+                {
+                    categoria: (plan.categoria as string) ?? existing?.plan.categoria,
+                    tipo_deporte: (plan.tipo_deporte as string | null) ?? existing?.plan.tipo_deporte ?? null,
+                    fecha_evento: (plan.fecha_evento as string | null) ?? existing?.plan.fecha_evento ?? null,
+                    solo_chicas: !!(plan.solo_chicas ?? existing?.plan.solo_chicas),
+                },
+                {
+                    personalityTags: tags,
+                    viewerAge: feedTaste?.viewerAge ?? null,
+                    viewerGenero: genero,
+                },
+                id,
+            );
+        } catch {
+            return null;
+        }
+    };
+
+    // No pisar un detalle completo ya cargado (salvo membership / fitPct frescos).
     if (existing && !existing.partial && cacheIsFresh(key)) {
-        if (opts?.membership && opts.membership !== existing.membership) {
+        const fitPct = resolveFitPct();
+        const membershipChanged = !!(opts?.membership && opts.membership !== existing.membership);
+        const fitChanged = fitPct != null && fitPct !== existing.fitPct;
+        if (membershipChanged || fitChanged) {
             cacheSet(
                 key,
-                { ...existing, membership: opts.membership, partial: false },
+                {
+                    ...existing,
+                    membership: opts?.membership ?? existing.membership,
+                    fitPct: fitPct ?? existing.fitPct,
+                    partial: false,
+                },
                 PLAN_DETAIL_TTL_MS,
             );
         }
@@ -150,8 +195,8 @@ export function seedPlanDetailFromFeed(
             modo_privado: !!plan.modo_privado,
             fecha_evento: (plan.fecha_evento as string | null) ?? null,
             nombre_ubicacion: (plan.nombre_ubicacion as string | null) ?? null,
-            latitud: plan.latitud != null ? Number(plan.latitud) : null,
-            longitud: plan.longitud != null ? Number(plan.longitud) : null,
+            latitud: Number.isFinite(Number(plan.latitud)) ? Number(plan.latitud) : null,
+            longitud: Number.isFinite(Number(plan.longitud)) ? Number(plan.longitud) : null,
             maximo_participantes: Number(plan.maximo_participantes) || 5,
             creador_id: creatorId,
             requiere_aprobacion: !!plan.requiere_aprobacion,
@@ -172,37 +217,28 @@ export function seedPlanDetailFromFeed(
         openRating: null,
         currentUserId: opts?.currentUserId ?? existing?.currentUserId ?? null,
         organizerFollowers,
-        fitPct: existing?.fitPct ?? null,
+        fitPct: resolveFitPct(),
         partial: true,
     };
 
-    // Precalcular compatibilidad si tenemos datos del feed
-    if (!snap.fitPct && snap.currentUserId && snap.currentUserGenero) {
-        const feedSnap = cacheGetStale<{ feedTaste?: { personalityTags?: string[]; viewerAge?: number } }>(FEED_CACHE_KEY);
-        const feedTaste = feedSnap?.feedTaste;
-        if (feedTaste?.personalityTags) {
-            try {
-                snap.fitPct = feedFitPercent(
-                    {
-                        categoria: snap.plan.categoria,
-                        tipo_deporte: snap.plan.tipo_deporte,
-                        fecha_evento: snap.plan.fecha_evento,
-                        solo_chicas: snap.plan.solo_chicas,
-                    },
-                    {
-                        personalityTags: feedTaste.personalityTags,
-                        viewerAge: feedTaste.viewerAge,
-                        viewerGenero: snap.currentUserGenero,
-                    },
-                    snap.plan.id,
-                );
-            } catch {
-                // Ignorar errores en el cálculo
-            }
-        }
-    }
-
     cacheSet(key, snap, PLAN_DETAIL_TTL_MS);
+
+    // Precarga afinidad + stats del creador para pintar al instante en detalle.
+    const viewerId = opts?.currentUserId ?? existing?.currentUserId ?? null;
+    if (creatorId) {
+        void import('./stats').then(({ getUserStats }) => {
+            void getUserStats(creatorId);
+        });
+    }
+    if (viewerId && creatorId && viewerId !== creatorId) {
+        const friendSet = opts?.friendIds ?? existing?.friendIds ?? [];
+        void prefetchPairAffinity(viewerId, creatorId, {
+            isFriends: friendSet.includes(creatorId),
+        });
+    }
+    } catch (e) {
+        if (__DEV__) console.warn('seedPlanDetailFromFeed', e);
+    }
 }
 
 const prefetchInflight = new Set<string>();

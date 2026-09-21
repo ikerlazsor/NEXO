@@ -21,6 +21,18 @@ export function isSystemMessageContent(contenido: string | null | undefined): bo
     return parseSystemContent(contenido) != null;
 }
 
+/** Mensaje legacy «¡Plan creado!…» que ya no queremos mostrar. */
+export function isLegacyPlanCreatedNotice(contenido: string | null | undefined): boolean {
+    if (!contenido) return false;
+    const t = contenido.trim();
+    return (
+        t === '¡Plan creado! Este es el chat del grupo.'
+        || t === 'Plan created! This is the group chat.'
+        || t.toLowerCase().includes('este es el chat del grupo')
+        || t.toLowerCase().includes('this is the group chat')
+    );
+}
+
 /** Preview de lista de chats (evita enseñar `@@nexo_system:…` crudo). */
 export function formatChatListPreview(
     msg: { tipo: string; contenido: string; emisor_id: string },
@@ -67,6 +79,9 @@ export function formatChatListPreview(
     }
     if (fallbackKind === 'join_plan') {
         return isSelf ? opts.labels.joinedPlanSelf : opts.labels.joinedPlan(nombre);
+    }
+    if (isLegacyPlanCreatedNotice(msg.contenido)) {
+        return '';
     }
     return `${nombre}: ${msg.contenido}`;
 }

@@ -21,7 +21,6 @@ import {
     Modal,
     Platform,
     ScrollView,
-    Share,
     StatusBar,
     Text,
     TouchableOpacity,
@@ -29,19 +28,23 @@ import {
 } from 'react-native';
 import { Marker } from 'react-native-maps';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BounceHeart } from '../../components/BounceHeart';
+import { FeedHeartBurstHost } from '../../components/FeedHeartBurstHost';
 import { FitMatchBanner } from '../../components/FitMatchBanner';
 import { FootballLineupSection } from '../../components/FootballLineup';
 import { FootballShareCard } from '../../components/FootballShareCard';
+import { PlanShareModal, buildPlanSharePayload, type PlanSharePayload } from '../../components/PlanShareModal';
 import { InvitePeopleSheet, type InviteProfile } from '../../components/InvitePeopleSheet';
 import { NexoMapView } from '../../components/NexoMapView';
 import { PadelLineupSection } from '../../components/PadelLineup';
 import { PlanCoverCarousel } from '../../components/PlanCoverCarousel';
+import { PressScale } from '../../components/PressScale';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { PlanDetailSkeleton } from '../../components/SkeletonShimmer';
 import { TranslatedText } from '../../components/TranslatedText';
 import { NexoEmptyState } from '../../components/ui/NexoState';
 import { PersonBubble } from '../../features/plan-detail/PersonBubble';
-import { createPlanDetailStyles } from '../../features/plan-detail/planDetailStyles';
+import { createPlanDetailStyles, PLAN_DETAIL_HERO_H } from '../../features/plan-detail/planDetailStyles';
 import type { Participant, PlanDetailSnapshot, PlanRow } from '../../features/plan-detail/types';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
@@ -65,13 +68,14 @@ import {
 import { getFriends } from '../../lib/friends';
 import { distanceKm, formatDistanceKm, openDirectionsTo } from '../../lib/geo';
 import { fetchGuestPlanDetail } from '../../lib/guestFeed';
-import { hapticError, hapticLight, hapticMedium, hapticSuccess } from '../../lib/haptics';
+import { emitHeartBurst } from '../../lib/heartBurst';
+import { hapticError, hapticLight, hapticMedium, hapticSave, hapticCelebrate, hapticSuccess, hapticWarning } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { kickParticipant } from '../../lib/kickParticipant';
 import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
 import { hidePlanFromAttendedProfile, removePlanFromMyPlansAndHistory } from '../../lib/myPlansHide';
 import { Alert } from '../../lib/nexoAlert';
-import { persistJoinWithWaitlistFallback, persistLeave, persistSave } from '../../lib/offlineActions';
+import { persistJoinWithWaitlistFallback, persistLeave, persistSave, subscribeSaveState } from '../../lib/offlineActions';
 import { getOrganizerFollowStats, peekViewerIsOrganizer, rememberViewerIsOrganizer } from '../../lib/organizer';
 import {
     canJoinWaitlist,
@@ -107,18 +111,26 @@ import {
 } from '../../lib/planJoinRequests';
 import { formatCountdown, isPlanActiveForSaved, isPlanChatAlive, resolveRatingUiPhase } from '../../lib/planLifecycle';
 import { MAX_ACTIVE_PLANS } from '../../lib/planLimits';
+import { markChatOpenedFromPlan } from '../../lib/chatFromPlan';
 import { seedChatThreadPeek } from '../../lib/prefetchChats';
 import { dismissPushForPlanDetail } from '../../lib/presentedPush';
 import { getMyProfile, getPublicProfileCards } from '../../lib/profileData';
-import { getPersonalityLabel, type Genero } from '../../lib/profileFields';
+import { type Genero } from '../../lib/profileFields';
+import { type AffinityPerson } from '../../lib/profileAffinity';
+import {
+    peekOrComputePairAffinity,
+    prefetchPairAffinity,
+    type PairAffinityResult,
+} from '../../lib/pairAffinityCache';
+import { ensureViewerAffinityPerson, peekViewerAffinityPerson } from '../../lib/viewerAffinityCache';
 import { renderRatingStars } from '../../lib/profileRating';
 import { getPendingRatingForPlan, subscribeRatingSession, type PendingRatingPlan } from '../../lib/ratings';
 import { ScreenKeys } from '../../lib/screenState';
+import { screenCacheKey } from '../../lib/screenCaches';
 import { shareFootballCard } from '../../lib/shareFootballPlan';
-import { buildPlanShareMessage } from '../../lib/shareLinks';
 import { canJoinPlanByGender } from '../../lib/soloChicas';
 import { resolvePlanSport } from '../../lib/sports';
-import { EMPTY_STATS, formatRatingScore, getUserStats, personRepeatStat, type UserStats } from '../../lib/stats';
+import { EMPTY_STATS, formatRatingScore, getUserStats, peekUserStats, personRepeatStat, type UserStats } from '../../lib/stats';
 import { supabase } from '../../lib/supabase';
 import { lockTabPager, unlockTabPager } from '../../lib/tabPagerScroll';
 import { cacheGetStale, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
@@ -140,7 +152,7 @@ export default function PlanDetailScreen() {
     const { t, lang } = useT();
     const styles = useThemedStyles(createPlanDetailStyles);
     const { colors } = useAppTheme();
-    const { requireAccount, userId: sessionUserId } = useAuthSession();
+    const { requireAccount, userId: sessionUserId, isGuest } = useAuthSession();
     const dateLocale = lang === 'en' ? 'en-GB' : 'es-ES';
     const { id, inviteId, inviterId, inviterName, inviterAvatar, inviteTipo, from } = useLocalSearchParams<{
         id: string | string[];
@@ -167,6 +179,7 @@ export default function PlanDetailScreen() {
     const fromInvite = !!pendingInviteId && !inviteHandled;
     const scrollKey = planId ? `${ScreenKeys.PLAN_DETAIL}:${planId}` : ScreenKeys.PLAN_DETAIL;
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(scrollKey);
+    const heartHostRef = useRef<View>(null);
 
     const cachedDetail = planId ? cacheGetStale<PlanDetailSnapshot>(planDetailKey(planId)) : null;
 
@@ -175,7 +188,20 @@ export default function PlanDetailScreen() {
     const [participants, setParticipants] = useState<Participant[]>(() => cachedDetail?.participants ?? []);
     const [joinedCount, setJoinedCount] = useState(() => cachedDetail?.joinedCount ?? 0);
     const [creator, setCreator] = useState<Participant | null>(() => cachedDetail?.creator ?? null);
-    const [creatorStats, setCreatorStats] = useState<UserStats>(() => cachedDetail?.creatorStats ?? EMPTY_STATS);
+    const [creatorStats, setCreatorStats] = useState<UserStats>(() => {
+        const seeded = cachedDetail?.creatorStats;
+        if (seeded && (seeded.numeroEvaluadoresDistintos > 0 || seeded.numeroValoraciones > 0 || seeded.porcentajeRepetiria > 0)) {
+            return seeded;
+        }
+        const cid = cachedDetail?.creator?.id || cachedDetail?.plan?.creador_id;
+        if (cid) {
+            const fromStats = peekUserStats(cid);
+            if (fromStats) return fromStats;
+            const fromProfile = cacheGetStale<{ stats?: UserStats }>(screenCacheKey.profileUI(cid))?.stats;
+            if (fromProfile) return fromProfile;
+        }
+        return seeded ?? EMPTY_STATS;
+    });
     const [organizerFollowers, setOrganizerFollowers] = useState<number | null>(
         () => cachedDetail?.organizerFollowers ?? null,
     );
@@ -197,6 +223,19 @@ export default function PlanDetailScreen() {
         const snap = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY);
         return snap?.feedTaste?.personalityTags ?? [];
     });
+    const [seedFitPct, setSeedFitPct] = useState<number | null>(() => cachedDetail?.fitPct ?? null);
+    const [viewerAffinity, setViewerAffinity] = useState<AffinityPerson | null>(() =>
+        peekViewerAffinityPerson(cachedDetail?.currentUserId ?? null),
+    );
+    const [creatorPersonFit, setCreatorPersonFit] = useState<PairAffinityResult | null>(() => {
+        const uid = sessionUserId ?? cachedDetail?.currentUserId;
+        const cid = cachedDetail?.creator?.id || cachedDetail?.plan?.creador_id;
+        if (!uid || !cid) return null;
+        return peekOrComputePairAffinity(uid, cid, {
+            isFriends: cachedDetail?.friendIds?.includes(cid),
+        });
+    });
+    const creatorFitLockedRef = useRef(!!creatorPersonFit);
     const [isSaved, setIsSaved] = useState(() => cachedDetail?.isSaved ?? false);
     const [actionBusy, setActionBusy] = useState(false);
     const [mapExpanded, setMapExpanded] = useState(false);
@@ -215,12 +254,39 @@ export default function PlanDetailScreen() {
     const hasLoadedRef = useRef(!!cachedDetail);
     const loadGenRef = useRef(0);
 
+    useEffect(() => {
+        creatorFitLockedRef.current = false;
+        const uid = sessionUserId ?? cachedDetail?.currentUserId;
+        const cid = cachedDetail?.creator?.id || cachedDetail?.plan?.creador_id;
+        const instant =
+            uid && cid
+                ? peekOrComputePairAffinity(uid, cid, {
+                      isFriends: cachedDetail?.friendIds?.includes(cid),
+                  })
+                : null;
+        setCreatorPersonFit(instant);
+        creatorFitLockedRef.current = !!instant;
+    }, [planId]);
+
     const applyDetailSnapshot = useCallback((snap: PlanDetailSnapshot) => {
         setPlan(snap.plan);
         setParticipants(snap.participants);
         setJoinedCount(snap.joinedCount);
         setCreator(snap.creator);
-        setCreatorStats(snap.creatorStats);
+        setCreatorStats((prev) => {
+            const next = snap.creatorStats;
+            const nextEmpty =
+                !next ||
+                (next.numeroEvaluadoresDistintos === 0 &&
+                    next.numeroValoraciones === 0 &&
+                    next.porcentajeRepetiria === 0);
+            const prevUseful =
+                prev.numeroEvaluadoresDistintos > 0 ||
+                prev.numeroValoraciones > 0 ||
+                prev.porcentajeRepetiria > 0;
+            if (nextEmpty && prevUseful) return prev;
+            return next ?? prev;
+        });
         setOrganizerFollowers(snap.organizerFollowers ?? null);
         setMembership(snap.membership);
         setFriendIds(new Set(snap.friendIds));
@@ -229,6 +295,7 @@ export default function PlanDetailScreen() {
         setCurrentUserGenero(snap.currentUserGenero);
         setOpenRating(snap.openRating);
         setCurrentUserId(snap.currentUserId);
+        if (snap.fitPct != null) setSeedFitPct(snap.fitPct);
         hasLoadedRef.current = true;
     }, []);
 
@@ -627,6 +694,8 @@ export default function PlanDetailScreen() {
     const isCreator = currentUserId && plan && String(plan.creador_id) === String(currentUserId);
     const planFitPct = useMemo(() => {
         if (!plan || !currentUserId || isCreator || currentUserIsOrganizer) return null;
+        // Preferir el % del feed (ya visible en la card) para no esperar al fetch de tags.
+        if (seedFitPct != null) return seedFitPct;
         const feedTaste = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY)?.feedTaste;
         return feedFitPercent(
             {
@@ -642,7 +711,77 @@ export default function PlanDetailScreen() {
             },
             plan.id,
         );
-    }, [plan, currentUserId, isCreator, currentUserIsOrganizer, fitPersonalityTags, currentUserGenero]);
+    }, [plan, currentUserId, isCreator, currentUserIsOrganizer, fitPersonalityTags, currentUserGenero, seedFitPct]);
+
+    useEffect(() => {
+        const cid = creator?.id || plan?.creador_id;
+        if (!cid) return;
+        const peeked = peekUserStats(cid);
+        if (peeked) {
+            setCreatorStats((prev) => {
+                const prevUseful =
+                    prev.numeroEvaluadoresDistintos > 0 ||
+                    prev.numeroValoraciones > 0 ||
+                    prev.porcentajeRepetiria > 0;
+                if (prevUseful) return prev;
+                return peeked;
+            });
+        }
+        let cancelled = false;
+        void getUserStats(cid).then((stats) => {
+            if (cancelled) return;
+            setCreatorStats(stats);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [creator?.id, plan?.creador_id]);
+
+    useEffect(() => {
+        if (!currentUserId || isCreator) {
+            setViewerAffinity(null);
+            return;
+        }
+        const peeked = peekViewerAffinityPerson(currentUserId);
+        if (peeked) setViewerAffinity(peeked);
+        void ensureViewerAffinityPerson(currentUserId).then((p) => {
+            if (p) setViewerAffinity(p);
+        });
+    }, [currentUserId, isCreator]);
+
+    useEffect(() => {
+        if (!creator?.id || !currentUserId || isCreator || currentUserIsOrganizer || plan?.es_organizador) {
+            if (!creatorFitLockedRef.current) setCreatorPersonFit(null);
+            return;
+        }
+        const isFriends = friendIds.has(creator.id);
+
+        const instant = peekOrComputePairAffinity(currentUserId, creator.id, { isFriends });
+        if (instant) {
+            creatorFitLockedRef.current = true;
+            setCreatorPersonFit(instant);
+        }
+
+        let cancelled = false;
+        // Siempre confirmar con el cálculo completo (mismos inputs que el perfil).
+        void prefetchPairAffinity(currentUserId, creator.id, { isFriends }).then((result) => {
+            if (cancelled || !result) return;
+            creatorFitLockedRef.current = true;
+            setCreatorPersonFit(result);
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        creator?.id,
+        currentUserId,
+        isCreator,
+        currentUserIsOrganizer,
+        plan?.es_organizador,
+        friendIds,
+    ]);
+
     const isFull = plan ? joinedCount >= plan.maximo_participantes : false;
     const requiresApproval = !!plan?.requiere_aprobacion;
     const waitlistOpen = canJoinWaitlist(plan?.fecha_evento);
@@ -735,8 +874,8 @@ export default function PlanDetailScreen() {
         ? eventDate.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })
         : '';
     const sportPlan = plan ? resolvePlanSport(plan) : null;
-    const lat = plan?.latitud ?? 40.4167;
-    const lng = plan?.longitud ?? -3.7037;
+    const lat = Number.isFinite(Number(plan?.latitud)) ? Number(plan?.latitud) : 40.4167;
+    const lng = Number.isFinite(Number(plan?.longitud)) ? Number(plan?.longitud) : -3.7033;
 
     const handleKick = (targetUserId: string, targetName: string) => {
         if (!currentUserId || !planId || !isCreator) return;
@@ -846,6 +985,7 @@ export default function PlanDetailScreen() {
         slots: FootballOccupant[];
         when: string;
     } | null>(null);
+    const [planSharePayload, setPlanSharePayload] = useState<PlanSharePayload | null>(null);
     const [footballShareBusy, setFootballShareBusy] = useState(false);
 
     useEffect(() => {
@@ -897,19 +1037,21 @@ export default function PlanDetailScreen() {
         const isFootball = sportPlan?.tipo === 'futbol';
 
         if (!isFootball) {
-            const message = buildPlanShareMessage({
-                title: plan.titulo,
-                location: plan.nombre_ubicacion,
-                when: when || null,
-                planId: plan.id,
-                hint: t('planDetail.shareHint'),
-                lang,
-            });
-            try {
-                await Share.share({ message });
-            } catch {
-                // cancelled
-            }
+            setPlanSharePayload(
+                buildPlanSharePayload({
+                    planId: plan.id,
+                    title: plan.titulo,
+                    coverUrl: planCoverList(plan)[0] ?? plan.imagen_url,
+                    when,
+                    location: plan.nombre_ubicacion,
+                    participants: participants.map((p) => ({
+                        id: p.id,
+                        nombre: p.nombre,
+                        avatar_url: p.avatar_url,
+                    })),
+                    maxPeople: plan.maximo_participantes,
+                }),
+            );
             return;
         }
 
@@ -935,7 +1077,7 @@ export default function PlanDetailScreen() {
             return;
         }
         const prev = isSaved;
-        hapticLight();
+        hapticSave(!prev);
         setIsSaved(!prev);
         const patchCache = (saved: boolean) => {
             const key = planDetailKey(planId);
@@ -1028,7 +1170,7 @@ export default function PlanDetailScreen() {
                 setJoinedCount(prevCount);
                 Alert.alert(t('feed.joinedWaitlist'));
             }
-            hapticSuccess();
+            hapticCelebrate();
             const finalMembership: Membership =
                 applied === 'lista_espera'
                     ? 'waitlist'
@@ -1069,6 +1211,7 @@ export default function PlanDetailScreen() {
     };
 
     const handleLeave = () => {
+        hapticWarning();
         if (!currentUserId || !plan) return;
         const wasJoined = membership === 'joined';
         const wasWaitlist = membership === 'waitlist';
@@ -1147,12 +1290,14 @@ export default function PlanDetailScreen() {
             creadorId: plan.creador_id,
             fechaEvento: plan.fecha_evento,
         });
-        router.push(`/chat/${plan.id}`);
+        markChatOpenedFromPlan(plan.id);
+        router.push({ pathname: '/chat/[id]', params: { id: plan.id, fromPlan: '1' } });
     }, [plan, currentUserId, router]);
 
     const confirmHideFromMyList = () => {
         if (!plan || !currentUserId) return;
         const isAttended = hideMode === 'attended';
+        hapticWarning();
         Alert.alert(
             t(isAttended ? 'planDetail.hideFromAttendedTitle' : 'planDetail.hideFromListTitle'),
             undefined,
@@ -1161,15 +1306,19 @@ export default function PlanDetailScreen() {
                 {
                     text: t(isAttended ? 'planDetail.hideFromAttendedConfirm' : 'planDetail.hideFromListConfirm'),
                     style: 'destructive',
-                    onPress: async () => {
-                        const { error } = isAttended
-                            ? await hidePlanFromAttendedProfile(currentUserId, plan.id)
-                            : await removePlanFromMyPlansAndHistory(currentUserId, plan.id);
-                        if (error) {
-                            Alert.alert(t('feed.error'), t('planDetail.hideFromListError'));
-                            return;
-                        }
+                    onPress: () => {
+                        const uid = currentUserId;
+                        const pid = plan.id;
+                        // Salir ya; red en segundo plano (antes se esperaba al servidor).
                         router.back();
+                        void (async () => {
+                            const { error } = isAttended
+                                ? await hidePlanFromAttendedProfile(uid, pid)
+                                : await removePlanFromMyPlansAndHistory(uid, pid);
+                            if (error) {
+                                Alert.alert(t('feed.error'), t('planDetail.hideFromListError'));
+                            }
+                        })();
                     },
                 },
             ],
@@ -1387,23 +1536,29 @@ export default function PlanDetailScreen() {
         if (membership === 'joined') {
             return (
                 <View style={styles.joinedActions}>
-                    <TouchableOpacity style={styles.joinedOutlineBtn} onPress={handleLeave} activeOpacity={0.85}>
+                    <PressScale
+                        style={styles.joinedOutlineBtn}
+                        pressedScale={0.96}
+                        minTouch={false}
+                        onPress={handleLeave}
+                    >
                         <Ionicons name="checkmark-circle" size={20} color="#059669" />
                         <Text style={styles.joinedOutlineText}>
                             {t(currentUserGenero === 'femenino' ? 'card.joinedF' : 'card.joined')}
                         </Text>
-                    </TouchableOpacity>
+                    </PressScale>
                     {chatAlive ? (
-                        <TouchableOpacity
+                        <PressScale
                             style={styles.chatIconBtn}
-                            activeOpacity={0.9}
+                            pressedScale={0.9}
+                            minTouch={false}
                             onPress={openPlanChat}
                             accessibilityLabel={t('planDetail.openChat')}
                         >
                             <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.chatIconBtnGradient}>
                                 <Ionicons name="chatbubbles" size={22} color={theme.colors.surface} />
                             </LinearGradient>
-                        </TouchableOpacity>
+                        </PressScale>
                     ) : null}
                 </View>
             );
@@ -1411,28 +1566,33 @@ export default function PlanDetailScreen() {
 
         if (membership === 'requested') {
             return (
-                <View style={{ width: '100%', gap: 8 }}>
-                    <TouchableOpacity style={styles.requestedBtn} onPress={handleLeave} activeOpacity={0.85}>
-                        <Ionicons name="time" size={20} color="#B45309" />
-                        <Text style={styles.requestedBtnText}>{t('card.requested')}</Text>
-                    </TouchableOpacity>
-                    <Text style={{ textAlign: 'center', fontSize: 13, fontWeight: '600', color: '#64748B' }}>
-                        {t('card.requestHint')}
-                    </Text>
-                </View>
+                <PressScale
+                    style={styles.requestedBtn}
+                    pressedScale={0.96}
+                    minTouch={false}
+                    onPress={handleLeave}
+                >
+                    <Ionicons name="time" size={20} color="#B45309" />
+                    <Text style={styles.requestedBtnText}>{t('card.requested')}</Text>
+                </PressScale>
             );
         }
 
         if (membership === 'waitlist') {
             return (
-                <TouchableOpacity style={styles.waitlistBtn} onPress={handleLeave} activeOpacity={0.85}>
+                <PressScale
+                    style={styles.waitlistBtn}
+                    pressedScale={0.96}
+                    minTouch={false}
+                    onPress={handleLeave}
+                >
                     <Ionicons name="hourglass" size={20} color={WAITLIST} />
                     <Text style={styles.waitlistBtnText}>
                         {waitlistPosition != null
                             ? t('card.waitlistPosition', { n: waitlistPosition })
                             : t('card.waitlist')}
                     </Text>
-                </TouchableOpacity>
+                </PressScale>
             );
         }
 
@@ -1473,26 +1633,33 @@ export default function PlanDetailScreen() {
                 );
             }
             return (
-                <TouchableOpacity style={styles.waitlistJoinBtn} onPress={handleJoin} activeOpacity={0.9} disabled={actionBusy}>
+                <PressScale
+                    style={[styles.waitlistJoinBtn, actionBusy && { opacity: 0.55 }]}
+                    pressedScale={0.96}
+                    minTouch={false}
+                    disabled={actionBusy}
+                    haptic={false}
+                    onPress={handleJoin}
+                >
                     <Ionicons name="list" size={20} color={theme.colors.surface} />
                     <Text style={styles.waitlistJoinText}>{t('card.joinWaitlist')}</Text>
-                </TouchableOpacity>
+                </PressScale>
             );
         }
 
         return (
-            <View style={{ width: '100%', gap: 8 }}>
-            <TouchableOpacity style={styles.joinBtn} onPress={handleJoin} activeOpacity={0.9} disabled={actionBusy}>
-                <LinearGradient colors={[PRIMARY, PRIMARY_DARK]} style={styles.joinBtnGradient}>
+            <PressScale
+                style={[styles.joinBtn, actionBusy && { opacity: 0.55 }]}
+                pressedScale={0.96}
+                minTouch={false}
+                disabled={actionBusy}
+                haptic={false}
+                onPress={handleJoin}
+            >
+                <LinearGradient colors={['#1D4ED8', '#1E40AF']} style={styles.joinBtnGradient}>
                     <Text style={styles.joinBtnText}>{requiresApproval ? t('card.request') : t('card.join')}</Text>
                 </LinearGradient>
-            </TouchableOpacity>
-            {requiresApproval ? (
-                <Text style={{ textAlign: 'center', fontSize: 13, fontWeight: '600', color: '#64748B' }}>
-                    {t('card.requestHint')}
-                </Text>
-            ) : null}
-            </View>
+            </PressScale>
         );
     };
 
@@ -1528,7 +1695,7 @@ export default function PlanDetailScreen() {
                 membership === 'joined' ||
                 membership === 'requested' ||
                 membership === 'waitlist'));
-    const scrollBottomPad = insets.bottom + (fromInvite ? 200 : roomyBottomBar ? 148 : 108);
+    const scrollBottomPad = insets.bottom + (fromInvite ? 168 : roomyBottomBar ? 118 : 88);
     const ratingLabel =
         creatorStats.numeroValoraciones > 0
             ? t(
@@ -1555,14 +1722,14 @@ export default function PlanDetailScreen() {
                 scrollEventThrottle={scrollEventThrottle}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingBottom: scrollBottomPad }}
+                contentContainerStyle={{ paddingBottom: scrollBottomPad, backgroundColor: theme.colors.surface }}
             >
                 <View style={styles.heroWrap}>
                     <PlanCoverCarousel
                         covers={planCoverList(plan)}
                         fallback={plan.imagen_url}
                         width={Dimensions.get('window').width}
-                        height={Math.min(440, Dimensions.get('window').width * 1.08)}
+                        height={PLAN_DETAIL_HERO_H}
                         priority="high"
                         recyclingKey={plan.id}
                         dotsBottom={72}
@@ -1573,31 +1740,47 @@ export default function PlanDetailScreen() {
                         locations={[0, 0.45, 1]}
                         style={styles.heroBottomScrim}
                     />
-                    <View style={[styles.heroTopBar, { paddingTop: insets.top + 10 }]}>
-                        <TouchableOpacity style={styles.glassBtn} onPress={() => router.back()} activeOpacity={0.85}>
-                            <Ionicons name="chevron-back" size={24} color={theme.colors.surface} />
-                        </TouchableOpacity>
+                    <View style={[styles.heroTopBar, { paddingTop: insets.top + 10 }]} pointerEvents="box-none">
+                        {/* Espacio reservado: el back real está fijo fuera del ScrollView */}
+                        <View style={styles.glassBtnPlaceholder} />
                         <View style={styles.heroTopRight}>
-                            {!isPastPlan ? (
-                                <TouchableOpacity style={styles.glassBtnSm} onPress={handleShare} activeOpacity={0.85}>
-                                    <Ionicons name="arrow-redo" size={15} color={theme.colors.surface} />
-                                </TouchableOpacity>
-                            ) : null}
                             {!isPastPlan && !isCreator ? (
-                                <TouchableOpacity style={styles.glassBtnSm} onPress={handleToggleSave} activeOpacity={0.85}>
-                                    <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={16} color={isSaved ? DANGER : theme.colors.surface} />
-                                </TouchableOpacity>
+                                <View
+                                    ref={heartHostRef}
+                                    style={styles.heartHost}
+                                    collapsable={false}
+                                >
+                                    <BounceHeart
+                                        saved={isSaved}
+                                        size={16}
+                                        color="#0F172A"
+                                        savedColor="#0F172A"
+                                        style={styles.glassBtnSm}
+                                        haptic={false}
+                                        onPress={() => {
+                                            if (!isSaved && !isGuest) {
+                                                requestAnimationFrame(() => {
+                                                    heartHostRef.current?.measureInWindow((x, y, w, h) => {
+                                                        emitHeartBurst(x + w / 2, y + h / 2);
+                                                    });
+                                                });
+                                            }
+                                            void handleToggleSave();
+                                        }}
+                                    />
+                                </View>
                             ) : null}
                             {!isCreator && currentUserId ? (
-                                <TouchableOpacity
+                                <PressScale
                                     style={styles.glassBtnSm}
+                                    pressedScale={0.88}
+                                    minTouch={false}
                                     onPress={() =>
                                         router.push({ pathname: '/report-plan', params: { planId: plan.id } })
                                     }
-                                    activeOpacity={0.85}
                                 >
-                                    <Ionicons name="flag-outline" size={15} color={theme.colors.dangerBorder} />
-                                </TouchableOpacity>
+                                    <Ionicons name="alert-circle-outline" size={17} color="#0F172A" />
+                                </PressScale>
                             ) : null}
                         </View>
                     </View>
@@ -1654,15 +1837,14 @@ export default function PlanDetailScreen() {
                     ) : null}
 
                     <View style={styles.dateRow}>
-                        <View style={styles.dateCard}>
-                            <Ionicons name="calendar" size={20} color={PRIMARY_DARK} />
-                            <Text style={styles.dateValue}>{dateString}</Text>
-                        </View>
+                        <Ionicons name="calendar-outline" size={18} color={PRIMARY_DARK} />
+                        <Text style={styles.dateValue}>{dateString}</Text>
                         {timeString ? (
-                            <View style={styles.dateCard}>
-                                <Ionicons name="time" size={20} color={PRIMARY_DARK} />
-                                <Text style={styles.dateValue}>{timeString}</Text>
-                            </View>
+                            <>
+                                <View style={styles.dateDot} />
+                                <Ionicons name="time-outline" size={17} color={PRIMARY_DARK} />
+                                <Text style={styles.dateTimeValue}>{timeString}</Text>
+                            </>
                         ) : null}
                     </View>
 
@@ -1695,47 +1877,49 @@ export default function PlanDetailScreen() {
                                         <Text style={[styles.creatorName, creatorIsFriend && styles.creatorNameFriend]}>
                                             {creator.nombre}
                                         </Text>
-                                        <View style={styles.ratingRow}>
-                                            {plan.es_organizador ? (
-                                                <>
-                                                    {renderRatingStars(creatorStats.valoracionMedia, 18)}
-                                                    <Text style={styles.ratingText}>{ratingLabel}</Text>
-                                                </>
-                                            ) : (
-                                                <Text style={styles.ratingText}>
-                                                    {personRep.repeatPct != null
-                                                        ? `${personRep.repeatPct}% ${personRep.label}`
-                                                        : `${personRep.middleText} ${personRep.label}`}
-                                                </Text>
-                                            )}
-                                        </View>
-                                        {plan.es_organizador && organizerFollowers != null ? (
-                                            <Text style={styles.membersText}>
-                                                {t(
-                                                    organizerFollowers === 1
-                                                        ? 'planDetail.orgMembersOne'
-                                                        : 'planDetail.orgMembers',
-                                                    { n: organizerFollowers },
-                                                )}
-                                            </Text>
-                                        ) : null}
-                                        {!plan.es_organizador && (creator.ambientes_preferidos?.length || creator.etiquetas?.length) ? (
-                                            <View style={styles.personalityRow}>
-                                                {(creator.ambientes_preferidos?.length
-                                                    ? creator.ambientes_preferidos
-                                                    : creator.etiquetas ?? []
-                                                )
-                                                    .slice(0, 3)
-                                                    .map((tag) => (
-                                                        <View key={tag} style={styles.personalityChip}>
-                                                            <Text style={styles.personalityChipText}>
-                                                                {getPersonalityLabel(tag, creator.genero, t)}
+                                        {!isGuest ? (
+                                            <>
+                                                <View style={styles.ratingRow}>
+                                                    {plan.es_organizador ? (
+                                                        <>
+                                                            {renderRatingStars(creatorStats.valoracionMedia, 18)}
+                                                            <Text style={styles.ratingText}>{ratingLabel}</Text>
+                                                        </>
+                                                    ) : (
+                                                        <View style={styles.repeatStatRow}>
+                                                            <Ionicons name="people" size={14} color="#059669" />
+                                                            <Text style={styles.ratingText}>
+                                                                {personRep.repeatPct != null
+                                                                    ? `${personRep.repeatPct}% ${personRep.label}`
+                                                                    : `${personRep.middleText} ${personRep.label}`}
                                                             </Text>
                                                         </View>
-                                                    ))}
-                                            </View>
+                                                    )}
+                                                </View>
+                                                {plan.es_organizador && organizerFollowers != null ? (
+                                                    <Text style={styles.membersText}>
+                                                        {t(
+                                                            organizerFollowers === 1
+                                                                ? 'planDetail.orgMembersOne'
+                                                                : 'planDetail.orgMembers',
+                                                            { n: organizerFollowers },
+                                                        )}
+                                                    </Text>
+                                                ) : null}
+                                                {!plan.es_organizador && creatorPersonFit != null ? (
+                                                    <View style={styles.personFitRow}>
+                                                        <Ionicons name="star" size={13} color="#059669" />
+                                                        <Text style={styles.personFitText}>
+                                                            {t('card.personFitLead')}{' '}
+                                                            <Text style={styles.personFitPct}>{creatorPersonFit.score}%</Text>
+                                                            {' '}{t('card.personFitTrail')}
+                                                        </Text>
+                                                    </View>
+                                                ) : null}
+                                            </>
                                         ) : null}
                                     </View>
+                                    <Ionicons name="chevron-forward" size={22} color="#94A3B8" />
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -1870,12 +2054,14 @@ export default function PlanDetailScreen() {
                     ) : null}
 
                     <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>{t('planDetail.about')}</Text>
-                        <TranslatedText
-                            text={plan.descripcion?.trim() || null}
-                            empty={t('card.noDescription')}
-                            style={styles.description}
-                        />
+                        <View style={styles.aboutCard}>
+                            <Text style={styles.aboutCardTitle}>{t('planDetail.about')}</Text>
+                            <TranslatedText
+                                text={plan.descripcion?.trim() || null}
+                                empty={t('card.noDescription')}
+                                style={styles.description}
+                            />
+                        </View>
                     </View>
 
                     <View style={styles.section}>
@@ -1929,7 +2115,21 @@ export default function PlanDetailScreen() {
                 </View>
             </ScrollView>
 
-            <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+            <View
+                pointerEvents="box-none"
+                style={[styles.fixedBackBar, { paddingTop: insets.top + 10 }]}
+            >
+                <PressScale
+                    style={styles.glassBtn}
+                    pressedScale={0.9}
+                    minTouch={false}
+                    onPress={() => router.back()}
+                >
+                    <Ionicons name="chevron-back" size={24} color="#0F172A" />
+                </PressScale>
+            </View>
+
+            <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
                 {renderPrimaryAction()}
             </View>
 
@@ -2018,16 +2218,12 @@ export default function PlanDetailScreen() {
                 />
             ) : null}
 
+            <PlanShareModal payload={planSharePayload} onDone={() => setPlanSharePayload(null)} />
+
             {footballSharePack && plan ? (
                 <View
                     pointerEvents="none"
-                    style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: 0,
-                        opacity: 0.02,
-                        zIndex: -1,
-                    }}
+                    style={{ position: 'absolute', left: 0, top: 0, opacity: 1, zIndex: -1 }}
                     collapsable={false}
                 >
                     <FootballShareCard
@@ -2049,6 +2245,7 @@ export default function PlanDetailScreen() {
                     />
                 </View>
             ) : null}
+            <FeedHeartBurstHost />
         </View>
     );
 }

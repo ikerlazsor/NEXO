@@ -217,12 +217,34 @@ function ChatMessageRowInner({
                         </Text>
                     </View>
                 ) : null}
-                <Text style={[styles.msgText, isMe ? styles.myMsgText : styles.otherMsgText]}>
+                <Text style={[styles.msgText, styles.msgTextPadForTime, isMe ? styles.myMsgText : styles.otherMsgText]}>
                     {plainText}
                 </Text>
             </>
         );
     })();
+
+    const isPlainText =
+        item.tipo === 'texto' && !parseSystemContent(item.contenido);
+
+    const timeNode = (
+        <View style={[isPlainText ? styles.timeAbsolute : styles.timeRow]}>
+            {item.pending ? (
+                <Ionicons
+                    name="time-outline"
+                    size={12}
+                    color={isMe ? 'rgba(255,255,255,0.75)' : '#94A3B8'}
+                    style={{ marginRight: 4 }}
+                />
+            ) : null}
+            <Text style={[styles.timeText, isMe ? styles.myTime : styles.otherTime]}>
+                {new Date(item.creado_en).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                })}
+            </Text>
+        </View>
+    );
 
     return (
         <View style={styles.swipeWrap}>
@@ -258,22 +280,7 @@ function ChatMessageRowInner({
                                     <Text style={styles.senderName}>{nombreMostrar}</Text>
                                 ) : null}
                                 {content}
-                                <View style={styles.timeRow}>
-                                    {item.pending ? (
-                                        <Ionicons
-                                            name="time-outline"
-                                            size={12}
-                                            color={isMe ? 'rgba(255,255,255,0.75)' : '#94A3B8'}
-                                            style={{ marginRight: 4 }}
-                                        />
-                                    ) : null}
-                                    <Text style={[styles.timeText, isMe ? styles.myTime : styles.otherTime]}>
-                                        {new Date(item.creado_en).toLocaleTimeString([], {
-                                            hour: '2-digit',
-                                            minute: '2-digit',
-                                        })}
-                                    </Text>
-                                </View>
+                                {timeNode}
                             </TouchableOpacity>
                             <MessageReactionChips
                                 messageId={item.id}
@@ -380,6 +387,7 @@ const styles = StyleSheet.create({
         elevation: 0,
         flexShrink: 1,
         shadowOpacity: 0,
+        overflow: 'visible',
     },
     myBubble: { backgroundColor: PRIMARY, borderBottomRightRadius: 4 },
     otherBubble: {
@@ -388,8 +396,9 @@ const styles = StyleSheet.create({
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: '#E2E8F0',
     },
-    senderName: { fontSize: 12, fontWeight: '700', color: PRIMARY_DARK, marginBottom: 3 },
-    msgText: { fontSize: 15, lineHeight: 21, color: '#0F172A' },
+    senderName: { fontSize: 15, fontWeight: '700', color: PRIMARY_DARK, marginBottom: 3 },
+    msgText: { fontSize: 17, lineHeight: 23, color: '#0F172A' },
+    msgTextPadForTime: { paddingRight: 56, paddingBottom: 1 },
     myMsgText: { color: '#FFF' },
     otherMsgText: { color: '#0F172A' },
     quoteBox: {
@@ -400,12 +409,19 @@ const styles = StyleSheet.create({
     },
     quoteBoxMe: { borderLeftColor: 'rgba(255,255,255,0.65)' },
     quoteBoxOther: { borderLeftColor: PRIMARY },
-    quoteName: { fontSize: 11, fontWeight: '800', color: PRIMARY_DARK },
+    quoteName: { fontSize: 13, fontWeight: '800', color: PRIMARY_DARK },
     quoteNameMe: { color: '#FFF' },
-    quotePreview: { fontSize: 12, color: '#64748B', marginTop: 1 },
+    quotePreview: { fontSize: 14, color: '#64748B', marginTop: 1 },
     quotePreviewMe: { color: 'rgba(255,255,255,0.85)' },
-    timeRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 4 },
-    timeText: { fontSize: 10, color: '#94A3B8' },
+    timeRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 2 },
+    timeAbsolute: {
+        position: 'absolute',
+        right: 10,
+        bottom: 7,
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    timeText: { fontSize: 12, color: '#94A3B8' },
     myTime: { color: 'rgba(255, 255, 255, 0.75)' },
     otherTime: { color: '#94A3B8' },
     mediaImage: { width: 220, height: 220, borderRadius: 14, backgroundColor: '#E2E8F0' },

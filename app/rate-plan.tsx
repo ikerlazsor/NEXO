@@ -541,7 +541,7 @@ export default function RatePlanScreen() {
                             <Text style={styles.sheetTitle}>{t('ratings.orgStarsQ')}</Text>
                             <View style={styles.starsRow}>
                                 {[1, 2, 3, 4, 5].map((n) => (
-                                    <TouchableOpacity
+                                    <PressScale
                                         key={n}
                                         onPress={() => {
                                             hapticSelection();
@@ -549,13 +549,17 @@ export default function RatePlanScreen() {
                                         }}
                                         hitSlop={8}
                                         style={styles.starBtn}
+                                        pressedScale={0.82}
+                                        minTouch={false}
+                                        haptic={false}
+                                        bounceKey={draft.puntuacion_general === n ? n : null}
                                     >
                                         <Ionicons
                                             name={draft.puntuacion_general >= n ? 'star' : 'star-outline'}
                                             size={38}
                                             color={draft.puntuacion_general >= n ? GOLD : colors.borderStrong}
                                         />
-                                    </TouchableOpacity>
+                                    </PressScale>
                                 ))}
                             </View>
                             {draft.puntuacion_general > 0 ? (

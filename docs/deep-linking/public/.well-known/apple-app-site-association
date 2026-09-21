@@ -1,0 +1,19 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "WR5J2G5FV5.com.ikerlazsor.nexo",
+        "paths": [
+          "/plan/*",
+          "/plan"
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": [
+      "WR5J2G5FV5.com.ikerlazsor.nexo"
+    ]
+  }
+}

@@ -24,11 +24,8 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function footballShareCaption(input: Pick<
-    FootballShareInput,
-    'title' | 'location' | 'when' | 'planId' | 'spotsLeft' | 'formatLabel' | 'lang'
->): string {
-    return buildFootballShareMessage(input);
+export function footballShareCaption(input: Pick<FootballShareInput, 'planId'>): string {
+    return buildFootballShareMessage({ planId: input.planId });
 }
 
 /**

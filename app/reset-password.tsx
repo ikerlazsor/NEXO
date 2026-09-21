@@ -15,9 +15,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Alert } from '../lib/nexoAlert';
+import { ingestAuthDeepLink, waitForAuthSession } from '../lib/authDeepLink';
 import { useT } from '../lib/i18n';
 import { isPasswordPolicyError, isStrongPassword } from '../lib/passwordRules';
-import { setPasswordRecoveryPending } from '../lib/passwordRecovery';
+import { isPasswordRecoveryPending, setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { supabase } from '../lib/supabase';
 import { signOutAndClearLocalData } from '../lib/session';
 
@@ -28,22 +29,6 @@ const MUTED = '#64748B';
 const PLACEHOLDER = '#94A3B8';
 const FIELD_BG = '#F5F9FF';
 const FIELD_BORDER = '#E3ECFB';
-
-function parseAuthParams(url: string): Record<string, string> {
-    const out: Record<string, string> = {};
-    const collect = (str?: string) => {
-        if (!str) return;
-        str.split('&').forEach((pair) => {
-            const [k, v] = pair.split('=');
-            if (k) out[decodeURIComponent(k)] = decodeURIComponent(v || '');
-        });
-    };
-    const qIndex = url.indexOf('?');
-    const hIndex = url.indexOf('#');
-    if (qIndex !== -1) collect(url.substring(qIndex + 1, hIndex !== -1 ? hIndex : undefined));
-    if (hIndex !== -1) collect(url.substring(hIndex + 1));
-    return out;
-}
 
 export default function ResetPasswordScreen() {
     const router = useRouter();
@@ -56,38 +41,42 @@ export default function ResetPasswordScreen() {
 
     useEffect(() => {
         let alive = true;
+        let settled = false;
 
-        const ingestUrl = async (url: string | null) => {
-            if (!url) return;
-            const params = parseAuthParams(url);
-            if (params.access_token && params.refresh_token) {
-                await setPasswordRecoveryPending(true);
-                const { error } = await supabase.auth.setSession({
-                    access_token: params.access_token,
-                    refresh_token: params.refresh_token,
-                });
-                if (error) throw error;
-                return;
-            }
-            if (params.code) {
-                await setPasswordRecoveryPending(true);
-                const { error } = await supabase.auth.exchangeCodeForSession(params.code);
-                if (error) throw error;
+        const tryReady = async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!alive || settled) return;
+            if (session || (await isPasswordRecoveryPending())) {
+                settled = true;
+                setReady(true);
             }
         };
 
         void (async () => {
             try {
                 const initial = await Linking.getInitialURL();
-                await ingestUrl(initial);
+                try {
+                    await ingestAuthDeepLink(initial);
+                } catch (e) {
+                    if (__DEV__) console.warn('reset-password ingest initial', e);
+                }
+                if (!alive) return;
+
+                if (await waitForAuthSession(3200)) {
+                    await tryReady();
+                    if (settled) return;
+                }
+
                 const { data: { session } } = await supabase.auth.getSession();
                 if (!alive) return;
-                if (!session) {
-                    Alert.alert(t('login.resetInvalidTitle'), t('login.resetInvalidMsg'));
-                    router.replace('/login');
+                if (session || (await isPasswordRecoveryPending())) {
+                    settled = true;
+                    setReady(true);
                     return;
                 }
-                setReady(true);
+
+                Alert.alert(t('login.resetInvalidTitle'), t('login.resetInvalidMsg'));
+                router.replace('/login');
             } catch (e) {
                 if (!alive) return;
                 const msg = e instanceof Error ? e.message : t('login.resetInvalidMsg');
@@ -96,13 +85,27 @@ export default function ResetPasswordScreen() {
             }
         })();
 
-        const sub = Linking.addEventListener('url', ({ url }) => {
-            void ingestUrl(url).catch(() => undefined);
+        const subLink = Linking.addEventListener('url', ({ url }) => {
+            void (async () => {
+                try {
+                    await ingestAuthDeepLink(url);
+                    await tryReady();
+                } catch (e) {
+                    if (__DEV__) console.warn('reset-password ingest url', e);
+                }
+            })();
+        });
+
+        const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+            if (event === 'PASSWORD_RECOVERY' || session) {
+                void tryReady();
+            }
         });
 
         return () => {
             alive = false;
-            sub.remove();
+            subLink.remove();
+            authListener.subscription.unsubscribe();
         };
     }, [router, t]);
 

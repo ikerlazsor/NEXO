@@ -24,7 +24,8 @@ export function shouldRunStartupForAuthEvent(
   startupReady: boolean,
 ): boolean {
   if (!startupReady) return true;
-  if (event === 'PASSWORD_RECOVERY') return true;
+  // Recuperación de contraseña: no re-ejecutar arranque (evita redirecciones fuera de reset-password).
+  if (event === 'PASSWORD_RECOVERY') return false;
   return previousUserId !== nextUserId;
 }
 

@@ -39,7 +39,8 @@ import { dismissPushForMyPlans } from '../lib/presentedPush';
 import { hapticLight, hapticSelection, hapticSuccess, hapticError } from '../lib/haptics';
 import { type Genero } from '../lib/profileFields';
 import { formatCountdown, resolveRatingUiPhase } from '../lib/planLifecycle';
-import { type PendingRatingPlan } from '../lib/ratings';
+import { subscribeMyPlanHide } from '../lib/myPlansHide';
+import { subscribeRatingSession, type PendingRatingPlan } from '../lib/ratings';
 import { fetchMyPlansSnapshot, type MyPlanItem } from '../lib/myPlansQuery';
 import { ScreenKeys } from '../lib/screenState';
 import { diskSet } from '../lib/diskCache';
@@ -89,6 +90,37 @@ export default function MyPlansScreen() {
             hasDataRef.current = true;
             setLoading(false);
         }
+    }, [userId]);
+
+    useEffect(() => {
+        if (!userId) return;
+        const unsubRating = subscribeRatingSession((evt) => {
+            if (evt.userId !== userId) return;
+            if (evt.type === 'removed') {
+                setRatingByPlan((prev) => {
+                    if (!(evt.planId in prev)) return prev;
+                    const next = { ...prev };
+                    delete next[evt.planId];
+                    return next;
+                });
+            }
+        });
+        const unsubHide = subscribeMyPlanHide((evt) => {
+            if (evt.userId !== userId) return;
+            if (evt.type === 'my-list') {
+                setPlans((prev) => prev.filter((p) => p.id !== evt.planId));
+                setRatingByPlan((prev) => {
+                    if (!(evt.planId in prev)) return prev;
+                    const next = { ...prev };
+                    delete next[evt.planId];
+                    return next;
+                });
+            }
+        });
+        return () => {
+            unsubRating();
+            unsubHide();
+        };
     }, [userId]);
 
     const locale = lang === 'en' ? 'en-GB' : 'es-ES';

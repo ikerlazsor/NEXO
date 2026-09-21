@@ -18,15 +18,29 @@ export function resolveDeepLinkUrl(url: string | null | undefined): DeepLinkTarg
 
     // https://dominio-verificado.example/plan/id → hostname=..., path=plan/id
     // nexo://plan/id → hostname=plan, path=id
+    // https://*.supabase.co/functions/v1/share-plan/id → landing de share
     const scheme = (parsed.scheme || '').toLowerCase();
     const path = (parsed.path || '').replace(/^\/+/, '');
     const host = (parsed.hostname || '').replace(/^\/+/, '');
     const isOwnScheme = scheme === 'nexo';
+    const hostLower = host.toLowerCase();
+    const shareHosts = new Set(
+        [SHARE_WEB_HOST, 'appnexo.es', 'www.appnexo.es']
+            .filter(Boolean)
+            .map((h) => String(h).toLowerCase().replace(/^www\./, '')),
+    );
     const isWebHost =
         (scheme === 'https' || scheme === 'http')
-        && !!SHARE_WEB_HOST
-        && host.toLowerCase() === SHARE_WEB_HOST.toLowerCase();
-    if (!isOwnScheme && !isWebHost) return null;
+        && shareHosts.has(hostLower.replace(/^www\./, ''));
+    const isShareFn =
+        (scheme === 'https' || scheme === 'http')
+        && host.toLowerCase().endsWith('.supabase.co')
+        && /(^|\/)functions\/v1\/share-plan\//i.test(path);
+    if (!isOwnScheme && !isWebHost && !isShareFn) return null;
+    if (isShareFn) {
+        const m = path.match(/share-plan\/([0-9a-f-]{36})/i);
+        return m?.[1] ? { href: `/plan/${m[1]}` } : null;
+    }
     const parts = (isWebHost ? path.split('/') : [host, ...path.split('/')]).filter(Boolean);
     if (parts.length === 0) return null;
 

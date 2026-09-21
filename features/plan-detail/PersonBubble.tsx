@@ -1,4 +1,3 @@
-import { Ionicons } from "@expo/vector-icons";
 import { Text, TouchableOpacity, View } from "react-native";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { useT } from "../../lib/i18n";
@@ -6,16 +5,13 @@ import { createPlanDetailStyles } from "./planDetailStyles";
 import { useThemedStyles } from "../../lib/appTheme";
 import type { Participant } from "./types";
 
-const FRIEND = "#10B981";
-const ACQUAINTANCE = "#2563EB";
-
 export function PersonBubble({
   person,
   isFriend,
-  isAcquaintance,
+  isAcquaintance: _isAcquaintance,
   subtitle,
   onPress,
-  size = 64,
+  size = 72,
 }: {
   person: Participant;
   isFriend: boolean;
@@ -24,9 +20,9 @@ export function PersonBubble({
   onPress: () => void;
   size?: number;
 }) {
-  const { t, lang } = useT();
+  const { t } = useT();
   const styles = useThemedStyles(createPlanDetailStyles);
-  const showAcquaintance = !!isAcquaintance && !isFriend;
+  const radius = size / 2;
   return (
     <TouchableOpacity
       style={styles.personBubble}
@@ -36,9 +32,8 @@ export function PersonBubble({
       <View
         style={[
           styles.personAvatarRing,
-          { width: size + 8, height: size + 8, borderRadius: (size + 8) / 2 },
+          { width: size, height: size, borderRadius: radius },
           isFriend && styles.personAvatarRingFriend,
-          showAcquaintance && styles.personAvatarRingAcquaintance,
         ]}
       >
         <ProfileAvatar
@@ -47,56 +42,14 @@ export function PersonBubble({
           size={size}
           recyclingKey={person.id}
         />
-        {person.isCreator && (
-          <View style={styles.creatorStar}>
-            <Ionicons name="star" size={10} color="#FFF" />
-          </View>
-        )}
       </View>
-      <Text
-        style={[
-          styles.personName,
-          isFriend && styles.personNameFriend,
-          showAcquaintance && styles.personNameAcquaintance,
-        ]}
-        numberOfLines={1}
-      >
+      <Text style={styles.personName} numberOfLines={1}>
         {person.nombre || t("planDetail.anonymous")}
       </Text>
       {subtitle ? (
-        <Text
-          style={[
-            styles.personSubtitle,
-            isFriend && styles.personSubtitleFriend,
-            showAcquaintance && styles.personSubtitleAcquaintance,
-          ]}
-          numberOfLines={1}
-        >
+        <Text style={styles.personSubtitle} numberOfLines={1}>
           {subtitle}
         </Text>
-      ) : null}
-      {isFriend ? (
-        <View style={styles.friendPill}>
-          <Ionicons name="heart" size={10} color={FRIEND} />
-          <Text style={styles.friendPillText}>
-            {t(
-              person.genero === "femenino"
-                ? "planDetail.friendF"
-                : "planDetail.friend",
-            )}
-          </Text>
-        </View>
-      ) : showAcquaintance ? (
-        <View style={styles.acquaintancePill}>
-          <Ionicons name="people" size={10} color={ACQUAINTANCE} />
-          <Text style={styles.acquaintancePillText}>
-            {t(
-              person.genero === "femenino"
-                ? "planDetail.acquaintanceF"
-                : "planDetail.acquaintance",
-            )}
-          </Text>
-        </View>
       ) : null}
     </TouchableOpacity>
   );

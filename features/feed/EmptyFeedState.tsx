@@ -1,6 +1,8 @@
 import { useT } from '../../lib/i18n';
 import { NexoEmptyState } from '../../components/ui/NexoState';
 
+const PENGUIN_FEED_EMPTY = require('../../assets/images/Pinguino vacio feed.png');
+
 export const EmptySearch = ({
   onClear,
   onCreate,
@@ -35,6 +37,7 @@ export const EmptySearch = ({
         title={t('feed.loadError')}
         actionLabel={t('feed.retry')}
         onAction={onRetry}
+        style={{ paddingTop: 56 }}
       />
     );
   }
@@ -42,13 +45,15 @@ export const EmptySearch = ({
   if (nearbyKm != null && nearestDistanceLabel) {
     return (
       <NexoEmptyState
-        icon="navigate-outline"
+        image={PENGUIN_FEED_EMPTY}
+        imageSize={196}
         title={nearbyTitle}
         description={t('feed.emptyNearbySub', { distance: nearestDistanceLabel })}
         actionLabel={t('feed.emptyNearbySeeCloser')}
         onAction={onWidenNearby}
         secondaryLabel={t('feed.emptyCreate')}
         onSecondaryAction={onCreate}
+        style={{ paddingTop: 56 }}
       />
     );
   }
@@ -56,26 +61,30 @@ export const EmptySearch = ({
   if (nearbyKm != null) {
     return (
       <NexoEmptyState
-        icon="navigate-outline"
+        image={PENGUIN_FEED_EMPTY}
+        imageSize={196}
         title={nearbyTitle}
         description={t('feed.emptySub')}
         actionLabel={t('feed.emptyCreate')}
         onAction={onCreate}
         secondaryLabel={t('feed.emptySeeAll')}
         onSecondaryAction={onClear}
+        style={{ paddingTop: 56 }}
       />
     );
   }
 
   return (
     <NexoEmptyState
-      icon="compass-outline"
+      image={PENGUIN_FEED_EMPTY}
+      imageSize={196}
       title={t('feed.empty')}
       description={t('feed.emptySub')}
       actionLabel={t('feed.emptyCreate')}
       onAction={onCreate}
       secondaryLabel={t('feed.emptySeeAll')}
       onSecondaryAction={onClear}
+      style={{ paddingTop: 56 }}
     />
   );
 };

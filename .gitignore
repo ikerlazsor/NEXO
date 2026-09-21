@@ -51,3 +51,6 @@ app-example
 eas-build-*.json
 eas-fail*.json
 tsc-out.txt
+builds/
+.tmp-ios-bundle/
+.tmp-eas-log*.txt

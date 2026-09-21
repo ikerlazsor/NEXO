@@ -59,19 +59,21 @@ import {
     affinityPersonFromProfile,
     countSharedOrganizerFollows,
     fetchFirstPersonRepeat,
-    resolveProfileAffinity,
     type AffinityPerson,
     type FirstRepeatVote,
 } from '../../lib/profileAffinity';
+import { resolveAndRememberPairAffinity } from '../../lib/pairAffinityCache';
 import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { USER_PROFILE_TTL_MS, userProfileKey } from '../../lib/userProfileCache';
 import { rememberFriendStatus, resolveKnownFriendStatus } from '../../lib/friendStatusPeek';
 import { ensureViewerAffinityPerson } from '../../lib/viewerAffinityCache';
+import { peekChromeAvatar } from '../../lib/chromeAvatar';
 import { screenCacheKey } from '../../lib/screenCaches';
 import { getAdminProfileAccess, getMyProfile, getPublicProfile } from '../../lib/profileData';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../../lib/screenState';
 import { bothFemaleGenero, calcAge, parseHabitos, parsePrivacy } from '../../lib/profileFields';
+import { parseCountryCode } from '../../lib/countryFlags';
 import { deleteUserAdmin } from '../../lib/moderation';
 import { fetchAccountAccess } from '../../lib/roles';
 import { ownerActionsVisible } from '../../lib/ownerSecretActions';
@@ -132,6 +134,8 @@ type UserProfileSnapshot = {
     currentUserId: string | null;
     currentUserGenero: string | null;
     currentUserIsOrganizer?: boolean;
+    currentUserAvatarUrl?: string | null;
+    currentUserNombre?: string | null;
     sharedPlans: number;
     followersCount?: number;
     organizerPlansCount?: number;
@@ -187,6 +191,12 @@ export default function UserProfileScreen() {
     );
     const [currentUserIsOrganizer, setCurrentUserIsOrganizer] = useState(
         () => cached?.currentUserIsOrganizer === true,
+    );
+    const [currentUserAvatarUrl, setCurrentUserAvatarUrl] = useState<string | null>(
+        () => cached?.currentUserAvatarUrl ?? null,
+    );
+    const [currentUserNombre, setCurrentUserNombre] = useState<string | null>(
+        () => cached?.currentUserNombre ?? null,
     );
     const [isOwner, setIsOwner] = useState(false);
     const [targetIsStaff, setTargetIsStaff] = useState(false);
@@ -269,6 +279,8 @@ export default function UserProfileScreen() {
         setCurrentUserId(snap.currentUserId);
         setCurrentUserGenero(snap.currentUserGenero);
         setCurrentUserIsOrganizer(snap.currentUserIsOrganizer === true);
+        setCurrentUserAvatarUrl(snap.currentUserAvatarUrl ?? null);
+        setCurrentUserNombre(snap.currentUserNombre ?? null);
         setSharedPlans(snap.sharedPlans);
         setFollowersCount(snap.followersCount ?? 0);
         setOrganizerPlansCount(snap.organizerPlansCount ?? 0);
@@ -329,14 +341,21 @@ export default function UserProfileScreen() {
                       ])
                     : Promise.resolve(null);
 
-            const [profile, count, userStats, friendData, access, earlyBadgeStats] = await Promise.all([
-                getPublicProfile(profileId),
-                getFriendsCount(profileId),
-                getUserStats(profileId),
-                friendPromise,
-                user ? fetchAccountAccess(user.id) : Promise.resolve(null),
-                peekIsOrg ? Promise.resolve(EMPTY_BADGE_STATS) : getBadgeStats(profileId),
-            ]);
+            // Planes asistidos en 1ª oleada (antes iban en la 2ª y tardaban mucho).
+            const attendedEarlyPromise = peekIsOrg
+                ? Promise.resolve([] as PublicAttendedPlan[])
+                : getPublicAttendedPlans(profileId, 12);
+
+            const [profile, count, userStats, friendData, access, earlyBadgeStats, attendedEarly] =
+                await Promise.all([
+                    getPublicProfile(profileId),
+                    getFriendsCount(profileId),
+                    getUserStats(profileId),
+                    friendPromise,
+                    user ? fetchAccountAccess(user.id) : Promise.resolve(null),
+                    peekIsOrg ? Promise.resolve(EMPTY_BADGE_STATS) : getBadgeStats(profileId),
+                    attendedEarlyPromise,
+                ]);
 
             if (!profile) throw new Error('profile_missing');
 
@@ -346,6 +365,11 @@ export default function UserProfileScreen() {
                 : null;
             const targetRol = targetAccess?.rol;
             setTargetIsStaff(targetRol === 'owner' || targetRol === 'admin');
+
+            // Pintar planes asistidos en cuanto llegan (no esperar al resto del shell).
+            if (profile.es_organizador !== true && attendedEarly.length > 0) {
+                setAttendedPlans(attendedEarly);
+            }
 
             const nextProfile: PublicProfile = {
                 id: profile.id,
@@ -374,6 +398,8 @@ export default function UserProfileScreen() {
             let nextBlockedEitherWay = false;
             let nextSharedPlans = 0;
             let nextMyGenero: string | null = null;
+            let nextMyAvatar: string | null = null;
+            let nextMyNombre: string | null = null;
 
             let nextViewerAffinity: AffinityPerson | null = null;
             let nextSharedCommunities = 0;
@@ -389,6 +415,8 @@ export default function UserProfileScreen() {
                 nextBlockedEitherWay = eitherWay;
                 nextSharedPlans = shared;
                 nextMyGenero = (myProfileRes.data?.genero as string | null) ?? null;
+                nextMyAvatar = myProfileRes.data?.avatar_url ?? null;
+                nextMyNombre = myProfileRes.data?.nombre ?? null;
                 if (!nextProfile.es_organizador) {
                     nextViewerAffinity = viewerPerson;
                 }
@@ -419,6 +447,8 @@ export default function UserProfileScreen() {
                 currentUserId: user?.id ?? null,
                 currentUserGenero: nextMyGenero,
                 currentUserIsOrganizer: viewerIsOrganizer,
+                currentUserAvatarUrl: nextMyAvatar,
+                currentUserNombre: nextMyNombre,
                 sharedPlans: nextSharedPlans,
                 followersCount: stale?.followersCount ?? 0,
                 organizerPlansCount: stale?.organizerPlansCount ?? 0,
@@ -426,7 +456,7 @@ export default function UserProfileScreen() {
                 upcomingPlans: stale?.upcomingPlans ?? [],
                 organizedPlans: stale?.organizedPlans ?? [],
                 mutualFriends: stale?.mutualFriends ?? { total: 0, items: [] },
-                attendedPlans: stale?.attendedPlans ?? [],
+                attendedPlans: nextProfile.es_organizador ? [] : attendedEarly,
                 orgFriendAttendees: stale?.orgFriendAttendees ?? { total: 0, items: [] },
                 followerPreviews: stale?.followerPreviews ?? [],
                 badgeStats: earlyBadgeStats ?? stale?.badgeStats ?? EMPTY_BADGE_STATS,
@@ -465,7 +495,8 @@ export default function UserProfileScreen() {
                 user && user.id !== profileId && !nextProfile.es_organizador
                     ? getMutualFriends(profileId, 6)
                     : Promise.resolve({ total: 0, items: [] }),
-                nextProfile.es_organizador ? Promise.resolve([]) : getPublicAttendedPlans(profileId, 12),
+                // Ya cargados en 1ª oleada; no repetir.
+                Promise.resolve(attendedEarly),
                 user && user.id !== profileId && nextProfile.es_organizador
                     ? getOrganizerFriendAttendees(profileId)
                     : Promise.resolve({ total: 0, items: [] }),
@@ -515,6 +546,8 @@ export default function UserProfileScreen() {
                 currentUserId: user?.id ?? null,
                 currentUserGenero: nextMyGenero,
                 currentUserIsOrganizer: viewerIsOrganizer,
+                currentUserAvatarUrl: nextMyAvatar,
+                currentUserNombre: nextMyNombre,
                 sharedPlans: nextSharedPlans,
                 followersCount: orgStats.followers ?? 0,
                 organizerPlansCount: orgPlansCount,
@@ -984,6 +1017,7 @@ export default function UserProfileScreen() {
         }
         buttons.push({
             text: t(isOrganizerProfile ? 'userprofile.reportOrganizer' : 'userprofile.report'),
+            style: 'destructive',
             onPress: () => router.push({ pathname: '/report-user', params: { userId: userProfile.id } }),
         });
         buttons.push({
@@ -1017,9 +1051,11 @@ export default function UserProfileScreen() {
     });
     const profileAffinity =
         userProfile && viewerAffinity
-            ? resolveProfileAffinity({
+            ? resolveAndRememberPairAffinity({
                   isSelf: friendStatus === 'self',
                   viewer: viewerAffinity,
+                  viewerId: currentUserId,
+                  targetId: userProfile.id,
                   target: affinityPersonFromProfile({
                       age: userProfile.edad,
                       tags: hobbies,
@@ -1098,6 +1134,28 @@ export default function UserProfileScreen() {
                         coverUrl={userProfile.cover_url || orgMeta.portada || null}
                         avatarUrl={userProfile.avatar_url}
                         name={displayName}
+                        age={
+                            isOrganizerProfile
+                                ? null
+                                : parsePrivacy(userProfile.perfil_gustos).mostrar_edad === false
+                                  ? null
+                                  : userProfile.edad
+                        }
+                        genero={
+                            isOrganizerProfile
+                                ? null
+                                : parsePrivacy(userProfile.perfil_gustos).mostrar_genero === false
+                                  ? null
+                                  : userProfile.genero
+                        }
+                        flagCode={
+                            isOrganizerProfile
+                                ? null
+                                : parsePrivacy(userProfile.perfil_gustos).mostrar_edad === false ||
+                                    parsePrivacy(userProfile.perfil_gustos).mostrar_genero === false
+                                  ? null
+                                  : parseCountryCode(userProfile.perfil_gustos)
+                        }
                         verified={isOrganizerProfile}
                         onBack={() => router.back()}
                         onMore={friendStatus === 'self' ? undefined : openMoreMenu}
@@ -1220,13 +1278,18 @@ export default function UserProfileScreen() {
                         isSelf={friendStatus === 'self'}
                         genero={isOrganizerProfile ? null : userProfile.genero}
                         affinityLevel={profileAffinity?.level ?? 0}
-                        showThermo={
+                        affinityScore={profileAffinity?.score}
+                        showAffinity={
                             !isOrganizerProfile
                             && friendStatus !== 'self'
                             && !!currentUserId
                             && !currentUserIsOrganizer
                             && profileAffinity != null
                         }
+                        viewerAvatarUrl={currentUserAvatarUrl ?? peekChromeAvatar(currentUserId)}
+                        viewerName={currentUserNombre}
+                        targetAvatarUrl={userProfile.avatar_url}
+                        targetName={userProfile.nombre}
                         variant={isOrganizerProfile ? 'organizer' : 'person'}
                     />
 
@@ -1236,7 +1299,7 @@ export default function UserProfileScreen() {
                                 <ProfileSection title={t('userprofile.aboutMe')}>
                                     <TranslatedText
                                         text={aboutText}
-                                        style={[styles.aboutText, { color: colors.textMuted }]}
+                                        style={[styles.aboutText, { color: '#1E293B' }]}
                                     />
                                 </ProfileSection>
                             ) : null}
@@ -1333,7 +1396,7 @@ const styles = StyleSheet.create({
     errorText: { fontSize: 16, textAlign: 'center', marginTop: 16 },
     socialProof: { paddingHorizontal: 20, marginTop: 16 },
     socialFallback: { color: MUTED, fontWeight: '700', fontSize: 13, textAlign: 'center' },
-    aboutText: { color: '#334155', fontSize: 16, lineHeight: 24, fontWeight: '500' },
+    aboutText: { color: '#1E293B', fontSize: 16, lineHeight: 24, fontWeight: '500' },
     rejectLink: { alignSelf: 'center', paddingVertical: 4 },
     rejectLinkText: { color: DANGER, fontWeight: '700' },
     galleryThumb: { width: 92, height: 92, borderRadius: 14, overflow: 'hidden', marginRight: 8 },

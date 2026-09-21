@@ -58,7 +58,7 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         (lat: number, lon: number, address: string) => {
             onLocationChange({ latitude: lat, longitude: lon, address });
             mapRef.current?.animateToRegion(
-                { latitude: lat, longitude: lon, latitudeDelta: 0.006, longitudeDelta: 0.006 },
+                { latitude: lat, longitude: lon, latitudeDelta: 0.022, longitudeDelta: 0.022 },
                 600
             );
             setResults([]);
@@ -120,7 +120,7 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         setShowSuggestions(false);
         setResults([]);
         mapRef.current?.animateToRegion(
-            { latitude: lat, longitude: lon, latitudeDelta: 0.006, longitudeDelta: 0.006 },
+            { latitude: lat, longitude: lon, latitudeDelta: 0.022, longitudeDelta: 0.022 },
             400
         );
         onLocationChange({
@@ -265,8 +265,8 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
                         initialRegion={{
                             latitude: location.latitude,
                             longitude: location.longitude,
-                            latitudeDelta: 0.01,
-                            longitudeDelta: 0.01,
+                            latitudeDelta: 0.028,
+                            longitudeDelta: 0.028,
                         }}
                         onPress={(e) =>
                             onMapPress(

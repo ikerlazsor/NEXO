@@ -1480,6 +1480,7 @@ export type Database = {
       not_banned: { Args: never; Returns: boolean }
       plan_is_feed_public: { Args: { p_plan_id: string }; Returns: boolean }
       promote_waitlist: { Args: { p_plan_id: string }; Returns: undefined }
+      purge_ended_plan_invites: { Args: never; Returns: number }
       purge_expired_plan_chats: { Args: never; Returns: number }
       purge_past_saved_plans: { Args: never; Returns: number }
       recalcular_badge_categorias: {

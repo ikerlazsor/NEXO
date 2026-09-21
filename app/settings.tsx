@@ -8,6 +8,7 @@ import {
 } from 'expo-router';
 import {
     useCallback,
+    useEffect,
     useState
 } from 'react';
 import {
@@ -21,34 +22,21 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LangPicker } from '../components/LangPicker';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { SettingsSkeletonList } from '../components/SkeletonShimmer';
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { getAuthUser } from '../lib/auth';
 import { useAuthSession } from '../lib/authSession';
 import { NEXO_SUPPORT_URL, openNexoPage } from '../lib/brand';
-import { hapticLight, hapticToggle, hapticWarning } from '../lib/haptics';
+import { hapticLight, hapticWarning } from '../lib/haptics';
 import { useT } from '../lib/i18n';
 import {
     fetchModerationCounts,
     type ModerationCounts,
 } from '../lib/moderation';
 import { Alert } from '../lib/nexoAlert';
-import {
-    getNotificationCategoryPrefs,
-    setNotificationCategoryPrefs,
-    syncNotificationCategoryPrefsFromServer,
-    type NotificationCategoryPrefs,
-} from '../lib/notificationPrefs';
 import { ownerActionsVisible, staffActionsVisible } from '../lib/ownerSecretActions';
 import { deleteAccount } from '../lib/profile';
 import {
     cancelAllScheduledNexoNotifications,
-    enablePushWithPermission,
-    getNotificationPermissionStatus,
-    getPushPreference,
-    openSystemNotificationSettings,
-    setPushPreference,
-    syncPushPreferenceFromServer,
     unregisterPushToken,
 } from '../lib/push';
 import { fetchAccountAccess } from '../lib/roles';
@@ -88,38 +76,24 @@ export default function SettingsScreen() {
     const { t, lang, setLang } = useT();
     const { colors } = useAppTheme();
     const styles = useThemedStyles(createSettingsStyles);
-    const { isGuest, requireAccount } = useAuthSession();
-    const [notifications, setNotifications] = useState(true);
-    const [catPrefs, setCatPrefs] = useState<NotificationCategoryPrefs>({
-        messages: true,
-        social: true,
-        reminders: true,
-    });
-    const [settingsReady, setSettingsReady] = useState(false);
-    const [osDenied, setOsDenied] = useState(false);
+    const { isGuest } = useAuthSession();
+    const [loggingOut, setLoggingOut] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [isStaff, setIsStaff] = useState(false);
     const [isOwner, setIsOwner] = useState(false);
     const [modCounts, setModCounts] = useState<ModerationCounts | null>(null);
     const [userId, setUserId] = useState<string | null>(null);
 
-    // Precargar datos al montar el componente (no solo al focus)
+    // Roles en segundo plano; la UI no espera (antes skeleton bloqueaba).
     useEffect(() => {
         let alive = true;
         void (async () => {
             const user = await getAuthUser();
             const uid = user?.id ?? null;
-            const [pref, access, perm, cats] = await Promise.all([
-                uid ? syncPushPreferenceFromServer(uid) : getPushPreference(),
-                fetchAccountAccess(),
-                getNotificationPermissionStatus(),
-                uid ? syncNotificationCategoryPrefsFromServer(uid) : getNotificationCategoryPrefs(),
-            ]);
             if (!alive) return;
             setUserId(uid);
-            setNotifications(pref && perm !== 'denied');
-            setCatPrefs(cats);
-            setOsDenied(perm === 'denied');
+            const access = await fetchAccountAccess();
+            if (!alive) return;
             setIsStaff(access.isStaff);
             setIsOwner(access.isOwner);
             if (access.isStaff) {
@@ -128,66 +102,28 @@ export default function SettingsScreen() {
             } else {
                 setModCounts(null);
             }
-            if (alive) setSettingsReady(true);
         })();
         return () => {
             alive = false;
         };
     }, []);
 
-    // Solo refrescar al focus si ya está listo
     useFocusEffect(
         useCallback(() => {
-            if (settingsReady && userId) {
-                void (async () => {
-                    const [pref, perm, cats] = await Promise.all([
-                        syncPushPreferenceFromServer(userId),
-                        getNotificationPermissionStatus(),
-                        syncNotificationCategoryPrefsFromServer(userId),
-                    ]);
-                    setNotifications(pref && perm !== 'denied');
-                    setCatPrefs(cats);
-                    setOsDenied(perm === 'denied');
-                })();
-            }
-        }, [settingsReady, userId]),
+            if (!userId) return;
+            void (async () => {
+                const access = await fetchAccountAccess();
+                setIsStaff(access.isStaff);
+                setIsOwner(access.isOwner);
+                if (access.isStaff) {
+                    setModCounts(await fetchModerationCounts());
+                }
+            })();
+        }, [userId]),
     );
 
-    const handleNotificationsToggle = async (value: boolean) => {
-        hapticToggle(value);
-        if (!value) {
-            setNotifications(false);
-            await setPushPreference(false, userId ?? undefined);
-            return;
-        }
-        const result = await enablePushWithPermission(userId ?? undefined);
-        setNotifications(result.enabled);
-        setOsDenied(result.denied);
-        if (result.denied) {
-            hapticWarning();
-            Alert.alert(t('settings.notifPermissionDenied'), t('settings.notifPermissionBody'), [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: t('settings.notifOpenSettings'),
-                    onPress: () => {
-                        void openSystemNotificationSettings();
-                    },
-                },
-            ]);
-        }
-    };
-
-    const handleCategoryToggle = async (key: keyof NotificationCategoryPrefs, value: boolean) => {
-        hapticToggle(value);
-        const next = { ...catPrefs, [key]: value };
-        setCatPrefs(next);
-        await setNotificationCategoryPrefs(next, userId ?? undefined);
-        if (key === 'reminders' && !value) {
-            await cancelAllScheduledNexoNotifications();
-        }
-    };
-
     const handleLogout = () => {
+        if (loggingOut) return;
         hapticLight();
         Alert.alert(t('settings.logout'), t('settings.logoutConfirm'), [
             { text: t('common.cancel'), style: 'cancel' },
@@ -195,9 +131,14 @@ export default function SettingsScreen() {
                 text: t('common.yes'),
                 style: 'destructive',
                 onPress: async () => {
-                    await unregisterPushToken(userId ?? undefined);
-                    await signOutAndClearLocalData();
-                    router.replace('/login');
+                    setLoggingOut(true);
+                    try {
+                        await unregisterPushToken(userId ?? undefined);
+                        await signOutAndClearLocalData();
+                        router.replace('/login');
+                    } catch {
+                        setLoggingOut(false);
+                    }
                 },
             },
         ]);
@@ -237,10 +178,6 @@ export default function SettingsScreen() {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
             >
-                {!settingsReady ? (
-                    <SettingsSkeletonList count={9} />
-                ) : (
-                    <>
                 <View style={styles.card}>
                     <Row
                         icon="language-outline"
@@ -254,74 +191,8 @@ export default function SettingsScreen() {
                             <Row
                                 icon="notifications-outline"
                                 label={t('settings.notifications')}
-                                subtitle={t('settings.notificationsHint')}
-                                onPress={undefined}
-                                right={
-                                    <Switch
-                                        value={notifications}
-                                        onValueChange={(v) => {
-                                            void handleNotificationsToggle(v);
-                                        }}
-                                        trackColor={{ true: colors.brand, false: colors.borderStrong }}
-                                        thumbColor={colors.onPrimary}
-                                    />
-                                }
+                                onPress={() => router.push('/notification-settings')}
                             />
-                            {notifications && !osDenied ? (
-                                <>
-                                    <View style={styles.divider} />
-                                    <Row
-                                        icon="chatbubbles-outline"
-                                        label={t('settings.notifMessages')}
-                                        subtitle={t('settings.notifMessagesHint')}
-                                        onPress={undefined}
-                                        right={
-                                            <Switch
-                                                value={catPrefs.messages}
-                                                onValueChange={(v) => {
-                                                    void handleCategoryToggle('messages', v);
-                                                }}
-                                                trackColor={{ true: colors.brand, false: colors.borderStrong }}
-                                                thumbColor={colors.onPrimary}
-                                            />
-                                        }
-                                    />
-                                    <View style={styles.divider} />
-                                    <Row
-                                        icon="people-outline"
-                                        label={t('settings.notifSocial')}
-                                        subtitle={t('settings.notifSocialHint')}
-                                        onPress={undefined}
-                                        right={
-                                            <Switch
-                                                value={catPrefs.social}
-                                                onValueChange={(v) => {
-                                                    void handleCategoryToggle('social', v);
-                                                }}
-                                                trackColor={{ true: colors.brand, false: colors.borderStrong }}
-                                                thumbColor={colors.onPrimary}
-                                            />
-                                        }
-                                    />
-                                    <View style={styles.divider} />
-                                    <Row
-                                        icon="alarm-outline"
-                                        label={t('settings.notifReminders')}
-                                        subtitle={t('settings.notifRemindersHint')}
-                                        onPress={undefined}
-                                        right={
-                                            <Switch
-                                                value={catPrefs.reminders}
-                                                onValueChange={(v) => {
-                                                    void handleCategoryToggle('reminders', v);
-                                                }}
-                                                trackColor={{ true: colors.brand, false: colors.borderStrong }}
-                                                thumbColor={colors.onPrimary}
-                                            />
-                                        }
-                                    />
-                                </>
-                            ) : null}
                             <View style={styles.divider} />
                             <Row icon="ban-outline" label={t('settings.blockedAccounts')} onPress={() => router.push('/blocked-accounts')} />
                         </>
@@ -356,48 +227,24 @@ export default function SettingsScreen() {
                             <Row
                                 icon="shield-outline"
                                 label={
-                                    modCounts && Math.max(0, modCounts.total - (modCounts.organizadores ?? 0)) > 0
-                                        ? `${t('settings.moderation')} (${Math.max(0, modCounts.total - (modCounts.organizadores ?? 0))})`
+                                    modCounts
+                                        ? `${t('settings.moderation')} (${modCounts.total})`
                                         : t('settings.moderation')
                                 }
                                 onPress={() => router.push('/admin')}
                             />
-                            <View style={styles.divider} />
-                            <Row
-                                icon="ribbon-outline"
-                                label={
-                                    modCounts && modCounts.organizadores > 0
-                                        ? `${t('settings.organizersInbox')} (${modCounts.organizadores})`
-                                        : t('settings.organizersInbox')
-                                }
-                                onPress={() => router.push('/admin/organizers')}
-                            />
                         </>
                     ) : null}
-                    {!isGuest ? (
-                        <>
-                            <View style={styles.divider} />
-                            <Row
-                                icon="ribbon-outline"
-                                label={t('settings.organizer')}
-                                onPress={() => router.push('/organizer-apply')}
-                            />
-                        </>
-                    ) : (
-                        <>
-                            <View style={styles.divider} />
-                            <Row
-                                icon="person-add-outline"
-                                label={t('settings.createAccount')}
-                                onPress={() => requireAccount({ type: 'generic' })}
-                            />
-                        </>
-                    )}
                 </View>
 
                 {!isGuest ? (
                 <View style={[styles.card, { marginTop: 16 }]}>
-                    <Row icon="log-out-outline" label={t('settings.logout')} color={colors.danger} onPress={handleLogout} />
+                    <Row
+                        icon="log-out-outline"
+                        label={loggingOut ? t('settings.loggingOut') : t('settings.logout')}
+                        color={colors.danger}
+                        onPress={loggingOut ? undefined : handleLogout}
+                    />
                     <View style={styles.divider} />
                     <Row
                         icon="trash-outline"
@@ -407,8 +254,6 @@ export default function SettingsScreen() {
                     />
                 </View>
                 ) : null}
-                    </>
-                )}
             </ScrollView>
             </SafeAreaView>
         </View>
@@ -422,7 +267,6 @@ function createSettingsStyles(c: ThemeColors) {
         backButton: { width: 45, height: 45, justifyContent: 'center', alignItems: 'center', backgroundColor: c.surface, borderRadius: 15, elevation: 3, shadowColor: c.primary, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
         headerTitle: { fontSize: 22, fontWeight: '900', color: c.text },
         content: { paddingHorizontal: 20, paddingBottom: 40 },
-        loadingCard: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },
         card: { backgroundColor: c.surface, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
         row: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
         rowIcon: { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },

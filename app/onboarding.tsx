@@ -1,17 +1,17 @@
-import {
-    Ionicons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
+import { Image as ExpoImage } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { useCallback,
-    useEffect,
-    useMemo,
-    useRef,
-    useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
+    FlatList,
     Image,
+    Keyboard,
     KeyboardAvoidingView,
+    NativeScrollEvent,
+    NativeSyntheticEvent,
     Platform,
     Pressable,
     StyleSheet,
@@ -19,42 +19,50 @@ import {
     TextInput,
     TouchableOpacity,
     View,
+    type ListRenderItemInfo,
 } from 'react-native';
-import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
-import { Alert } from '../lib/nexoAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { AvatarCropModal } from '../components/AvatarCropModal';
+import { OnboardingReadyReveal } from '../components/OnboardingReadyReveal';
+import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { getAuthUser } from '../lib/auth';
 import { takePendingAuthRoute } from '../lib/authIntent';
 import { uploadAvatarFromUri } from '../lib/avatar';
 import { clearPendingVerifyEmail } from '../lib/emailVerification';
 import { markFirstRunPending } from '../lib/firstRun';
+import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../lib/haptics';
 import { useT } from '../lib/i18n';
 import { getUserCoords } from '../lib/location';
+import { Alert } from '../lib/nexoAlert';
 import { saveOnboardingPreferences } from '../lib/onboarding';
 import { clearPendingSignup } from '../lib/pendingSignup';
+import { prepareCachesForNewUser, warmAppCaches } from '../lib/prefetchHome';
 import {
-    prepareCachesForNewUser,
-    warmAppCaches,
-} from '../lib/prefetchHome';
-import {
-    AFICIONES_OPTIONS,
     getPersonalityLabel,
+    ONBOARDING_AFICIONES_OPTIONS,
     ONBOARDING_GENERO_OPTIONS,
     type Genero,
 } from '../lib/profileFields';
-import { deleteAccount, readNombreFromUser } from '../lib/profile';
-import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../lib/haptics';
-import { signOutAndClearLocalData } from '../lib/session';
-import { OnboardingReadyReveal } from '../components/OnboardingReadyReveal';
+import {
+    deleteAccount,
+    DISPLAY_NAME_MAX_LENGTH,
+    isValidDisplayName,
+    normalizeDisplayName,
+    readNombreFromUser,
+} from '../lib/profile';
 import { getInterestAccent, getInterestIcon, PERSONALITY_MAX, PERSONALITY_MIN } from '../lib/profileInterests';
-import { useAppTheme, useThemedStyles } from '../lib/appTheme';
+import { signOutAndClearLocalData } from '../lib/session';
 import { type ThemeColors } from '../theme';
 
 const MIN_AGE = 18;
 const MAX_AGE = 99;
-const ABOUT_MAX = 400;
+const DEFAULT_AGE = 24;
+/** Pasos con progress (intereses → nombre). Ready es step 5. */
 const TOTAL_STEPS = 5;
+const AGE_ITEM_H = 52;
+
+const IMG_AVATAR = require('../assets/images/Vacio foto perfil.png');
+const IMG_AVATAR_F = require('../assets/images/Vacio foto perfil femenino.png');
 
 let onboardingFinishLock = false;
 
@@ -71,30 +79,28 @@ function toIsoDate(d: Date): string {
     return `${y}-${m}-${day}`;
 }
 
+const AGE_OPTIONS = Array.from({ length: MAX_AGE - MIN_AGE + 1 }, (_, i) => MIN_AGE + i);
+
 export default function OnboardingScreen() {
     const router = useRouter();
-    const { t, lang } = useT();
-    const { colors } = useAppTheme();
+    const { t } = useT();
+    const { colors, scheme } = useAppTheme();
     const styles = useThemedStyles(createOnboardingStyles);
     const [step, setStep] = useState(0);
-    const [age, setAge] = useState(22);
+    const [age, setAge] = useState(DEFAULT_AGE);
     const [genero, setGenero] = useState<Genero | null>(null);
     const [avatarUri, setAvatarUri] = useState<string | null>(null);
+    const [cropUri, setCropUri] = useState<string | null>(null);
+    const [cropWidth, setCropWidth] = useState<number | null>(null);
+    const [cropHeight, setCropHeight] = useState<number | null>(null);
     const [personalities, setPersonalities] = useState<string[]>([]);
-    const [aboutMe, setAboutMe] = useState('');
+    const [displayName, setDisplayName] = useState('');
     const [cancelling, setCancelling] = useState(false);
     const [saving, setSaving] = useState(false);
     const [completing, setCompleting] = useState(false);
     const [bootstrapped, setBootstrapped] = useState(false);
-    const [displayName, setDisplayName] = useState('');
-    const [sliderWidth, setSliderWidth] = useState(0);
-    const [scrollLocked, setScrollLocked] = useState(false);
-    const ageRef = useRef(age);
-    const trackRef = useRef<View>(null);
-    const trackPageXRef = useRef(0);
-    const sliderWidthRef = useRef(0);
-    ageRef.current = age;
-    sliderWidthRef.current = sliderWidth;
+    const ageListRef = useRef<FlatList<number>>(null);
+    const lastHapticAgeRef = useRef(DEFAULT_AGE);
 
     useEffect(() => {
         let alive = true;
@@ -105,7 +111,8 @@ export default function OnboardingScreen() {
                 router.replace('/login');
                 return;
             }
-            setDisplayName(readNombreFromUser(user));
+            const existing = readNombreFromUser(user);
+            if (existing) setDisplayName(existing.slice(0, DISPLAY_NAME_MAX_LENGTH));
             setBootstrapped(true);
             void warmAppCaches(user);
         })();
@@ -114,91 +121,44 @@ export default function OnboardingScreen() {
         };
     }, [router]);
 
+    useEffect(() => {
+        if (step !== 1) return;
+        const idx = age - MIN_AGE;
+        lastHapticAgeRef.current = age;
+        const tmr = setTimeout(() => {
+            ageListRef.current?.scrollToOffset({
+                offset: idx * AGE_ITEM_H,
+                animated: false,
+            });
+        }, 40);
+        return () => clearTimeout(tmr);
+        // Only re-align when entering the age step, not while scrolling updates age.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [step]);
+
     const birthDate = useMemo(() => dateYearsAgo(age), [age]);
     const birthValid = age >= MIN_AGE && age <= MAX_AGE;
     const personalitiesValid =
         personalities.length >= PERSONALITY_MIN && personalities.length <= PERSONALITY_MAX;
+    const nameValid = isValidDisplayName(normalizeDisplayName(displayName));
 
-    const personalitiesQuestion = useMemo(() => {
-        if (age >= 30) return t('onboarding.personalitiesQuestion30');
-        return t('onboarding.personalitiesQuestion');
-    }, [age, t]);
+    const finishingLabel = useMemo(() => {
+        const name = normalizeDisplayName(displayName) || 'Nexo!';
+        const young = age >= 18 && age <= 35;
+        if (young && genero === 'femenino') return t('onboarding.finishingReina', { name });
+        if (young) return t('onboarding.finishingJefe', { name });
+        return t('onboarding.finishingNeutral', { name });
+    }, [age, displayName, genero, t]);
 
-    const aboutQuestion = useMemo(() => {
-        if (age >= 18 && age <= 30 && genero === 'masculino') return t('onboarding.aboutQuestionRey');
-        if (age >= 18 && age <= 30 && genero === 'femenino') return t('onboarding.aboutQuestionReina');
-        return t('onboarding.aboutQuestion');
-    }, [age, genero, t]);
+    const emptyAvatar = genero === 'femenino' ? IMG_AVATAR_F : IMG_AVATAR;
 
-    const finishLabel = useMemo(() => {
-        if (!aboutMe.trim()) return t('onboarding.finishEmpty');
-        if (age >= 18 && age <= 24) return t('onboarding.finishYoung');
-        return t('onboarding.finishGo');
-    }, [aboutMe, age, t]);
-
-    const setAgeFromX = useCallback((x: number, width: number) => {
-        if (width <= 0) return;
-        const ratio = Math.max(0, Math.min(1, x / width));
-        const next = Math.round(MIN_AGE + ratio * (MAX_AGE - MIN_AGE));
-        if (next !== ageRef.current) {
-            hapticSelection();
-            ageRef.current = next;
-            setAge(next);
-        }
-    }, []);
-
-    const setAgeFromPageX = useCallback((pageX: number) => {
-        setAgeFromX(pageX - trackPageXRef.current, sliderWidthRef.current);
-    }, [setAgeFromX]);
-
-    const lockScroll = useCallback(() => setScrollLocked(true), []);
-    const unlockScroll = useCallback(() => setScrollLocked(false), []);
-
-    const agePan = useMemo(
-        () =>
-            Gesture.Pan()
-                // Al tocar el slider, se queda con el gesto: un pelín de vertical no abre el scroll.
-                .minDistance(0)
-                .shouldCancelWhenOutside(false)
-                .onBegin((e) => {
-                    'worklet';
-                    runOnJS(lockScroll)();
-                    runOnJS(setAgeFromPageX)(e.absoluteX);
-                })
-                .onChange((e) => {
-                    'worklet';
-                    runOnJS(setAgeFromPageX)(e.absoluteX);
-                })
-                .onFinalize(() => {
-                    'worklet';
-                    runOnJS(unlockScroll)();
-                }),
-        [lockScroll, setAgeFromPageX, unlockScroll],
-    );
-
-    const onSliderLayout = () => {
-        trackRef.current?.measureInWindow((x, _y, width) => {
-            trackPageXRef.current = x;
-            sliderWidthRef.current = width;
-            setSliderWidth(width);
-        });
-    };
-
-    const onSliderTouchStart = useCallback(() => {
-        lockScroll();
-        onSliderLayout();
-    }, [lockScroll]);
-
-    const ageThumbPct = ((age - MIN_AGE) / (MAX_AGE - MIN_AGE)) * 100;
     const togglePersonality = (tag: string) => {
         setPersonalities((prev) => {
             if (prev.includes(tag)) {
                 hapticSelection();
                 return prev.filter((p) => p !== tag);
             }
-            if (prev.length >= PERSONALITY_MAX) {
-                return prev;
-            }
+            if (prev.length >= PERSONALITY_MAX) return prev;
             hapticSelection();
             return [...prev, tag];
         });
@@ -207,35 +167,36 @@ export default function OnboardingScreen() {
     const pickPhoto = async (useCamera: boolean) => {
         try {
             if (useCamera) {
-                const cam = await ImagePicker.requestCameraPermissionsAsync();
+                const current = await ImagePicker.getCameraPermissionsAsync();
+                const cam = current.granted ? current : await ImagePicker.requestCameraPermissionsAsync();
                 if (!cam.granted) {
                     Alert.alert(t('onboarding.notice'), t('onboarding.cameraPermission'));
                     return;
                 }
             } else {
-                const lib = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                const current = await ImagePicker.getMediaLibraryPermissionsAsync();
+                const lib = current.granted ? current : await ImagePicker.requestMediaLibraryPermissionsAsync();
                 if (!lib.granted) {
                     Alert.alert(t('onboarding.notice'), t('onboarding.galleryPermission'));
                     return;
                 }
             }
-
             const result = useCamera
                 ? await ImagePicker.launchCameraAsync({
-                      mediaTypes: ['images'],
-                      allowsEditing: true,
-                      aspect: [1, 1],
-                      quality: 0.5,
-                  })
+                    mediaTypes: ['images'],
+                    allowsEditing: false,
+                    quality: 0.85,
+                })
                 : await ImagePicker.launchImageLibraryAsync({
-                      mediaTypes: ['images'],
-                      allowsEditing: true,
-                      aspect: [1, 1],
-                      quality: 0.5,
-                  });
-
+                    mediaTypes: ['images'],
+                    allowsEditing: false,
+                    quality: 0.85,
+                });
             if (!result.canceled && result.assets[0]?.uri) {
-                setAvatarUri(result.assets[0].uri);
+                const asset = result.assets[0];
+                setCropUri(asset.uri);
+                setCropWidth(asset.width ?? null);
+                setCropHeight(asset.height ?? null);
             }
         } catch (e) {
             console.warn('pickPhoto', e);
@@ -257,7 +218,6 @@ export default function OnboardingScreen() {
                             try {
                                 await clearPendingSignup();
                                 await clearPendingVerifyEmail();
-                                // Borra Auth + perfil: si no, el email queda “ya registrado”.
                                 const { error } = await deleteAccount();
                                 if (error) {
                                     await signOutAndClearLocalData({ scope: 'local' });
@@ -292,7 +252,14 @@ export default function OnboardingScreen() {
             return;
         }
         if (!personalitiesValid) {
-            Alert.alert(t('onboarding.notice'), t('onboarding.pickPersonalities', { min: PERSONALITY_MIN, max: PERSONALITY_MAX }));
+            Alert.alert(
+                t('onboarding.notice'),
+                t('onboarding.pickPersonalities', { min: PERSONALITY_MIN, max: PERSONALITY_MAX }),
+            );
+            return;
+        }
+        if (!nameValid) {
+            Alert.alert(t('onboarding.notice'), t('login.displayNameHint'));
             return;
         }
         if (saving || completing || onboardingFinishLock) return;
@@ -308,6 +275,7 @@ export default function OnboardingScreen() {
                 return;
             }
             const userId = authUser.id;
+            const nombre = normalizeDisplayName(displayName);
 
             const { url, error: uploadError } = await uploadAvatarFromUri(userId, avatarUri);
             if (uploadError || !url) {
@@ -322,7 +290,8 @@ export default function OnboardingScreen() {
                 genero,
                 avatar_url: url,
                 ambientes_preferidos: personalities,
-                descripcion: aboutMe.trim(),
+                descripcion: '',
+                nombre,
             });
             if (error) {
                 Alert.alert(t('onboarding.error'), error);
@@ -331,12 +300,8 @@ export default function OnboardingScreen() {
                 return;
             }
 
-            await Promise.all([
-                clearPendingSignup(),
-                clearPendingVerifyEmail(),
-                markFirstRunPending(),
-            ]);
-            // Ubicación opcional: mejora “cerca de mí” al llegar al feed
+            await Promise.all([clearPendingSignup(), clearPendingVerifyEmail(), markFirstRunPending()]);
+            // Ubicación al entrar a la app (como antes).
             void getUserCoords({ requestPermission: true });
 
             prepareCachesForNewUser(authUser.id);
@@ -355,6 +320,42 @@ export default function OnboardingScreen() {
         }
     };
 
+    const syncAgeFromOffset = useCallback((y: number, withHaptic: boolean) => {
+        const idx = Math.round(y / AGE_ITEM_H);
+        const next = Math.max(MIN_AGE, Math.min(MAX_AGE, MIN_AGE + idx));
+        setAge(next);
+        if (withHaptic && next !== lastHapticAgeRef.current) {
+            lastHapticAgeRef.current = next;
+            hapticSelection();
+        }
+    }, []);
+
+    const onAgeScroll = useCallback(
+        (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+            syncAgeFromOffset(e.nativeEvent.contentOffset.y, true);
+        },
+        [syncAgeFromOffset],
+    );
+
+    const onAgeScrollEnd = useCallback(
+        (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+            syncAgeFromOffset(e.nativeEvent.contentOffset.y, true);
+        },
+        [syncAgeFromOffset],
+    );
+
+    const renderAgeItem = useCallback(
+        ({ item }: ListRenderItemInfo<number>) => {
+            const active = item === age;
+            return (
+                <View style={styles.ageItem}>
+                    <Text style={[styles.ageItemText, active && styles.ageItemTextActive]}>{item}</Text>
+                </View>
+            );
+        },
+        [age, styles],
+    );
+
     const renderStepDots = () => (
         <View style={styles.steps}>
             {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
@@ -368,9 +369,30 @@ export default function OnboardingScreen() {
         </View>
     );
 
+    const backTo = (n: number) => (
+        <Pressable onPress={() => setStep(n)} style={styles.backLink}>
+            <Ionicons name="chevron-back" size={18} color={colors.primary} />
+            <Text style={styles.backText}>{t('onboarding.back')}</Text>
+        </Pressable>
+    );
+
+    const continueBtn = (enabled: boolean, onPress: () => void) => (
+        <TouchableOpacity
+            style={[styles.btn, !enabled && styles.btnDisabled]}
+            onPress={onPress}
+            disabled={!enabled}
+            activeOpacity={0.9}
+        >
+            <Text style={styles.btnText}>{t('onboarding.continue')}</Text>
+        </TouchableOpacity>
+    );
+
     return (
         <View style={styles.root}>
-            <LinearGradient colors={[colors.gradientTop, colors.gradientBottom, colors.surface]} style={StyleSheet.absoluteFill} />
+            <LinearGradient
+                colors={[colors.gradientTop, colors.gradientBottom, colors.surface]}
+                style={StyleSheet.absoluteFill}
+            />
 
             {!bootstrapped ? (
                 <View style={styles.completingOverlay}>
@@ -381,7 +403,7 @@ export default function OnboardingScreen() {
             {completing && step !== 5 ? (
                 <View style={styles.completingOverlay}>
                     <ActivityIndicator size="large" color={colors.primary} />
-                    <Text style={styles.completingText}>{t('onboarding.finishing')}</Text>
+                    <Text style={styles.completingText}>{finishingLabel}</Text>
                 </View>
             ) : null}
 
@@ -389,145 +411,192 @@ export default function OnboardingScreen() {
                 <KeyboardAvoidingView
                     style={styles.flex}
                     behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                    keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
                 >
-                    <ScrollView
-                        contentContainerStyle={styles.scroll}
-                        keyboardShouldPersistTaps="handled"
-                        showsVerticalScrollIndicator={false}
-                        scrollEnabled={!scrollLocked}
-                        nestedScrollEnabled={false}
-                    >
-                        {step < 5 ? (
-                            <View style={styles.header}>
-                                <Text style={styles.title}>{t('onboarding.welcomeTitle')}</Text>
-                            </View>
-                        ) : null}
+                    {step < 5 ? renderStepDots() : null}
 
-                        <View style={styles.card}>
-                            {step < 5 ? renderStepDots() : null}
-
-                            {step === 0 && (
-                                <>
-                                    <Pressable
-                                        onPress={cancelRegistration}
-                                        style={styles.backLink}
-                                        disabled={cancelling}
-                                    >
-                                        {cancelling ? (
-                                            <ActivityIndicator size="small" color={colors.primary} />
-                                        ) : (
-                                            <Ionicons name="chevron-back" size={18} color={colors.primary} />
-                                        )}
-                                        <Text style={styles.backText}>{t('onboarding.cancelRegister')}</Text>
-                                    </Pressable>
-                                    <Text style={styles.question}>{t('onboarding.birthQuestion')}</Text>
-                                    <View style={styles.ageHero}>
-                                        <Text style={styles.ageNumber}>{age}</Text>
-                                        <Text style={styles.ageUnit}>{lang === 'en' ? 'years old' : 'años'}</Text>
-                                    </View>
-                                    <GestureDetector gesture={agePan}>
-                                        <View
-                                            ref={trackRef}
-                                            style={styles.ageSliderTrackWrap}
-                                            onLayout={onSliderLayout}
-                                            // Bloqueo síncrono: evita que el ScrollView “robe” el gesto
-                                            // en el frame antes de que el Pan active.
-                                            onTouchStart={onSliderTouchStart}
-                                            onTouchEnd={unlockScroll}
-                                            onTouchCancel={unlockScroll}
-                                            collapsable={false}
-                                        >
-                                            <View style={styles.ageSliderTrack}>
-                                                <View style={[styles.ageSliderFill, { width: `${ageThumbPct}%` }]} />
-                                            </View>
-                                            <View
-                                                style={[styles.ageSliderThumb, { left: `${ageThumbPct}%` }]}
-                                                pointerEvents="none"
-                                            />
-                                        </View>
-                                    </GestureDetector>
-                                    <View style={styles.ageRangeRow}>
-                                        <Text style={styles.ageRangeLabel}>{MIN_AGE}</Text>
-                                        <Text style={styles.ageRangeLabel}>{MAX_AGE}</Text>
-                                    </View>
-                                    <TouchableOpacity
-                                        style={[styles.btn, !birthValid && styles.btnDisabled]}
-                                        onPress={() => {
-                                            if (!birthValid) return;
-                                            hapticLight();
-                                            setStep(1);
-                                        }}
-                                        disabled={!birthValid}
-                                        activeOpacity={0.9}
-                                    >
-                                        <Text style={styles.btnText}>{t('onboarding.continue')}</Text>
-                                    </TouchableOpacity>
-                                </>
-                            )}
-
-                            {step === 1 && (
-                                <>
-                                    <Pressable onPress={() => setStep(0)} style={styles.backLink}>
+                    <View style={styles.body}>
+                        {step === 0 && (
+                            <View style={styles.stepFill}>
+                                <Pressable
+                                    onPress={cancelRegistration}
+                                    style={styles.backLink}
+                                    disabled={cancelling}
+                                >
+                                    {cancelling ? (
+                                        <ActivityIndicator size="small" color={colors.primary} />
+                                    ) : (
                                         <Ionicons name="chevron-back" size={18} color={colors.primary} />
-                                        <Text style={styles.backText}>{t('onboarding.back')}</Text>
-                                    </Pressable>
+                                    )}
+                                    <Text style={styles.backText}>{t('onboarding.cancelRegister')}</Text>
+                                </Pressable>
+                                <Text style={[styles.question, styles.interestsQuestion]}>
+                                    {t('onboarding.personalitiesQuestion')}
+                                </Text>
+                                <View style={styles.personalityGrid}>
+                                    {ONBOARDING_AFICIONES_OPTIONS.map((tag) => {
+                                        const active = personalities.includes(tag);
+                                        const locked = !active && personalities.length >= PERSONALITY_MAX;
+                                        const accent = getInterestAccent(tag);
+                                        return (
+                                            <TouchableOpacity
+                                                key={tag}
+                                                style={[
+                                                    styles.interestTile,
+                                                    {
+                                                        backgroundColor: active ? accent.selectedBg : accent.bg,
+                                                        borderColor: active
+                                                            ? accent.selectedBorder
+                                                            : accent.border,
+                                                    },
+                                                    locked && styles.interestTileLocked,
+                                                ]}
+                                                onPress={() => togglePersonality(tag)}
+                                                activeOpacity={0.85}
+                                            >
+                                                <View
+                                                    style={[
+                                                        styles.interestIcon,
+                                                        {
+                                                            backgroundColor: active
+                                                                ? 'rgba(255,255,255,0.22)'
+                                                                : 'rgba(255,255,255,0.72)',
+                                                            borderColor: active
+                                                                ? 'rgba(255,255,255,0.45)'
+                                                                : accent.border,
+                                                        },
+                                                    ]}
+                                                >
+                                                    <Ionicons
+                                                        name={getInterestIcon(tag)}
+                                                        size={22}
+                                                        color={active ? '#FFF' : accent.icon}
+                                                    />
+                                                </View>
+                                                <Text
+                                                    style={[
+                                                        styles.interestLabel,
+                                                        active && { color: '#FFF' },
+                                                    ]}
+                                                    numberOfLines={2}
+                                                >
+                                                    {getPersonalityLabel(tag, genero, t)}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                                {continueBtn(personalitiesValid, () => {
+                                    hapticMedium();
+                                    setStep(1);
+                                })}
+                            </View>
+                        )}
+
+                        {step === 1 && (
+                            <View style={styles.stepFill}>
+                                {backTo(0)}
+                                <View style={styles.stepCenter}>
+                                    <Text style={styles.question}>{t('onboarding.birthQuestion')}</Text>
+                                    <View style={styles.ageWheelWrap}>
+                                        <View style={styles.ageWheelHighlight} pointerEvents="none" />
+                                        <FlatList
+                                            ref={ageListRef}
+                                            data={AGE_OPTIONS}
+                                            keyExtractor={(n) => String(n)}
+                                            renderItem={renderAgeItem}
+                                            showsVerticalScrollIndicator={false}
+                                            snapToInterval={AGE_ITEM_H}
+                                            disableIntervalMomentum
+                                            decelerationRate="fast"
+                                            scrollEventThrottle={16}
+                                            getItemLayout={(_d, index) => ({
+                                                length: AGE_ITEM_H,
+                                                offset: AGE_ITEM_H * index,
+                                                index,
+                                            })}
+                                            contentContainerStyle={{
+                                                paddingVertical: AGE_ITEM_H * 2,
+                                            }}
+                                            style={styles.ageWheel}
+                                            onScroll={onAgeScroll}
+                                            onMomentumScrollEnd={onAgeScrollEnd}
+                                            onScrollEndDrag={onAgeScrollEnd}
+                                        />
+                                    </View>
+                                </View>
+                                {continueBtn(birthValid, () => {
+                                    hapticLight();
+                                    setStep(2);
+                                })}
+                            </View>
+                        )}
+
+                        {step === 2 && (
+                            <View style={styles.stepFill}>
+                                {backTo(1)}
+                                <View style={styles.stepCenter}>
                                     <Text style={styles.question}>{t('onboarding.genderQuestion')}</Text>
                                     <View style={styles.genderGrid}>
                                         {ONBOARDING_GENERO_OPTIONS.map((g) => (
                                             <TouchableOpacity
                                                 key={g}
-                                                style={[styles.genderChip, genero === g && styles.genderChipActive]}
+                                                style={[
+                                                    styles.genderChip,
+                                                    genero === g && styles.genderChipActive,
+                                                ]}
                                                 onPress={() => {
                                                     hapticSelection();
                                                     setGenero(g);
                                                 }}
                                                 activeOpacity={0.85}
                                             >
-                                                <Text style={[styles.genderText, genero === g && styles.genderTextActive]}>
+                                                <Text
+                                                    style={[
+                                                        styles.genderText,
+                                                        genero === g && styles.genderTextActive,
+                                                    ]}
+                                                >
                                                     {t('genero.' + g)}
                                                 </Text>
                                             </TouchableOpacity>
                                         ))}
                                     </View>
-                                    <TouchableOpacity
-                                        style={[styles.btn, !genero && styles.btnDisabled]}
-                                        onPress={() => {
-                                            if (!genero) return;
-                                            hapticLight();
-                                            setStep(2);
-                                        }}
-                                        disabled={!genero}
-                                        activeOpacity={0.9}
-                                    >
-                                        <Text style={styles.btnText}>{t('onboarding.continue')}</Text>
-                                    </TouchableOpacity>
-                                </>
-                            )}
+                                </View>
+                                {continueBtn(!!genero, () => {
+                                    hapticLight();
+                                    setStep(3);
+                                })}
+                            </View>
+                        )}
 
-                            {step === 2 && (
-                                <>
-                                    <Pressable onPress={() => setStep(1)} style={styles.backLink}>
-                                        <Ionicons name="chevron-back" size={18} color={colors.primary} />
-                                        <Text style={styles.backText}>{t('onboarding.back')}</Text>
-                                    </Pressable>
+                        {step === 3 && (
+                            <View style={styles.stepFill}>
+                                {backTo(2)}
+                                <View style={styles.stepCenter}>
                                     <Text style={styles.question}>{t('onboarding.photoQuestion')}</Text>
-                                    <View style={styles.photoPicker}>
+                                    <TouchableOpacity
+                                        style={styles.photoBubble}
+                                        onPress={() => void pickPhoto(false)}
+                                        activeOpacity={0.88}
+                                    >
                                         {avatarUri ? (
                                             <Image source={{ uri: avatarUri }} style={styles.photoPreview} />
                                         ) : (
-                                            <View style={styles.photoPlaceholder}>
-                                                <Ionicons name="person" size={36} color={colors.primary} />
-                                                <Text style={styles.photoPlaceholderText}>{t('onboarding.addPhoto')}</Text>
-                                            </View>
+                                            <ExpoImage
+                                                source={emptyAvatar}
+                                                style={styles.photoPreview}
+                                                contentFit="cover"
+                                            />
                                         )}
-                                    </View>
+                                    </TouchableOpacity>
                                     <View style={styles.photoActions}>
                                         <TouchableOpacity
                                             style={styles.photoActionBtn}
                                             onPress={() => void pickPhoto(true)}
                                             activeOpacity={0.85}
                                         >
-                                            <Ionicons name="camera" size={20} color={colors.primary} />
+                                            <Ionicons name="camera-outline" size={20} color={colors.primary} />
                                             <Text style={styles.photoActionText}>{t('profile.camera')}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
@@ -535,397 +604,277 @@ export default function OnboardingScreen() {
                                             onPress={() => void pickPhoto(false)}
                                             activeOpacity={0.85}
                                         >
-                                            <Ionicons name="images" size={20} color={colors.primary} />
+                                            <Ionicons name="images-outline" size={20} color={colors.primary} />
                                             <Text style={styles.photoActionText}>{t('profile.gallery')}</Text>
                                         </TouchableOpacity>
                                     </View>
-                                    <TouchableOpacity
-                                        style={[styles.btn, !avatarUri && styles.btnDisabled]}
-                                        onPress={() => {
-                                            if (!avatarUri) return;
-                                            hapticLight();
-                                            setStep(3);
-                                        }}
-                                        disabled={!avatarUri}
-                                        activeOpacity={0.9}
-                                    >
-                                        <Text style={styles.btnText}>{t('onboarding.continue')}</Text>
-                                    </TouchableOpacity>
-                                </>
-                            )}
+                                </View>
+                                {continueBtn(!!avatarUri, () => {
+                                    hapticLight();
+                                    setStep(4);
+                                })}
+                            </View>
+                        )}
 
-                            {step === 3 && (
-                                <>
-                                    <Pressable onPress={() => setStep(2)} style={styles.backLink}>
-                                        <Ionicons name="chevron-back" size={18} color={colors.primary} />
-                                        <Text style={styles.backText}>{t('onboarding.back')}</Text>
-                                    </Pressable>
-                                    <Text style={styles.question}>{personalitiesQuestion}</Text>
-                                    <View style={styles.personalityGrid}>
-                                        {AFICIONES_OPTIONS.map((tag) => {
-                                            const active = personalities.includes(tag);
-                                            const locked = !active && personalities.length >= PERSONALITY_MAX;
-                                            const accent = getInterestAccent(tag);
-                                            return (
-                                                <TouchableOpacity
-                                                    key={tag}
-                                                    style={[
-                                                        styles.interestTile,
-                                                        {
-                                                            backgroundColor: active ? accent.selectedBg : accent.bg,
-                                                            borderColor: active ? accent.selectedBorder : accent.border,
-                                                        },
-                                                        locked && styles.interestTileLocked,
-                                                    ]}
-                                                    onPress={() => togglePersonality(tag)}
-                                                    activeOpacity={0.85}
-                                                >
-                                                    <View
-                                                        style={[
-                                                            styles.interestIcon,
-                                                            {
-                                                                backgroundColor: active ? '#FFF' : 'rgba(255,255,255,0.72)',
-                                                                borderColor: active ? accent.selectedBorder : accent.border,
-                                                            },
-                                                        ]}
-                                                    >
-                                                        <Ionicons
-                                                            name={getInterestIcon(tag)}
-                                                            size={24}
-                                                            color={accent.icon}
-                                                        />
-                                                    </View>
-                                                    <Text
-                                                        style={[
-                                                            styles.interestLabel,
-                                                            active && { color: accent.icon },
-                                                        ]}
-                                                        numberOfLines={2}
-                                                    >
-                                                        {getPersonalityLabel(tag, genero, t)}
-                                                    </Text>
-                                                    {active ? (
-                                                        <View style={[styles.interestCheck, { backgroundColor: accent.icon }]}>
-                                                            <Ionicons name="checkmark" size={11} color="#FFF" />
-                                                        </View>
-                                                    ) : null}
-                                                </TouchableOpacity>
-                                            );
-                                        })}
-                                    </View>
-                                    <TouchableOpacity
-                                        style={[styles.btn, !personalitiesValid && styles.btnDisabled]}
-                                        onPress={() => {
-                                            if (!personalitiesValid) return;
-                                            hapticMedium();
-                                            setStep(4);
-                                        }}
-                                        disabled={!personalitiesValid}
-                                        activeOpacity={0.9}
-                                    >
-                                        <Text style={styles.btnText}>{t('onboarding.continue')}</Text>
-                                    </TouchableOpacity>
-                                </>
-                            )}
-
-                            {step === 4 && (
-                                <>
-                                    <Pressable onPress={() => setStep(3)} style={styles.backLink}>
-                                        <Ionicons name="chevron-back" size={18} color={colors.primary} />
-                                        <Text style={styles.backText}>{t('onboarding.back')}</Text>
-                                    </Pressable>
-                                    <Text style={styles.question}>{aboutQuestion}</Text>
+                        {step === 4 && (
+                            <Pressable style={styles.stepFill} onPress={Keyboard.dismiss}>
+                                {backTo(3)}
+                                <View style={styles.stepCenter}>
+                                    <Text style={styles.question}>{t('onboarding.nameQuestion')}</Text>
                                     <TextInput
-                                        style={styles.aboutInput}
-                                        value={aboutMe}
-                                        onChangeText={(text) => setAboutMe(text.slice(0, ABOUT_MAX))}
-                                        placeholder={t('onboarding.aboutPlaceholder')}
-                                        placeholderTextColor={colors.textSubtle}
-                                        multiline
-                                        maxLength={ABOUT_MAX}
-                                        textAlignVertical="top"
+                                        style={styles.nameInput}
+                                        value={displayName}
+                                        onChangeText={(text) =>
+                                            setDisplayName(text.slice(0, DISPLAY_NAME_MAX_LENGTH))
+                                        }
+                                        placeholder={t('onboarding.namePlaceholder')}
+                                        placeholderTextColor="rgba(15,42,74,0.35)"
+                                        maxLength={DISPLAY_NAME_MAX_LENGTH}
+                                        autoCapitalize="words"
+                                        autoFocus
+                                        keyboardAppearance={scheme}
+                                        returnKeyType="done"
+                                        blurOnSubmit
+                                        onSubmitEditing={Keyboard.dismiss}
                                     />
-                                    <Text style={styles.aboutCounter}>
-                                        {aboutMe.length}/{ABOUT_MAX}
-                                    </Text>
-                                    <TouchableOpacity
-                                        style={styles.btn}
-                                        onPress={() => {
-                                            hapticMedium();
-                                            setStep(5);
-                                        }}
-                                        activeOpacity={0.9}
-                                    >
-                                        <Text style={styles.btnText}>{finishLabel}</Text>
-                                    </TouchableOpacity>
-                                </>
-                            )}
+                                </View>
+                                {continueBtn(nameValid, () => {
+                                    Keyboard.dismiss();
+                                    hapticMedium();
+                                    setStep(5);
+                                })}
+                            </Pressable>
+                        )}
 
-                            {step === 5 && (
+                        {step === 5 && (
+                            <View style={styles.stepFillCenter}>
                                 <OnboardingReadyReveal
-                                    name={displayName.trim() || 'Nexo!'}
+                                    name={normalizeDisplayName(displayName) || 'Nexo!'}
                                     avatarUri={avatarUri}
-                                    preparingLabel={t('onboarding.finishing')}
+                                    preparingLabel={finishingLabel}
                                     retryLabel={t('onboarding.continue')}
                                     busy={saving || completing}
                                     onFinish={() => void handleFinish()}
+                                    avatarSize={156}
                                 />
-                            )}
-                        </View>
-                    </ScrollView>
+                            </View>
+                        )}
+                    </View>
                 </KeyboardAvoidingView>
             </SafeAreaView>
+
+            <AvatarCropModal
+                visible={!!cropUri}
+                uri={cropUri}
+                imageWidth={cropWidth}
+                imageHeight={cropHeight}
+                onCancel={() => {
+                    setCropUri(null);
+                    setCropWidth(null);
+                    setCropHeight(null);
+                }}
+                onConfirm={(cropped) => {
+                    setAvatarUri(cropped);
+                    setCropUri(null);
+                    setCropWidth(null);
+                    setCropHeight(null);
+                }}
+            />
         </View>
     );
 }
 
 function createOnboardingStyles(c: ThemeColors) {
     const INK = c.text;
-    const MUTED = c.textMuted;
     const PRIMARY = c.brand;
     const PRIMARY_DARK = c.primary;
     return StyleSheet.create({
-    root: { flex: 1 },
-    flex: { flex: 1 },
-    safe: { flex: 1 },
-    scroll: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 36, justifyContent: 'center' },
-    header: { alignItems: 'center', marginBottom: 32, marginTop: 20 },
-    title: { fontSize: 26, fontWeight: '900', color: INK, textAlign: 'center' },
-    subtitle: { fontSize: 15, color: MUTED, textAlign: 'center', marginTop: 8, lineHeight: 22, paddingHorizontal: 12 },
-    card: {
-        backgroundColor: c.surface,
-        borderRadius: 28,
-        padding: 28,
-        shadowColor: c.primary,
-        shadowOpacity: 0.1,
-        shadowRadius: 20,
-        elevation: 8,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: c.border,
-    },
-    steps: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 28 },
-    stepGroup: { flexDirection: 'row', alignItems: 'center' },
-    stepDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: c.border },
-    stepDotActive: { backgroundColor: PRIMARY_DARK, width: 10, height: 10, borderRadius: 5 },
-    stepLine: { width: 20, height: 2, backgroundColor: c.border, marginHorizontal: 4 },
-    stepLineActive: { backgroundColor: PRIMARY },
-    question: { fontSize: 20, fontWeight: '800', color: INK, textAlign: 'center', marginBottom: 18, lineHeight: 28 },
-    hint: { fontSize: 13, color: MUTED, textAlign: 'center', marginBottom: 24, lineHeight: 20 },
-    ageHero: { alignItems: 'center', marginTop: 8, marginBottom: 28 },
-    ageNumber: {
-        fontSize: 72,
-        fontWeight: '900',
-        color: PRIMARY_DARK,
-        letterSpacing: -2,
-        lineHeight: 80,
-    },
-    ageUnit: { marginTop: 2, fontSize: 16, fontWeight: '700', color: MUTED },
-    ageSliderTrackWrap: {
-        height: 52,
-        justifyContent: 'center',
-        marginBottom: 8,
-        paddingHorizontal: 4,
-        // Zona táctil alta para no “perder” el gesto con un pelín de vertical.
-        paddingVertical: 12,
-    },
-    ageSliderTrack: {
-        height: 10,
-        borderRadius: 999,
-        backgroundColor: c.border,
-        overflow: 'hidden',
-    },
-    ageSliderFill: {
-        height: '100%',
-        borderRadius: 999,
-        backgroundColor: PRIMARY,
-    },
-    ageSliderThumb: {
-        position: 'absolute',
-        top: 16,
-        marginLeft: -16,
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: c.surface,
-        borderWidth: 3,
-        borderColor: PRIMARY_DARK,
-        shadowColor: c.primary,
-        shadowOpacity: 0.18,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 3 },
-        elevation: 4,
-    },
-    ageRangeRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 28,
-        paddingHorizontal: 4,
-    },
-    ageRangeLabel: { fontSize: 12, fontWeight: '700', color: c.textSubtle },
-    dateBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-        backgroundColor: c.surfaceSubtle,
-        borderRadius: 16,
-        borderWidth: 1.5,
-        borderColor: c.primaryBorder,
-        paddingVertical: 16,
-        paddingHorizontal: 18,
-        marginBottom: 16,
-    },
-    dateBtnText: { fontSize: 16, fontWeight: '700', color: INK, flexShrink: 1 },
-    datePicker: { alignSelf: 'center', marginBottom: 8 },
-    agePreview: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: MUTED,
-        textAlign: 'center',
-        marginBottom: 28,
-    },
-    photoPicker: {
-        alignSelf: 'center',
-        marginTop: 4,
-        marginBottom: 28,
-        borderRadius: 999,
-        overflow: 'hidden',
-    },
-    photoPreview: { width: 140, height: 140, borderRadius: 70 },
-    photoPlaceholder: {
-        width: 140,
-        height: 140,
-        borderRadius: 70,
-        backgroundColor: c.primarySoft,
-        borderWidth: 2,
-        borderColor: c.primaryBorder,
-        borderStyle: 'dashed',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-    },
-    photoPlaceholderText: { fontSize: 13, fontWeight: '700', color: PRIMARY_DARK },
-    photoActions: {
-        flexDirection: 'row',
-        gap: 12,
-        marginBottom: 28,
-        justifyContent: 'center',
-    },
-    photoActionBtn: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: c.primarySoft,
-        borderWidth: 1.5,
-        borderColor: c.primaryBorder,
-        borderRadius: 14,
-        paddingVertical: 14,
-    },
-    photoActionText: { fontSize: 14, fontWeight: '800', color: PRIMARY_DARK },
-    personalityGrid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 12,
-        marginTop: 8,
-        marginBottom: 24,
-    },
-    interestTile: {
-        width: '47%',
-        flexGrow: 1,
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: c.surfaceSubtle,
-        borderRadius: 20,
-        paddingVertical: 14,
-        paddingHorizontal: 10,
-        borderWidth: 1.5,
-        borderColor: c.primaryBorder,
-        position: 'relative',
-    },
-    interestTileLocked: { opacity: 0.4 },
-    interestIcon: {
-        width: 58,
-        height: 58,
-        borderRadius: 18,
-        borderWidth: 1.5,
-        backgroundColor: c.surface,
-        alignItems: 'center',
-        justifyContent: 'center',
-        shadowColor: c.text,
-        shadowOpacity: 0.06,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 1,
-    },
-    interestLabel: { fontSize: 12, fontWeight: '800', color: INK, textAlign: 'center' },
-    interestCheck: {
-        position: 'absolute',
-        top: 8,
-        right: 8,
-        width: 18,
-        height: 18,
-        borderRadius: 9,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    aboutInput: {
-        minHeight: 120,
-        borderRadius: 16,
-        borderWidth: 1.5,
-        borderColor: c.primaryBorder,
-        backgroundColor: c.surfaceSubtle,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        fontSize: 15,
-        fontWeight: '600',
-        color: INK,
-        marginBottom: 8,
-    },
-    aboutCounter: {
-        alignSelf: 'flex-end',
-        marginBottom: 20,
-        color: c.textSubtle,
-        fontWeight: '700',
-        fontSize: 12,
-    },
-    btnWrapper: { borderRadius: 16, overflow: 'hidden', marginTop: 4 },
-    btn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 16,
-        borderRadius: 16,
-        backgroundColor: PRIMARY_DARK,
-        marginTop: 4,
-    },
-    btnDisabled: { opacity: 0.5 },
-    btnText: { color: c.onPrimary, fontWeight: '800', fontSize: 16 },
-    backLink: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 20 },
-    backText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 14 },
-    genderGrid: { gap: 12, marginBottom: 28, marginTop: 4 },
-    genderChip: {
-        paddingVertical: 14,
-        paddingHorizontal: 18,
-        borderRadius: 14,
-        backgroundColor: c.surfaceSubtle,
-        borderWidth: 1.5,
-        borderColor: c.primaryBorder,
-        alignItems: 'center',
-    },
-    genderChipActive: { backgroundColor: c.primarySoft, borderColor: PRIMARY },
-    genderText: { fontSize: 15, fontWeight: '700', color: MUTED },
-    genderTextActive: { color: PRIMARY_DARK },
-    completingOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: c.backgroundAlt,
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 10,
-        gap: 16,
-    },
-    completingText: { fontSize: 16, fontWeight: '700', color: INK },
+        root: { flex: 1 },
+        flex: { flex: 1 },
+        safe: { flex: 1 },
+        body: { flex: 1, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16 },
+        stepFill: { flex: 1 },
+        stepFillCenter: { flex: 1, justifyContent: 'center' },
+        stepCenter: { flex: 1, justifyContent: 'center' },
+        steps: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingTop: 20,
+            paddingBottom: 14,
+            paddingHorizontal: 16,
+        },
+        stepGroup: { flexDirection: 'row', alignItems: 'center' },
+        stepDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: c.border },
+        stepDotActive: { backgroundColor: PRIMARY_DARK, width: 10, height: 10, borderRadius: 5 },
+        stepLine: { width: 18, height: 2, backgroundColor: c.border, marginHorizontal: 3 },
+        stepLineActive: { backgroundColor: PRIMARY },
+        backLink: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 4,
+            alignSelf: 'flex-start',
+            marginBottom: 10,
+            paddingVertical: 4,
+        },
+        backText: { color: PRIMARY_DARK, fontWeight: '700', fontSize: 14 },
+        question: {
+            fontSize: 22,
+            fontWeight: '900',
+            color: INK,
+            textAlign: 'center',
+            marginBottom: 10,
+            lineHeight: 28,
+        },
+        interestsQuestion: {
+            marginTop: 18,
+            marginBottom: 22,
+        },
+        personalityGrid: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            justifyContent: 'space-between',
+            gap: 8,
+            marginBottom: 12,
+            alignContent: 'flex-start',
+        },
+        interestTile: {
+            width: '47%',
+            minHeight: 84,
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 5,
+            borderRadius: 16,
+            paddingVertical: 10,
+            paddingHorizontal: 8,
+            borderWidth: 2,
+        },
+        interestTileLocked: { opacity: 0.4 },
+        interestIcon: {
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            borderWidth: 1.5,
+            alignItems: 'center',
+            justifyContent: 'center',
+        },
+        interestLabel: { fontSize: 12, fontWeight: '800', color: INK, textAlign: 'center' },
+        ageWheelWrap: {
+            height: AGE_ITEM_H * 5,
+            marginVertical: 12,
+            overflow: 'hidden',
+            justifyContent: 'center',
+        },
+        ageWheel: { flexGrow: 0, height: AGE_ITEM_H * 5, zIndex: 2 },
+        ageWheelHighlight: {
+            position: 'absolute',
+            left: 24,
+            right: 24,
+            top: AGE_ITEM_H * 2,
+            height: AGE_ITEM_H,
+            borderRadius: 14,
+            backgroundColor: c.primarySoft,
+            borderWidth: 1.5,
+            borderColor: c.primaryBorder,
+            zIndex: 0,
+        },
+        ageItem: {
+            height: AGE_ITEM_H,
+            alignItems: 'center',
+            justifyContent: 'center',
+        },
+        ageItemText: { fontSize: 24, fontWeight: '600', color: c.textSubtle, opacity: 0.45 },
+        ageItemTextActive: {
+            fontSize: 42,
+            fontWeight: '900',
+            color: PRIMARY_DARK,
+            opacity: 1,
+        },
+        genderGrid: { gap: 12, marginTop: 18 },
+        genderChip: {
+            backgroundColor: c.surface,
+            borderRadius: 16,
+            borderWidth: 1.5,
+            borderColor: c.border,
+            paddingVertical: 16,
+            alignItems: 'center',
+        },
+        genderChipActive: {
+            backgroundColor: PRIMARY_DARK,
+            borderColor: PRIMARY_DARK,
+        },
+        genderText: { fontSize: 16, fontWeight: '800', color: INK },
+        genderTextActive: { color: '#FFF' },
+        photoBubble: {
+            alignSelf: 'center',
+            width: 188,
+            height: 188,
+            borderRadius: 94,
+            overflow: 'hidden',
+            marginTop: 8,
+            marginBottom: 18,
+            borderWidth: 3,
+            borderColor: c.primaryBorder,
+            backgroundColor: c.primarySoft,
+        },
+        photoPreview: { width: '100%', height: '100%' },
+        photoActions: {
+            flexDirection: 'row',
+            justifyContent: 'center',
+            gap: 12,
+            marginBottom: 8,
+        },
+        photoActionBtn: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            backgroundColor: c.surface,
+            borderRadius: 14,
+            borderWidth: 1.5,
+            borderColor: c.primaryBorder,
+            paddingVertical: 12,
+            paddingHorizontal: 16,
+        },
+        photoActionText: { fontSize: 14, fontWeight: '800', color: PRIMARY_DARK },
+        nameInput: {
+            alignSelf: 'center',
+            width: '100%',
+            maxWidth: 320,
+            backgroundColor: c.surface,
+            borderRadius: 16,
+            borderWidth: 1.5,
+            borderColor: c.border,
+            paddingHorizontal: 16,
+            paddingVertical: 16,
+            textAlign: 'center',
+            fontSize: 22,
+            fontWeight: '800',
+            color: INK,
+            marginTop: 12,
+        },
+        btn: {
+            marginTop: 'auto',
+            backgroundColor: PRIMARY_DARK,
+            borderRadius: 16,
+            paddingVertical: 16,
+            alignItems: 'center',
+        },
+        btnDisabled: { opacity: 0.45 },
+        btnText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+        completingOverlay: {
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: 'rgba(255,255,255,0.72)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 20,
+            gap: 12,
+            paddingHorizontal: 28,
+        },
+        completingText: {
+            fontSize: 16,
+            fontWeight: '700',
+            color: INK,
+            textAlign: 'center',
+        },
     });
 }

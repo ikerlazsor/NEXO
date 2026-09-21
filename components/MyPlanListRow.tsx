@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { memo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { PlanImage } from './PlanImage';
+import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { type MyPlanItem } from '../lib/myPlansQuery';
@@ -86,9 +87,10 @@ export const MyPlanListRow = memo(function MyPlanListRow({
                     {pastLabel}
                 </Text>
             ) : null}
-            <TouchableOpacity
+            <PressScale
                 style={[styles.card, item.isPast && styles.cardPast]}
-                activeOpacity={0.88}
+                pressedScale={0.98}
+                minTouch={false}
                 onPress={() => onOpenPlan(item)}
             >
                 <View style={styles.cardHeader}>
@@ -122,13 +124,11 @@ export const MyPlanListRow = memo(function MyPlanListRow({
                                     </Text>
                                 </View>
                             ) : (
-                            <TouchableOpacity
+                            <PressScale
                                 style={styles.rateChip}
-                                onPress={(e) => {
-                                    e.stopPropagation?.();
-                                    onOpenRate(item.id);
-                                }}
-                                activeOpacity={0.85}
+                                pressedScale={0.94}
+                                minTouch={false}
+                                onPress={() => onOpenRate(item.id)}
                             >
                                 <Ionicons name="star" size={13} color={colors.primary} />
                                 <Text style={styles.rateChipText}>
@@ -136,20 +136,19 @@ export const MyPlanListRow = memo(function MyPlanListRow({
                                         ? rateProgressLabel
                                         : closePlanLabel}
                                 </Text>
-                            </TouchableOpacity>
+                            </PressScale>
                             )
                         ) : null}
                     </View>
                     {!item.isPast ? (
-                        <TouchableOpacity
+                        <PressScale
                             style={styles.chatBtn}
-                            onPress={(e) => {
-                                e.stopPropagation?.();
-                                onOpenChat(item.id);
-                            }}
+                            pressedScale={0.9}
+                            minTouch={false}
+                            onPress={() => onOpenChat(item.id)}
                         >
                             <Ionicons name="chatbubbles-outline" size={20} color={colors.primary} />
-                        </TouchableOpacity>
+                        </PressScale>
                     ) : (
                         <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
                     )}
@@ -203,7 +202,7 @@ export const MyPlanListRow = memo(function MyPlanListRow({
                         {isFull ? <Text style={styles.fullHint}>{fullHint}</Text> : null}
                     </View>
                 ) : null}
-            </TouchableOpacity>
+            </PressScale>
         </View>
     );
 }, (prev, next) => {

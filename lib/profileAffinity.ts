@@ -4,7 +4,7 @@ import type { HabitosConsumo } from './profileFields';
 import { hasPublicRepeatStats, type UserStats } from './stats';
 import { supabase } from './supabase';
 
-export type AffinityLevel = 0 | 1 | 2 | 3 | 4;
+export type AffinityLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 export type FirstRepeatVote = 'si' | 'no' | null;
 
 export type AffinityPerson = {
@@ -95,7 +95,7 @@ function repeatPoints(pct: number): number {
 
 const YOUNG_ACCOUNT_DAYS = 45;
 
-/** Cuenta con menos de 45 días: el termómetro nunca baja de «Media». */
+/** Cuenta con menos de 45 días: el nivel nunca baja de «Algo de feeling». */
 function isYoungAccount(p: AffinityPerson): boolean {
     const days = p.accountDays;
     if (days == null || !Number.isFinite(days)) return false;
@@ -124,10 +124,15 @@ function isLowDataAffinityProfile(p: AffinityPerson): boolean {
 }
 
 export function levelFromScore(score: number): AffinityLevel {
-    if (score >= 78) return 4;
-    if (score >= 60) return 3;
-    if (score >= 42) return 2;
-    if (score >= 28) return 1;
+    if (score >= 92) return 9;
+    if (score >= 85) return 8;
+    if (score >= 78) return 7;
+    if (score >= 71) return 6;
+    if (score >= 64) return 5;
+    if (score >= 57) return 4;
+    if (score >= 50) return 3;
+    if (score >= 33) return 2;
+    if (score >= 17) return 1;
     return 0;
 }
 
@@ -218,10 +223,28 @@ export async function fetchFirstPersonRepeat(viewerId: string, targetId: string)
     return null;
 }
 
+/** Offset estable por pareja (±2…±8) para que no salgan tantos % iguales. */
+function affinityPairSpread(viewerId?: string | null, targetId?: string | null): number {
+    const a = (viewerId ?? '').trim();
+    const b = (targetId ?? '').trim();
+    if (!a || !b || a === b) return 0;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const blob = `${lo}|${hi}`;
+    let h = 2166136261;
+    for (let i = 0; i < blob.length; i++) {
+        h ^= blob.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    const spreads = [-8, -7, -6, -5, -4, -3, -2, 2, 3, 4, 5, 6, 7, 8];
+    return spreads[Math.abs(h) % spreads.length];
+}
+
 export function resolveProfileAffinity(input: {
     isSelf?: boolean;
     viewer?: AffinityPerson | null;
     target: AffinityPerson;
+    viewerId?: string | null;
+    targetId?: string | null;
     isFriends?: boolean;
     mutualFriends?: number;
     sharedCommunities?: number;
@@ -293,7 +316,7 @@ export function resolveProfileAffinity(input: {
         score = Math.max(score, 26);
     }
 
-    score = Math.round(clamp(score, 0, 100));
+    score = Math.round(clamp(score + affinityPairSpread(input.viewerId, input.targetId), 0, 100));
     let level = levelFromScore(score);
 
     const viewerYoung = isYoungAccount(a);

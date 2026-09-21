@@ -12,6 +12,7 @@ export interface PlanInvitePlan {
     maximo_participantes: number | null;
     requiere_aprobacion: boolean | null;
     categoria?: string | null;
+    fecha_evento?: string | null;
 }
 
 export interface PlanInvite {
@@ -28,9 +29,19 @@ export interface PlanInvite {
 
 const INVITE_SELECT = `
     id, plan_id, invitador_id, invitado_id, tipo, estado, creado_en,
-    planes:plan_id ( id, titulo, imagen_url, maximo_participantes, requiere_aprobacion, categoria ),
+    planes:plan_id ( id, titulo, imagen_url, maximo_participantes, requiere_aprobacion, categoria, fecha_evento ),
     invitador:perfiles!inv_planes_invitador_fkey ( id, nombre, avatar_url )
 `;
+
+/** Misma regla que el feed: sin fecha futura = plan terminado (invites caducados). */
+function isInvitePlanStillActive(plan: { fecha_evento?: string | null; categoria?: string | null } | undefined): boolean {
+    if (!plan) return false;
+    const cat = plan.categoria ?? '';
+    if (cat === 'Grupo' || cat === 'Chat') return true;
+    if (!plan.fecha_evento) return true;
+    const t = new Date(plan.fecha_evento).getTime();
+    return Number.isFinite(t) && t > Date.now();
+}
 
 function firstRow<T>(raw: T | T[] | null | undefined): T | undefined {
     if (!raw) return undefined;
@@ -135,20 +146,31 @@ export async function getIncomingPlanInvites(userId: string): Promise<PlanInvite
         .in('estado', ['aceptado', 'pendiente', 'lista_espera']);
 
     const alreadyIn = new Set((memberRows ?? []).map((r) => r.plan_id as string));
-    if (alreadyIn.size > 0) {
+    const endedPlanIds = rows
+        .filter((row: any) => {
+            const plan = firstRow(row.planes) as PlanInvitePlan | undefined;
+            return !isInvitePlanStillActive(plan);
+        })
+        .map((row: any) => row.plan_id as string);
+    const staleIds = [...new Set([...alreadyIn, ...endedPlanIds])];
+    if (staleIds.length > 0) {
         void supabase
             .from('invitaciones_planes')
             .delete()
             .eq('invitado_id', userId)
             .eq('estado', 'pendiente')
-            .in('plan_id', [...alreadyIn])
+            .in('plan_id', staleIds)
             .then(({ error: delErr }) => {
                 if (!delErr) invalidateProfileNotificationCount(userId);
             });
     }
 
     return rows
-        .filter((row: any) => !alreadyIn.has(row.plan_id as string))
+        .filter((row: any) => {
+            if (alreadyIn.has(row.plan_id as string)) return false;
+            const plan = firstRow(row.planes) as PlanInvitePlan | undefined;
+            return isInvitePlanStillActive(plan);
+        })
         .map((row: any) => ({
             id: row.id,
             plan_id: row.plan_id,
@@ -168,6 +190,7 @@ export async function acceptPlanInvite(
 ): Promise<{ error: string | null; chatId?: string; estado?: string; max?: number; alreadyMember?: boolean }> {
     const plan = invite.plan;
     if (!plan) return { error: 'no_plan' };
+    if (!isInvitePlanStillActive(plan)) return { error: 'plan_ended' };
     if (await isUserOrganizer(userId)) return { error: 'organizer_cannot_join' };
 
     const { data: existing } = await supabase
@@ -249,12 +272,18 @@ export async function rejectPlanInvite(inviteId: string): Promise<{ error: strin
 export async function countPendingPlanInvites(userId: string): Promise<number> {
     const { data, error } = await supabase
         .from('invitaciones_planes')
-        .select('plan_id')
+        .select('plan_id, planes:plan_id ( fecha_evento, categoria )')
         .eq('invitado_id', userId)
         .eq('estado', 'pendiente');
     if (error || !data?.length) return 0;
 
-    const planIds = [...new Set(data.map((r) => r.plan_id as string))];
+    const activeRows = data.filter((r: any) => {
+        const plan = firstRow(r.planes) as { fecha_evento?: string | null; categoria?: string | null } | undefined;
+        return isInvitePlanStillActive(plan);
+    });
+    if (!activeRows.length) return 0;
+
+    const planIds = [...new Set(activeRows.map((r) => r.plan_id as string))];
     const { data: memberRows } = await supabase
         .from('participantes')
         .select('plan_id')
@@ -263,7 +292,7 @@ export async function countPendingPlanInvites(userId: string): Promise<number> {
         .in('estado', ['aceptado', 'pendiente', 'lista_espera']);
 
     const alreadyIn = new Set((memberRows ?? []).map((r) => r.plan_id as string));
-    return data.filter((r) => !alreadyIn.has(r.plan_id as string)).length;
+    return activeRows.filter((r) => !alreadyIn.has(r.plan_id as string)).length;
 }
 
 export type PlanInvitee = {

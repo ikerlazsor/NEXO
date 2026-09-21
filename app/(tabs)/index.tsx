@@ -15,12 +15,13 @@ import {
     useState
 } from 'react';
 import {
-    ActivityIndicator,
     AppState,
+    Dimensions,
     Modal,
+    Platform,
     Pressable,
     RefreshControl,
-    ScrollView,
+    StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
@@ -29,14 +30,25 @@ import {
     type ViewToken
 } from 'react-native';
 import Animated, {
+    cancelAnimation,
+    Easing,
+    Extrapolation,
     interpolate,
+    runOnJS,
     useAnimatedStyle,
     useSharedValue,
     withTiming,
 } from 'react-native-reanimated';
+import {
+    Gesture,
+    GestureDetector,
+    GestureHandlerRootView,
+    ScrollView as GHScrollView,
+} from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useChromeHeaderLayout } from '../../components/MainChrome';
 import { PlanCard, type Membership } from '../../components/PlanCard';
+import { FeedHeartBurstHost } from '../../components/FeedHeartBurstHost';
 import { PressScale } from '../../components/PressScale';
 import { FeedSkeletonList } from '../../components/SkeletonShimmer';
 import { EmptySearch } from '../../features/feed/EmptyFeedState';
@@ -64,6 +76,7 @@ import { deletePlanCompletely } from '../../lib/deletePlan';
 import { diskRemove, diskSet } from '../../lib/diskCache';
 import {
     emptyFeedTaste,
+    feedFitPercent,
     type FeedTaste,
 } from '../../lib/feedAffinity';
 import {
@@ -76,16 +89,19 @@ import { requestOpenFeedMap } from '../../lib/feedMapIntent';
 import { attachFeedPlanPeople, fetchMoreFeedPlanRows, type FeedMoreCursor } from '../../lib/feedQuery';
 import {
     applyStickyInviteClears,
+    applyStickyPlanDeletes,
     consumeFeedNeedsRefresh,
     consumeFeedNeedsRefreshUrgent,
     markFeedNeedsRefresh,
+    mergeStickyCreatedPlan,
     mergeStickyMembershipMap,
     noteFeedMembershipPatch,
     subscribeFeedHomeRetap,
     subscribeFeedRefreshSignal,
     takeFeedInviteClears,
     takeFeedMembershipPatches,
-    takeOptimisticFeedPlan
+    takeFeedPlanDeletes,
+    takeOptimisticFeedPlan,
 } from '../../lib/feedReload';
 import { expandSearchQuery, planMatchesSearch } from '../../lib/feedSearch';
 import { buildFeedRows, type FeedRow } from '../../lib/feedSections';
@@ -93,7 +109,7 @@ import { consumeFirstRunPending } from '../../lib/firstRun';
 import { rememberFriendsSet } from '../../lib/friendStatusPeek';
 import { distanceKm, formatDistanceKm } from '../../lib/geo';
 import { fetchGuestFeedPlans } from '../../lib/guestFeed';
-import { hapticError, hapticLight, hapticSelection, hapticSuccess } from '../../lib/haptics';
+import { hapticError, hapticSave, hapticSelection, hapticSuccess } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { getUserCoords, peekUserCoords, type UserCoords } from '../../lib/location';
@@ -101,7 +117,12 @@ import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
 import { deletePlanAdmin } from '../../lib/moderation';
 import { getIsOnline } from '../../lib/network';
 import { Alert } from '../../lib/nexoAlert';
-import { persistJoinWithWaitlistFallback, persistLeave, persistSave } from '../../lib/offlineActions';
+import {
+    persistJoinWithWaitlistFallback,
+    persistLeave,
+    persistSave,
+    subscribeSaveState,
+} from '../../lib/offlineActions';
 import { peekViewerIsOrganizer, rememberViewerIsOrganizer } from '../../lib/organizer';
 import { ownerActionsVisible } from '../../lib/ownerSecretActions';
 import {
@@ -132,6 +153,7 @@ import { canJoinPlanByGender, isSoloChicasPlan } from '../../lib/soloChicas';
 import { supabase } from '../../lib/supabase';
 import { cacheGetStale, cacheInvalidate, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
+import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
@@ -173,6 +195,104 @@ export default function HomeScreen() {
         return saved === 'month' || saved === 'custom' ? 'all' : saved;
     });
     const [showFiltersModal, setShowFiltersModal] = useState(false);
+    const filtersSheetY = useSharedValue(0);
+    const filtersScrollY = useSharedValue(0);
+    const filtersClosing = useSharedValue(0);
+    const filtersSheetHeight = useMemo(() => Dimensions.get('window').height * 0.72, []);
+
+    const finishCloseFiltersModal = useCallback(() => {
+        // Dejar el sheet abajo: si reseteamos Y a 0 con el Modal aún visible, parpadea un frame.
+        setShowFiltersModal(false);
+        filtersClosing.value = 0;
+        filtersScrollY.value = 0;
+    }, [filtersClosing, filtersScrollY]);
+
+    const openFiltersModal = useCallback(() => {
+        cancelAnimation(filtersSheetY);
+        filtersClosing.value = 0;
+        filtersScrollY.value = 0;
+        filtersSheetY.value = filtersSheetHeight;
+        setShowFiltersModal(true);
+    }, [filtersClosing, filtersScrollY, filtersSheetHeight, filtersSheetY]);
+
+    const closeFiltersModal = useCallback(() => {
+        if (!showFiltersModal || filtersClosing.value) return;
+        filtersClosing.value = 1;
+        cancelAnimation(filtersSheetY);
+        filtersSheetY.value = withTiming(
+            filtersSheetHeight,
+            { duration: 260, easing: Easing.inOut(Easing.cubic) },
+            (finished) => {
+                if (finished) runOnJS(finishCloseFiltersModal)();
+            },
+        );
+    }, [
+        finishCloseFiltersModal,
+        filtersClosing,
+        filtersSheetHeight,
+        filtersSheetY,
+        showFiltersModal,
+    ]);
+
+    useEffect(() => {
+        if (!showFiltersModal) return;
+        cancelAnimation(filtersSheetY);
+        filtersSheetY.value = withTiming(0, {
+            duration: 280,
+            easing: Easing.out(Easing.cubic),
+        });
+    }, [showFiltersModal, filtersSheetY]);
+
+    const filtersSheetStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: filtersSheetY.value }],
+    }));
+
+    const filtersBackdropStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(
+            filtersSheetY.value,
+            [0, filtersSheetHeight * 0.85],
+            [1, 0],
+            Extrapolation.CLAMP,
+        ),
+    }));
+
+    const filtersPanGesture = useMemo(
+        () =>
+            Gesture.Pan()
+                .activeOffsetY(8)
+                .failOffsetX([-32, 32])
+                .onUpdate((e) => {
+                    if (filtersClosing.value) return;
+                    filtersSheetY.value = Math.max(0, e.translationY);
+                })
+                .onEnd((e) => {
+                    if (filtersClosing.value) return;
+                    const dismiss = filtersSheetY.value > 100 || e.velocityY > 900;
+                    if (dismiss) {
+                        filtersClosing.value = 1;
+                        const progress = Math.min(
+                            1,
+                            filtersSheetY.value / Math.max(1, filtersSheetHeight),
+                        );
+                        const duration = Math.round(200 + (1 - progress) * 100);
+                        cancelAnimation(filtersSheetY);
+                        filtersSheetY.value = withTiming(
+                            filtersSheetHeight,
+                            { duration, easing: Easing.inOut(Easing.cubic) },
+                            (finished) => {
+                                if (finished) runOnJS(finishCloseFiltersModal)();
+                            },
+                        );
+                    } else {
+                        filtersSheetY.value = withTiming(0, {
+                            duration: 240,
+                            easing: Easing.out(Easing.cubic),
+                        });
+                    }
+                }),
+        [finishCloseFiltersModal, filtersClosing, filtersSheetHeight, filtersSheetY],
+    );
+
     const [nearbyKm, setNearbyKm] = useState<number | null>(null);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
     const [showFirstRun, setShowFirstRun] = useState(false);
@@ -213,6 +333,7 @@ export default function HomeScreen() {
     const [hasMoreFeed, setHasMoreFeed] = useState(true);
     const feedCursorRef = useRef<FeedMoreCursor | null>(null);
     const loadingMoreRef = useRef(false);
+    const endReachedLockRef = useRef(false);
     const [searchExpanded, setSearchExpanded] = useState<string[]>([]);
     const plansRef = useRef<any[]>([]);
     const currentUserIdRef = useRef<string | null>(null);
@@ -222,50 +343,11 @@ export default function HomeScreen() {
         ScreenKeys.FEED,
         { restoreOnFocus: false },
     );
-    const feedChromeVisible = useSharedValue(1);
-    const lastFeedScrollY = useRef(0);
-    const feedScrollAccumulator = useRef(0);
 
-    const onFeedScroll = useCallback(
-        (event: { nativeEvent: { contentOffset: { y: number }; contentSize: { height: number }; layoutMeasurement: { height: number } } }) => {
-            onScroll(event);
-            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-            const y = contentOffset.y;
-            const maxY = Math.max(0, contentSize.height - layoutMeasurement.height);
-            const dy = y - lastFeedScrollY.current;
-            lastFeedScrollY.current = y;
-
-            if (y <= 6) {
-                feedScrollAccumulator.current = 0;
-                feedChromeVisible.value = withTiming(1, { duration: 200 });
-                return;
-            }
-
-            // Rebote al final del feed: ignorar el tirón hacia arriba.
-            if (y >= maxY - 2 && dy < 0) return;
-            if (y < 0) return;
-
-            if (Math.abs(dy) < 0.25) return;
-
-            feedScrollAccumulator.current += dy;
-
-            if (feedScrollAccumulator.current > 10) {
-                feedScrollAccumulator.current = 0;
-                feedChromeVisible.value = withTiming(0, { duration: 200 });
-            } else if (feedScrollAccumulator.current < -10) {
-                feedScrollAccumulator.current = 0;
-                feedChromeVisible.value = withTiming(1, { duration: 200 });
-            }
-        },
-        [feedChromeVisible, onScroll],
-    );
-
-    const feedChromeStyle = useAnimatedStyle(() => ({
-        height: interpolate(feedChromeVisible.value, [0, 1], [0, 56]),
-        opacity: feedChromeVisible.value,
-        marginBottom: interpolate(feedChromeVisible.value, [0, 1], [0, 10]),
-        overflow: 'hidden',
-    }));
+    const onFeedRefresh = useCallback(() => {
+        hapticSelection();
+        void fetchDataRef.current({ refresh: true });
+    }, []);
 
     useEffect(() => {
         void consumeFirstRunPending().then((pending) => {
@@ -372,21 +454,28 @@ export default function HomeScreen() {
                 setMembershipMap(mergeStickyMembershipMap(snap.membershipMap));
                 setSavedPlans(snap.savedPlans);
                 setFeedTaste(snap.feedTaste);
-                setPlans(formattedPlans);
+                const visiblePlans = mergeStickyCreatedPlan(applyStickyPlanDeletes(formattedPlans));
+                setPlans(visiblePlans);
                 feedCursorRef.current = null;
                 setHasMoreFeed(true);
                 setLoading(false);
-                cacheSet(FEED_CACHE_KEY, snap, FEED_CACHE_TTL_MS);
-                void diskSet(FEED_CACHE_KEY, snap);
+                const cachedSnap = {
+                    ...snap,
+                    plans: visiblePlans,
+                    membershipMap: mergeStickyMembershipMap(snap.membershipMap),
+                    invitedPlanIds: [...applyStickyInviteClears(snap.invitedPlanIds)],
+                };
+                cacheSet(FEED_CACHE_KEY, cachedSnap, FEED_CACHE_TTL_MS);
+                void diskSet(FEED_CACHE_KEY, cachedSnap);
                 return;
             }
 
-            setPlans(formattedPlans);
+            setPlans(applyStickyPlanDeletes(formattedPlans));
             feedCursorRef.current = null;
             setHasMoreFeed(false); // invitado: un solo lote vía RPC
             setLoading(false);
 
-            const guestSnap: FeedSnapshot = emptyGuestFeedSnapshot(formattedPlans);
+            const guestSnap: FeedSnapshot = emptyGuestFeedSnapshot(applyStickyPlanDeletes(formattedPlans));
             setIsOrganizerAccount(false);
             rememberViewerIsOrganizer(false);
             setMembershipMap({});
@@ -461,6 +550,10 @@ export default function HomeScreen() {
                 setHasMoreFeed(hasMore);
                 return;
             }
+            // Diferir el trabajo pesado para no trabar el scroll al llegar al final.
+            await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+            });
             const withPeople = await attachFeedPlanPeople(extraRaw);
             if (withPeople.length === 0) {
                 setHasMoreFeed(hasMore);
@@ -583,7 +676,7 @@ export default function HomeScreen() {
             const urgent = consumeFeedNeedsRefreshUrgent();
             if (consumeFeedNeedsRefresh() || urgent || optimistic) {
                 didSessionFeedLoadRef.current = true;
-                const delay = urgent || optimistic ? 40 : 450;
+                const delay = urgent || optimistic ? 700 : 450;
                 timer = setTimeout(() => {
                     if (!cancelled) {
                         requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true });
@@ -608,9 +701,9 @@ export default function HomeScreen() {
         const unsub = subscribeFeedRefreshSignal(() => {
             if (!feedFocusedRef.current) return;
             if (timer) clearTimeout(timer);
-            timer = setTimeout(() => {
-                requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true });
-            }, 160);
+                timer = setTimeout(() => {
+                    requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true });
+                }, 520);
         });
         return () => {
             unsub();
@@ -976,7 +1069,7 @@ export default function HomeScreen() {
         if (!currentUserId) return;
         const isAlreadySaved = savedPlans.includes(planId);
         const prevSaved = savedPlans;
-        hapticLight();
+        hapticSave(!isAlreadySaved);
         if (isAlreadySaved) {
             setSavedPlans(prev => prev.filter(id => id !== planId));
             const { error } = await persistSave(planId, currentUserId, false);
@@ -1178,32 +1271,68 @@ export default function HomeScreen() {
 
     const openPlanDetail = useCallback(
         (planId: string) => {
-            const found = plansRef.current.find((p) => String(p.id) === String(planId));
-            const mid = String(planId);
-            if (found) {
-                const hostId = String(found.creador_id || found.host?.id || '');
-                if (hostId) {
-                    seedUserProfilePeek({
-                        id: hostId,
-                        nombre: found.host?.nombre,
-                        avatar_url: found.host?.avatar_url,
-                        es_organizador: !!found.es_organizador,
+            try {
+                const found = plansRef.current.find((p) => String(p.id) === String(planId));
+                const mid = String(planId);
+                if (found) {
+                    const hostId = String(found.creador_id || found.host?.id || '');
+                    if (hostId) {
+                        seedUserProfilePeek({
+                            id: hostId,
+                            nombre: found.host?.nombre,
+                            avatar_url: found.host?.avatar_url,
+                            es_organizador: !!found.es_organizador,
+                        });
+                        prefetchUserProfile(hostId);
+                        if (
+                            currentUserId &&
+                            hostId !== String(currentUserId) &&
+                            !found.es_organizador
+                        ) {
+                            void prefetchPairAffinity(currentUserId, hostId, {
+                                isFriends: friendIds.has(hostId),
+                            });
+                        }
+                    }
+                    seedPlanDetailFromFeed(found, {
+                        membership: (membershipMapRef.current[mid] || 'none') as Membership,
+                        friendIds: [...friendIds],
+                        coincidedIds: [...coincidedIds],
+                        currentUserId,
+                        currentUserGenero,
+                        isSaved: savedPlanIds.has(mid),
+                        fitPct:
+                            currentUserId &&
+                            !found.es_organizador &&
+                            String(found.creador_id || found.host?.id || '') !== String(currentUserId)
+                                ? feedFitPercent(
+                                      {
+                                          categoria: found.categoria,
+                                          tipo_deporte: found.tipo_deporte,
+                                          fecha_evento: found.fecha_evento,
+                                          solo_chicas: found.solo_chicas,
+                                      },
+                                      {
+                                          personalityTags: feedTaste.personalityTags,
+                                          viewerAge: feedTaste.viewerAge,
+                                          viewerGenero: currentUserGenero,
+                                      },
+                                      found.id,
+                                  )
+                                : null,
                     });
-                    prefetchUserProfile(hostId);
                 }
-                seedPlanDetailFromFeed(found, {
-                    membership: (membershipMapRef.current[mid] || 'none') as Membership,
-                    friendIds: [...friendIds],
-                    coincidedIds: [...coincidedIds],
-                    currentUserId,
-                    currentUserGenero,
-                    isSaved: savedPlanIds.has(mid),
-                });
+                prefetchPlanDetail(mid);
+            } catch (e) {
+                if (__DEV__) console.warn('openPlanDetail seed', e);
             }
-            prefetchPlanDetail(mid);
-            router.push({ pathname: '/plan/[id]', params: { id: planId } });
+            try {
+                router.push({ pathname: '/plan/[id]', params: { id: String(planId) } });
+            } catch (e) {
+                if (__DEV__) console.warn('openPlanDetail nav', e);
+            }
         },
-        [router, friendIds, coincidedIds, currentUserId, currentUserGenero, savedPlanIds],
+        [router, friendIds, coincidedIds, currentUserId, currentUserGenero, savedPlanIds, feedTaste],
     );
 
     const openProfile = useCallback(
@@ -1339,6 +1468,43 @@ export default function HomeScreen() {
         secretOwnerUx,
     ]);
 
+    const warmFeedPlan = useCallback((row: FeedRow) => {
+        if (row.kind !== 'plan' || !row.plan?.id) return;
+        const mid = String(row.plan.id);
+        if (prefetchedAheadRef.current.has(mid)) return;
+        prefetchedAheadRef.current.add(mid);
+        seedPlanDetailFromFeed(row.plan, {
+            membership: membershipMapRef.current[mid] || 'none',
+            friendIds: [...(friendIdsRef.current ?? [])],
+            coincidedIds: [...(coincidedIdsRef.current ?? [])],
+            currentUserId: currentUserIdRef.current,
+            currentUserGenero,
+        });
+        prefetchPlanDetail(mid);
+        const host =
+            row.plan.host ||
+            (Array.isArray(row.plan.participantsList)
+                ? row.plan.participantsList.find((p: { isCreator?: boolean }) => p.isCreator)
+                : null);
+        if (!host?.id) return;
+        seedUserProfilePeek({
+            id: host.id,
+            nombre: host.nombre,
+            avatar_url: host.avatar_url,
+            es_organizador: !!row.plan.es_organizador,
+        });
+        prefetchUserProfile(host.id);
+        const uid = currentUserIdRef.current;
+        if (uid && String(host.id) !== String(uid) && !row.plan.es_organizador) {
+            void prefetchPairAffinity(uid, String(host.id), {
+                isFriends: friendIdsRef.current?.has(String(host.id)) === true,
+            });
+        }
+    }, [currentUserGenero]);
+
+    const warmFeedPlanRef = useRef(warmFeedPlan);
+    warmFeedPlanRef.current = warmFeedPlan;
+
     const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
         const indices = viewableItems
             .map((v) => v.index)
@@ -1346,50 +1512,36 @@ export default function HomeScreen() {
         if (indices.length === 0) return;
         const maxIdx = Math.max(...indices);
         const rows = feedRowsRef.current;
-        let seeded = 0;
-        // Visible: calentar host de las tarjetas en pantalla.
+        const warm = warmFeedPlanRef.current;
         for (const v of viewableItems) {
             const row = typeof v.index === 'number' ? rows[v.index] : null;
-            if (!row || row.kind !== 'plan' || !row.plan) continue;
-            const host =
-                row.plan.host ||
-                (Array.isArray(row.plan.participantsList)
-                    ? row.plan.participantsList.find((p: { isCreator?: boolean }) => p.isCreator)
-                    : null);
-            if (host?.id) {
-                seedUserProfilePeek({
-                    id: host.id,
-                    nombre: host.nombre,
-                    avatar_url: host.avatar_url,
-                    es_organizador: !!row.plan.es_organizador,
-                });
-                prefetchUserProfile(host.id);
-            }
+            if (row) warm(row);
         }
-        for (let i = maxIdx + 1; i < rows.length && seeded < 4; i++) {
+        let seeded = 0;
+        for (let i = maxIdx + 1; i < rows.length && seeded < 6; i++) {
             const row = rows[i];
             if (row.kind !== 'plan' || !row.plan?.id) continue;
-            const mid = String(row.plan.id);
-            if (prefetchedAheadRef.current.has(mid)) continue;
-            prefetchedAheadRef.current.add(mid);
-            seedPlanDetailFromFeed(row.plan, {
-                membership: membershipMapRef.current[mid] || 'none',
-                friendIds: [...(friendIdsRef.current ?? [])],
-                coincidedIds: [...(coincidedIdsRef.current ?? [])],
-                currentUserId: currentUserIdRef.current,
-            });
-            prefetchPlanDetail(mid);
-            const host =
-                row.plan.host ||
-                (Array.isArray(row.plan.participantsList)
-                    ? row.plan.participantsList.find((p: { isCreator?: boolean }) => p.isCreator)
-                    : null);
-            if (host?.id) prefetchUserProfile(host.id);
+            warm(row);
             seeded += 1;
         }
     }).current;
 
-    const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 35, minimumViewTime: 120 }).current;
+    useEffect(() => {
+        prefetchedAheadRef.current.clear();
+    }, [currentUserId]);
+
+    useEffect(() => {
+        // Al cargar el feed: calentar detalle + afinidad (no al press).
+        let n = 0;
+        for (const row of feedRowsUi) {
+            if (n >= 8) break;
+            if (row.kind !== 'plan' || !row.plan?.id) continue;
+            warmFeedPlan(row);
+            n += 1;
+        }
+    }, [feedRowsUi, warmFeedPlan]);
+
+    const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 20, minimumViewTime: 40 }).current;
 
     useEffect(() => {
         if (nearbyKm === 10) setNearbyKm(null);
@@ -1417,6 +1569,7 @@ export default function HomeScreen() {
     }, [selectedCategories]);
 
     const toggleCategory = (cat: string) => {
+        hapticSelection();
         const next = toggleInList(selectedCategories, cat);
         const allowed = new Set<string>();
         for (const c of next) {
@@ -1428,11 +1581,13 @@ export default function HomeScreen() {
     };
 
     const clearCategories = () => {
+        hapticSelection();
         setSelectedCategories([]);
         setSelectedSubcategories([]);
     };
 
     const clearAllFilters = () => {
+        hapticSelection();
         setSelectedCategories([]);
         setSelectedSubcategories([]);
         setDateFilter('all');
@@ -1466,34 +1621,6 @@ export default function HomeScreen() {
                     />
                 </View>
             </View>
-
-            <Animated.View style={feedChromeStyle}>
-                <View style={styles.quickFiltersRow}>
-                    <PressScale
-                        style={[styles.quickFilterPill, styles.quickFilterBox]}
-                        onPress={() => requestOpenFeedMap()}
-                        pressedScale={0.96}
-                        haptic={false}
-                    >
-                        <Ionicons name="map" size={15} color={PRIMARY_DARK} />
-                        <Text style={styles.quickFilterText} numberOfLines={1}>
-                            {t('feed.map')}
-                        </Text>
-                    </PressScale>
-
-                    <PressScale
-                        style={[styles.quickFilterPill, styles.quickFilterBox, hasSheetFilters ? styles.quickFilterActive : null]}
-                        onPress={() => setShowFiltersModal(true)}
-                        pressedScale={0.96}
-                        haptic={false}
-                    >
-                        <Ionicons name="options" size={15} color={hasSheetFilters ? theme.colors.surface : PRIMARY_DARK} />
-                        <Text style={[styles.quickFilterText, hasSheetFilters ? { color: theme.colors.surface } : null]} numberOfLines={1}>
-                            {t('feed.filters')}
-                        </Text>
-                    </PressScale>
-                </View>
-            </Animated.View>
 
             {showFirstRun ? (
                 <View style={styles.firstRunBanner}>
@@ -1546,9 +1673,52 @@ export default function HomeScreen() {
                     keyboardDismissMode="on-drag"
                     keyboardShouldPersistTaps="handled"
                     onLayout={onListLayout}
-                    onScroll={onFeedScroll}
+                    onScroll={onScroll}
                     scrollEventThrottle={scrollEventThrottle}
                     drawDistance={FLASH_LIST_DRAW_DISTANCE}
+                    ListHeaderComponent={
+                        <View style={styles.feedChromeHeader}>
+                            <View style={styles.quickFiltersRow}>
+                                <PressScale
+                                    style={[styles.quickFilterPill, styles.quickFilterBox]}
+                                    onPress={() => requestOpenFeedMap()}
+                                    pressedScale={0.96}
+                                    haptic={false}
+                                >
+                                    <Ionicons name="map" size={15} color={PRIMARY_DARK} />
+                                    <Text style={styles.quickFilterText} numberOfLines={1}>
+                                        {t('feed.map')}
+                                    </Text>
+                                </PressScale>
+
+                                <PressScale
+                                    style={[
+                                        styles.quickFilterPill,
+                                        styles.quickFilterBox,
+                                        hasSheetFilters ? styles.quickFilterActive : null,
+                                    ]}
+                                    onPress={openFiltersModal}
+                                    pressedScale={0.96}
+                                    haptic={false}
+                                >
+                                    <Ionicons
+                                        name="options"
+                                        size={15}
+                                        color={hasSheetFilters ? theme.colors.surface : PRIMARY_DARK}
+                                    />
+                                    <Text
+                                        style={[
+                                            styles.quickFilterText,
+                                            hasSheetFilters ? { color: theme.colors.surface } : null,
+                                        ]}
+                                        numberOfLines={1}
+                                    >
+                                        {t('feed.filters')}
+                                    </Text>
+                                </PressScale>
+                            </View>
+                        </View>
+                    }
                     ListEmptyComponent={
                         !loading ? (
                             <EmptySearch
@@ -1573,24 +1743,34 @@ export default function HomeScreen() {
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
-                            onRefresh={() => void fetchData({ refresh: true })}
-                            tintColor={PRIMARY_DARK}
+                            onRefresh={onFeedRefresh}
+                            tintColor={theme.colors.textMuted}
+                            colors={[theme.colors.primary]}
+                            progressBackgroundColor={theme.colors.surface}
                         />
                     }
                     renderItem={renderPlanItem}
                     onViewableItemsChanged={onViewableItemsChanged}
                     viewabilityConfig={viewabilityConfig}
                     onEndReached={() => {
-                        void loadMoreFeed();
+                        if (endReachedLockRef.current) return;
+                        endReachedLockRef.current = true;
+                        void loadMoreFeed().finally(() => {
+                            setTimeout(() => {
+                                endReachedLockRef.current = false;
+                            }, 650);
+                        });
                     }}
-                    onEndReachedThreshold={0.55}
+                    onEndReachedThreshold={0.35}
                     ListFooterComponent={
                         loadingMore ? (
-                            <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                                <ActivityIndicator color={PRIMARY_DARK} />
+                            <View style={styles.loadMoreFooter}>
+                                <View style={styles.loadMoreDot} />
+                                <View style={[styles.loadMoreDot, styles.loadMoreDotMid]} />
+                                <View style={styles.loadMoreDot} />
                             </View>
                         ) : (
-                            <View style={{ height: 8 }} />
+                            <View style={{ height: 12 }} />
                         )
                     }
                 />
@@ -1604,49 +1784,59 @@ export default function HomeScreen() {
             <Modal
                 visible={showFiltersModal}
                 transparent
-                animationType="fade"
-                onRequestClose={() => {
-                    setShowFiltersModal(false);
-                }}
+                animationType="none"
+                onRequestClose={closeFiltersModal}
+                statusBarTranslucent
             >
-                <View style={styles.modalOverlay}>
-                    <Pressable
-                        style={styles.modalBackdrop}
-                        onPress={() => {
-                            setShowFiltersModal(false);
-                        }}
-                    />
-                    <View style={[styles.filtersSheet, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
-                        <View style={styles.filtersGrabber} />
-                        <View style={styles.filtersHeader}>
-                            <View>
-                                <Text style={styles.modalTitle}>{t('feed.filters')}</Text>
-                                <Text style={styles.filtersSubtitle}>{t('feed.filtersHint')}</Text>
-                            </View>
-                            {hasSheetFilters ? (
-                                <TouchableOpacity
-                                    onPress={() => {
-                                        setSelectedCategories([]);
-                                        setSelectedSubcategories([]);
-                                        setDateFilter('all');
-                                        setNearbyKm(null);
-                                    }}
-                                    hitSlop={8}
-                                >
-                                    <Text style={styles.clearFiltersText}>{t('feed.clearFilters')}</Text>
-                                </TouchableOpacity>
-                            ) : null}
-                        </View>
+                <GestureHandlerRootView style={styles.modalOverlay}>
+                    <Animated.View style={[styles.modalBackdrop, filtersBackdropStyle]}>
+                        <Pressable style={StyleSheet.absoluteFill} onPress={closeFiltersModal} />
+                    </Animated.View>
+                    <Animated.View
+                        style={[
+                            styles.filtersSheet,
+                            { paddingBottom: Math.max(insets.bottom, 16) + 12 },
+                            filtersSheetStyle,
+                        ]}
+                    >
+                        <GestureDetector gesture={filtersPanGesture}>
+                            <Animated.View>
+                                <View style={styles.filtersGrabberHit}>
+                                    <View style={styles.filtersGrabber} />
+                                </View>
+                                <View style={styles.filtersHeader}>
+                                    <View>
+                                        <Text style={styles.modalTitle}>{t('feed.filters')}</Text>
+                                        <Text style={styles.filtersSubtitle}>{t('feed.filtersHint')}</Text>
+                                    </View>
+                                    {hasSheetFilters ? (
+                                        <TouchableOpacity
+                                            onPress={() => {
+                                                setSelectedCategories([]);
+                                                setSelectedSubcategories([]);
+                                                setDateFilter('all');
+                                                setNearbyKm(null);
+                                            }}
+                                            hitSlop={8}
+                                        >
+                                            <Text style={styles.clearFiltersText}>{t('feed.clearFilters')}</Text>
+                                        </TouchableOpacity>
+                                    ) : null}
+                                </View>
+                            </Animated.View>
+                        </GestureDetector>
 
-                        <ScrollView
+                        <GHScrollView
                             style={styles.filtersScroll}
                             contentContainerStyle={styles.filtersScrollContent}
                             showsVerticalScrollIndicator={false}
                             keyboardShouldPersistTaps="handled"
                             nestedScrollEnabled
-                            bounces
-                            alwaysBounceVertical
+                            bounces={false}
                             scrollEventThrottle={16}
+                            onScroll={(e) => {
+                                filtersScrollY.value = e.nativeEvent.contentOffset.y;
+                            }}
                         >
                             <View style={styles.filterSectionCard}>
                             <Text style={styles.filterSectionLabel}>{t('feed.category')}</Text>
@@ -1694,7 +1884,10 @@ export default function HomeScreen() {
                                 <View style={styles.chipWrap}>
                                     <TouchableOpacity
                                         style={[styles.filterChip, selectedSubcategories.length === 0 && styles.filterChipActive]}
-                                        onPress={() => setSelectedSubcategories([])}
+                                        onPress={() => {
+                                            hapticSelection();
+                                            setSelectedSubcategories([]);
+                                        }}
                                     >
                                         <Text style={[styles.filterChipText, selectedSubcategories.length === 0 && styles.filterChipTextActive]}>
                                             {t('feed.allSubcategories')}
@@ -1706,7 +1899,10 @@ export default function HomeScreen() {
                                             <TouchableOpacity
                                                 key={sub}
                                                 style={[styles.filterChip, active && styles.filterChipActive]}
-                                                onPress={() => setSelectedSubcategories((prev) => toggleInList(prev, sub))}
+                                                onPress={() => {
+                                                    hapticSelection();
+                                                    setSelectedSubcategories((prev) => toggleInList(prev, sub));
+                                                }}
                                             >
                                                 <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
                                                     {t(`cat.sub.${sub}`)}
@@ -1727,7 +1923,10 @@ export default function HomeScreen() {
                                         <TouchableOpacity
                                             key={key}
                                             style={[styles.dateFilterChip, active && styles.dateFilterChipActive]}
-                                            onPress={() => setDateFilter(key)}
+                                            onPress={() => {
+                                                hapticSelection();
+                                                setDateFilter(key);
+                                            }}
                                         >
                                             <Text style={[styles.dateFilterChipText, active && styles.dateFilterChipTextActive]}>
                                                 {t('date.' + key)}
@@ -1759,20 +1958,19 @@ export default function HomeScreen() {
                                 </TouchableOpacity>
                             </View>
                             </View>
-                        </ScrollView>
+                        </GHScrollView>
 
                         <TouchableOpacity
                             style={styles.applyFiltersBtn}
-                            onPress={() => {
-                                setShowFiltersModal(false);
-                            }}
+                            onPress={closeFiltersModal}
                         >
                             <Text style={styles.applyFiltersBtnText}>{t('feed.applyFilters')}</Text>
                         </TouchableOpacity>
-                    </View>
-                </View>
+                    </Animated.View>
+                </GestureHandlerRootView>
             </Modal>
 
+            <FeedHeartBurstHost />
             </View>
             </View>
     );

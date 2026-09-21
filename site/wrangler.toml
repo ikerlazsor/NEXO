@@ -1,0 +1,10 @@
+# Deploy desde Root directory = site (sin package.json → sin npm ci)
+name = "nexoo"
+main = "site-worker.js"
+compatibility_date = "2025-08-01"
+workers_dev = true
+
+[assets]
+directory = "./"
+binding = "ASSETS"
+html_handling = "auto-trailing-slash"

@@ -1,6 +1,7 @@
-# Deploy #2 — sin _redirects (evita bucle Cloudflare). Worker = nexoo
+# Legacy: el deploy de Cloudflare usa site/wrangler.toml
+# Root directory en el panel = site
 name = "nexoo"
-main = "site-worker.js"
+main = "site/site-worker.js"
 compatibility_date = "2025-08-01"
 workers_dev = true
 

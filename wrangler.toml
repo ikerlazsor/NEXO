@@ -8,4 +8,4 @@ workers_dev = true
 [assets]
 directory = "./site"
 binding = "ASSETS"
-html_handling = "auto"
+html_handling = "auto-trailing-slash"

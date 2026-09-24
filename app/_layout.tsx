@@ -78,6 +78,7 @@ const GUEST_ROOTS = new Set([
   '(tabs)',
   'plan',
   'settings',
+  'language',
   'privacy',
   'terms',
   'community-norms',
@@ -600,6 +601,10 @@ function RootStack() {
                 />
                 <Stack.Screen
                   name="settings"
+                  options={{ animation: 'slide_from_right', freezeOnBlur: false }}
+                />
+                <Stack.Screen
+                  name="language"
                   options={{ animation: 'slide_from_right', freezeOnBlur: false }}
                 />
                 <Stack.Screen

@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Nexo!",
+    "name": "Nexo",
     "slug": "nexo",
-    "version": "1.0.4",
+    "version": "1.0.7",
     "runtimeVersion": "1.0.0",
     "updates": {
       "url": "https://u.expo.dev/edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e",
@@ -29,6 +29,7 @@
         "applinks:www.appnexo.es"
       ],
       "infoPlist": {
+        "CFBundleDisplayName": "Nexo",
         "NSLocationWhenInUseUsageDescription": "Nexo! usa tu ubicación para calcular la distancia a los planes y mostrarte cómo llegar.",
         "NSMicrophoneUsageDescription": "Nexo! usa el micrófono para que puedas enviar notas de voz en el chat.",
         "ITSAppUsesNonExemptEncryption": false,

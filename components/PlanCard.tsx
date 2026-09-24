@@ -32,6 +32,7 @@ import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../li
 import { emitHeartBurst } from '../lib/heartBurst';
 import { useAuthSession } from '../lib/authSession';
 import { useT } from '../lib/i18n';
+import { localeTag } from '../lib/locale';
 import { PlanShareModal, buildPlanSharePayload, type PlanSharePayload } from './PlanShareModal';
 import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../lib/planInvites';
 import { formatSocialJoinedBanner } from '../lib/socialJoinedBanner';
@@ -39,6 +40,7 @@ import { feedFitPercent, type FeedTaste } from '../lib/feedAffinity';
 import { FitMatchBanner } from './FitMatchBanner';
 import { PlanCoverCarousel } from './PlanCoverCarousel';
 import { InvitePeopleSheet, type InviteProfile } from './InvitePeopleSheet';
+import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
 import { TranslatedText } from './TranslatedText';
 import { seedUserProfilePeek, prefetchUserProfile } from '../lib/userProfileCache';
@@ -273,7 +275,7 @@ function PlanCardInner({
     const isOrganizerPlan = planIsOrganizer(item);
     const coverList = planCoverList(item);
     const isCalmPremium = !isToday && !isFull && !isSoloChicas && !isFriendsOnly && !isPrivate;
-    const dateLocale = lang === 'en' ? 'en-GB' : 'es-ES';
+    const dateLocale = localeTag(lang);
     const dateString = eventDate
         ? (() => {
               const raw = eventDate.toLocaleDateString(dateLocale, {
@@ -315,7 +317,7 @@ function PlanCardInner({
 
     const coverUrl = planCoverList(item)[0] ?? item.imagen_url ?? null;
 
-    const startShare = () => {
+    const handleShare = () => {
         hapticLight();
         const when = eventDate ? `${dateString}${timeString ? ` · ${timeString}` : ''}` : '';
         const location = (distanceLabel || item.nombre_ubicacion || '').trim();
@@ -334,14 +336,6 @@ function PlanCardInner({
                 maxPeople: item.maximo_participantes,
             }),
         );
-    };
-
-    const handleShare = () => {
-        Alert.alert(t('card.share'), `"${item.titulo}"`, [
-            { text: t('card.shareWhats'), onPress: startShare },
-            { text: t('card.shareOther'), onPress: startShare },
-            { text: t('common.cancel'), style: 'cancel' },
-        ]);
     };
 
     const openInviteSheet = async () => {
@@ -636,10 +630,28 @@ function PlanCardInner({
                                 ) : null}
                             </View>
                             <View style={styles.topRightGroup}>
+                                <PressScale
+                                    style={styles.shareBtnOnImage}
+                                    pressedScale={0.88}
+                                    minTouch={false}
+                                    onPress={(e) => {
+                                        e.stopPropagation();
+                                        handleShare();
+                                    }}
+                                    accessibilityLabel={t('card.share')}
+                                >
+                                    <Ionicons
+                                        name="share-outline"
+                                        size={26}
+                                        color="#FFFFFF"
+                                        style={styles.iconOnImage}
+                                    />
+                                </PressScale>
                                 <View ref={heartHostRef} style={styles.heartHost} collapsable={false}>
                                     <BounceHeart
                                         saved={isSaved}
                                         size={26}
+                                        iconStyle={styles.iconOnImage}
                                         onPress={() => {
                                             if (!isSaved && !isGuest) {
                                                 requestAnimationFrame(() => {
@@ -657,7 +669,12 @@ function PlanCardInner({
 
                         <View style={styles.imageBottomRow} pointerEvents="none">
                             <View style={{ flex: 1 }}>
-                                <Text style={styles.cardTitleOnImage} numberOfLines={2}>{item.titulo}</Text>
+                                <TranslatedText
+                                    text={item.titulo}
+                                    style={styles.cardTitleOnImage}
+                                    numberOfLines={2}
+                                    showHint={false}
+                                />
                             </View>
                         </View>
                     </View>
@@ -1067,6 +1084,18 @@ function createPlanCardStyles(c: ThemeColors) {
     topRow: { position: 'absolute', top: 12, left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', zIndex: 4 },
     topLeftTags: { flexDirection: 'column', alignItems: 'flex-start', gap: 5, flexShrink: 1, maxWidth: '62%' },
     topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0 },
+    shareBtnOnImage: {
+        width: 36,
+        height: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'transparent',
+    },
+    iconOnImage: {
+        textShadowColor: 'rgba(0,0,0,0.65)',
+        textShadowOffset: { width: 0, height: 1 },
+        textShadowRadius: 4,
+    },
     mainCategoryTag: {
         backgroundColor: 'rgba(255,255,255,0.95)',
         paddingHorizontal: 10,

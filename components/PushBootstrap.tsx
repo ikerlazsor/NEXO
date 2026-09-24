@@ -304,13 +304,59 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
     useEffect(() => {
         if (Platform.OS === 'web') return;
 
+        const handledHrefRef = { current: null as string | null };
+        const handledHrefAtRef = { current: 0 };
+
         const openUrl = (url: string | null) => {
-            if (!url || handledUrlRef.current === url) return;
+            if (!url) return;
+            if (handledUrlRef.current === url) return;
             const target = resolveDeepLinkUrl(url);
             if (!target) return;
+
+            const now = Date.now();
+            // Misma destino (https UL + nexo:// del landing) → una sola navegación
+            if (handledHrefRef.current === target.href && now - handledHrefAtRef.current < 4500) {
+                handledUrlRef.current = url;
+                return;
+            }
+
             handledUrlRef.current = url;
+            handledHrefRef.current = target.href;
+            handledHrefAtRef.current = now;
+
+            // Rutas de archivo (/plan/…) las abre Expo Router vía Universal/App Links.
+            // Solo empujamos a mano share-plan (Supabase) y deep links tipo open?type=…
+            let parsedHost = '';
+            let parsedPath = '';
+            try {
+                const parsed = Linking.parse(url);
+                parsedHost = (parsed.hostname || '').toLowerCase();
+                parsedPath = (parsed.path || '').replace(/^\/+/, '');
+            } catch {
+                /* ignore */
+            }
+            const isShareFn =
+                parsedHost.endsWith('.supabase.co')
+                && /(^|\/)functions\/v1\/share-plan\//i.test(parsedPath);
+            const isPushStyle =
+                parsedHost === 'open'
+                || parsedHost === 'push'
+                || parsedHost === 'n'
+                || /[?&](type|screen|planId)=/i.test(url);
+            if (!isShareFn && !isPushStyle) {
+                return;
+            }
+
             requestAnimationFrame(() => {
-                router.push(target.href as never);
+                try {
+                    if (target.href.startsWith('/plan/')) {
+                        router.replace(target.href as never);
+                    } else {
+                        router.push(target.href as never);
+                    }
+                } catch {
+                    /* ignore */
+                }
             });
         };
 

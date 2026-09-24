@@ -1,4 +1,4 @@
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import { LANG_OPTIONS, type Lang } from '../lib/i18n';
 import { hapticSelection } from '../lib/haptics';
 
@@ -11,9 +11,14 @@ interface Props {
     compact?: boolean;
 }
 
+/** Compact horizontal chips (login / legacy). Prefer `/language` screen in settings. */
 export function LangPicker({ lang, onChange, compact }: Props) {
     return (
-        <View style={[styles.row, compact && styles.rowCompact]}>
+        <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={[styles.row, compact && styles.rowCompact]}
+        >
             {LANG_OPTIONS.map((opt) => (
                 <TouchableOpacity
                     key={opt.code}
@@ -30,20 +35,21 @@ export function LangPicker({ lang, onChange, compact }: Props) {
                     activeOpacity={0.8}
                 >
                     <Text style={[styles.code, compact && styles.codeCompact, lang === opt.code && styles.codeActive]}>
-                        {opt.label}
+                        {opt.flag} {opt.label}
                     </Text>
                 </TouchableOpacity>
             ))}
-        </View>
+        </ScrollView>
     );
 }
 
 const styles = StyleSheet.create({
     row: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
+        flexWrap: 'nowrap',
         gap: 8,
-        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 2,
     },
     rowCompact: { gap: 4 },
     option: {

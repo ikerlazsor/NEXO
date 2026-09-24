@@ -4,6 +4,7 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { Linking, Platform } from 'react-native';
 import { getStoredLang } from './i18n';
+import { localeTag } from './locale';
 import { persistPreferredLanguage } from './appLanguage';
 import {
     getNotificationCategoryPrefs,
@@ -491,7 +492,7 @@ export async function schedulePlanTodayReminder(opts: {
     }
     if (whenMs <= Date.now()) return;
     const lang = await getStoredLang();
-    const timeStr = event.toLocaleTimeString(lang === 'en' ? 'en-GB' : 'es-ES', {
+    const timeStr = event.toLocaleTimeString(localeTag(lang), {
         hour: '2-digit',
         minute: '2-digit',
     });

@@ -71,6 +71,7 @@ import { fetchGuestPlanDetail } from '../../lib/guestFeed';
 import { emitHeartBurst } from '../../lib/heartBurst';
 import { hapticError, hapticLight, hapticMedium, hapticSave, hapticCelebrate, hapticSuccess, hapticWarning } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
+import { localeTag } from '../../lib/locale';
 import { kickParticipant } from '../../lib/kickParticipant';
 import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
 import { hidePlanFromAttendedProfile, removePlanFromMyPlansAndHistory } from '../../lib/myPlansHide';
@@ -153,7 +154,7 @@ export default function PlanDetailScreen() {
     const styles = useThemedStyles(createPlanDetailStyles);
     const { colors } = useAppTheme();
     const { requireAccount, userId: sessionUserId, isGuest } = useAuthSession();
-    const dateLocale = lang === 'en' ? 'en-GB' : 'es-ES';
+    const dateLocale = localeTag(lang);
     const { id, inviteId, inviterId, inviterName, inviterAvatar, inviteTipo, from } = useLocalSearchParams<{
         id: string | string[];
         inviteId?: string | string[];
@@ -1744,6 +1745,22 @@ export default function PlanDetailScreen() {
                         {/* Espacio reservado: el back real está fijo fuera del ScrollView */}
                         <View style={styles.glassBtnPlaceholder} />
                         <View style={styles.heroTopRight}>
+                            {!isPastPlan ? (
+                                <PressScale
+                                    style={styles.glassBtnSm}
+                                    pressedScale={0.88}
+                                    minTouch={false}
+                                    onPress={() => void handleShare()}
+                                    accessibilityLabel={t('card.share')}
+                                    disabled={footballShareBusy}
+                                >
+                                    {footballShareBusy ? (
+                                        <ActivityIndicator size="small" color="#0F172A" />
+                                    ) : (
+                                        <Ionicons name="share-outline" size={17} color="#0F172A" />
+                                    )}
+                                </PressScale>
+                            ) : null}
                             {!isPastPlan && !isCreator ? (
                                 <View
                                     ref={heartHostRef}

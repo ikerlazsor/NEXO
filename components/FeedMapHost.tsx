@@ -721,7 +721,7 @@ export function FeedMapHost() {
                                 const people = Array.isArray(item.participantsList)
                                     ? item.participantsList.slice(0, 5)
                                     : [];
-                                const when = formatProfilePlanWhen(item.fecha_evento, lang === 'en' ? 'en' : 'es');
+                                const when = formatProfilePlanWhen(item.fecha_evento, lang);
                                 const cat = typeof item.categoria === 'string' ? item.categoria : null;
                                 const tipo =
                                     typeof item.tipo_deporte === 'string' ? item.tipo_deporte : null;

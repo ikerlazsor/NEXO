@@ -25,6 +25,7 @@ import { useListScrollRestore } from '../hooks/useListScrollRestore';
 import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../lib/planDetailCache';
 import { seedChatThreadPeek } from '../lib/prefetchChats';
 import { useT } from '../lib/i18n';
+import { localeTag } from '../lib/locale';
 import { FLASH_LIST_DRAW_DISTANCE } from '../lib/listConfig';
 import { getAuthUser } from '../lib/auth';
 import { useAuthSession } from '../lib/authSession';
@@ -123,7 +124,7 @@ export default function MyPlansScreen() {
         };
     }, [userId]);
 
-    const locale = lang === 'en' ? 'en-GB' : 'es-ES';
+    const locale = localeTag(lang);
 
     const fetchMyPlans = useCallback(async (opts?: { force?: boolean; silent?: boolean }) => {
         const gen = ++fetchGenRef.current;

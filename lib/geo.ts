@@ -75,14 +75,25 @@ export function distanceKm(
     return EARTH_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export function formatDistanceKm(km: number, lang: 'es' | 'en' | string = 'es'): string {
+export function formatDistanceKm(km: number, lang: string = 'es'): string {
     if (!Number.isFinite(km)) return '—';
+    const code = (lang || 'en').toLowerCase().split('-')[0];
     if (km < 1) {
         const m = Math.max(1, Math.round(km * 1000));
-        return lang === 'en' ? `${m} m away` : `A ${m} m`;
+        if (code === 'es') return `A ${m} m`;
+        if (code === 'fr') return `À ${m} m`;
+        if (code === 'de') return `${m} m entfernt`;
+        if (code === 'pt') return `A ${m} m`;
+        if (code === 'it') return `A ${m} m`;
+        return `${m} m away`;
     }
     const rounded = km < 10 ? km.toFixed(1) : String(Math.round(km));
-    return lang === 'en' ? `${rounded} km away` : `A ${rounded} km`;
+    if (code === 'es') return `A ${rounded} km`;
+    if (code === 'fr') return `À ${rounded} km`;
+    if (code === 'de') return `${rounded} km entfernt`;
+    if (code === 'pt') return `A ${rounded} km`;
+    if (code === 'it') return `A ${rounded} km`;
+    return `${rounded} km away`;
 }
 
 /** Abre Apple Maps / Google Maps con indicaciones hasta el destino. */

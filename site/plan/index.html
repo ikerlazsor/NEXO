@@ -51,13 +51,22 @@
       var deep = uuid ? ('nexo://plan/' + uuid) : 'nexo://';
       var openBtn = document.getElementById('openApp');
       openBtn.href = deep;
-      if (uuid) {
-        // Intento inmediato (Universal Links a veces caen aquí si la app no interceptó)
-        setTimeout(function () { location.href = deep; }, 300);
-      } else {
+      if (!uuid) {
         document.querySelector('h1').textContent = 'Plan no encontrado';
         document.getElementById('hint').textContent = 'Este enlace no incluye un plan válido.';
+        return;
       }
+      // Si Universal/App Links ya abrieron la app, no redirigir a nexo:// (evita 2 pantallas).
+      var left = false;
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) left = true;
+      });
+      window.addEventListener('pagehide', function () { left = true; });
+      // Solo fallback si seguimos en el navegador (app no instalada / UL no cogió el enlace)
+      setTimeout(function () {
+        if (left) return;
+        try { location.href = deep; } catch (e) {}
+      }, 900);
     })();
   </script>
 </body>

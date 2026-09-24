@@ -614,7 +614,7 @@ export default function ProfileScreen() {
                                 <AttendedPlansRow
                                     plans={attendedPlans}
                                     emptyLabel={t('profilev.attendedEmpty')}
-                                    lang={lang === 'en' ? 'en' : 'es'}
+                                    lang={lang}
                                     onPressPlan={(id) =>
                                         router.push({
                                             pathname: '/plan/[id]',
@@ -632,7 +632,7 @@ export default function ProfileScreen() {
                                     <AttendedPlansRow
                                         plans={organizedPlans.map(organizerPlanCard)}
                                         emptyLabel=""
-                                        lang={lang === 'en' ? 'en' : 'es'}
+                                        lang={lang}
                                         onPressPlan={(id) => router.push({ pathname: '/plan/[id]', params: { id } })}
                                     />
                                 </ProfileSection>
@@ -642,7 +642,7 @@ export default function ProfileScreen() {
                                     <AttendedPlansRow
                                         plans={upcomingPlans.map(organizerPlanCard)}
                                         emptyLabel=""
-                                        lang={lang === 'en' ? 'en' : 'es'}
+                                        lang={lang}
                                         showWhen
                                         onPressPlan={(id) => router.push({ pathname: '/plan/[id]', params: { id } })}
                                     />

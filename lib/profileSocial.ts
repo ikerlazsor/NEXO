@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { localeTag } from './locale';
 import { parseOrganizerGallery, type OrganizerMedia } from './organizer';
 
 export const MAX_PROFILE_GALLERY = 20;
@@ -140,11 +141,11 @@ export function formatCompactCount(value: number): string {
     return `${compact.replace(/\.0$/, '')}M`;
 }
 
-export function formatProfilePlanWhen(iso: string | null | undefined, lang: 'es' | 'en'): string {
+export function formatProfilePlanWhen(iso: string | null | undefined, lang: string = 'es'): string {
     if (!iso) return '';
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return '';
-    const locale = lang === 'en' ? 'en-GB' : 'es-ES';
+    const locale = localeTag(lang);
     const weekday = date.toLocaleDateString(locale, { weekday: 'short' });
     const dayMonth = date.toLocaleDateString(locale, { day: 'numeric', month: 'short' });
     const time = date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });

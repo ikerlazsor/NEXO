@@ -10,6 +10,7 @@ import {
     View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Asset } from 'expo-asset';
 import { LinearGradient } from 'expo-linear-gradient';
 import { captureRef } from 'react-native-view-shot';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -21,6 +22,7 @@ import { sharePlanLink } from '../lib/sharePlan';
 export const PLAN_SHARE_WIDTH = 360;
 const COVER_H = 222;
 const MAX_AVATARS = 5;
+const LOGO_MODULE = require('../assets/images/nexo-logo.png');
 
 export type PlanSharePerson = {
     id?: string;
@@ -93,15 +95,64 @@ function hasNativeRnShare(): boolean {
     }
 }
 
-/** Una hoja de sistema. Nunca importar react-native-share si no está en el binario (crash iOS). */
+function asFileUri(uri: string): string {
+    return uri.startsWith('file://') ? uri : `file://${uri}`;
+}
+
+/** Logo local para el preview de la hoja de compartir (sin flash de portada). */
+async function getLogoFileUri(): Promise<string | null> {
+    try {
+        const asset = Asset.fromModule(LOGO_MODULE);
+        await asset.downloadAsync();
+        const uri = asset.localUri || asset.uri;
+        return uri ? asFileUri(uri) : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Hoja del sistema: preview = logo Nexo.
+ * Contenido compartido: tarjeta del plan (portada + datos) + link.
+ * Nunca importar react-native-share si no está en el binario (crash iOS).
+ */
 async function shareImageAndLink(imageUri: string, link: string) {
-    const fileUri = imageUri.startsWith('file://') ? imageUri : `file://${imageUri}`;
+    const cardUri = asFileUri(imageUri);
+    const logoUri = await getLogoFileUri();
 
     if (hasNativeRnShare()) {
         try {
             const RNShare = (await import('react-native-share')).default;
+            if (Platform.OS === 'ios' && logoUri) {
+                // placeholder/linkMetadata = logo en la hoja; item = tarjeta en el mensaje
+                await RNShare.open({
+                    failOnCancel: false,
+                    activityItemSources: [
+                        {
+                            placeholderItem: { type: 'url', content: logoUri },
+                            item: {
+                                default: { type: 'url', content: cardUri },
+                            },
+                            subject: { default: 'Nexo' },
+                            linkMetadata: {
+                                title: 'Nexo',
+                                icon: logoUri,
+                                image: logoUri,
+                            },
+                        },
+                        {
+                            placeholderItem: { type: 'text', content: link },
+                            item: {
+                                default: { type: 'text', content: link },
+                            },
+                        },
+                    ],
+                });
+                return;
+            }
+            // Android: una sola imagen (la tarjeta). El flash de portada se evita con opacity 0.
             await RNShare.open({
-                url: fileUri,
+                url: cardUri,
                 message: link,
                 type: 'image/jpeg',
                 failOnCancel: false,
@@ -113,13 +164,15 @@ async function shareImageAndLink(imageUri: string, link: string) {
     }
 
     if (Platform.OS === 'ios') {
-        await Share.share({ url: fileUri, message: link });
+        // Preferir logo como preview del sheet; el mensaje lleva el link. Si hay tarjeta, iOS
+        // a veces solo acepta un `url`: priorizamos tarjeta en el share nativo básico.
+        await Share.share({ url: cardUri, message: link });
         return;
     }
 
     try {
         if (await Sharing.isAvailableAsync()) {
-            await Sharing.shareAsync(fileUri, {
+            await Sharing.shareAsync(cardUri, {
                 mimeType: 'image/jpeg',
                 dialogTitle: 'Compartir',
                 UTI: 'public.jpeg',
@@ -128,7 +181,7 @@ async function shareImageAndLink(imageUri: string, link: string) {
     } catch {
         /* ignore */
     }
-    await Share.share({ message: link, title: 'Nexo!' });
+    await Share.share({ message: link, title: 'Nexo' });
 }
 
 /**
@@ -138,8 +191,9 @@ async function shareImageAndLink(imageUri: string, link: string) {
 export function PlanShareModal({ payload, onDone }: Props) {
     const cardRef = useRef<View>(null);
     const [coverSource, setCoverSource] = useState<CoverSource | null>(null);
+    const [coverPainted, setCoverPainted] = useState(false);
     const [localAvatars, setLocalAvatars] = useState<string[]>([]);
-    const [ready, setReady] = useState(false);
+    const [assetsReady, setAssetsReady] = useState(false);
     const ranRef = useRef(false);
 
     const people = useMemo(() => (payload?.people ?? []).slice(0, 12), [payload?.people]);
@@ -148,17 +202,23 @@ export function PlanShareModal({ payload, onDone }: Props) {
     const joined = people.length;
     const maxPeople = payload?.maxPeople ?? 0;
 
+    const ready = assetsReady && coverPainted;
+
     useEffect(() => {
         if (!payload) {
             setCoverSource(null);
             setLocalAvatars([]);
-            setReady(false);
+            setAssetsReady(false);
+            setCoverPainted(false);
             ranRef.current = false;
             return;
         }
         let cancelled = false;
-        setReady(false);
+        setAssetsReady(false);
+        setCoverPainted(false);
         ranRef.current = false;
+        // Precalentar logo para el preview de la hoja
+        void getLogoFileUri();
 
         void (async () => {
             const resolved = resolveCoverSource(payload.coverUrl);
@@ -166,10 +226,10 @@ export function PlanShareModal({ payload, onDone }: Props) {
 
             if (!resolved) {
                 setCoverSource(null);
+                setCoverPainted(true);
             } else if (resolved.kind === 'asset') {
                 setCoverSource(resolved);
             } else {
-                // Timeout corto: no bloquear el share por la red
                 const local = await Promise.race([
                     downloadToCache(resolved.uri, 'cover'),
                     sleep(1200).then(() => null),
@@ -178,7 +238,6 @@ export function PlanShareModal({ payload, onDone }: Props) {
                 setCoverSource(local ? { kind: 'uri', uri: local } : resolved);
             }
 
-            // Avatares en paralelo, máx ~1.2s; si fallan, iniciales remotas o vacío
             const avJobs = visiblePeople.map(async (p) => {
                 const remote = (p.avatar_url || '').trim();
                 if (!remote) return null;
@@ -192,7 +251,7 @@ export function PlanShareModal({ payload, onDone }: Props) {
             const avs = (await Promise.all(avJobs)).filter((u): u is string => !!u);
             if (cancelled) return;
             setLocalAvatars(avs);
-            setReady(true);
+            setAssetsReady(true);
         })();
 
         return () => {
@@ -205,8 +264,8 @@ export function PlanShareModal({ payload, onDone }: Props) {
         ranRef.current = true;
         const link = planShareUrl(payload.planId);
         try {
-            // Pintar un frame en el Modal transparente
-            await sleep(220);
+            // Un frame con la tarjeta ya pintada (invisible) antes de capturar
+            await sleep(80);
             if (!cardRef.current) {
                 await sharePlanLink(payload.planId, payload.title);
                 return;
@@ -236,7 +295,6 @@ export function PlanShareModal({ payload, onDone }: Props) {
         void runShare();
     }, [payload, ready, runShare]);
 
-    // Failsafe: si assets tardan, compartir solo el link (no expulsar ni colgar)
     useEffect(() => {
         if (!payload || ready || ranRef.current) return;
         const t = setTimeout(() => {
@@ -255,6 +313,16 @@ export function PlanShareModal({ payload, onDone }: Props) {
     const when = (payload.when || '').trim();
     const location = (payload.location || '').trim();
 
+    const onCoverLoad = () => setCoverPainted(true);
+    const onCoverError = () => setCoverPainted(true);
+
+    // Si onLoad no dispara (asset en caché), no bloquear el share
+    useEffect(() => {
+        if (!coverSource || coverPainted) return;
+        const t = setTimeout(() => setCoverPainted(true), 500);
+        return () => clearTimeout(t);
+    }, [coverSource, coverPainted]);
+
     return (
         <Modal
             visible
@@ -263,14 +331,26 @@ export function PlanShareModal({ payload, onDone }: Props) {
             statusBarTranslucent
             onRequestClose={onDone}
         >
-            {/* Casi invisible pero EN pantalla — view-shot en iOS no tolera off-screen */}
+            {/* Invisible pero en pantalla — view-shot en iOS no tolera off-screen */}
             <View style={styles.captureHost} pointerEvents="none">
                 <View ref={cardRef} collapsable={false} style={styles.card}>
                     <View style={styles.imageWrap} collapsable={false}>
                         {coverSource?.kind === 'asset' ? (
-                            <Image source={coverSource.source} style={styles.cover} resizeMode="cover" />
+                            <Image
+                                source={coverSource.source}
+                                style={styles.cover}
+                                resizeMode="cover"
+                                onLoad={onCoverLoad}
+                                onError={onCoverError}
+                            />
                         ) : coverSource?.kind === 'uri' ? (
-                            <Image source={{ uri: coverSource.uri }} style={styles.cover} resizeMode="cover" />
+                            <Image
+                                source={{ uri: coverSource.uri }}
+                                style={styles.cover}
+                                resizeMode="cover"
+                                onLoad={onCoverLoad}
+                                onError={onCoverError}
+                            />
                         ) : (
                             <View style={[styles.cover, styles.coverFallback]} />
                         )}
@@ -366,7 +446,7 @@ export function buildPlanSharePayload(input: {
 const styles = StyleSheet.create({
     captureHost: {
         ...StyleSheet.absoluteFillObject,
-        opacity: 0.02,
+        opacity: 0,
         justifyContent: 'center',
         alignItems: 'center',
     },

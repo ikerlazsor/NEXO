@@ -56,6 +56,7 @@ import { FEED_CACHE_KEY } from '../lib/feedCache';
 import { injectOptimisticFeedPlan, markFeedNeedsRefresh } from '../lib/feedReload';
 import { hapticCelebrate, hapticError, hapticLight, hapticMedium, hapticSelection, hapticSuccess, hapticToggle } from '../lib/haptics';
 import { useT } from '../lib/i18n';
+import { localeTag } from '../lib/locale';
 import { broadcastPlanMembership } from '../lib/membershipBroadcast';
 import { Alert, dismissAllNexoAlerts } from '../lib/nexoAlert';
 import { MAX_ORGANIZER_COVERS, uploadOrganizerCover } from '../lib/planCovers';
@@ -758,7 +759,7 @@ export default function CreatePlanScreen() {
                         Math.abs(originalPlace.longitude - location.longitude) > 0.0002)
                 );
                 if (dateChanged || placeChanged) {
-                    const timeLabel = date.toLocaleString(lang === 'en' ? 'en-GB' : 'es-ES', {
+                    const timeLabel = date.toLocaleString(localeTag(lang), {
                         weekday: 'short',
                         day: 'numeric',
                         month: 'short',
@@ -1183,7 +1184,7 @@ export default function CreatePlanScreen() {
                                         <Ionicons name="calendar-outline" size={22} color={PRIMARY} />
                                     </View>
                                     <Text style={styles.dateTimeTimeText}>
-                                        {date.toLocaleDateString(lang === 'en' ? 'en-GB' : 'es-ES', {
+                                        {date.toLocaleDateString(localeTag(lang), {
                                             weekday: 'short',
                                             day: 'numeric',
                                             month: 'short',
@@ -1226,7 +1227,7 @@ export default function CreatePlanScreen() {
                                                     setDayCalendarOpen(false);
                                                 }}
                                                 days={30}
-                                                locale={lang === 'en' ? 'en-GB' : 'es-ES'}
+                                                locale={localeTag(lang)}
                                                 minDate={minPlanDate()}
                                             />
                                         </ScrollView>
@@ -1241,7 +1242,7 @@ export default function CreatePlanScreen() {
                                 onCancel={() => setPickerVisible(false)}
                                 date={date}
                                 is24Hour={true}
-                                locale={lang === 'en' ? 'en-GB' : 'es-ES'}
+                                locale={localeTag(lang)}
                                 isDarkModeEnabled={scheme === 'dark'}
                                 themeVariant={scheme}
                                 textColor={colors.text}

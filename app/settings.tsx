@@ -20,7 +20,6 @@ import {
     View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LangPicker } from '../components/LangPicker';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { getAuthUser } from '../lib/auth';
@@ -63,7 +62,9 @@ const Row = ({ icon, label, color, onPress, right, subtitle }: RowProps) => {
                 <Ionicons name={icon} size={20} color={danger ? colors.danger : colors.primary} />
             </View>
             <View style={styles.rowTextCol}>
-                <Text style={[styles.rowLabel, { color: tint }]}>{label}</Text>
+                <Text style={[styles.rowLabel, { color: tint }]} numberOfLines={1}>
+                    {label}
+                </Text>
                 {subtitle ? <Text style={styles.rowSub}>{subtitle}</Text> : null}
             </View>
             {right ?? (onPress ? <Ionicons name="chevron-forward" size={18} color={colors.borderStrong} /> : null)}
@@ -73,7 +74,7 @@ const Row = ({ icon, label, color, onPress, right, subtitle }: RowProps) => {
 
 export default function SettingsScreen() {
     const router = useRouter();
-    const { t, lang, setLang } = useT();
+    const { t } = useT();
     const { colors } = useAppTheme();
     const styles = useThemedStyles(createSettingsStyles);
     const { isGuest } = useAuthSession();
@@ -182,8 +183,7 @@ export default function SettingsScreen() {
                     <Row
                         icon="language-outline"
                         label={t('settings.language')}
-                        onPress={undefined}
-                        right={<LangPicker lang={lang} onChange={setLang} compact />}
+                        onPress={() => router.push('/language')}
                     />
                     {!isGuest ? (
                         <>
@@ -270,7 +270,7 @@ function createSettingsStyles(c: ThemeColors) {
         card: { backgroundColor: c.surface, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
         row: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
         rowIcon: { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-        rowTextCol: { flex: 1 },
+        rowTextCol: { flex: 1, minWidth: 0 },
         rowLabel: { fontSize: 16, fontWeight: '600' },
         rowSub: { marginTop: 3, fontSize: 12, fontWeight: '500', color: c.textSubtle, lineHeight: 16 },
         divider: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 68 },

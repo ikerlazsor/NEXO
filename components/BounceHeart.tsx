@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef } from 'react';
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import Animated, {
     useAnimatedStyle,
     useSharedValue,
@@ -17,6 +17,7 @@ type Props = {
     color?: string;
     savedColor?: string;
     style?: StyleProp<ViewStyle>;
+    iconStyle?: StyleProp<TextStyle>;
     haptic?: boolean;
 };
 
@@ -28,6 +29,7 @@ export function BounceHeart({
     color = '#FFF',
     savedColor = '#FFF',
     style,
+    iconStyle,
     haptic = true,
 }: Props) {
     const scale = useSharedValue(1);
@@ -70,6 +72,7 @@ export function BounceHeart({
                     name={saved ? 'bookmark' : 'bookmark-outline'}
                     size={size}
                     color={saved ? savedColor : color}
+                    style={iconStyle}
                 />
             </Animated.View>
         </Pressable>

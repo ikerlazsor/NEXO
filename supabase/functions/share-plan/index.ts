@@ -43,12 +43,19 @@ function resolveImageUrl(raw: string | null | undefined, supabaseUrl: string): s
   return null;
 }
 
-function formatWhen(iso: string | null | undefined, lang: 'es' | 'en'): string {
+function formatWhen(iso: string | null | undefined, lang: string): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
+  const tag =
+    lang === 'en' ? 'en-GB'
+    : lang === 'fr' ? 'fr-FR'
+    : lang === 'de' ? 'de-DE'
+    : lang === 'pt' ? 'pt-PT'
+    : lang === 'it' ? 'it-IT'
+    : 'es-ES';
   try {
-    return new Intl.DateTimeFormat(lang === 'en' ? 'en-GB' : 'es-ES', {
+    return new Intl.DateTimeFormat(tag, {
       weekday: 'short',
       day: 'numeric',
       month: 'short',
@@ -61,6 +68,18 @@ function formatWhen(iso: string | null | undefined, lang: 'es' | 'en'): string {
     return '';
   }
 }
+
+function detectShareLang(acceptLanguage: string): string {
+  const raw = acceptLanguage.toLowerCase();
+  if (raw.startsWith('en')) return 'en';
+  if (raw.startsWith('fr')) return 'fr';
+  if (raw.startsWith('de')) return 'de';
+  if (raw.startsWith('pt')) return 'pt';
+  if (raw.startsWith('it')) return 'it';
+  if (raw.startsWith('es')) return 'es';
+  return 'en';
+}
+
 
 function extractPlanId(req: Request): string | null {
   const url = new URL(req.url);
@@ -111,9 +130,7 @@ serve(async (req) => {
   }
 
   const ua = req.headers.get('user-agent') || '';
-  const lang: 'es' | 'en' = (req.headers.get('accept-language') || '').toLowerCase().startsWith('en')
-    ? 'en'
-    : 'es';
+  const lang = detectShareLang(req.headers.get('accept-language') || '');
   const isIOS = /iphone|ipad|ipod/i.test(ua);
   const isAndroid = /android/i.test(ua);
 
@@ -145,7 +162,58 @@ serve(async (req) => {
     `S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_URL)};end`;
   const primary = isIOS ? deepLink : intent;
   const pageUrl = `${supabaseUrl}/functions/v1/share-plan/${planId}`;
-  const description = [when, location].filter(Boolean).join(' · ') || 'Abre este plan en Nexo!';
+  const shareUi = {
+    es: {
+      open: 'Abrir en Nexo!',
+      store: 'Descargar Nexo! en App Store',
+      storeAndroid: 'Descargar Nexo! en Google Play',
+      hint: 'Si no tienes la app, descárgala abajo',
+      desc: 'Abre este plan en Nexo!',
+    },
+    en: {
+      open: 'Open in Nexo!',
+      store: 'Get Nexo! on the App Store',
+      storeAndroid: 'Get Nexo! on Google Play',
+      hint: 'If the app does not open, download it below',
+      desc: 'Open this plan in Nexo!',
+    },
+    fr: {
+      open: 'Ouvrir dans Nexo!',
+      store: 'Télécharger Nexo! sur l’App Store',
+      storeAndroid: 'Télécharger Nexo! sur Google Play',
+      hint: 'Si l’app ne s’ouvre pas, télécharge-la ci-dessous',
+      desc: 'Ouvre ce plan dans Nexo!',
+    },
+    de: {
+      open: 'In Nexo! öffnen',
+      store: 'Nexo! im App Store laden',
+      storeAndroid: 'Nexo! bei Google Play laden',
+      hint: 'Wenn die App nicht öffnet, lade sie unten herunter',
+      desc: 'Diesen Plan in Nexo! öffnen',
+    },
+    pt: {
+      open: 'Abrir no Nexo!',
+      store: 'Descarregar Nexo! na App Store',
+      storeAndroid: 'Descarregar Nexo! no Google Play',
+      hint: 'Se a app não abrir, descarrega-a abaixo',
+      desc: 'Abre este plano no Nexo!',
+    },
+    it: {
+      open: 'Apri in Nexo!',
+      store: 'Scarica Nexo! sull’App Store',
+      storeAndroid: 'Scarica Nexo! su Google Play',
+      hint: 'Se l’app non si apre, scaricala qui sotto',
+      desc: 'Apri questo piano in Nexo!',
+    },
+  }[lang] || {
+    open: 'Open in Nexo!',
+    store: 'Get Nexo! on the App Store',
+    storeAndroid: 'Get Nexo! on Google Play',
+    hint: 'If the app does not open, download it below',
+    desc: 'Open this plan in Nexo!',
+  };
+
+  const description = [when, location].filter(Boolean).join(' · ') || shareUi.desc;
   const safeTitle = escapeHtml(title);
   const safeDesc = escapeHtml(description);
   const safeImage = escapeHtml(image);
@@ -172,12 +240,10 @@ serve(async (req) => {
 </head><body><p>${safeTitle}</p></body></html>`);
   }
 
-  const openLabel = lang === 'en' ? 'Open in Nexo!' : 'Abrir en Nexo!';
-  const storeLabel = lang === 'en' ? 'Get Nexo! on the App Store' : 'Descargar Nexo! en App Store';
-  const storeLabelAndroid = lang === 'en' ? 'Get Nexo! on Google Play' : 'Descargar Nexo! en Google Play';
-  const hint = lang === 'en'
-    ? 'If the app does not open, download it below'
-    : 'Si no tienes la app, descárgala abajo';
+  const openLabel = shareUi.open;
+  const storeLabel = shareUi.store;
+  const storeLabelAndroid = shareUi.storeAndroid;
+  const hint = shareUi.hint;
 
   return htmlResponse(`<!DOCTYPE html>
 <html lang="${lang}">
@@ -225,10 +291,8 @@ a.btn2{display:block;background:transparent;color:#93C5FD;text-decoration:none;f
     if (document.hidden) left = true;
   });
   window.addEventListener('pagehide', function(){ left = true; });
-  // 1) Intentar abrir la app
+  // Un solo intento de abrir la app (evitar 2× detalle por primary + deep)
   go(primary);
-  setTimeout(function(){ if (!left) go(deep); }, 250);
-  // 2) Si no hay app instalada, ir a la tienda
   setTimeout(function(){
     if (left) return;
     go(isIOS ? appStore : (isAndroid ? play : store));

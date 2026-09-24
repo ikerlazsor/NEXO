@@ -1314,7 +1314,7 @@ export default function UserProfileScreen() {
                                 <AttendedPlansRow
                                     plans={attendedPlans}
                                     emptyLabel={t('profilev.attendedEmpty')}
-                                    lang={lang === 'en' ? 'en' : 'es'}
+                                    lang={lang}
                                     onPressPlan={openPlan}
                                 />
                             </ProfileSection>
@@ -1327,7 +1327,7 @@ export default function UserProfileScreen() {
                                     <AttendedPlansRow
                                         plans={organizedPlans.map(organizerPlanCard)}
                                         emptyLabel=""
-                                        lang={lang === 'en' ? 'en' : 'es'}
+                                        lang={lang}
                                         onPressPlan={openPlan}
                                     />
                                 </ProfileSection>
@@ -1337,7 +1337,7 @@ export default function UserProfileScreen() {
                                     <AttendedPlansRow
                                         plans={upcomingPlans.map(organizerPlanCard)}
                                         emptyLabel=""
-                                        lang={lang === 'en' ? 'en' : 'es'}
+                                        lang={lang}
                                         showWhen
                                         onPressPlan={openPlan}
                                     />

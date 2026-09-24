@@ -1,23 +1,28 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getLocales } from 'expo-localization';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { de, fr, it, pt } from './i18n/locales';
+import { isAppLang, normalizeDeviceLang } from './locale';
 
-export type Lang = 'es' | 'en';
+export type Lang = 'es' | 'en' | 'fr' | 'de' | 'pt' | 'it';
 
 const STORAGE_KEY = '@nexo_lang';
 
 export function detectDeviceLang(): Lang {
     try {
-        const code = getLocales()[0]?.languageCode?.toLowerCase() ?? '';
-        return code === 'es' ? 'es' : 'en';
+        return normalizeDeviceLang(getLocales()[0]?.languageCode);
     } catch {
-        return 'es';
+        return 'en';
     }
 }
 
-export const LANG_OPTIONS: { code: Lang; label: string }[] = [
-    { code: 'es', label: 'ES' },
-    { code: 'en', label: 'EN' },
+export const LANG_OPTIONS: { code: Lang; label: string; flag: string; name: string }[] = [
+    { code: 'es', label: 'ES', flag: '🇪🇸', name: 'Español' },
+    { code: 'en', label: 'EN', flag: '🇬🇧', name: 'English' },
+    { code: 'fr', label: 'FR', flag: '🇫🇷', name: 'Français' },
+    { code: 'de', label: 'DE', flag: '🇩🇪', name: 'Deutsch' },
+    { code: 'pt', label: 'PT', flag: '🇵🇹', name: 'Português' },
+    { code: 'it', label: 'IT', flag: '🇮🇹', name: 'Italiano' },
 ];
 
 type Dict = Record<string, string>;
@@ -3667,134 +3672,12 @@ const en: Dict = {
     'futbol.removeLineupConfirm': 'Remove',
 };
 
-/** Traducciones francesas (base inglés + overrides). */
-const fr: Dict = {
-    ...en,
-    'common.back': 'Retour',
-    'common.cancel': 'Annuler',
-    'common.save': 'Enregistrer',
-    'common.delete': 'Supprimer',
-    'common.edit': 'Modifier',
-    'common.loading': 'Chargement...',
-    'common.search': 'Rechercher',
-    'common.offline': 'Hors ligne',
-    'feed.greeting': 'Découvrir des plans',
-    'feed.subtitle': 'Trouvez votre prochaine sortie',
-    'feed.searchPlaceholder': 'Rechercher des plans...',
-    'feed.empty': 'Aucun plan ici',
-    'feed.emptySub': 'Créez le premier ou changez les filtres',
-    'card.join': 'Rejoindre',
-    'card.request': 'Demander',
-    'card.joined': 'Inscrit',
-    'card.requested': 'Demandé',
-    'card.full': 'COMPLET',
-    'card.report': 'Signaler',
-    'card.reportTitle': 'Signaler le plan',
-    'card.reportConfirm': 'Signaler ce plan ? Notre équipe l\'examinera.',
-    'card.reportSuccess': 'Signalement envoyé. Merci.',
-    'card.reportAlready': 'Vous avez déjà signalé ce plan.',
-    'profile.myProfile': 'Mon profil',
-    'profile.details': 'Détails',
-    'profile.detailsSub': 'Visible sur votre profil public. Modifiez ou masquez chaque champ.',
-    'profile.hidden': 'Masqué',
-    'profile.visible': 'Visible',
-    'profile.notSet': 'Non renseigné',
-    'profile.age': 'Âge',
-    'profile.gender': 'Genre',
-    'profile.drinking': 'Alcool',
-    'profile.smoking': 'Tabac',
-    'profile.hobbies': 'Loisirs',
-    'profile.badges': 'Badges',
-    'profile.aboutMe': 'À propos',
-    'profile.searchUsers': 'Trouver des personnes',
-    'profile.quickActions': 'Accès rapide',
-    'profile.logout': 'Déconnexion',
-    'userprofile.title': 'Profil',
-    'userprofile.details': 'Détails',
-    'userprofile.aboutMe': 'À propos',
-    'userprofile.addFriend': 'Envoyer une demande d\'ami',
-    'userprofile.areFriends': 'Vous êtes amis',
-    'userprofile.requestSent': 'Demande envoyée',
-    'login.tabLogin': 'Connexion',
-    'login.tabRegister': 'Créer un compte',
-    'login.language': 'Langue',
-    'login.enter': 'Entrer',
-    'login.createAccount': 'Créer mon compte',
-    'settings.language': 'Langue',
-    'settings.title': 'Paramètres',
-    'onboarding.welcomeTitle': 'Complétez votre profil',
-    'onboarding.ageQuestion': 'Quel âge avez-vous ?',
-    'onboarding.genderQuestion': 'Comment vous identifiez-vous ?',
-    'onboarding.finish': 'Commencer sur Nexo!',
-};
-
-/** Traducciones portuguesas (base inglés + overrides). */
-const pt: Dict = {
-    ...en,
-    'common.back': 'Voltar',
-    'common.cancel': 'Cancelar',
-    'common.save': 'Guardar',
-    'common.delete': 'Eliminar',
-    'common.edit': 'Editar',
-    'common.loading': 'A carregar...',
-    'common.search': 'Pesquisar',
-    'common.offline': 'Sem ligação',
-    'feed.greeting': 'Descobrir planos',
-    'feed.subtitle': 'Encontre o seu próximo encontro',
-    'feed.searchPlaceholder': 'Pesquisar planos...',
-    'feed.empty': 'Sem planos por aqui',
-    'feed.emptySub': 'Crie o primeiro ou mude os filtros',
-    'card.join': 'Juntar-me',
-    'card.request': 'Pedir para entrar',
-    'card.joined': 'Inscrito',
-    'card.requested': 'Solicitado',
-    'card.full': 'CHEIO',
-    'card.report': 'Denunciar',
-    'card.reportTitle': 'Denunciar plano',
-    'card.reportConfirm': 'Denunciar este plano? A nossa equipa irá analisá-lo.',
-    'card.reportSuccess': 'Denúncia enviada. Obrigado.',
-    'card.reportAlready': 'Já denunciou este plano.',
-    'profile.myProfile': 'O meu perfil',
-    'profile.details': 'Detalhes',
-    'profile.detailsSub': 'Visível no seu perfil público. Edite ou oculte cada campo.',
-    'profile.hidden': 'Oculto',
-    'profile.visible': 'Visível',
-    'profile.notSet': 'Não definido',
-    'profile.age': 'Idade',
-    'profile.gender': 'Género',
-    'profile.drinking': 'Bebida',
-    'profile.smoking': 'Tabaco',
-    'profile.hobbies': 'Passatempos',
-    'profile.badges': 'Insígnias',
-    'profile.aboutMe': 'Sobre mim',
-    'profile.searchUsers': 'Encontrar pessoas',
-    'profile.quickActions': 'Acesso rápido',
-    'profile.logout': 'Terminar sessão',
-    'userprofile.title': 'Perfil',
-    'userprofile.details': 'Detalhes',
-    'userprofile.aboutMe': 'Sobre mim',
-    'userprofile.addFriend': 'Enviar pedido de amizade',
-    'userprofile.areFriends': 'São amigos',
-    'userprofile.requestSent': 'Pedido enviado',
-    'login.tabLogin': 'Iniciar sessão',
-    'login.tabRegister': 'Criar conta',
-    'login.language': 'Idioma',
-    'login.enter': 'Entrar',
-    'login.createAccount': 'Criar a minha conta',
-    'settings.language': 'Idioma',
-    'settings.title': 'Definições',
-    'onboarding.welcomeTitle': 'Complete o seu perfil',
-    'onboarding.ageQuestion': 'Quantos anos tem?',
-    'onboarding.genderQuestion': 'Como se identifica?',
-    'onboarding.finish': 'Começar no Nexo!',
-};
-
-const DICTS: Record<Lang, Dict> = { es, en };
+const DICTS: Record<Lang, Dict> = { es, en, fr, de, pt, it };
 
 export async function getStoredLang(): Promise<Lang> {
     try {
         const saved = await AsyncStorage.getItem(STORAGE_KEY);
-        if (saved === 'es' || saved === 'en') return saved;
+        if (isAppLang(saved)) return saved;
     } catch {
         /* ignore */
     }
@@ -3808,7 +3691,7 @@ export function tOffline(
     key: string,
     params?: Record<string, string | number>,
 ): string {
-    let str = DICTS[lang]?.[key] ?? es[key] ?? key;
+    let str = DICTS[lang]?.[key] ?? DICTS.en[key] ?? es[key] ?? key;
     if (params) {
         Object.keys(params).forEach((p) => {
             str = str.replace(new RegExp(`\\{${p}\\}`, 'g'), String(params[p]));
@@ -3830,7 +3713,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         AsyncStorage.getItem(STORAGE_KEY).then((saved) => {
-            if (saved === 'es' || saved === 'en') {
+            if (isAppLang(saved)) {
                 setLangState(saved);
                 void import('./appLanguage').then(({ persistPreferredLanguage }) => {
                     void persistPreferredLanguage(saved);
@@ -3856,7 +3739,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
     const t = useCallback(
         (key: string, params?: Record<string, string | number>) => {
-            let str = DICTS[lang][key] ?? DICTS.es[key] ?? key;
+            let str = DICTS[lang]?.[key] ?? DICTS.en[key] ?? es[key] ?? key;
             if (params) {
                 Object.keys(params).forEach((p) => {
                     str = str.replace(new RegExp(`\\{${p}\\}`, 'g'), String(params[p]));
@@ -3877,10 +3760,11 @@ export function useT() {
     if (!ctx) {
         // Fallback seguro si algún componente se renderiza fuera del provider
         return {
-            lang: 'es' as Lang,
+            lang: detectDeviceLang(),
             setLang: () => {},
             t: (key: string, params?: Record<string, string | number>) => {
-                let str = es[key] ?? key;
+                const d = detectDeviceLang();
+                let str = DICTS[d]?.[key] ?? DICTS.en[key] ?? es[key] ?? key;
                 if (params) Object.keys(params).forEach((p) => { str = str.replace(new RegExp(`\\{${p}\\}`, 'g'), String(params[p])); });
                 return str;
             },

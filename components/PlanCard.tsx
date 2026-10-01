@@ -75,12 +75,10 @@ const isSameCalendarDay = (a: Date, b: Date) =>
 
 const AvatarStack = ({
     participants,
-    maxPeople,
     onOpenRoster,
     dark,
 }: {
     participants: any[];
-    maxPeople: number;
     onOpenRoster: () => void;
     dark?: boolean;
 }) => {
@@ -89,8 +87,7 @@ const AvatarStack = ({
     if (!participants || participants.length === 0) {
         return (
             <View style={styles.avatarStackRow}>
-                <Text style={[styles.beFirstText, dark && styles.beFirstTextDark]}>{t('card.beFirst')} · </Text>
-                <Text style={[styles.maxText, dark && styles.maxTextDark]}>({t('card.max', { n: maxPeople })})</Text>
+                <Text style={[styles.beFirstText, dark && styles.beFirstTextDark]}>{t('card.beFirst')}</Text>
             </View>
         );
     }
@@ -126,7 +123,6 @@ const AvatarStack = ({
             <TouchableOpacity activeOpacity={0.85} onPress={onOpenRoster}>
                 <Text style={[styles.goingText, dark && styles.goingTextDark]}>{t('card.weAre', { n: participants.length })}</Text>
             </TouchableOpacity>
-            <Text style={[styles.maxText, dark && styles.maxTextDark]}> ({t('card.max', { n: maxPeople })})</Text>
         </View>
     );
 };
@@ -691,7 +687,6 @@ function PlanCardInner({
                     ]}>
                         <AvatarStack
                             participants={participants}
-                            maxPeople={item.maximo_participantes}
                             onOpenRoster={() => {
                                 if (onOpenDetail) onOpenDetail(item.id);
                                 else if (participants.length > 0) setShowRoster(true);
@@ -1153,8 +1148,6 @@ function createPlanCardStyles(c: ThemeColors) {
     extraBubbleText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
     goingText: { marginLeft: 10, fontSize: 13, fontWeight: '800', color: INK },
     goingTextDark: { color: '#F1F5F9' },
-    maxText: { fontSize: 13, fontWeight: '700', color: '#94A3B8' },
-    maxTextDark: { color: '#CBD5E1' },
     beFirstText: { fontSize: 13, fontWeight: '600', color: '#94A3B8' },
     beFirstTextDark: { color: '#CBD5E1' },
 

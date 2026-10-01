@@ -11,7 +11,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "test": "tsc lib/startupControl.ts --outDir .test-dist --module commonjs --target es2022 --lib es2022,dom --strict --skipLibCheck && node --test tests/*.test.cjs",
+    "test": "tsc lib/startupControl.ts lib/otaReloadPolicy.ts --outDir .test-dist --module commonjs --target es2022 --lib es2022,dom --strict --skipLibCheck && node --test tests/*.test.cjs",
     "deps:check": "npm audit --omit=dev --audit-level=critical && npx expo install --check",
     "bundle:check": "expo export --platform android --output-dir /tmp/nexo-android-bundle --clear && expo export --platform ios --output-dir /tmp/nexo-ios-bundle --clear",
     "db:test": "supabase test db",

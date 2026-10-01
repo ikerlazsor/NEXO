@@ -54,7 +54,7 @@ import {
   type StartupFailure,
 } from '../lib/startupControl';
 import { supabase } from '../lib/supabase';
-import { ensureStartupAppUpdateCheck, startAppUpdateListener } from '../lib/appUpdates';
+import { applyAvailableUpdateBeforeReveal, startAppUpdateListener } from '../lib/appUpdates';
 import { AppThemeProvider, useAppTheme } from '../lib/appTheme';
 import { theme } from '../theme';
 
@@ -161,8 +161,14 @@ function AuthGate({ children }: { children: ReactNode }) {
       setStartupFailure(null);
       setStartupPhase('loading');
 
-      // OTA en paralelo: no bloquear splash ni forzar reload aquí.
-      void ensureStartupAppUpdateCheck();
+      // Con el splash puesto: entrar ya en la última versión publicada.
+      // Si no hay update, la red falla o se agota el tiempo, se abre la versión actual.
+      try {
+        await applyAvailableUpdateBeforeReveal();
+      } catch {
+        /* abrir igualmente */
+      }
+      if (!mounted) return;
 
       const result = await coordinator.run<StartupSnapshot>(
         async (signal) => {

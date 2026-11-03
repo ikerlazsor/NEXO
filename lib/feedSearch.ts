@@ -525,6 +525,14 @@ const SUB_KEYWORDS: Record<string, string[]> = {
     ],
 };
 
+/** No expandir estas palabras: sueltan grupos enteros (quedadas, fotos, juegos…). */
+const SEARCH_STOPWORDS = new Set([
+    'plan', 'planes', 'mesa', 'foto', 'fotos',
+    'the', 'and', 'con', 'para', 'una', 'uno', 'del', 'las', 'los', 'por', 'que',
+]);
+
+const EXPAND_MIN_LEN = 3;
+
 function stripAccents(s: string): string {
     return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
@@ -542,26 +550,33 @@ function tokenize(s: string): string[] {
 /** ¿El texto contiene el término (frase o tokens)? */
 function textHasTerm(text: string, term: string): boolean {
     if (!term || !text) return false;
+    if (term.length < EXPAND_MIN_LEN) {
+        return tokenize(text).some((t) => t === term || t.startsWith(term));
+    }
     if (text.includes(term)) return true;
     const tokens = tokenize(term);
     if (tokens.length >= 2) return tokens.every((t) => text.includes(t));
     return false;
 }
 
+function isStopword(term: string): boolean {
+    return SEARCH_STOPWORDS.has(term);
+}
+
 /** Índices de grupos que toca un texto. */
 function matchingGroupIndexes(text: string): number[] {
     const n = normalizeSearchText(text);
-    if (!n) return [];
-    const tokens = tokenize(n);
+    if (!n || n.length < EXPAND_MIN_LEN || isStopword(n)) return [];
+    const tokens = tokenize(n).filter((t) => t.length >= EXPAND_MIN_LEN && !isStopword(t));
     const hits: number[] = [];
     for (let i = 0; i < CONCEPT_GROUPS.length; i++) {
         const norms = CONCEPT_GROUPS[i].map(normalizeSearchText);
-        const hit = norms.some(
-            (term) =>
-                n.includes(term)
-                || term.includes(n)
-                || tokens.some((t) => t.length >= 3 && (term.includes(t) || t.includes(term))),
-        );
+        const hit = norms.some((term) => {
+            if (!term) return false;
+            if (term === n || n === term) return true;
+            if (n.length >= EXPAND_MIN_LEN && (n.includes(term) || term.includes(n))) return true;
+            return tokens.some((t) => term === t || (t.length >= 4 && (term.includes(t) || t.includes(term))));
+        });
         if (hit) hits.push(i);
     }
     return hits;
@@ -572,23 +587,35 @@ export function expandQueryLocally(query: string): string[] {
     const q = normalizeSearchText(query);
     if (!q) return [];
 
-    const out = new Set<string>([q, ...tokenize(query)]);
+    const out = new Set<string>([q, ...tokenize(query).filter((t) => !isStopword(t))]);
+    if (q.length < EXPAND_MIN_LEN || isStopword(q)) {
+        return Array.from(out).filter(Boolean);
+    }
 
     for (const idx of matchingGroupIndexes(q)) {
-        for (const term of CONCEPT_GROUPS[idx]) out.add(normalizeSearchText(term));
+        for (const term of CONCEPT_GROUPS[idx]) {
+            const n = normalizeSearchText(term);
+            if (n && !isStopword(n)) out.add(n);
+        }
     }
 
     for (const [cat, words] of Object.entries(CATEGORY_KEYWORDS) as [MainCategoryId, string[]][]) {
         if (words.some((w) => q.includes(normalizeSearchText(w)))) {
             out.add(normalizeSearchText(cat));
-            for (const w of words) out.add(normalizeSearchText(w));
+            for (const w of words) {
+                const n = normalizeSearchText(w);
+                if (n && !isStopword(n)) out.add(n);
+            }
         }
     }
 
     for (const [sub, words] of Object.entries(SUB_KEYWORDS)) {
         if (words.some((w) => q.includes(normalizeSearchText(w))) || q.includes(sub)) {
             out.add(sub);
-            for (const w of words) out.add(normalizeSearchText(w));
+            for (const w of words) {
+                const n = normalizeSearchText(w);
+                if (n && !isStopword(n)) out.add(n);
+            }
         }
     }
 
@@ -632,7 +659,14 @@ export type SearchablePlan = {
     categoria?: string | null;
     tipo_deporte?: string | null;
     nombre_ubicacion?: string | null;
+    host?: { nombre?: string | null; nombre_usuario?: string | null } | null;
 };
+
+function hostSearchText(plan: SearchablePlan): string {
+    const host = plan.host;
+    if (!host || typeof host !== 'object') return '';
+    return [host.nombre, host.nombre_usuario].filter(Boolean).join(' ');
+}
 
 function planHaystack(plan: SearchablePlan): string {
     const main = normalizeMainCategory(plan.categoria);
@@ -644,12 +678,31 @@ function planHaystack(plan: SearchablePlan): string {
         plan.categoria,
         plan.tipo_deporte,
         plan.nombre_ubicacion,
+        hostSearchText(plan),
         main || '',
         ...(main ? CATEGORY_KEYWORDS[main] || [] : []),
         ...(plan.tipo_deporte ? SUB_KEYWORDS[String(plan.tipo_deporte)] || [] : []),
         ...expandPlanConcepts(title, desc),
     ];
     return normalizeSearchText(parts.filter(Boolean).join(' '));
+}
+
+/** Más alto = más relevante (título exacto > parcial > sitio > anfitrión > sinónimo). */
+export function searchRelevanceScore(plan: SearchablePlan, query: string): number {
+    const q = normalizeSearchText(query);
+    if (!q) return 0;
+    const title = normalizeSearchText(plan.titulo || '');
+    const loc = normalizeSearchText(plan.nombre_ubicacion || '');
+    const host = normalizeSearchText(hostSearchText(plan));
+    if (title && title === q) return 100;
+    if (title && title.startsWith(q)) return 80;
+    if (title && textHasTerm(title, q)) return 60;
+    if (loc && textHasTerm(loc, q)) return 45;
+    if (host && textHasTerm(host, q)) return 40;
+    if (textHasTerm(normalizeSearchText(plan.categoria || ''), q)) return 25;
+    if (textHasTerm(normalizeSearchText(plan.tipo_deporte || ''), q)) return 25;
+    if (planMatchesSearch(plan, query)) return 10;
+    return 0;
 }
 
 /** ¿El plan encaja con la búsqueda (título + descripción + semántica)? */
@@ -663,10 +716,16 @@ export function planMatchesSearch(
 
     const title = normalizeSearchText(plan.titulo || '');
     const desc = normalizeSearchText(plan.descripcion || '');
+    const host = normalizeSearchText(hostSearchText(plan));
     const hay = planHaystack(plan);
 
-    // 1) Coincidencia literal en título, descripción o texto ampliado
-    if (textHasTerm(title, q) || textHasTerm(desc, q) || textHasTerm(hay, q)) return true;
+    // 1) Coincidencia literal en título, descripción, anfitrión o texto ampliado
+    if (
+        textHasTerm(title, q)
+        || textHasTerm(desc, q)
+        || textHasTerm(host, q)
+        || textHasTerm(hay, q)
+    ) return true;
 
     const terms = expandedTerms?.length ? expandedTerms : expandQueryLocally(query);
 
@@ -681,11 +740,11 @@ export function planMatchesSearch(
     // 3) Tokens de la query repartidos por título/descripción
     const qTokens = tokenize(query).filter((t) => t.length >= 3);
     if (qTokens.length >= 2) {
-        const hits = qTokens.filter((t) => title.includes(t) || desc.includes(t) || hay.includes(t));
+        const hits = qTokens.filter((t) => title.includes(t) || desc.includes(t) || host.includes(t) || hay.includes(t));
         if (hits.length >= Math.ceil(qTokens.length * 0.6)) return true;
     } else if (qTokens.length === 1) {
         const t = qTokens[0];
-        if (title.includes(t) || desc.includes(t)) return true;
+        if (title.includes(t) || desc.includes(t) || host.includes(t)) return true;
     }
 
     // 4) Mismo grupo conceptual: query ↔ título o descripción

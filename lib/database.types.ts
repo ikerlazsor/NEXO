@@ -466,6 +466,7 @@ export type Database = {
           archivo_url: string | null
           contenido: string
           creado_en: string
+          eliminado_en: string | null
           emisor_id: string
           id: string
           plan_id: string | null
@@ -476,6 +477,7 @@ export type Database = {
           archivo_url?: string | null
           contenido: string
           creado_en?: string
+          eliminado_en?: string | null
           emisor_id: string
           id?: string
           plan_id?: string | null
@@ -486,6 +488,7 @@ export type Database = {
           archivo_url?: string | null
           contenido?: string
           creado_en?: string
+          eliminado_en?: string | null
           emisor_id?: string
           id?: string
           plan_id?: string | null
@@ -742,7 +745,7 @@ export type Database = {
           creador_id: string
           descripcion: string | null
           estado: Database["public"]["Enums"]["tipo_estado_plan"]
-          fecha_evento: string
+          fecha_evento: string | null
           finalizado_en: string | null
           id: string
           imagen_url: string | null
@@ -759,6 +762,8 @@ export type Database = {
           solo_chicas: boolean
           tipo_deporte: string | null
           titulo: string
+          titulo_cierre: string | null
+          imagen_cierre: string | null
         }
         Insert: {
           actualizado_en?: string
@@ -769,7 +774,7 @@ export type Database = {
           creador_id: string
           descripcion?: string | null
           estado?: Database["public"]["Enums"]["tipo_estado_plan"]
-          fecha_evento: string
+          fecha_evento: string | null
           finalizado_en?: string | null
           id?: string
           imagen_url?: string | null
@@ -786,6 +791,8 @@ export type Database = {
           solo_chicas?: boolean
           tipo_deporte?: string | null
           titulo: string
+          titulo_cierre?: string | null
+          imagen_cierre?: string | null
         }
         Update: {
           actualizado_en?: string
@@ -813,6 +820,8 @@ export type Database = {
           solo_chicas?: boolean
           tipo_deporte?: string | null
           titulo?: string
+          titulo_cierre?: string | null
+          imagen_cierre?: string | null
         }
         Relationships: [
           {
@@ -1371,7 +1380,7 @@ export type Database = {
           creador_id: string
           descripcion: string | null
           estado: Database["public"]["Enums"]["tipo_estado_plan"]
-          fecha_evento: string
+          fecha_evento: string | null
           finalizado_en: string | null
           id: string
           imagen_url: string | null
@@ -1402,11 +1411,19 @@ export type Database = {
       get_badge_stats: { Args: { p_user_id: string }; Returns: Json }
       get_user_attended_categories: { Args: { p_user_id: string }; Returns: string[] }
       set_plan_alineacion: { Args: { p_plan_id: string; p_alineacion: Json }; Returns: undefined }
+      patch_tournament_alineacion: {
+        Args: { p_plan_id: string; p_alineacion: Json }
+        Returns: undefined
+      }
       claim_alineacion_slot: {
         Args: { p_plan_id: string; p_equipo: number; p_posicion: number }
         Returns: undefined
       }
       release_alineacion_slot: { Args: { p_plan_id: string }; Returns: undefined }
+      kick_alineacion_slot: {
+        Args: { p_plan_id: string; p_usuario_id: string }
+        Returns: undefined
+      }
       get_person_ranking_this_month: {
         Args: { p_limit?: number; p_user_ids?: string[] | null }
         Returns: { score: number; usuario_id: string }[]
@@ -1450,6 +1467,7 @@ export type Database = {
         Returns: Json
       }
       get_feed_plan_people: { Args: { p_plan_ids: string[] }; Returns: Json }
+      search_feed_plans: { Args: { p_query: string }; Returns: Json }
       get_user_public_stats: { Args: { p_user_id: string }; Returns: Json }
       guardar_valoracion: {
         Args: {
@@ -1481,6 +1499,7 @@ export type Database = {
       plan_is_feed_public: { Args: { p_plan_id: string }; Returns: boolean }
       promote_waitlist: { Args: { p_plan_id: string }; Returns: undefined }
       purge_ended_plan_invites: { Args: never; Returns: number }
+      keep_plan_chat_forever: { Args: { p_plan_id: string }; Returns: undefined }
       purge_expired_plan_chats: { Args: never; Returns: number }
       purge_past_saved_plans: { Args: never; Returns: number }
       recalcular_badge_categorias: {

@@ -34,7 +34,7 @@ export default function AdminOrganizerRequestScreen() {
         let { data } = await supabase.from('solicitudes_organizador').select(selectFull).eq('id', id).maybeSingle();
         if (!data) {
             const fallback = await supabase.from('solicitudes_organizador').select(selectLegacy).eq('id', id).maybeSingle();
-            data = fallback.data;
+            data = fallback.data as typeof data;
         }
         setRow((data as OrganizerRequest | null) ?? null);
         setNotes((data as OrganizerRequest | null)?.notas_internas ?? '');

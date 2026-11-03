@@ -13,8 +13,10 @@ import {
 import { buildPushCopy, fallbackPlanTitle, resolveAvatarUrl } from './pushCopy';
 import {
     getPlanEndMs,
+    getRatingsDeadlineMs,
     getRatingsUnlockMs,
     isGroupOrChatPlan,
+    isStandaloneGroupChat,
 } from './planLifecycle';
 import { withRetry } from './retry';
 import { getMyProfile } from './profileData';
@@ -22,6 +24,90 @@ import { getAuthUser } from './auth';
 import { supabase } from './supabase';
 
 const PREF_KEY = '@nexo_push_enabled';
+const HANDLED_PUSH_KEY = '@nexo_handled_push_id';
+
+const handledPushIds = new Set<string>();
+let handledPushLoaded = false;
+let queuedPushHref: string | null = null;
+
+/** Evita reabrir una noti vieja en cada arranque (Expo guarda la última respuesta). */
+export async function wasPushResponseHandled(id: string): Promise<boolean> {
+    if (!id) return false;
+    if (handledPushIds.has(id)) return true;
+    if (!handledPushLoaded) {
+        handledPushLoaded = true;
+        try {
+            const prev = await AsyncStorage.getItem(HANDLED_PUSH_KEY);
+            if (prev) handledPushIds.add(prev);
+        } catch {
+            /* ignore */
+        }
+    }
+    return handledPushIds.has(id);
+}
+
+/** True solo la primera vez. Síncrono tras hidratar el id guardado. */
+export function claimPushResponse(id: string): boolean {
+    if (!id || handledPushIds.has(id)) return false;
+    handledPushIds.add(id);
+    void AsyncStorage.setItem(HANDLED_PUSH_KEY, id).catch(() => {});
+    return true;
+}
+
+/** La app aún no puede navegar (onboarding / sesión). Se abre al estar lista. */
+export function queuePushHref(href: string): void {
+    if (href) queuedPushHref = href;
+}
+
+export function takeQueuedPushHref(): string | null {
+    const href = queuedPushHref;
+    queuedPushHref = null;
+    return href;
+}
+
+/** Si el payload no trae destino, al menos abre la bandeja que corresponde. */
+export function fallbackPushHref(raw: Record<string, unknown> | undefined): string {
+    const type = String(raw?.type ?? '');
+    const screen = String(raw?.screen ?? '');
+    if (
+        type.includes('message')
+        || screen === 'chat'
+        || screen === 'direct-chat'
+        || screen === 'chats'
+    ) {
+        return '/(tabs)/chats';
+    }
+    if (type.includes('friend') || screen === 'friends') return '/friends?tab=requests';
+    if (
+        type.includes('plan')
+        || type.includes('rating')
+        || type === 'compliment'
+        || screen === 'plan'
+        || screen === 'my-plans'
+        || screen === 'rate-plan'
+        || screen === 'profile'
+    ) {
+        return type === 'compliment' || screen === 'profile' ? '/profile' : '/my-plans';
+    }
+    return '/(tabs)';
+}
+
+export function navigateAppHref(
+    router: { navigate?: (href: never) => void; push: (href: never) => void },
+    href: string,
+): void {
+    let tries = 0;
+    const attempt = () => {
+        tries += 1;
+        try {
+            if (typeof router.navigate === 'function') router.navigate(href as never);
+            else router.push(href as never);
+        } catch {
+            if (tries < 6) setTimeout(attempt, 120 * tries);
+        }
+    };
+    attempt();
+}
 
 let pushPrefMemory: boolean | null = null;
 
@@ -95,7 +181,7 @@ export async function setPushPreference(enabled: boolean, userId?: string): Prom
         await supabase.from('perfiles').update({ notificaciones_push: enabled }).eq('id', userId);
     }
     if (enabled) {
-        await registerPushToken(userId);
+        await registerPushToken(userId, { markEnabled: true });
     } else {
         await unregisterPushToken(userId);
         await cancelAllScheduledNexoNotifications();
@@ -197,7 +283,11 @@ async function ensureAndroidChannel() {
 }
 
 /** Registra el token Expo Push y lo guarda en Supabase. */
-export async function registerPushToken(userId?: string): Promise<string | null> {
+export async function registerPushToken(
+    userId?: string,
+    /** Solo al activarlas a mano: el registro automático no debe reactivarlas. */
+    opts?: { markEnabled?: boolean },
+): Promise<string | null> {
     if (Platform.OS === 'web') return null;
     if (!Device.isDevice) return null;
 
@@ -236,7 +326,9 @@ export async function registerPushToken(userId?: string): Promise<string | null>
         { onConflict: 'user_id,token' },
     );
 
-    await supabase.from('perfiles').update({ notificaciones_push: true }).eq('id', uid);
+    if (opts?.markEnabled) {
+        await supabase.from('perfiles').update({ notificaciones_push: true }).eq('id', uid);
+    }
     try {
         const lang = await getStoredLang();
         await persistPreferredLanguage(lang);
@@ -447,7 +539,7 @@ export async function scheduleRatingReminder(opts: {
     fechaEvento: string | null | undefined;
     categoria?: string | null;
 }): Promise<void> {
-    if (isGroupOrChatPlan({ categoria: opts.categoria })) return;
+    if (isStandaloneGroupChat({ categoria: opts.categoria, fecha_evento: opts.fechaEvento })) return;
     const unlock = getRatingsUnlockMs(opts.fechaEvento);
     if (unlock == null) return;
     const lang = await getStoredLang();
@@ -532,6 +624,102 @@ export async function scheduleChatExpiringReminder(opts: {
     await Notifications.cancelScheduledNotificationAsync(`chat-expiry:${opts.planId}`).catch(() => {});
 }
 
+/**
+ * Quita recordatorios locales de planes a los que ya no perteneces,
+ * de chats caducados y de valoraciones cuyo plazo pasó.
+ * Si no, la noti suena y al tocarla no hay a dónde ir.
+ */
+export async function pruneStaleLocalReminders(userId: string): Promise<void> {
+    if (Platform.OS === 'web' || !userId) return;
+    let scheduled: Notifications.NotificationRequest[] = [];
+    try {
+        scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    } catch {
+        return;
+    }
+    const local = scheduled.filter(
+        (n) =>
+            n.identifier.startsWith('rating:')
+            || n.identifier.startsWith('plan-today:')
+            || n.identifier.startsWith('chat-expiry:'),
+    );
+
+    const [{ data: joined }, { data: owned }] = await Promise.all([
+        supabase
+            .from('participantes')
+            .select('plan_id')
+            .eq('usuario_id', userId)
+            .eq('estado', 'aceptado'),
+        supabase.from('planes').select('id, fecha_evento').eq('creador_id', userId),
+    ]);
+    const member = new Set<string>((joined ?? []).map((row) => String(row.plan_id)));
+    const eventById = new Map<string, string | null>();
+    for (const row of owned ?? []) {
+        member.add(String(row.id));
+        eventById.set(String(row.id), (row.fecha_evento as string | null) ?? null);
+    }
+    const extra = [...member].filter((id) => !eventById.has(id));
+    if (extra.length) {
+        const { data: plans } = await supabase
+            .from('planes')
+            .select('id, fecha_evento')
+            .in('id', extra);
+        for (const row of plans ?? []) {
+            eventById.set(String(row.id), (row.fecha_evento as string | null) ?? null);
+        }
+    }
+
+    const now = Date.now();
+    await Promise.all(
+        local.map(async (n) => {
+            if (n.identifier.startsWith('chat-expiry:')) {
+                await Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => {});
+                return;
+            }
+            const planId = n.identifier.startsWith('rating:')
+                ? n.identifier.slice('rating:'.length)
+                : n.identifier.slice('plan-today:'.length);
+            if (!member.has(planId)) {
+                await Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => {});
+                return;
+            }
+            const fecha = eventById.get(planId);
+            const end = fecha ? new Date(fecha).getTime() : NaN;
+            if (n.identifier.startsWith('plan-today:') && Number.isFinite(end) && end < now) {
+                await Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => {});
+                return;
+            }
+            if (n.identifier.startsWith('rating:')) {
+                const deadline = getRatingsDeadlineMs(fecha);
+                if (deadline != null && deadline < now) {
+                    await Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => {});
+                }
+            }
+        }),
+    );
+
+    try {
+        const presented = await Notifications.getPresentedNotificationsAsync();
+        await Promise.all(
+            presented.map(async (item) => {
+                const data = normalizePushData(
+                    item.request.content.data as Record<string, unknown> | undefined,
+                );
+                const type = String(data?.type ?? '');
+                const planId = data?.planId ? String(data.planId) : '';
+                const staleReminder =
+                    (type === 'plan_today' || type === 'rating_ready' || type === 'chat_expiring')
+                    && planId
+                    && !member.has(planId);
+                if (!staleReminder) return;
+                await Notifications.dismissNotificationAsync(item.request.identifier).catch(() => {});
+            }),
+        );
+    } catch {
+        /* ignore */
+    }
+}
+
 /** Reprograma recordatorios locales de un plan al unirse / al abrir la app. */
 export async function schedulePlanLifecycleReminders(opts: {
     planId: string;
@@ -539,12 +727,13 @@ export async function schedulePlanLifecycleReminders(opts: {
     fechaEvento: string | null | undefined;
     categoria?: string | null;
     locationName?: string | null;
+    /** false = solo el recordatorio del día (no reavivar “valora” si ya se cerró). */
+    includeRating?: boolean;
 }): Promise<void> {
     await Notifications.cancelScheduledNotificationAsync(`chat-expiry:${opts.planId}`).catch(() => {});
-    await Promise.all([
-        scheduleRatingReminder(opts),
-        schedulePlanTodayReminder(opts),
-    ]);
+    const tasks = [schedulePlanTodayReminder(opts)];
+    if (opts.includeRating !== false) tasks.push(scheduleRatingReminder(opts));
+    await Promise.all(tasks);
 }
 
 export type PushNavTarget = { href: string } | null;

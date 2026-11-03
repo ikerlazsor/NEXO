@@ -26,7 +26,8 @@ function getImageSize(uri: string): Promise<{ width: number; height: number } | 
 
 async function fileSizeBytes(uri: string): Promise<number> {
     try {
-        const info = await FileSystem.getInfoAsync(uri, { size: true });
+        // `size` ya viene siempre; la opción desapareció de la API.
+        const info = await FileSystem.getInfoAsync(uri);
         if (info.exists && 'size' in info && typeof info.size === 'number') return info.size;
     } catch {
         // ignore

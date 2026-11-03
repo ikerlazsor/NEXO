@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getChatSummaries, invalidateChatSummaries } from './chatSummaries';
+import { getChatSummaries, invalidateChatSummaries, rememberChatReadCursor } from './chatSummaries';
 import { isPlanChatAlive } from './planLifecycle';
 import { cacheGetStale, cacheInvalidate, cacheSet } from './ttlCache';
 
@@ -55,7 +55,9 @@ export async function markPlanChatRead(userId: string, planId: string): Promise<
             notifyChatUnreadChanged();
         }
     }
-    await AsyncStorage.setItem(planKey(userId, planId), new Date().toISOString());
+    const at = new Date().toISOString();
+    await AsyncStorage.setItem(planKey(userId, planId), at);
+    void rememberChatReadCursor(userId, 'plan', planId, at);
     invalidateUnread(userId);
     notifyChatUnreadChanged();
 }
@@ -79,7 +81,9 @@ export async function markDirectChatRead(userId: string, peerId: string): Promis
             notifyChatUnreadChanged();
         }
     }
-    await AsyncStorage.setItem(directKey(userId, peerId), new Date().toISOString());
+    const at = new Date().toISOString();
+    await AsyncStorage.setItem(directKey(userId, peerId), at);
+    void rememberChatReadCursor(userId, 'direct', peerId, at);
     invalidateUnread(userId);
     notifyChatUnreadChanged();
 }
@@ -147,6 +151,13 @@ export async function getChatUnreadMap(
 
 export async function getUnreadChatCount(userId: string, opts?: { force?: boolean }): Promise<number> {
     const map = await getChatUnreadMap(userId, opts);
+    return map.total;
+}
+
+/** Fuerza recálculo y avisa a MainChrome / badge del sistema. */
+export async function refreshChatUnreadBadge(userId: string): Promise<number> {
+    const map = await getChatUnreadMap(userId, { force: true });
+    notifyChatUnreadChanged();
     return map.total;
 }
 

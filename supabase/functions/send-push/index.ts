@@ -446,15 +446,12 @@ serve(async (req) => {
         throw new Error('invalid_message');
       }
 
-      const { data: blocks, error: blockError } = await admin
-        .from('bloqueos')
-        .select('id')
-        .or(
-          `and(usuario_origen_id.eq.${user.id},usuario_destino_id.eq.${toUserId}),and(usuario_origen_id.eq.${toUserId},usuario_destino_id.eq.${user.id})`,
-        )
-        .limit(1);
+      const { data: blocked, error: blockError } = await admin.rpc('users_are_blocked', {
+        p_a: user.id,
+        p_b: toUserId,
+      });
       if (blockError) throw new Error('block_check_failed');
-      if ((blocks ?? []).length > 0) throw new Error('not_allowed');
+      if (blocked === true) throw new Error('not_allowed');
 
       claimedMessageId = String(message.id);
       targetIds = [toUserId];
@@ -488,7 +485,7 @@ serve(async (req) => {
         .eq('evaluador_id', user.id)
         .eq('evaluado_id', toUserId)
         .maybeSingle();
-      if (!mine || mine.repetiria_experiencia !== 'si') throw new Error('not_allowed');
+      if (!mine) throw new Error('not_allowed');
 
       const { data: plan } = await admin
         .from('planes')
@@ -497,11 +494,12 @@ serve(async (req) => {
         .maybeSingle();
       const planTitle = (plan?.titulo as string) || undefined;
       const pos = Array.isArray(mine.aspectos_positivos)
-        ? (mine.aspectos_positivos as string[])
+        ? (mine.aspectos_positivos as string[]).filter((key) => typeof key === 'string' && key.length > 0)
         : [];
       const traitRaw = String(body.trait ?? pos[0] ?? '').trim();
 
       if (type === 'spark') {
+        if (mine.repetiria_experiencia !== 'si') throw new Error('not_allowed');
         const { data: theirs } = await admin
           .from('valoraciones')
           .select('repetiria_experiencia')
@@ -523,6 +521,8 @@ serve(async (req) => {
         collapseId = `spark:${planId}:${[user.id, toUserId].sort().join(':')}`;
         copyCtx = { type: 'spark', senderName, planTitle };
       } else {
+        if (pos.length === 0) throw new Error('not_allowed');
+        const trait = pos.includes(traitRaw) ? traitRaw : pos[0];
         const anonName = 'Alguien';
         avatarUrl = resolveAvatarUrl(null, 'Nexo!');
         targetIds = [toUserId];
@@ -539,7 +539,7 @@ serve(async (req) => {
           type: 'compliment',
           senderName: anonName,
           planTitle,
-          trait: traitRaw,
+          trait,
         };
       }
     } else if (type === 'plan_cancelled' || type === 'plan_updated') {
@@ -623,6 +623,25 @@ serve(async (req) => {
     }
 
     targetIds = [...new Set(targetIds.filter(Boolean))];
+
+    // Nadie recibe avisos de alguien con quien hay un bloqueo, en cualquier dirección.
+    if (targetIds.length) {
+      const { data: blockRows } = await admin
+        .from('bloqueos')
+        .select('bloqueador_id, bloqueado_id')
+        .or(`bloqueador_id.eq.${user.id},bloqueado_id.eq.${user.id}`);
+      if (blockRows?.length) {
+        const blockedIds = new Set<string>(
+          blockRows.map((row) =>
+            row.bloqueador_id === user.id
+              ? (row.bloqueado_id as string)
+              : (row.bloqueador_id as string),
+          ),
+        );
+        targetIds = targetIds.filter((id) => !blockedIds.has(id));
+      }
+    }
+
     if (!targetIds.length) {
       return new Response(JSON.stringify({ sent: 0 }), {
         headers: { ...cors, 'Content-Type': 'application/json' },

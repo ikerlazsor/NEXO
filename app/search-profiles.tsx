@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlashList } from '@shopify/flash-list';
 import {
     ActivityIndicator,
+    InteractionManager,
     StyleSheet,
     Text,
     TextInput,
@@ -35,6 +36,7 @@ type SearchHit = {
 
 export default function SearchProfilesScreen() {
     const router = useRouter();
+    const navigation = useNavigation();
     const { t } = useT();
     const { colors, scheme } = useAppTheme();
     const styles = useThemedStyles(createSearchStyles);
@@ -44,11 +46,33 @@ export default function SearchProfilesScreen() {
     const [results, setResults] = useState<SearchHit[]>([]);
     const searchGenRef = useRef(0);
     const inputRef = useRef<TextInput>(null);
+    const focusedOnceRef = useRef(false);
 
+    // Enfocar solo cuando la transición ya terminó: con slide el teclado salía de lado;
+    // con fade + afterInteractions el teclado siempre sube desde abajo.
     useEffect(() => {
-        const timer = setTimeout(() => inputRef.current?.focus(), 350);
-        return () => clearTimeout(timer);
-    }, []);
+        let cancelled = false;
+        let focusTimer: ReturnType<typeof setTimeout> | null = null;
+        const focusInput = () => {
+            if (cancelled || focusedOnceRef.current) return;
+            focusedOnceRef.current = true;
+            inputRef.current?.focus();
+        };
+        const unsub = navigation.addListener('transitionEnd' as never, ((e: { data?: { closing?: boolean } }) => {
+            if (e?.data?.closing) return;
+            focusTimer = setTimeout(focusInput, 40);
+        }) as never);
+        const task = InteractionManager.runAfterInteractions(() => {
+            // Si transitionEnd no llega (algunos gestos / reaparecer), enfocar tras asentar la UI.
+            focusTimer = setTimeout(focusInput, 280);
+        });
+        return () => {
+            cancelled = true;
+            unsub();
+            task.cancel();
+            if (focusTimer) clearTimeout(focusTimer);
+        };
+    }, [navigation]);
 
     useEffect(() => {
         const q = query.trim();

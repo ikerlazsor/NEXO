@@ -183,12 +183,18 @@ export function previewMessage(opts: {
     const lang = parsePushLang(opts.lang);
     const type = String(opts.tipo ?? 'texto');
     const m = MSG[lang];
+    if (String(opts.contenido ?? '').startsWith('nexo_moments:v1:')) {
+        return lang === 'es' ? 'Momentos del plan' : 'Plan moments';
+    }
     if (type === 'imagen') return m.photo;
     if (type === 'video') return m.video;
     if (type === 'audio') return m.audio;
 
     let content = String(opts.contenido ?? '');
     if (content.startsWith('@@nexo_system:')) return m.joined;
+    if (content.startsWith('@@nexo_plan_invite:')) {
+        return lang === 'es' ? 'Te ha invitado a un plan' : 'Invited you to a plan';
+    }
     const mark = '@@nexo_reply:';
     if (content.startsWith(mark)) {
         const end = content.indexOf('@@\n', mark.length);
@@ -222,9 +228,9 @@ export function buildPushCopy(input: PushCopyInput): { title: string; body: stri
             todayTime: '«{plan}» a las {time}',
             todayPlan: '«{plan}»',
             rate: 'Valora a los participantes',
-            complimentTitle: 'Nuevo cumplido',
-            complimentTrait: '{trait} en «{plan}»',
-            complimentGeneric: 'Alguien de «{plan}» repetiría plan contigo',
+            complimentTitle: 'Alguien te ha valorado',
+            complimentTrait: 'Te han votado como {trait} en «{plan}»',
+            complimentGeneric: 'Alguien de «{plan}» te ha dejado un cumplido',
             spark: 'También te ha destacado',
             cancelledTitle: 'Cancelado',
             cancelledBody: '«{plan}» ya no se celebra',
@@ -250,9 +256,9 @@ export function buildPushCopy(input: PushCopyInput): { title: string; body: stri
             todayTime: '"{plan}" at {time}',
             todayPlan: '"{plan}"',
             rate: 'Rate the people who went',
-            complimentTitle: 'New compliment',
-            complimentTrait: '{trait} — from "{plan}"',
-            complimentGeneric: 'Someone from "{plan}" would hang with you again',
+            complimentTitle: 'Someone rated you',
+            complimentTrait: 'They marked you as {trait} in "{plan}"',
+            complimentGeneric: 'Someone from "{plan}" left you a compliment',
             spark: 'Also highlighted you on "{plan}"',
             cancelledTitle: 'Cancelled',
             cancelledBody: '"{plan}" was cancelled',

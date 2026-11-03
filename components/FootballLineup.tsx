@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    InteractionManager,
     Pressable,
     StyleSheet,
     Text,
@@ -32,6 +31,7 @@ import {
     type FootballFormat,
     type FootballOccupant,
 } from '../lib/footballLineup';
+import { loadTournamentLineup, peekTournamentLineup } from '../lib/tournamentLineupCache';
 import { supabase } from '../lib/supabase';
 
 function formatLabel(formato: FootballFormat, t: (key: string) => string): string {
@@ -63,7 +63,6 @@ type Props = {
 
 const SLOT_SIZE = 58;
 const CIRCLE = 118;
-const BALL = 18;
 const SLOT_WRAP_W = 72;
 
 
@@ -89,6 +88,9 @@ export function FootballLineupSection({
     const [slots, setSlots] = useState<FootballOccupant[]>([]);
     const [picking, setPicking] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [isTournament, setIsTournament] = useState(() => !!peekTournamentLineup(planId)?.config);
+    /** Evita flash del botón verde de alineación mientras se detecta torneo. */
+    const [modeReady, setModeReady] = useState(() => peekTournamentLineup(planId) != null);
 
     const peopleById = useMemo(() => {
         const map = new Map(participants.map((p) => [p.id, p]));
@@ -97,6 +99,21 @@ export function FootballLineupSection({
 
     const load = useCallback(async () => {
         try {
+            const peek = peekTournamentLineup(planId);
+            if (peek?.config) {
+                setIsTournament(true);
+                setConfig(null);
+                setSlots([]);
+                return;
+            }
+            const snap = await loadTournamentLineup(planId);
+            if (snap.config) {
+                setIsTournament(true);
+                setConfig(null);
+                setSlots([]);
+                return;
+            }
+            setIsTournament(false);
             const nextConfig = await fetchFootballConfig(planId);
             setConfig(nextConfig);
             if (nextConfig) {
@@ -106,27 +123,30 @@ export function FootballLineupSection({
                 setSlots([]);
             }
         } catch {
+            setIsTournament(false);
             setConfig(null);
             setSlots([]);
+        } finally {
+            setModeReady(true);
         }
     }, [planId]);
 
     useEffect(() => {
+        const peek = peekTournamentLineup(planId);
+        if (peek?.config) {
+            setIsTournament(true);
+            setModeReady(true);
+            return;
+        }
+        setModeReady(peek != null);
         let cancelled = false;
-        const task = InteractionManager.runAfterInteractions(() => {
+        void load().then(() => {
             if (cancelled) return;
-            void load();
         });
-        const fallback = setTimeout(() => {
-            if (cancelled) return;
-            void load();
-        }, 200);
         return () => {
             cancelled = true;
-            task.cancel();
-            clearTimeout(fallback);
         };
-    }, [load]);
+    }, [load, planId]);
 
     useEffect(() => {
         const channel = supabase
@@ -196,7 +216,7 @@ export function FootballLineupSection({
         if (ok) hapticSuccess();
     };
 
-    const onPressSlot = async (equipo: 0 | 1, posicion: number) => {
+    const onPressSlot = async (equipo: number, posicion: number) => {
         const occupant = slots.find((s) => s.equipo === equipo && s.posicion === posicion);
         if (occupant) {
             hapticLight();
@@ -235,6 +255,7 @@ export function FootballLineupSection({
         ? slots.find((s) => s.usuario_id === currentUserId)
         : undefined;
 
+    if (!modeReady || isTournament) return null;
     if (!options.length) return null;
 
     if (!config) {
@@ -435,7 +456,7 @@ function Pitch({
     config: FootballConfig;
     slots: FootballOccupant[];
     peopleById: Map<string, Person>;
-    onPressSlot: (equipo: 0 | 1, posicion: number) => void;
+    onPressSlot: (equipo: number, posicion: number) => void;
     styles: ReturnType<typeof createFootballStyles>;
     futsal: boolean;
 }) {
@@ -511,16 +532,6 @@ function Pitch({
                             },
                         ]}
                     />
-                    <View
-                        pointerEvents="none"
-                        style={[
-                            styles.centerBall,
-                            { left: size.w / 2 - BALL / 2, top: size.h / 2 - BALL / 2 },
-                        ]}
-                    >
-                        <Ionicons name="football" size={BALL} color="#FFF" />
-                    </View>
-
                     {futsal ? (
                         <>
                             {/* Áreas de penalti (semicírculos de fútbol sala) */}
@@ -788,13 +799,6 @@ function createFootballStyles(c: ThemeColors) {
         borderRadius: CIRCLE / 2,
         borderWidth: 2,
         borderColor: 'rgba(255,255,255,0.75)',
-    },
-    centerBall: {
-        position: 'absolute',
-        width: BALL,
-        height: BALL,
-        alignItems: 'center',
-        justifyContent: 'center',
     },
     box: {
         position: 'absolute',

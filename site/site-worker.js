@@ -44,6 +44,22 @@ export default {
     }
 
     if (path === '/plan' || path.startsWith('/plan/')) {
+      const id = path.split('/')[2] || '';
+      const ua = request.headers.get('user-agent') || '';
+      const isPreviewBot = /whatsapp|facebookexternalhit|facebot|twitterbot|linkedinbot|slackbot|discordbot|telegrambot|embedly|pinterest|googlebot|bingpreview|applebot|previewbot/i
+        .test(ua);
+      if (/^[0-9a-f-]{36}$/i.test(id) && isPreviewBot) {
+        const cardPage = `https://nixeproyzxvqzyrvsxcx.supabase.co/functions/v1/share-plan/${id}`;
+        const upstream = await fetch(cardPage, { headers: { 'user-agent': ua, 'accept-language': request.headers.get('accept-language') || 'es' } });
+        const html = await upstream.text();
+        return new Response(html, {
+          status: upstream.status,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'public, max-age=0, must-revalidate',
+          },
+        });
+      }
       const assetReq = new Request(new URL('/plan/index.html', url.origin), request);
       return env.ASSETS.fetch(assetReq);
     }

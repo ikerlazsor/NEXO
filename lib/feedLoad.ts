@@ -9,7 +9,6 @@ import type { FeedSnapshot } from './feedCache';
 import { attachFeedPlanPeople, fetchUpcomingFeedPlanRows } from './feedQuery';
 import { getFriends } from './friends';
 import type { UserCoords } from './location';
-import { getProfileNotificationCount } from './notifications';
 import { mapEstadoToMembership } from './participants';
 import { calcAge, type Genero } from './profileFields';
 import { getMyProfile } from './profileData';
@@ -19,18 +18,40 @@ import { supabase } from './supabase';
 
 export type SignedInFeedLoad = FeedSnapshot & { isOrganizer: boolean };
 
+const feedSnapshotInflight = new Map<string, Promise<SignedInFeedLoad>>();
+
+function feedSnapshotKey(userId: string, coords?: UserCoords | null): string {
+    const lat = coords?.latitude != null ? coords.latitude.toFixed(3) : 'x';
+    const lng = coords?.longitude != null ? coords.longitude.toFixed(3) : 'x';
+    return `${userId}:${lat}:${lng}`;
+}
+
 /**
  * Feed autenticado: geo en paralelo con perfil/amigos, y el extra de
  * categorías/amigos arranca en cuanto hay ids (sin esperar al geo).
+ * Las llamadas simultáneas (Home + prefetch) comparten la misma promesa.
  */
 export async function fetchSignedInFeedSnapshot(
+    userId: string,
+    coords?: UserCoords | null,
+): Promise<SignedInFeedLoad> {
+    const key = feedSnapshotKey(userId, coords);
+    const pending = feedSnapshotInflight.get(key);
+    if (pending) return pending;
+    const work = loadSignedInFeedSnapshot(userId, coords).finally(() => {
+        if (feedSnapshotInflight.get(key) === work) feedSnapshotInflight.delete(key);
+    });
+    feedSnapshotInflight.set(key, work);
+    return work;
+}
+
+async function loadSignedInFeedSnapshot(
     userId: string,
     coords?: UserCoords | null,
 ): Promise<SignedInFeedLoad> {
     const nowIso = new Date().toISOString();
 
     const profileP = getMyProfile();
-    const notifsP = getProfileNotificationCount(userId);
     const partsP = supabase.from('participantes').select('plan_id, estado').eq('usuario_id', userId);
     const savedP = supabase.from('planes_guardados').select('plan_id').eq('usuario_id', userId);
     const friendsP = getFriends(userId);
@@ -82,7 +103,6 @@ export async function fetchSignedInFeedSnapshot(
 
     const [
         profileRes,
-        notifs,
         participantsRes,
         savedRes,
         friendsData,
@@ -94,7 +114,6 @@ export async function fetchSignedInFeedSnapshot(
         supplementRows,
     ] = await Promise.all([
         profileP,
-        notifsP,
         partsP,
         savedP,
         friendsP,
@@ -130,7 +149,7 @@ export async function fetchSignedInFeedSnapshot(
             const o = p as { categoria?: string | null; tipo_deporte?: string | null };
             return { categoria: o.categoria, tipo_deporte: o.tipo_deporte };
         })
-        .filter((row): row is { categoria?: string | null; tipo_deporte?: string | null } => row != null);
+        .filter((row): row is NonNullable<typeof row> => row != null);
 
     const joinedPlanIds = new Set(
         (participantsRes.data || [])
@@ -167,12 +186,12 @@ export async function fetchSignedInFeedSnapshot(
         friendIds: friendsData.map((f) => f.id),
         coincidedIds: [...coincidedSet],
         invitedPlanIds: (invitesRes.data ?? []).map((r) => r.plan_id as string),
-        feedTaste: buildFeedTaste(tags as string[], historyPlans, calcAge(profileRes.data?.fecha_nacimiento)),
-        notifBreakdown: {
-            friendRequests: notifs.friendRequests,
-            planRequests: notifs.planRequests,
-            planInvites: notifs.planInvites,
-        },
+        feedTaste: buildFeedTaste(
+            tags as string[],
+            historyPlans.filter((row): row is NonNullable<typeof row> => row != null),
+            calcAge(profileRes.data?.fecha_nacimiento),
+        ),
+        notifBreakdown: { friendRequests: 0, planRequests: 0, planInvites: 0 },
         isOrganizer: organizer,
     };
 }
@@ -214,7 +233,7 @@ export async function fetchFeedTasteForUser(userId: string): Promise<FeedTaste> 
             const o = p as { categoria?: string | null; tipo_deporte?: string | null };
             return { categoria: o.categoria, tipo_deporte: o.tipo_deporte };
         })
-        .filter((row): row is { categoria?: string | null; tipo_deporte?: string | null } => row != null);
+        .filter((row): row is NonNullable<typeof row> => row != null);
 
     const tags =
         (Array.isArray(profileRes.data?.ambientes_preferidos) && profileRes.data.ambientes_preferidos.length
@@ -223,7 +242,9 @@ export async function fetchFeedTasteForUser(userId: string): Promise<FeedTaste> 
 
     return buildFeedTaste(
         tags as string[],
-        [...(createdPlansRes.data || []), ...joinedHistoryFromDb],
+        [...(createdPlansRes.data || []), ...joinedHistoryFromDb].filter(
+            (row): row is NonNullable<typeof row> => row != null,
+        ),
         calcAge(profileRes.data?.fecha_nacimiento),
     );
 }

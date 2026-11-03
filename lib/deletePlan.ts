@@ -13,6 +13,8 @@ export async function deletePlanCompletely(planId: string): Promise<{ error: str
     // Invalidar caches locales inmediatamente
     cacheInvalidatePrefix('planDetail:');
     cacheInvalidate(screenCacheKey.feedSnapshot);
+    cacheInvalidatePrefix('chatsList:');
+    cacheInvalidatePrefix('planChat:');
 
     try {
         const { data, error } = await supabase.functions.invoke('delete-plan', {

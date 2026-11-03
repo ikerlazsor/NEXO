@@ -68,10 +68,14 @@ export function resolveDeepLinkUrl(url: string | null | undefined): DeepLinkTarg
     switch (head) {
         case 'plan': {
             const inviteId = q('inviteId');
-            if (id && inviteId) {
+            const uuidMatch = id?.match(
+                /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+            );
+            const planId = uuidMatch ? uuidMatch[0] : id;
+            if (planId && inviteId) {
                 return resolvePushNavigation({
                     type: 'plan_invite',
-                    planId: id,
+                    planId,
                     inviteId,
                     otherUserId: q('inviterId') || q('otherUserId'),
                     senderName: q('inviterName') || q('senderName'),
@@ -79,7 +83,11 @@ export function resolveDeepLinkUrl(url: string | null | undefined): DeepLinkTarg
                     inviteTipo: q('inviteTipo'),
                 });
             }
-            return id ? { href: `/plan/${id}` } : null;
+            if (!planId) return null;
+            const team = q('team');
+            const teamQ =
+                team && /^\d+$/.test(team) ? `?team=${encodeURIComponent(team)}` : '';
+            return { href: `/plan/${planId}${teamQ}` };
         }
         case 'chat':
             return id ? { href: `/chat/${id}` } : null;

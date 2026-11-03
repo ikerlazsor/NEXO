@@ -2,13 +2,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDelayedVisible } from '../lib/useDelayedVisible';
 import {
     ActivityIndicator,
+    BackHandler,
+    FlatList,
+    KeyboardAvoidingView,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
@@ -19,16 +23,14 @@ import { ProfileAvatar } from '../components/ProfileAvatar';
 import { trackFunnel } from '../lib/analytics';
 import { getAuthUser } from '../lib/auth';
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
-import { hapticLight, hapticSelection, hapticSuccess } from '../lib/haptics';
+import { hapticCelebrate, hapticLight, hapticSelection, hapticSuccess } from '../lib/haptics';
 import { useT } from '../lib/i18n';
 import { Alert } from '../lib/nexoAlert';
 import { dismissPushForRating } from '../lib/presentedPush';
 import { notifyCompliment } from '../lib/push';
-import { RatingChip } from '../components/RatingChip';
 import {
     EMPTY_RATING_DRAFT,
     MAX_ASPECTS,
-    MAX_FACE_PEERS,
     MAX_PEOPLE_RATINGS_COMPACT,
     NEGATIVE_ASPECTS,
     ORGANIZER_NEGATIVE_ASPECTS,
@@ -40,8 +42,10 @@ import {
     applyRatingFlowCompleteOptimistic,
     dismissRatingWithoutHistory,
     ensurePlanInHistory,
-    filterPeersByQuery,
+    findMutualSpark,
+    getAspectLabel,
     getPendingRatingPlans,
+    hasRatingSessionStarted,
     isOrganizerDraftComplete,
     isPersonDraftComplete,
     markRatingSessionStarted,
@@ -52,13 +56,19 @@ import {
     type RatingPeer,
     type Repetiria,
 } from '../lib/ratings';
+import { formatCountdown, resolveRatingUiPhase } from '../lib/planLifecycle';
 import { resolvePlanImageSource } from '../lib/sports';
+import { storageThumbUrl } from '../lib/storageImage';
 import { type ThemeColors } from '../theme';
+import { ScreenErrorBoundary } from '../components/ScreenErrorBoundary';
 
 const GOLD = '#F59E0B';
 const ACTION_BLUE = '#2563EB';
 const INK = '#0F172A';
-
+/** Tamaño de la burbuja en la pantalla de valorar a alguien. */
+const PERSON_AVATAR = 200;
+/** Tamaño de las caras de la lista: la miniatura ya está en caché al abrir el perfil. */
+const FACE_AVATAR = 64;
 type Stage = 'attendance' | 'org' | 'list' | 'person' | 'skipped';
 function draftFromRepeat(key: Repetiria): RatingDraft {
     return {
@@ -68,6 +78,12 @@ function draftFromRepeat(key: Repetiria): RatingDraft {
         aspectos_positivos: key === 'no' ? [] : [],
         aspectos_negativos: key === 'no' ? [] : [],
     };
+}
+
+function ratingErrorCopy(t: (key: string) => string, error: string | null | undefined): string {
+    if (error === 'not_participant') return t('ratings.errNotParticipant');
+    if (error === 'incomplete_rating') return t('ratings.errIncomplete');
+    return t('ratings.saveError');
 }
 
 function orderedSearchPeers(plan: PendingRatingPlan | null): RatingPeer[] {
@@ -88,6 +104,14 @@ function orderedSearchPeers(plan: PendingRatingPlan | null): RatingPeer[] {
 }
 
 export default function RatePlanScreen() {
+    return (
+        <ScreenErrorBoundary>
+            <RatePlanScreenInner />
+        </ScreenErrorBoundary>
+    );
+}
+
+function RatePlanScreenInner() {
     const router = useRouter();
     const { t } = useT();
     const insets = useSafeAreaInsets();
@@ -96,38 +120,54 @@ export default function RatePlanScreen() {
     const scrollRef = useRef<ScrollView>(null);
     const attendanceLockRef = useRef(false);
     const flowStartedRef = useRef(false);
+    const leavingRef = useRef(false);
+    const loadGenRef = useRef(0);
+    const ratedIdsRef = useRef<Set<string>>(new Set());
     const { planId } = useLocalSearchParams<{ planId: string }>();
 
     const [loading, setLoading] = useState(true);
+    const showRatingLoader = useDelayedVisible(loading);
     const [saving, setSaving] = useState(false);
+    const [sparkPeer, setSparkPeer] = useState<RatingPeer | null>(null);
     const [userId, setUserId] = useState<string | null>(null);
     const [plan, setPlan] = useState<PendingRatingPlan | null>(null);
     const [stage, setStage] = useState<Stage>('attendance');
     const [selectedPeer, setSelectedPeer] = useState<RatingPeer | null>(null);
     const [draft, setDraft] = useState<RatingDraft>(EMPTY_RATING_DRAFT);
     const [ratedIds, setRatedIds] = useState<Set<string>>(new Set());
+    ratedIdsRef.current = ratedIds;
     const [orgRated, setOrgRated] = useState(false);
-    const [peopleQuery, setPeopleQuery] = useState('');
+    const [nowTick, setNowTick] = useState(() => Date.now());
+    const [leaving, setLeaving] = useState(false);
+    const [capNotice, setCapNotice] = useState(false);
 
-    const applyPlan = useCallback((found: PendingRatingPlan | null, resetFlow: boolean) => {
+    const applyPlan = useCallback((found: PendingRatingPlan | null, resetFlow: boolean, attendedAlready = false) => {
         setPlan(found);
-        setRatedIds(new Set(found?.ratedIds ?? []));
+        const nextRated = new Set(found?.ratedIds ?? []);
+        ratedIdsRef.current = nextRated;
+        setRatedIds(nextRated);
         setOrgRated(found?.organizerRated === true);
         if (resetFlow) {
-            setPeopleQuery('');
             setSelectedPeer(null);
             setDraft(EMPTY_RATING_DRAFT);
-            setStage('attendance');
-            attendanceLockRef.current = false;
-            flowStartedRef.current = false;
+            const skipAttendance = attendedAlready && !!found;
+            attendanceLockRef.current = skipAttendance;
+            flowStartedRef.current = skipAttendance;
+            if (skipAttendance && found) {
+                setStage(found.organizer && found.organizerRated !== true ? 'org' : 'list');
+            } else {
+                setStage('attendance');
+            }
         }
     }, []);
 
-    const load = useCallback(async () => {
-        setLoading(true);
+    const load = useCallback(async (opts?: { silent?: boolean }) => {
+        if (leavingRef.current) return;
+        const gen = ++loadGenRef.current;
+        if (!opts?.silent) setLoading(true);
         try {
             const user = await getAuthUser();
-            if (!user) return;
+            if (!user || gen !== loadGenRef.current || leavingRef.current) return;
             setUserId(user.id);
 
             const pick = (plans: PendingRatingPlan[]) =>
@@ -135,73 +175,91 @@ export default function RatePlanScreen() {
                 ?? plans.find((p) => p.planId === planId && p.phase === 'waiting')
                 ?? null;
 
+            const attendedAlready = async (found: PendingRatingPlan | null) => {
+                if (!found) return false;
+                if ((found.ratedIds?.length ?? 0) > 0) return true;
+                if (found.organizerRated === true) return true;
+                return hasRatingSessionStarted(user.id, found.planId);
+            };
+
             // Cache primero → botones usables sin esperar red.
             const cached = await getPendingRatingPlans(user.id);
+            if (gen !== loadGenRef.current || leavingRef.current) return;
             const cachedFound = pick(cached);
             if (cachedFound && !flowStartedRef.current) {
-                applyPlan(cachedFound, true);
+                applyPlan(cachedFound, true, await attendedAlready(cachedFound));
                 setLoading(false);
                 trackFunnel('rating_start', { userId: user.id, props: { planId: cachedFound.planId } });
             }
 
-            const plans = await getPendingRatingPlans(user.id, { force: true });
+            const plans = await getPendingRatingPlans(user.id, { force: !opts?.silent });
+            if (gen !== loadGenRef.current || leavingRef.current) return;
             const found = pick(plans);
             if (flowStartedRef.current) {
                 // Usuario ya avanzó: actualizar datos sin volver a "¿fuiste?".
                 if (found) {
                     setPlan(found);
-                    setRatedIds(new Set(found.ratedIds ?? []));
-                    setOrgRated(found.organizerRated === true);
+                    setRatedIds((prev) => {
+                        const next = new Set(found.ratedIds ?? []);
+                        for (const id of prev) next.add(id);
+                        ratedIdsRef.current = next;
+                        return next;
+                    });
+                    setOrgRated((prev) => prev || found.organizerRated === true);
                 }
             } else {
-                applyPlan(found, true);
+                applyPlan(found, true, await attendedAlready(found));
                 if (found && !cachedFound) {
                     trackFunnel('rating_start', { userId: user.id, props: { planId: found.planId } });
                 }
             }
         } finally {
-            setLoading(false);
+            if (gen === loadGenRef.current && !leavingRef.current) setLoading(false);
         }
     }, [planId, applyPlan]);
 
     useFocusEffect(
         useCallback(() => {
             if (planId && typeof planId === 'string') dismissPushForRating(planId);
-            attendanceLockRef.current = false;
-            flowStartedRef.current = false;
-            void load();
+            void load({ silent: flowStartedRef.current });
+            return () => {
+                loadGenRef.current += 1;
+            };
         }, [planId, load]),
     );
+
+    useEffect(() => {
+        if (!plan || resolveRatingUiPhase(plan) !== 'waiting') return;
+        const id = setInterval(() => setNowTick(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, [plan?.planId, plan?.unlockAt]);
 
     useEffect(() => {
         scrollRef.current?.scrollTo({ y: 0, animated: false });
     }, [stage, selectedPeer?.id]);
 
     const listPeers = useMemo(() => orderedSearchPeers(plan), [plan]);
-    const hiddenUnratedCount = useMemo(() => {
-        if (!plan) return 0;
-        const all = plan.searchPeers ?? [];
-        if (all.length <= MAX_FACE_PEERS) return 0;
-        const totalUnrated = all.filter((p) => !ratedIds.has(p.id)).length;
-        const shownUnrated = listPeers.filter((p) => !ratedIds.has(p.id)).length;
-        return Math.max(0, totalUnrated - shownUnrated);
-    }, [plan, ratedIds, listPeers]);
+
     const ratedCount = ratedIds.size;
-    const totalPeople = plan?.searchPeers?.length ?? 0;
-    const searchHits = filterPeersByQuery(plan?.searchPeers ?? [], peopleQuery);
     const canSubmitOrg = isOrganizerDraftComplete(draft);
     const canSubmitPerson = isPersonDraftComplete(draft);
-    const showCompactSearch = totalPeople > 6;
 
-    const goBackSafe = () => {
-        // Nunca InteractionManager aquí: tras valorar puede no dispararse y congela la app.
-        try {
-            if (router.canGoBack()) router.back();
-            else router.replace('/my-plans');
-        } catch {
-            router.replace('/my-plans');
-        }
-    };
+    const goBackSafe = useCallback(() => {
+        if (leavingRef.current) return;
+        leavingRef.current = true;
+        loadGenRef.current += 1;
+        setCapNotice(false);
+        setSparkPeer(null);
+        setLeaving(true);
+        requestAnimationFrame(() => {
+            try {
+                if (router.canGoBack()) router.back();
+                else router.replace('/my-plans');
+            } catch {
+                router.replace('/my-plans');
+            }
+        });
+    }, [router]);
 
     const goAfterAttendance = () => {
         if (plan?.organizer && !orgRated) setStage('org');
@@ -209,7 +267,11 @@ export default function RatePlanScreen() {
     };
 
     const confirmAttendance = () => {
-        if (!userId || !plan || attendanceLockRef.current) return;
+        if (!userId || !plan || resolveRatingUiPhase(plan) === 'waiting') return;
+        if (attendanceLockRef.current) {
+            goAfterAttendance();
+            return;
+        }
         attendanceLockRef.current = true;
         flowStartedRef.current = true;
         // UI primero: nada síncrono pesado antes (congelaba / expulsaba).
@@ -267,6 +329,7 @@ export default function RatePlanScreen() {
 
     const skipAttendance = () => {
         if (!userId || !plan || attendanceLockRef.current) return;
+        if (resolveRatingUiPhase(plan) === 'waiting') return;
         attendanceLockRef.current = true;
         flowStartedRef.current = true;
         applyRatingFlowCompleteOptimistic(userId, plan.planId, { skipped: true });
@@ -286,20 +349,16 @@ export default function RatePlanScreen() {
     };
 
     const openPeer = (peer: RatingPeer, opts?: { allowRerate?: boolean }) => {
-        if (ratedIds.has(peer.id) && !opts?.allowRerate) return;
-        if (!opts?.allowRerate && ratedCount >= MAX_PEOPLE_RATINGS_COMPACT) {
-            Alert.alert(t('ratings.peopleCapTitle'), t('ratings.peopleCapBody', { n: MAX_PEOPLE_RATINGS_COMPACT }));
+        if (ratedIdsRef.current.has(peer.id) && !opts?.allowRerate) return;
+        if (!opts?.allowRerate && ratedIdsRef.current.size >= MAX_PEOPLE_RATINGS_COMPACT) {
+            hapticLight();
+            setCapNotice(true);
             return;
         }
         hapticSelection();
         setSelectedPeer(peer);
         setDraft(EMPTY_RATING_DRAFT);
         setStage('person');
-    };
-
-    const pickSearchPeer = (peer: RatingPeer) => {
-        setPeopleQuery('');
-        openPeer(peer, { allowRerate: true });
     };
 
     const toggleAspect = (list: 'aspectos_positivos' | 'aspectos_negativos', key: string) => {
@@ -322,6 +381,7 @@ export default function RatePlanScreen() {
         const orgId = plan.organizer.id;
         const payload = { ...draft, asistencia: true as const };
         hapticSuccess();
+        setSaving(true);
         setOrgRated(true);
         setDraft(EMPTY_RATING_DRAFT);
         setStage('list');
@@ -330,6 +390,7 @@ export default function RatePlanScreen() {
                 await markRatingSessionStarted(uid, pid);
                 const { error: histError } = await ensurePlanInHistory(uid, pid, { skipBump: true });
                 if (histError) {
+                    setOrgRated(false);
                     Alert.alert(t('profile.error'), t('ratings.saveError'));
                     return;
                 }
@@ -341,13 +402,19 @@ export default function RatePlanScreen() {
                     tipo: 'organizacion',
                 });
                 if (error) {
-                    Alert.alert(
-                        t('profile.error'),
-                        `${t('ratings.saveError')}${error !== 'rpc_rejected' ? `\n\n${error}` : ''}`,
-                    );
+                    setOrgRated(false);
+                    Alert.alert(t('profile.error'), ratingErrorCopy(t, error));
+                    return;
+                }
+                const pos = (payload.aspectos_positivos ?? []).filter(Boolean);
+                if (pos.length > 0) {
+                    notifyCompliment({ toUserId: orgId, planId: pid, trait: pos[0] });
                 }
             } catch {
+                setOrgRated(false);
                 Alert.alert(t('profile.error'), t('ratings.saveError'));
+            } finally {
+                setSaving(false);
             }
         })();
     };
@@ -357,18 +424,17 @@ export default function RatePlanScreen() {
         const uid = userId;
         const pid = plan.planId;
         const peer = selectedPeer;
-        const payload = draft;
+        const payload = {
+            ...draft,
+            aspectos_positivos: [...draft.aspectos_positivos],
+            aspectos_negativos: [...draft.aspectos_negativos],
+        };
         hapticSuccess();
+        setSaving(true);
         const nextRated = new Set(ratedIds);
         nextRated.add(peer.id);
+        ratedIdsRef.current = nextRated;
         setRatedIds(nextRated);
-        if (payload.repetiria_experiencia === 'si') {
-            notifyCompliment({
-                toUserId: peer.id,
-                planId: pid,
-                trait: payload.aspectos_positivos[0] ?? '',
-            });
-        }
         setSelectedPeer(null);
         setDraft(EMPTY_RATING_DRAFT);
         setStage('list');
@@ -377,6 +443,12 @@ export default function RatePlanScreen() {
                 await markRatingSessionStarted(uid, pid);
                 const { error: histError } = await ensurePlanInHistory(uid, pid, { skipBump: true });
                 if (histError) {
+                    setRatedIds((prev) => {
+                        const next = new Set(prev);
+                        next.delete(peer.id);
+                        ratedIdsRef.current = next;
+                        return next;
+                    });
                     Alert.alert(t('profile.error'), t('ratings.saveError'));
                     return;
                 }
@@ -387,13 +459,43 @@ export default function RatePlanScreen() {
                     draft: payload,
                 });
                 if (error) {
-                    Alert.alert(
-                        t('profile.error'),
-                        `${t('ratings.saveError')}${error !== 'rpc_rejected' ? `\n\n${error}` : ''}`,
-                    );
+                    setRatedIds((prev) => {
+                        const next = new Set(prev);
+                        next.delete(peer.id);
+                        ratedIdsRef.current = next;
+                        return next;
+                    });
+                    Alert.alert(t('profile.error'), ratingErrorCopy(t, error));
+                    return;
+                }
+                if (payload.aspectos_positivos.length > 0) {
+                    notifyCompliment({
+                        toUserId: peer.id,
+                        planId: pid,
+                        trait: payload.aspectos_positivos[0],
+                    });
+                }
+                if (payload.repetiria_experiencia === 'si') {
+                    try {
+                        const mutual = await findMutualSpark(pid, uid, peer.id);
+                        if (mutual) {
+                            hapticCelebrate();
+                            setSparkPeer(peer);
+                        }
+                    } catch {
+                        /* ignore */
+                    }
                 }
             } catch {
+                setRatedIds((prev) => {
+                    const next = new Set(prev);
+                    next.delete(peer.id);
+                    ratedIdsRef.current = next;
+                    return next;
+                });
                 Alert.alert(t('profile.error'), t('ratings.saveError'));
+            } finally {
+                setSaving(false);
             }
         })();
     };
@@ -405,6 +507,14 @@ export default function RatePlanScreen() {
     };
 
     const onHeaderBack = () => {
+        if (capNotice) {
+            setCapNotice(false);
+            return;
+        }
+        if (sparkPeer) {
+            setSparkPeer(null);
+            return;
+        }
         if (stage === 'skipped') {
             void undoSkip();
             return;
@@ -413,12 +523,63 @@ export default function RatePlanScreen() {
             closePersonSheet();
             return;
         }
-        if (stage === 'org' || stage === 'list') {
-            setStage('attendance');
-            return;
-        }
         goBackSafe();
     };
+
+    useFocusEffect(
+        useCallback(() => {
+            const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+                if (capNotice) {
+                    setCapNotice(false);
+                    return true;
+                }
+                if (sparkPeer) {
+                    setSparkPeer(null);
+                    return true;
+                }
+                if (stage === 'skipped') {
+                    void undoSkip();
+                    return true;
+                }
+                if (stage === 'person') {
+                    closePersonSheet();
+                    return true;
+                }
+                goBackSafe();
+                return true;
+            });
+            return () => sub.remove();
+        }, [stage, undoSkip, capNotice, sparkPeer, goBackSafe]),
+    );
+
+    const renderFace = ({ item: peer }: { item: RatingPeer }) => {
+        const done = ratedIds.has(peer.id);
+        return (
+            <PressScale
+                disabled={done}
+                onPress={() => openPeer(peer)}
+                style={styles.faceCell}
+            >
+                <View style={[styles.faceRing, done && styles.faceRingOn]}>
+                    <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={64} />
+                    {done ? (
+                        <View style={styles.faceCheck}>
+                            <Ionicons name="checkmark" size={16} color="#FFF" />
+                        </View>
+                    ) : null}
+                </View>
+                <Text style={styles.faceName} numberOfLines={2}>{peer.nombre}</Text>
+            </PressScale>
+        );
+    };
+
+    if (leaving) {
+        return <View style={[styles.container, { paddingTop: insets.top }]} />;
+    }
+
+    if (loading && !showRatingLoader) {
+        return <View style={[styles.container, { paddingTop: insets.top }]} />;
+    }
 
     if (loading) {
         return (
@@ -443,11 +604,12 @@ export default function RatePlanScreen() {
         );
     }
 
+    const waiting = resolveRatingUiPhase(plan, nowTick) === 'waiting';
     const cover = resolvePlanImageSource(plan.imagen_url);
 
     const renderHero = (subtitle?: string) => (
         <View style={styles.hero}>
-            <PlanImage source={cover} style={styles.heroImg} recyclingKey={plan.planId} />
+            <PlanImage source={cover} style={styles.heroImg} recyclingKey={plan.planId} thumbWidth={440} />
             <LinearGradient
                 colors={['rgba(15,23,42,0.08)', 'rgba(15,23,42,0.82)']}
                 style={StyleSheet.absoluteFill}
@@ -463,25 +625,135 @@ export default function RatePlanScreen() {
         </View>
     );
 
+    const aspectLabel = (kind: 'pos' | 'neg', key: string) =>
+        getAspectLabel(kind, key, selectedPeer?.genero, t);
+
+    const renderAspectBoard = (
+        title: string,
+        list: 'aspectos_positivos' | 'aspectos_negativos',
+        kind: 'pos' | 'neg',
+        keys: readonly string[],
+    ) => {
+        const selected = draft[list];
+        const positive = kind === 'pos';
+        return (
+            <View style={styles.sheetCard}>
+                <View style={styles.aspectHead}>
+                    <Text style={styles.aspectTitle}>{title}</Text>
+                    <Text style={styles.aspectMax}>{t('ratings.aspectMax')}</Text>
+                </View>
+                <View style={styles.aspectDeck}>
+                    {keys.map((key) => {
+                        const on = selected.includes(key);
+                        return (
+                            <PressScale
+                                key={key}
+                                haptic={false}
+                                pressedScale={0.96}
+                                style={[
+                                    styles.aspectCard,
+                                    positive ? styles.aspectPosIdle : styles.aspectNegIdle,
+                                    on && (positive ? styles.aspectPosOn : styles.aspectNegOn),
+                                ]}
+                                onPress={() => toggleAspect(list, key)}
+                            >
+                                <Text
+                                    style={[
+                                        styles.aspectCardText,
+                                        positive ? styles.aspectPosText : styles.aspectNegText,
+                                        on && styles.aspectTextOn,
+                                    ]}
+                                >
+                                    {aspectLabel(kind, key)}
+                                </Text>
+                            </PressScale>
+                        );
+                    })}
+                </View>
+            </View>
+        );
+    };
+
     return (
         <View style={styles.container}>
             <LinearGradient
                 colors={['#EEF4FF', colors.backgroundAlt]}
                 style={StyleSheet.absoluteFill}
             />
-            <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+            <View
+                pointerEvents="box-none"
+                style={[styles.header, { paddingTop: insets.top + 2 }]}
+            >
                 <TouchableOpacity onPress={onHeaderBack} style={styles.backBtn}>
                     <Ionicons name="chevron-back" size={24} color={colors.text} />
                 </TouchableOpacity>
             </View>
 
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            >
+            {stage === 'list' ? (
+                <FlatList
+                    data={listPeers}
+                    keyExtractor={(peer) => peer.id}
+                    numColumns={4}
+                    renderItem={renderFace}
+                    initialNumToRender={16}
+                    maxToRenderPerBatch={12}
+                    windowSize={6}
+                    removeClippedSubviews={Platform.OS === 'android'}
+                    columnWrapperStyle={styles.faceRow}
+                    contentContainerStyle={[
+                        styles.content,
+                        { paddingBottom: insets.bottom + 28, paddingTop: insets.top + 50 },
+                    ]}
+                    ListHeaderComponent={
+                        <View style={styles.sheetCard}>
+                            <Text style={styles.sheetTitle}>{t('ratings.highlightTitle')}</Text>
+                            <Text style={styles.sheetHint}>{t('ratings.highlightHint')}</Text>
+                        </View>
+                    }
+                    ListFooterComponent={
+                        <TouchableOpacity style={styles.primaryBtn} onPress={finishAndArchive}>
+                            <Text style={styles.primaryBtnText}>
+                                {ratedCount === 0 ? t('ratings.finishWithoutRating') : t('ratings.finish')}
+                            </Text>
+                        </TouchableOpacity>
+                    }
+                />
+            ) : (
             <ScrollView
                 ref={scrollRef}
-                contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 28 }]}
+                contentContainerStyle={[
+                    styles.content,
+                    {
+                        paddingBottom: insets.bottom + 28,
+                        paddingTop:
+                            stage === 'person' || stage === 'skipped'
+                                ? insets.top + 4
+                                : insets.top + 72,
+                    },
+                ]}
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
             >
-                {stage === 'attendance' && (
+                {stage === 'attendance' && waiting && (
+                    <>
+                        {renderHero()}
+                        <View style={styles.sheetCard}>
+                            <Text style={styles.sheetTitle}>{t('ratings.waitingTitle')}</Text>
+                            <Text style={styles.sheetHint}>
+                                {t('ratings.unlockIn', { time: formatCountdown(plan.unlockAt - nowTick) })}
+                            </Text>
+                            <TouchableOpacity style={styles.primaryBtn} onPress={goBackSafe}>
+                                <Text style={styles.primaryBtnText}>{t('common.back')}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </>
+                )}
+
+                {stage === 'attendance' && !waiting && (
                     <>
                         {renderHero()}
                         <View style={styles.sheetCard}>
@@ -620,93 +892,16 @@ export default function RatePlanScreen() {
                     </>
                 )}
 
-                {stage === 'list' && (
-                    <>
-                        {renderHero()}
-                        <View style={styles.sheetCard}>
-                            <Text style={styles.sheetTitle}>{t('ratings.highlightTitle')}</Text>
-
-                            <View style={styles.faceGrid}>
-                                {listPeers.map((peer) => {
-                                    const done = ratedIds.has(peer.id);
-                                    return (
-                                        <PressScale
-                                            key={peer.id}
-                                            disabled={done}
-                                            onPress={() => openPeer(peer)}
-                                            style={styles.faceCell}
-                                        >
-                                            <View style={[styles.faceRing, done && styles.faceRingOn]}>
-                                                <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={76} />
-                                                {done ? (
-                                                    <View style={styles.faceCheck}>
-                                                        <Ionicons name="checkmark" size={14} color="#FFF" />
-                                                    </View>
-                                                ) : null}
-                                            </View>
-                                            <Text style={styles.faceName} numberOfLines={2}>{peer.nombre}</Text>
-                                            <Text style={[styles.faceStatus, done && styles.faceStatusDone]}>
-                                                {done ? t('ratings.alreadyRated') : t('ratings.tapToRate')}
-                                            </Text>
-                                        </PressScale>
-                                    );
-                                })}
-                                {hiddenUnratedCount > 0 ? (
-                                    <View style={styles.faceCell}>
-                                        <View style={styles.faceMore}>
-                                            <Text style={styles.faceMoreText}>+{hiddenUnratedCount}</Text>
-                                        </View>
-                                        <Text style={styles.faceName}>{t('ratings.pickPeopleYouKnow')}</Text>
-                                    </View>
-                                ) : null}
-                            </View>
-                        </View>
-
-                        {showCompactSearch ? (
-                            <>
-                                <TextInput
-                                    style={styles.search}
-                                    value={peopleQuery}
-                                    onChangeText={setPeopleQuery}
-                                    placeholder={t('ratings.searchPeople')}
-                                    placeholderTextColor={colors.textSubtle}
-                                    autoCapitalize="none"
-                                    autoCorrect={false}
-                                />
-                                {searchHits.length > 0 ? (
-                                    <View style={styles.searchResults}>
-                                        {searchHits.map((peer) => (
-                                            <TouchableOpacity
-                                                key={peer.id}
-                                                style={styles.peerRow}
-                                                onPress={() => pickSearchPeer(peer)}
-                                                activeOpacity={0.85}
-                                            >
-                                                <ProfileAvatar uri={peer.avatar_url} name={peer.nombre} size={44} />
-                                                <Text style={[styles.peerRowName, { flex: 1 }]}>{peer.nombre}</Text>
-                                                <Ionicons name="chevron-forward" size={16} color={colors.textSubtle} />
-                                            </TouchableOpacity>
-                                        ))}
-                                    </View>
-                                ) : null}
-                            </>
-                        ) : null}
-
-                        <TouchableOpacity
-                            style={styles.primaryBtn}
-                            onPress={finishAndArchive}
-                        >
-                            <Text style={styles.primaryBtnText}>
-                                {ratedCount === 0 ? t('ratings.finishWithoutRating') : t('ratings.finish')}
-                            </Text>
-                        </TouchableOpacity>
-                    </>
-                )}
-
                 {stage === 'person' && selectedPeer && (
                     <>
                         <View style={styles.personHero}>
-                            <ProfileAvatar uri={selectedPeer.avatar_url} name={selectedPeer.nombre} size={104} />
+                            <ProfileAvatar
+                                uri={selectedPeer.avatar_url}
+                                name={selectedPeer.nombre}
+                                size={PERSON_AVATAR}
+                                recyclingKey={selectedPeer.id}
+                                placeholderUri={storageThumbUrl(selectedPeer.avatar_url, FACE_AVATAR) ?? selectedPeer.avatar_url}
+                            />
                             <Text style={styles.peerName}>{selectedPeer.nombre}</Text>
                         </View>
 
@@ -714,16 +909,18 @@ export default function RatePlanScreen() {
                             <Text style={styles.sheetTitle}>{t('ratings.repeatQ')}</Text>
                             <View style={styles.choiceRow}>
                                 {([
-                                    ['si', t('ratings.repeatYes'), colors.successStrong, 'heart'],
-                                    ['no', t('ratings.repeatNo'), colors.danger, 'close'],
-                                ] as [Repetiria, string, string, string][]).map(([key, label, color, icon]) => {
+                                    ['si', t('ratings.repeatYes'), 'heart'],
+                                    ['no', t('ratings.repeatNo'), 'close'],
+                                ] as [Repetiria, string, 'heart' | 'close'][]).map(([key, label, icon]) => {
                                     const on = draft.repetiria_experiencia === key;
+                                    const yes = key === 'si';
                                     return (
                                         <TouchableOpacity
                                             key={key}
                                             style={[
                                                 styles.choiceBtn,
-                                                on && { backgroundColor: color, borderColor: color },
+                                                yes ? styles.choiceYesIdle : styles.choiceNoIdle,
+                                                on && (yes ? styles.choiceYesOn : styles.choiceNoOn),
                                             ]}
                                             onPress={() => {
                                                 hapticSelection();
@@ -735,11 +932,17 @@ export default function RatePlanScreen() {
                                             }}
                                         >
                                             <Ionicons
-                                                name={icon as 'heart' | 'close'}
+                                                name={icon}
                                                 size={20}
-                                                color={on ? '#FFF' : colors.textMuted}
+                                                color={on ? '#FFF' : yes ? '#166534' : '#B91C1C'}
                                             />
-                                            <Text style={[styles.choiceBtnText, on && styles.choiceBtnTextOn]}>
+                                            <Text
+                                                style={[
+                                                    styles.choiceBtnText,
+                                                    yes ? styles.aspectPosText : styles.aspectNegText,
+                                                    on && styles.choiceBtnTextOn,
+                                                ]}
+                                            >
                                                 {label}
                                             </Text>
                                         </TouchableOpacity>
@@ -748,60 +951,75 @@ export default function RatePlanScreen() {
                             </View>
                         </View>
 
-                        {draft.repetiria_experiencia === 'si' ? (
-                            <View style={styles.sheetCard}>
-                                <Text style={styles.q}>{t('ratings.positivesQ')}</Text>
-                                <View style={styles.rowWrap}>
-                                    {POSITIVE_ASPECTS.map((key) => {
-                                        const on = draft.aspectos_positivos.includes(key);
-                                        return (
-                                            <RatingChip
-                                                key={key}
-                                                label={t(`ratings.pos.${key}`)}
-                                                selected={on}
-                                                onPress={() => toggleAspect('aspectos_positivos', key)}
-                                                selectedStyle={styles.chipPos}
-                                            />
-                                        );
-                                    })}
-                                </View>
-                            </View>
+                        {draft.repetiria_experiencia === 'si' || draft.repetiria_experiencia === 'no' ? (
+                            <>
+                                {renderAspectBoard(
+                                    t('ratings.positivesQ'),
+                                    'aspectos_positivos',
+                                    'pos',
+                                    POSITIVE_ASPECTS,
+                                )}
+                                {renderAspectBoard(
+                                    t('ratings.negativesQ'),
+                                    'aspectos_negativos',
+                                    'neg',
+                                    NEGATIVE_ASPECTS,
+                                )}
+                            </>
                         ) : null}
 
-                        {draft.repetiria_experiencia === 'no' ? (
-                            <View style={styles.sheetCard}>
-                                <Text style={styles.q}>{t('ratings.negativesQ')}</Text>
-                                <View style={styles.rowWrap}>
-                                    {NEGATIVE_ASPECTS.map((key) => {
-                                        const on = draft.aspectos_negativos.includes(key);
-                                        return (
-                                            <RatingChip
-                                                key={key}
-                                                label={t(`ratings.neg.${key}`)}
-                                                selected={on}
-                                                onPress={() => toggleAspect('aspectos_negativos', key)}
-                                                selectedStyle={styles.chipNeg}
-                                            />
-                                        );
-                                    })}
-                                </View>
-                            </View>
+                        {draft.repetiria_experiencia === 'si' || draft.repetiria_experiencia === 'no' ? (
+                            <TouchableOpacity
+                                style={[styles.primaryBtn, (!canSubmitPerson || saving) && styles.primaryBtnDisabled]}
+                                onPress={() => void submitCurrent()}
+                                disabled={!canSubmitPerson || saving}
+                            >
+                                {saving ? (
+                                    <ActivityIndicator color="#FFF" />
+                                ) : (
+                                    <Text style={styles.primaryBtnText}>{t('ratings.savedPerson')}</Text>
+                                )}
+                            </TouchableOpacity>
                         ) : null}
-
-                        <TouchableOpacity
-                            style={[styles.primaryBtn, (!canSubmitPerson || saving) && styles.primaryBtnDisabled]}
-                            onPress={() => void submitCurrent()}
-                            disabled={!canSubmitPerson || saving}
-                        >
-                            {saving ? (
-                                <ActivityIndicator color="#FFF" />
-                            ) : (
-                                <Text style={styles.primaryBtnText}>{t('ratings.savedPerson')}</Text>
-                            )}
-                        </TouchableOpacity>
                     </>
                 )}
             </ScrollView>
+            )}
+            </KeyboardAvoidingView>
+            {sparkPeer ? (
+                <View style={styles.sparkOverlay}>
+                    <View style={styles.sparkCard}>
+                        <View style={styles.sparkHalo}>
+                            <ProfileAvatar
+                                uri={sparkPeer.avatar_url}
+                                name={sparkPeer.nombre}
+                                size={96}
+                                recyclingKey={`spark-${sparkPeer.id}`}
+                            />
+                        </View>
+                        <Text style={styles.sparkTitle}>{t('ratings.sparkTitle')}</Text>
+                        <Text style={styles.sparkBody}>
+                            {t('ratings.sparkBody', { name: sparkPeer.nombre })}
+                        </Text>
+                        <TouchableOpacity style={styles.sparkLaterBtn} onPress={() => setSparkPeer(null)}>
+                            <Text style={styles.sparkLaterText}>{t('ratings.sparkLater')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            ) : null}
+            {capNotice ? (
+                <Pressable style={styles.sparkOverlay} onPress={() => setCapNotice(false)}>
+                    <Pressable style={styles.sparkCard} onPress={(e) => e.stopPropagation()}>
+                        <Text style={styles.sparkTitle}>{t('ratings.peopleCapTitle')}</Text>
+                        <Text style={styles.sparkBody}>
+                            {t('ratings.peopleCapBody', { n: MAX_PEOPLE_RATINGS_COMPACT })}
+                        </Text>
+                        <TouchableOpacity style={styles.primaryBtn} onPress={() => setCapNotice(false)}>
+                            <Text style={styles.primaryBtnText}>{t('common.ok')}</Text>
+                        </TouchableOpacity>
+                    </Pressable>
+                </Pressable>
+            ) : null}
         </View>
     );
 }
@@ -831,10 +1049,15 @@ function createRatePlanStyles(c: ThemeColors) {
         },
         empty: { color: MUTED, fontWeight: '600', marginBottom: 16, textAlign: 'center' },
         header: {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 5,
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: 16,
-            paddingBottom: 8,
+            paddingHorizontal: 12,
+            paddingBottom: 0,
             gap: 12,
         },
         backBtn: {
@@ -860,7 +1083,7 @@ function createRatePlanStyles(c: ThemeColors) {
             borderRadius: 999,
             backgroundColor: ACTION_BLUE,
         },
-        content: { paddingHorizontal: 20, paddingTop: 4 },
+        content: { paddingHorizontal: 20 },
         hero: {
             height: 220,
             borderRadius: 24,
@@ -972,13 +1195,11 @@ function createRatePlanStyles(c: ThemeColors) {
             marginBottom: 10,
         },
         searchResults: { marginBottom: 12 },
-        faceGrid: {
-            flexDirection: 'row',
-            flexWrap: 'wrap',
+        faceRow: {
             marginHorizontal: -8,
         },
         faceCell: {
-            width: '33.333%',
+            flex: 1,
             alignItems: 'center',
             paddingHorizontal: 8,
             marginBottom: 18,
@@ -986,23 +1207,23 @@ function createRatePlanStyles(c: ThemeColors) {
         faceRing: {
             borderRadius: 999,
             padding: 3,
-            borderWidth: 2,
+            borderWidth: 3,
             borderColor: 'transparent',
             position: 'relative',
         },
-        faceRingOn: { borderColor: ACTION_BLUE },
+        faceRingOn: { borderColor: '#1D4ED8' },
         faceCheck: {
             position: 'absolute',
-            right: 2,
-            bottom: 2,
-            width: 24,
-            height: 24,
-            borderRadius: 12,
-            backgroundColor: ACTION_BLUE,
+            right: -1,
+            bottom: -1,
+            width: 26,
+            height: 26,
+            borderRadius: 13,
+            backgroundColor: '#1D4ED8',
             alignItems: 'center',
             justifyContent: 'center',
             borderWidth: 2,
-            borderColor: SURFACE,
+            borderColor: '#FFF',
         },
         faceTapHint: {
             position: 'absolute',
@@ -1018,8 +1239,6 @@ function createRatePlanStyles(c: ThemeColors) {
             borderColor: SURFACE,
         },
         faceName: { marginTop: 8, fontSize: 13, fontWeight: '800', color: INK, textAlign: 'center' },
-        faceStatus: { marginTop: 2, fontSize: 11, fontWeight: '700', color: MUTED, textAlign: 'center' },
-        faceStatusDone: { color: ACTION_BLUE },
         faceMore: {
             width: 76,
             height: 76,
@@ -1034,7 +1253,45 @@ function createRatePlanStyles(c: ThemeColors) {
         personHero: {
             alignItems: 'center',
             marginBottom: 16,
+            gap: 10,
+        },
+        choiceYesIdle: { backgroundColor: '#F0FDF4', borderColor: '#86EFAC' },
+        choiceYesOn: { backgroundColor: '#16A34A', borderColor: '#14532D' },
+        choiceNoIdle: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
+        choiceNoOn: { backgroundColor: '#DC2626', borderColor: '#7F1D1D' },
+        aspectHead: {
+            flexDirection: 'row',
+            alignItems: 'baseline',
+            flexWrap: 'wrap',
+            gap: 6,
+            marginBottom: 10,
+        },
+        aspectTitle: { fontSize: 15, fontWeight: '800', color: INK },
+        aspectMax: { fontSize: 13, fontWeight: '700', color: MUTED },
+        aspectDeck: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
             gap: 8,
+        },
+        aspectCard: {
+            borderRadius: 999,
+            paddingHorizontal: 12,
+            paddingVertical: 7,
+            borderWidth: 1.5,
+            alignItems: 'center',
+            justifyContent: 'center',
+        },
+        aspectPosIdle: { backgroundColor: '#F0FDF4', borderColor: '#86EFAC' },
+        aspectPosOn: { backgroundColor: '#16A34A', borderColor: '#14532D' },
+        aspectNegIdle: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
+        aspectNegOn: { backgroundColor: '#DC2626', borderColor: '#7F1D1D' },
+        aspectPosText: { color: '#166534' },
+        aspectNegText: { color: '#B91C1C' },
+        aspectTextOn: { color: '#FFF' },
+        aspectCardText: {
+            fontSize: 13,
+            fontWeight: '800',
+            textAlign: 'center',
         },
         peerName: { fontSize: 24, fontWeight: '900', color: INK, textAlign: 'center' },
         peerRow: {
@@ -1066,6 +1323,43 @@ function createRatePlanStyles(c: ThemeColors) {
         chipNeg: { backgroundColor: c.danger, borderColor: c.danger },
         chipText: { fontSize: 13, fontWeight: '700', color: MUTED },
         chipTextOn: { color: '#FFF' },
+        sparkOverlay: {
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: 'rgba(15,23,42,0.55)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: 28,
+            zIndex: 20,
+        },
+        sparkCard: {
+            width: '100%',
+            backgroundColor: SURFACE,
+            borderRadius: 28,
+            paddingHorizontal: 24,
+            paddingTop: 28,
+            paddingBottom: 20,
+            alignItems: 'center',
+        },
+        sparkHalo: {
+            width: 112,
+            height: 112,
+            borderRadius: 56,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: '#FEF3C7',
+            marginBottom: 14,
+        },
+        sparkTitle: { fontSize: 26, fontWeight: '900', color: INK, textAlign: 'center' },
+        sparkBody: {
+            marginTop: 8,
+            fontSize: 15,
+            fontWeight: '600',
+            color: MUTED,
+            textAlign: 'center',
+            lineHeight: 22,
+        },
+        sparkLaterBtn: { marginTop: 18, paddingVertical: 10 },
+        sparkLaterText: { color: MUTED, fontWeight: '700', fontSize: 14 },
         primaryBtn: {
             marginTop: 4,
             borderRadius: 16,

@@ -130,7 +130,8 @@ export function prefetchPairAffinity(
     const running = inflight.get(key);
     if (running) return running;
 
-    const task = (async (): Promise<PairAffinityResult | null> => {
+    let task!: Promise<PairAffinityResult | null>;
+    task = (async (): Promise<PairAffinityResult | null> => {
         try {
             const snap = cacheGetStale<ProfileAffinitySnap>(userProfileKey(targetId));
             const needProfile = !snap?.userProfile;

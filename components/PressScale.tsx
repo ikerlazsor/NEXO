@@ -22,6 +22,7 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 type Props = {
     children: ReactNode;
     onPress?: (event: GestureResponderEvent) => void;
+    onPressIn?: (event: GestureResponderEvent) => void;
     style?: StyleProp<ViewStyle>;
     pressedScale?: number;
     disabled?: boolean;
@@ -46,6 +47,7 @@ const PRESS_OUT = { duration: 140, easing: Easing.out(Easing.cubic) };
 export function PressScale({
     children,
     onPress,
+    onPressIn,
     style,
     pressedScale = 0.96,
     disabled,
@@ -80,8 +82,9 @@ export function PressScale({
             disabled={disabled}
             hitSlop={hitSlop}
             onPress={onPress}
-            onPressIn={() => {
+            onPressIn={(event) => {
                 if (haptic && !disabled) hapticSoft();
+                onPressIn?.(event);
                 // Timing inmediato (no spring) para que no “espere” al JS del onPress.
                 scale.value = withTiming(pressedScale, PRESS_IN);
             }}

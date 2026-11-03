@@ -53,4 +53,9 @@ export type PlanDetailSnapshot = {
   fitPct?: number | null;
   /** Semilla incompleta del feed: no salta el fetch real. */
   partial?: boolean;
+  /**
+   * `participants` trae a todos los unidos, no la muestra de avatares del feed
+   * (get_feed_plan_people recorta la lista a 8).
+   */
+  participantsComplete?: boolean;
 };

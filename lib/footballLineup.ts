@@ -30,7 +30,8 @@ export type FootballConfig = {
 };
 
 export type FootballOccupant = {
-    equipo: 0 | 1;
+    /** 0|1 en partido; 0..N-1 en torneo. */
+    equipo: number;
     posicion: number;
     usuario_id: string;
 };
@@ -52,6 +53,17 @@ export const TEAM_COLORS = [
     '#DC2626',
     '#2563EB',
     '#16A34A',
+    '#F59E0B',
+    '#7C3AED',
+    '#EC4899',
+    '#0EA5E9',
+    '#84CC16',
+    '#F97316',
+    '#14B8A6',
+    '#EF4444',
+    '#6366F1',
+    '#A855F7',
+    '#64748B',
 ];
 
 const LAYOUTS: Record<FootballStoredFormat | 'sala', PitchSlot[]> = {
@@ -219,6 +231,8 @@ export function configWithUiFormat(
 export function parseFootballConfig(raw: unknown): FootballConfig | null {
     if (!raw || typeof raw !== 'object') return null;
     const o = raw as Record<string, unknown>;
+    // Torneo: lo gestiona footballTournament.ts (no forzar 2 equipos).
+    if (o.modo === 'torneo') return null;
     const rawFmt = o.formato;
     if (typeof rawFmt !== 'string') return null;
 
@@ -311,7 +325,7 @@ export async function fetchFootballSlots(planId: string): Promise<FootballOccupa
         .eq('plan_id', planId);
     if (error || !data) return [];
     return (data as Array<{ equipo: number; posicion: number; usuario_id: string }>).map((row) => ({
-        equipo: row.equipo === 1 ? 1 : 0,
+        equipo: Math.max(0, Number(row.equipo) || 0),
         posicion: Number(row.posicion) || 0,
         usuario_id: row.usuario_id,
     }));
@@ -352,13 +366,13 @@ export async function clearFootballConfig(planId: string): Promise<{ error: stri
 
 export async function claimFootballSlot(
     planId: string,
-    equipo: 0 | 1,
+    equipo: number,
     posicion: number,
 ): Promise<{ error: string | null }> {
     const { error } = await supabase.rpc('claim_alineacion_slot', {
         p_plan_id: planId,
-        p_equipo: equipo,
-        p_posicion: posicion,
+        p_equipo: Math.max(0, Math.floor(equipo)),
+        p_posicion: Math.max(0, Math.floor(posicion)),
     });
     return { error: error?.message ?? null };
 }

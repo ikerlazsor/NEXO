@@ -1,6 +1,5 @@
 import {
     Ionicons } from '@expo/vector-icons';
-import { useHeaderHeight } from '@react-navigation/elements';
 import { Audio,
     ResizeMode,
     Video } from 'expo-av';
@@ -17,8 +16,6 @@ import { FlashList } from '@shopify/flash-list';
 import { Image } from 'expo-image';
 import {
     ActivityIndicator,
-    Keyboard,
-    KeyboardAvoidingView,
     Modal,
     Platform,
     StyleSheet,
@@ -31,6 +28,8 @@ import { Alert } from '../../lib/nexoAlert';
 import { theme } from '../../theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
+import { MomentsAlbum } from '../../components/MomentsAlbum';
+import type { MomentItem } from '../../lib/planMoments';
 import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
 import { getAuthUser } from '../../lib/auth';
 import { useAuthSession } from '../../lib/authSession';
@@ -41,6 +40,7 @@ import {
     uploadChatFile,
 } from '../../lib/chatUpload';
 import { markDirectChatRead } from '../../lib/chatUnread';
+import { useInvertedChatStickiness } from '../../lib/chatScroll';
 import { hideDirectChat, unhideDirectChat } from '../../lib/directChat';
 import { setActiveConversation } from '../../lib/activeConversation';
 import {
@@ -49,11 +49,18 @@ import {
     subscribeOutboxFlush,
 } from '../../lib/chatOutbox';
 import { encodeReplyContent, previewForReply, type ReplyQuote } from '../../lib/chatReply';
+import { ChatKeyboardAnimated, useChatKeyboardBottomPad } from '../../lib/chatKeyboard';
 import { hapticMedium } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import { getIsOnline } from '../../lib/network';
+import { diskGet, diskSet } from '../../lib/diskCache';
 import { cacheGetStale, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
+import {
+    DELETED_MESSAGE_MARK,
+    isDeletedMessage,
+    softDeleteMensaje,
+} from '../../lib/softDeleteMessage';
 import {
     DIRECT_CHAT_TTL_MS,
     PAGE_SIZE,
@@ -61,6 +68,9 @@ import {
     formatDuration,
     mapMessageRow,
     mergeMessages,
+    chatListKey,
+    reconcileIncomingChatMessage,
+    withFallbackProfile,
     parseStoredDuration,
     type DirectChatSnapshot,
     type Message,
@@ -76,20 +86,9 @@ export default function DirectChatScreen() {
     const router = useRouter();
     const { t } = useT();
     const { userId: sessionUserId } = useAuthSession();
-    const headerHeight = useHeaderHeight();
     const insets = useSafeAreaInsets();
-    const [keyboardOpen, setKeyboardOpen] = useState(false);
-
-    useEffect(() => {
-        const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-        const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-        const show = Keyboard.addListener(showEvt, () => setKeyboardOpen(true));
-        const hide = Keyboard.addListener(hideEvt, () => setKeyboardOpen(false));
-        return () => {
-            show.remove();
-            hide.remove();
-        };
-    }, []);
+    // Subida del teclado animada (iOS/Android), sin el corte de KeyboardAvoidingView.
+    const keyboardBottomStyle = useChatKeyboardBottomPad(insets.bottom);
 
     const cachedDirect =
         sessionUserId && otherUserId
@@ -117,8 +116,10 @@ export default function DirectChatScreen() {
     const [recording, setRecording] = useState<Audio.Recording | null>(null);
     const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
     const [modalImage, setModalImage] = useState<string | null>(null);
+    const [momentsAlbum, setMomentsAlbum] = useState<MomentItem[] | null>(null);
     const [modalVideo, setModalVideo] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
+    const [pendingFile, setPendingFile] = useState<{ uri: string; type: 'image' | 'video' } | null>(null);
     const [isSending, setIsSending] = useState(false);
     const sendLockRef = useRef(false);
     const [audioDurations, setAudioDurations] = useState<Record<string, number>>({});
@@ -126,13 +127,77 @@ export default function DirectChatScreen() {
 
     const soundRef = useRef<Audio.Sound | null>(null);
     const isMountedRef = useRef(true);
+    const initGenRef = useRef(0);
     const loadingDurationsRef = useRef<Set<string>>(new Set());
+    const {
+        listRef: messagesListRef,
+        onScroll: onMessagesScroll,
+        onScrollBeginDrag: onMessagesScrollBeginDrag,
+        onScrollEndDrag: onMessagesScrollEndDrag,
+        onMomentumScrollEnd: onMessagesMomentumScrollEnd,
+        onContentSizeChange: onMessagesContentSizeChange,
+        scrollToLatest,
+        maybeStickAfterIncoming,
+    } = useInvertedChatStickiness<Message>();
     const messagesRef = useRef(messages);
     messagesRef.current = messages;
     const [myProfile, setMyProfile] = useState<{ nombre: string; avatar_url: string | null }>({
         nombre: 'Yo',
         avatar_url: null,
     });
+
+    useEffect(() => {
+        if (!otherUserId || !sessionUserId || messages.length > 0) return;
+        let alive = true;
+        const key = directChatKey(sessionUserId, otherUserId);
+        void diskGet<DirectChatSnapshot>(key, 2 * 24 * 60 * 60 * 1000).then((snap) => {
+            if (!alive || !snap?.messages?.length) return;
+            setMessages((prev) => (prev.length > 0 ? prev : snap.messages));
+            if (snap.otherUserName) setOtherUserName((prev) => (prev && prev !== '…' ? prev : snap.otherUserName));
+            setLoading(false);
+            cacheSet(key, snap, DIRECT_CHAT_TTL_MS);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [otherUserId, sessionUserId, messages.length]);
+
+    useEffect(() => {
+        scrollToLatest(false);
+        if (!otherUserId || !sessionUserId) return;
+        let ticks = 0;
+        let pinnedOnce = false;
+        const syncFromCache = () => {
+            const latest = cacheGetStale<DirectChatSnapshot>(directChatKey(sessionUserId, otherUserId));
+            if (!latest?.messages?.length) return;
+            let changed = false;
+            setMessages((prev) => {
+                const next = mergeMessages(latest.messages, prev);
+                if (
+                    next.length === prev.length &&
+                    next[0]?.id === prev[0]?.id &&
+                    next[next.length - 1]?.id === prev[prev.length - 1]?.id
+                ) {
+                    return prev;
+                }
+                changed = true;
+                return next;
+            });
+            if (changed && !pinnedOnce) {
+                pinnedOnce = true;
+                scrollToLatest(false);
+            }
+        };
+        syncFromCache();
+        const poll = setInterval(() => {
+            ticks += 1;
+            syncFromCache();
+            if (ticks >= 12) clearInterval(poll);
+        }, 80);
+        return () => {
+            clearInterval(poll);
+        };
+    }, [otherUserId, sessionUserId, scrollToLatest]);
 
     const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
     const { reactions, setReactions } = useMessageReactions(messageIds);
@@ -159,6 +224,7 @@ export default function DirectChatScreen() {
                     creado_en,
                     tipo,
                     archivo_url,
+                    eliminado_en,
                     perfiles:perfiles!mensajes_emisor_fkey (
                         nombre,
                         avatar_url
@@ -187,16 +253,22 @@ export default function DirectChatScreen() {
         peerId: string,
         patch: Partial<DirectChatSnapshot> & { messages: Message[] },
     ) => {
-        const key = directChatKey(userId, peerId);
-        const prev = cacheGetStale<DirectChatSnapshot>(key);
-        cacheSet(key, {
-            messages: patch.messages,
-            otherUserName: patch.otherUserName ?? prev?.otherUserName ?? 'Usuario',
-            otherUserAvatar: patch.otherUserAvatar !== undefined
-                ? patch.otherUserAvatar
-                : (prev?.otherUserAvatar ?? null),
-            hasMore: patch.hasMore ?? prev?.hasMore ?? true,
-        }, DIRECT_CHAT_TTL_MS);
+        requestAnimationFrame(() => {
+            const key = directChatKey(userId, peerId);
+            const prev = cacheGetStale<DirectChatSnapshot>(key);
+            cacheSet(key, {
+                messages: patch.messages,
+                otherUserName: patch.otherUserName ?? prev?.otherUserName ?? 'Usuario',
+                otherUserAvatar: patch.otherUserAvatar !== undefined
+                    ? patch.otherUserAvatar
+                    : (prev?.otherUserAvatar ?? null),
+                hasMore: patch.hasMore ?? prev?.hasMore ?? true,
+            }, DIRECT_CHAT_TTL_MS);
+            const saved = cacheGetStale<DirectChatSnapshot>(key);
+            if (saved) {
+                void diskSet(key, { ...saved, messages: saved.messages.slice(0, 40) });
+            }
+        });
     }, []);
 
     const loadMoreMessages = useCallback(async () => {
@@ -298,11 +370,13 @@ export default function DirectChatScreen() {
         let channel: ReturnType<typeof supabase.channel> | null = null;
         let pollTimer: ReturnType<typeof setInterval> | null = null;
         const realtimeOkRef = { current: false };
+        const gen = ++initGenRef.current;
+        const isCurrent = () => isMountedRef.current && initGenRef.current === gen;
 
         const initChat = async () => {
             try {
                 const userId = sessionUserId ?? userIdRef.current ?? (await getAuthUser())?.id ?? null;
-                if (!isMountedRef.current) return;
+                if (!isCurrent()) return;
 
                 if (!userId) {
                     router.replace('/login');
@@ -320,7 +394,9 @@ export default function DirectChatScreen() {
                     setOtherUserAvatar(stale.otherUserAvatar);
                     setHasMore(stale.hasMore);
                     setLoading(!(stale.messages?.length));
-                } else if (!messagesRef.current.length) {
+                } else {
+                    // Sin caché de esta conversación: fuera los mensajes de la anterior.
+                    setMessages([]);
                     setLoading(true);
                     setHasMore(true);
                 }
@@ -343,10 +419,14 @@ export default function DirectChatScreen() {
 
                 const initialMessages = await fetchMessages();
 
-                if (!isMountedRef.current) return;
+                if (!isCurrent()) return;
 
-                const merged = mergeMessages(initialMessages, stale?.messages ?? []);
+                const merged = mergeMessages(
+                    initialMessages,
+                    cacheGetStale<DirectChatSnapshot>(directChatKey(userId, otherUserId))?.messages ?? stale?.messages ?? [],
+                );
                 setMessages(merged);
+                scrollToLatest(false);
                 const nextHasMore = initialMessages.length >= PAGE_SIZE || (stale?.hasMore ?? false);
                 setHasMore(nextHasMore);
                 void markDirectChatRead(userId, otherUserId);
@@ -371,7 +451,7 @@ export default function DirectChatScreen() {
                         .from('perfiles')
                         .select('nombre, avatar_url')
                         .eq('id', emisor)
-                        .single();
+                        .maybeSingle();
 
                     const rawFileUrl = (row.archivo_url as string | null) ?? null;
                     const newMessage: Message = {
@@ -382,29 +462,36 @@ export default function DirectChatScreen() {
                         tipo: (row.tipo as Message['tipo']) ?? 'texto',
                         archivo_url: await resolveChatFileUrl(rawFileUrl),
                         perfiles: perfil,
+                        eliminado_en: (row.eliminado_en as string | null) ?? null,
                     };
 
-                    if (isMountedRef.current) {
+                    if (isCurrent()) {
                         setMessages((prev) => {
-                            if (prev.some((m) => m.id === newMessage.id)) return prev;
-                            const withoutOptimistic = prev.filter(
+                            const reconciled = reconcileIncomingChatMessage(
+                                prev,
+                                newMessage,
                                 (m) =>
-                                    !(
-                                        m.id.startsWith('local-') &&
-                                        m.emisor_id === newMessage.emisor_id &&
-                                        m.tipo === newMessage.tipo &&
-                                        m.contenido === newMessage.contenido &&
-                                        isSameChatFile(m.archivo_url, rawFileUrl)
-                                    ),
+                                    m.emisor_id === newMessage.emisor_id &&
+                                    m.tipo === newMessage.tipo &&
+                                    m.contenido === newMessage.contenido &&
+                                    isSameChatFile(m.archivo_url, rawFileUrl),
                             );
-                            const next = [newMessage, ...withoutOptimistic];
-                            persistDirectChatCache(userId, otherUserId, { messages: next });
-                            return next;
+                            if (reconciled.kind === 'dup') return prev;
+                            persistDirectChatCache(userId, otherUserId, { messages: reconciled.next });
+                            if (reconciled.kind === 'insert') {
+                                queueMicrotask(() => {
+                                    if (!isCurrent()) return;
+                                    if (emisor === userId) {
+                                        scrollToLatest(true);
+                                    } else {
+                                        maybeStickAfterIncoming();
+                                        void unhideDirectChat(userId, otherUserId);
+                                        void markDirectChatRead(userId, otherUserId);
+                                    }
+                                });
+                            }
+                            return reconciled.next;
                         });
-                        if (emisor !== userId) {
-                            void unhideDirectChat(userId, otherUserId);
-                            void markDirectChatRead(userId, otherUserId);
-                        }
                     }
                 };
 
@@ -430,14 +517,108 @@ export default function DirectChatScreen() {
                         },
                         (payload) => { void ingestDirectInsert(payload.new as Record<string, unknown>); },
                     )
+                    .on(
+                        'postgres_changes',
+                        {
+                            event: 'UPDATE',
+                            schema: 'public',
+                            table: 'mensajes',
+                            filter: `receptor_id=eq.${userId}`,
+                        },
+                        (payload) => {
+                            const row = payload.new as Record<string, unknown>;
+                            const emisor = row.emisor_id as string;
+                            const receptor = row.receptor_id as string;
+                            const id = String(row.id ?? '');
+                            const esDeEsta =
+                                (emisor === userId && receptor === otherUserId)
+                                || (emisor === otherUserId && receptor === userId);
+                            if (!id || !esDeEsta || !isCurrent()) return;
+                            if (!isDeletedMessage({
+                                eliminado_en: (row.eliminado_en as string | null) ?? null,
+                                contenido: (row.contenido as string) ?? '',
+                            })) return;
+                            setMessages((prev) => {
+                                if (!prev.some((m) => m.id === id) || prev.some((m) => m.id === id && isDeletedMessage(m))) {
+                                    return prev;
+                                }
+                                const next = prev.map((m) =>
+                                    m.id === id
+                                        ? {
+                                              ...m,
+                                              eliminado_en:
+                                                  (row.eliminado_en as string | null) ??
+                                                  new Date().toISOString(),
+                                              contenido: DELETED_MESSAGE_MARK,
+                                              archivo_url: null,
+                                              tipo: 'texto' as const,
+                                          }
+                                        : m,
+                                );
+                                persistDirectChatCache(userId, otherUserId, { messages: next });
+                                return next;
+                            });
+                        },
+                    )
+                    .on(
+                        'postgres_changes',
+                        {
+                            event: 'UPDATE',
+                            schema: 'public',
+                            table: 'mensajes',
+                            filter: `emisor_id=eq.${userId}`,
+                        },
+                        (payload) => {
+                            const row = payload.new as Record<string, unknown>;
+                            const emisor = row.emisor_id as string;
+                            const receptor = row.receptor_id as string;
+                            const id = String(row.id ?? '');
+                            const esDeEsta =
+                                (emisor === userId && receptor === otherUserId)
+                                || (emisor === otherUserId && receptor === userId);
+                            if (!id || !esDeEsta || !isCurrent()) return;
+                            if (!isDeletedMessage({
+                                eliminado_en: (row.eliminado_en as string | null) ?? null,
+                                contenido: (row.contenido as string) ?? '',
+                            })) return;
+                            setMessages((prev) => {
+                                if (!prev.some((m) => m.id === id) || prev.some((m) => m.id === id && isDeletedMessage(m))) {
+                                    return prev;
+                                }
+                                const next = prev.map((m) =>
+                                    m.id === id
+                                        ? {
+                                              ...m,
+                                              eliminado_en:
+                                                  (row.eliminado_en as string | null) ??
+                                                  new Date().toISOString(),
+                                              contenido: DELETED_MESSAGE_MARK,
+                                              archivo_url: null,
+                                              tipo: 'texto' as const,
+                                          }
+                                        : m,
+                                );
+                                persistDirectChatCache(userId, otherUserId, { messages: next });
+                                return next;
+                            });
+                        },
+                    )
                     .subscribe((status) => {
                         realtimeOkRef.current = status === 'SUBSCRIBED';
                     });
 
+                if (!isCurrent()) {
+                    if (pollTimer) clearInterval(pollTimer);
+                    supabase.removeChannel(channel);
+                    channel = null;
+                    pollTimer = null;
+                    return;
+                }
+
                 pollTimer = setInterval(() => {
-                    if (!isMountedRef.current || realtimeOkRef.current) return;
+                    if (!isCurrent() || realtimeOkRef.current) return;
                     void fetchMessages().then((rows) => {
-                        if (!isMountedRef.current) return;
+                        if (!isCurrent()) return;
                         setMessages((prev) => {
                             const next = mergeMessages(rows, prev);
                             persistDirectChatCache(userId, otherUserId, { messages: next });
@@ -446,22 +627,23 @@ export default function DirectChatScreen() {
                     });
                 }, 8000);
             } catch (error) {
-                console.error('Error en initChat:', error);
+                if (__DEV__) console.error('Error en initChat:', error);
                 if (!cacheUserPairRef.current || !cacheGetStale<DirectChatSnapshot>(cacheUserPairRef.current)?.messages?.length) {
                     Alert.alert(t('chat.errorTitle'), t('chat.loadError'));
                 }
             } finally {
-                if (isMountedRef.current) setLoading(false);
+                if (isCurrent()) setLoading(false);
             }
         };
 
         initChat();
 
         return () => {
+            initGenRef.current += 1;
             if (pollTimer) clearInterval(pollTimer);
             if (channel) supabase.removeChannel(channel);
         };
-    }, [otherUserId, router, fetchMessages, persistDirectChatCache, sessionUserId, t]);
+    }, [otherUserId, router, fetchMessages, persistDirectChatCache, sessionUserId, t, scrollToLatest, maybeStickAfterIncoming]);
 
     useFocusEffect(
         useCallback(() => {
@@ -486,7 +668,13 @@ export default function DirectChatScreen() {
             setMessages((prev) => {
                 const next = prev.map((m) =>
                     m.id === ev.tempId
-                        ? { ...m, id: ev.serverId, creado_en: ev.creadoEn, pending: false }
+                        ? {
+                              ...m,
+                              id: ev.serverId,
+                              creado_en: ev.creadoEn,
+                              pending: false,
+                              clientKey: m.clientKey ?? ev.tempId,
+                          }
                         : m,
                 );
                 persistDirectChatCache(currentUserId, otherUserId, { messages: next });
@@ -590,12 +778,14 @@ export default function DirectChatScreen() {
             archivo_url: archivoUrl,
             perfiles: myProfile,
             pending: !getIsOnline() && tipo === 'texto',
+            clientKey: tempId,
         };
         setMessages((prev) => {
             const next = [optimistic, ...prev];
             persistDirectChatCache(currentUserId, otherUserId, { messages: next });
             return next;
         });
+        scrollToLatest(true);
         setIsSending(false);
         setTimeout(() => {
             sendLockRef.current = false;
@@ -666,6 +856,7 @@ export default function DirectChatScreen() {
                               id: data.id as string,
                               creado_en: (data.creado_en as string) || m.creado_en,
                               pending: false,
+                              clientKey: m.clientKey ?? tempId,
                           }
                         : m,
                 );
@@ -696,18 +887,27 @@ export default function DirectChatScreen() {
             videoMaxDuration: 120,
         });
 
-        if (result.canceled || !otherUserId) return;
-
+        if (result.canceled || !result.assets[0]) return;
         const selectedAsset = result.assets[0];
-        const fileType = selectedAsset.type === 'video' ? 'video' : 'image';
-        const messageType = fileType === 'image' ? 'imagen' : 'video';
+        setPendingFile({
+            uri: selectedAsset.uri,
+            type: selectedAsset.type === 'video' ? 'video' : 'image',
+        });
+    };
 
+    const sendPendingFile = async () => {
+        if (!pendingFile || !otherUserId || !currentUserId || isUploading || sendLockRef.current) return;
+        const file = pendingFile;
+        setPendingFile(null);
         setIsUploading(true);
-        const uploadedUrl = await uploadChatFile(selectedAsset.uri, fileType, `direct-${currentUserId}-${otherUserId}`);
+        const uploadedUrl = await uploadChatFile(
+            file.uri,
+            file.type === 'video' ? 'video' : 'image',
+            `direct-${currentUserId}-${otherUserId}`,
+        );
         setIsUploading(false);
-
         if (uploadedUrl) {
-            await sendMessage(messageType, uploadedUrl);
+            await sendMessage(file.type === 'video' ? 'video' : 'imagen', uploadedUrl);
         } else {
             Alert.alert(t('chat.errorTitle'), t('chat.uploadError'));
         }
@@ -779,7 +979,9 @@ export default function DirectChatScreen() {
     const handleActionPress = () => {
         if (isUploading || isSending) return;
 
-        if (messageText.trim()) {
+        if (pendingFile) {
+            void sendPendingFile();
+        } else if (messageText.trim()) {
             sendMessage();
         } else if (recording) {
             stopRecording();
@@ -824,10 +1026,10 @@ export default function DirectChatScreen() {
     const inputDisabled = isUploading || isSending;
     const actionIcon = useMemo(() => {
         if (isUploading || isSending) return 'hourglass';
-        if (messageText.trim()) return 'send';
+        if (pendingFile || messageText.trim()) return 'send';
         if (recording) return 'stop';
         return 'mic';
-    }, [isUploading, isSending, messageText, recording]);
+    }, [isUploading, isSending, messageText, recording, pendingFile]);
 
     const openMessageProfile = useCallback(
         (userId: string) => {
@@ -852,9 +1054,14 @@ export default function DirectChatScreen() {
     );
 
     const renderItem = useCallback(
-        ({ item }: { item: Message }) => (
+        ({ item }: { item: Message }) => {
+            const fallback =
+                item.emisor_id === currentUserId
+                    ? myProfile
+                    : { nombre: otherUserName || 'Usuario', avatar_url: otherUserAvatar };
+            return (
             <ChatMessageRow
-                item={item}
+                item={withFallbackProfile(item, fallback)}
                 currentUserId={currentUserId}
                 isPlaying={playingMessageId === item.id}
                 audioDurationSec={audioDurations[item.id]}
@@ -863,6 +1070,7 @@ export default function DirectChatScreen() {
                 onOpenProfile={openMessageProfile}
                 onOpenImage={setModalImage}
                 onOpenVideo={setModalVideo}
+                onOpenMoments={setMomentsAlbum}
                 onPlayAudio={playAudio}
                 onLongPressMessage={setReactionPickerId}
                 onReplyMessage={(messageId) => {
@@ -879,7 +1087,8 @@ export default function DirectChatScreen() {
                 }}
                 onPickReaction={onPickMessageReaction}
             />
-        ),
+            );
+        },
         [
             currentUserId,
             playingMessageId,
@@ -890,6 +1099,8 @@ export default function DirectChatScreen() {
             playAudio,
             onPickMessageReaction,
             otherUserName,
+            otherUserAvatar,
+            myProfile,
         ],
     );
 
@@ -961,11 +1172,7 @@ export default function DirectChatScreen() {
                 </TouchableOpacity>
             </View>
 
-            <KeyboardAvoidingView
-                style={{ flex: 1 }}
-                behavior="padding"
-                keyboardVerticalOffset={Platform.OS === 'ios' ? Math.max(0, headerHeight - 10) : 0}
-            >
+            <ChatKeyboardAnimated.View style={[{ flex: 1 }, keyboardBottomStyle]}>
                 {loading && !otherUserName && messages.length === 0 ? (
                     <View style={styles.loading}>
                         <ActivityIndicator color={PRIMARY} size="large" />
@@ -973,15 +1180,22 @@ export default function DirectChatScreen() {
                 ) : (
                     <View style={styles.messagesPanel}>
                         <FlashList
+                            ref={messagesListRef}
                             style={{ flex: 1 }}
                             data={messages}
-                            keyExtractor={(item) => item.id}
+                            keyExtractor={chatListKey}
                             renderItem={renderItem}
                             getItemType={chatMessageItemType}
                             inverted
                             drawDistance={FLASH_LIST_DRAW_DISTANCE}
                             contentContainerStyle={styles.listContent}
                             keyboardShouldPersistTaps="handled"
+                            onScroll={onMessagesScroll}
+                            onScrollBeginDrag={onMessagesScrollBeginDrag}
+                            onScrollEndDrag={onMessagesScrollEndDrag}
+                            onMomentumScrollEnd={onMessagesMomentumScrollEnd}
+                            onContentSizeChange={onMessagesContentSizeChange}
+                            scrollEventThrottle={16}
                             onEndReached={loadMoreMessages}
                             onEndReachedThreshold={0.3}
                             ListFooterComponent={renderListFooter}
@@ -1022,7 +1236,23 @@ export default function DirectChatScreen() {
                     </View>
                 ) : null}
 
-                <View style={[styles.inputBar, { paddingBottom: keyboardOpen ? 4 : (Platform.OS === 'android' ? 12 : Math.max(insets.bottom, 10)) + 10 }]}>
+                {pendingFile ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingBottom: 8 }}>
+                        <Image
+                            source={{ uri: pendingFile.uri }}
+                            style={{ width: 48, height: 48, borderRadius: 10 }}
+                            contentFit="cover"
+                        />
+                        <Text style={{ flex: 1, color: theme.colors.text, fontWeight: '700' }} numberOfLines={1}>
+                            {t('chat.readyToSend')}
+                        </Text>
+                        <TouchableOpacity onPress={() => setPendingFile(null)} hitSlop={8}>
+                            <Ionicons name="close" size={20} color={theme.colors.textMuted} />
+                        </TouchableOpacity>
+                    </View>
+                ) : null}
+
+                <View style={styles.inputBar}>
                     <TouchableOpacity
                         onPress={pickMedia}
                         style={styles.attachBtn}
@@ -1066,12 +1296,62 @@ export default function DirectChatScreen() {
                         <Ionicons name={actionIcon} size={18} color="white" />
                     </TouchableOpacity>
                 </View>
-            </KeyboardAvoidingView>
+            </ChatKeyboardAnimated.View>
 
             <ReactionEmojiPicker
                 visible={!!reactionPickerId}
                 onClose={() => setReactionPickerId(null)}
                 reportLabel={t('report.messageAction')}
+                deleteLabel={t('chat.deleteMessage')}
+                onDelete={
+                    (() => {
+                        const target = reactionPickerId
+                            ? messages.find((message) => message.id === reactionPickerId)
+                            : undefined;
+                        if (
+                            !target
+                            || target.id.startsWith('local-')
+                            || target.emisor_id !== currentUserId
+                            || isDeletedMessage(target)
+                        ) {
+                            return undefined;
+                        }
+                        return () => {
+                            const messageId = target.id;
+                            setReactionPickerId(null);
+                            Alert.alert(t('chat.deleteMessage'), t('chat.deleteMessageConfirm'), [
+                                { text: t('common.cancel'), style: 'cancel' },
+                                {
+                                    text: t('chat.deleteMessage'),
+                                    style: 'destructive',
+                                    onPress: () => {
+                                        if (!currentUserId || !otherUserId) return;
+                                        setMessages((prev) => {
+                                            const next = prev.map((m) =>
+                                                m.id === messageId
+                                                    ? {
+                                                          ...m,
+                                                          eliminado_en: new Date().toISOString(),
+                                                          contenido: DELETED_MESSAGE_MARK,
+                                                          archivo_url: null,
+                                                          tipo: 'texto' as const,
+                                                      }
+                                                    : m,
+                                            );
+                                            persistDirectChatCache(currentUserId, otherUserId, { messages: next });
+                                            return next;
+                                        });
+                                        void softDeleteMensaje(messageId).then(({ error }) => {
+                                            if (error) {
+                                                Alert.alert(t('profile.error'), t('chat.deleteMessageError'));
+                                            }
+                                        });
+                                    },
+                                },
+                            ]);
+                        };
+                    })()
+                }
                 onReport={
                     reactionPickerId
                     && !reactionPickerId.startsWith('local-')
@@ -1095,6 +1375,13 @@ export default function DirectChatScreen() {
                         setReactions,
                     });
                 }}
+            />
+
+            <MomentsAlbum
+                items={momentsAlbum}
+                onClose={() => setMomentsAlbum(null)}
+                onOpenImage={setModalImage}
+                onOpenVideo={setModalVideo}
             />
 
             <Modal

@@ -22,17 +22,21 @@ export function planSchemeUrl(planId: string): string {
 }
 
 /** HTTPS pinchable (WhatsApp). Preferir dominio propio; fallback landing Supabase. */
-export function planHttpsUrl(planId: string): string | null {
+export function planHttpsUrl(planId: string, opts?: { team?: number }): string | null {
     if (!planId) return null;
-    if (SHARE_WEB_HOST) return `https://${SHARE_WEB_HOST}/plan/${planId}`;
+    const teamQ =
+        typeof opts?.team === 'number' && Number.isFinite(opts.team)
+            ? `&team=${Math.max(0, Math.floor(opts.team))}`
+            : '';
+    if (SHARE_WEB_HOST) return `https://${SHARE_WEB_HOST}/plan/${planId}?v=7${teamQ}`;
     const base = (SUPABASE_URL || '').replace(/\/+$/, '');
     if (!base) return null;
-    return `${base}/functions/v1/share-plan/${planId}?v=8`;
+    return `${base}/functions/v1/share-plan/${planId}?v=9${teamQ}`;
 }
 
 /** Preferir HTTPS (pinchable). Fallback scheme. */
-export function planShareUrl(planId: string): string {
-    return planHttpsUrl(planId) ?? planSchemeUrl(planId);
+export function planShareUrl(planId: string, opts?: { team?: number }): string {
+    return planHttpsUrl(planId, opts) ?? planSchemeUrl(planId);
 }
 
 /** Mensaje = solo el link. */

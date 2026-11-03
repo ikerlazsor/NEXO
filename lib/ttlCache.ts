@@ -101,7 +101,8 @@ export async function cacheGetOrFetch<T>(
     }
 
     const gen = bumpGeneration(key);
-    const promise = (async () => {
+    let promise!: Promise<T>;
+    promise = (async () => {
         try {
             const value = await fetcher();
             if (generation.get(key) === gen) {

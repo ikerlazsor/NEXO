@@ -1,4 +1,42 @@
 import { supabase } from './supabase';
+import { cacheGetStale, cacheInvalidate, cacheSet } from './ttlCache';
+
+/**
+ * Las mismas fichas (nombre, avatar, edad…) se piden una y otra vez: al abrir un
+ * plan, su chat, el perfil de alguien… y sin caché cada pantalla esperaba otra
+ * vuelta a red para pintar las burbujas. Se guardan por persona, no por consulta.
+ */
+const PUBLIC_PROFILE_TTL_MS = 300_000;
+const publicProfileKey = (id: string) => `publicProfile:${id}`;
+
+function readCachedProfiles(ids: string[]): {
+    cached: PublicProfileRow[];
+    missing: string[];
+} {
+    const cached: PublicProfileRow[] = [];
+    const missing: string[] = [];
+    for (const id of ids) {
+        const hit = cacheGetStale<PublicProfileRow>(publicProfileKey(id));
+        if (hit) cached.push(hit);
+        else missing.push(id);
+    }
+    return { cached, missing };
+}
+
+/** Fichas ya conocidas, sin red. Sirve para pintar antes de que llegue el fetch. */
+export function peekPublicProfiles(userIds: string[]): PublicProfileRow[] {
+    return readCachedProfiles([...new Set(userIds.filter(Boolean))]).cached;
+}
+
+export function rememberPublicProfiles(rows: PublicProfileRow[]): void {
+    for (const row of rows) {
+        if (row?.id) cacheSet(publicProfileKey(row.id), row, PUBLIC_PROFILE_TTL_MS);
+    }
+}
+
+export function invalidatePublicProfile(userId: string): void {
+    if (userId) cacheInvalidate(publicProfileKey(userId));
+}
 
 export type PrivateProfileRow = {
     id: string;
@@ -53,12 +91,27 @@ export async function getMyProfile(): Promise<{
     };
 }
 
-export async function getPublicProfiles(userIds: string[]): Promise<PublicProfileRow[]> {
+export async function getPublicProfiles(
+    userIds: string[],
+    options?: { force?: boolean },
+): Promise<PublicProfileRow[]> {
     const ids = [...new Set(userIds.filter(Boolean))].slice(0, 200);
     if (!ids.length) return [];
-    const { data, error } = await supabase.rpc('get_public_profiles', { p_user_ids: ids });
-    if (error) throw error;
-    return (data ?? []) as PublicProfileRow[];
+
+    const { cached, missing } = options?.force
+        ? { cached: [] as PublicProfileRow[], missing: ids }
+        : readCachedProfiles(ids);
+    if (!missing.length) return cached;
+
+    const { data, error } = await supabase.rpc('get_public_profiles', { p_user_ids: missing });
+    if (error) {
+        // Con parte en caché, media lista es mejor que un error (burbujas vacías).
+        if (cached.length) return cached;
+        throw error;
+    }
+    const rows = (data ?? []) as PublicProfileRow[];
+    rememberPublicProfiles(rows);
+    return [...cached, ...rows];
 }
 
 export async function getPublicProfile(userId: string): Promise<PublicProfileRow | null> {
@@ -73,20 +126,20 @@ export async function getPublicProfileMap(
     return new Map(rows.map((row) => [row.id, row]));
 }
 
-export async function getPublicProfileCards(userIds: string[]): Promise<
-    Array<{
-        id: string;
-        nombre: string | null;
-        nombre_usuario: string | null;
-        avatar_url: string | null;
-        genero: string | null;
-        edad: number | null;
-        ambientes_preferidos: string[];
-        etiquetas: string[];
-        es_organizador?: boolean;
-    }>
-> {
-    return (await getPublicProfiles(userIds)).map((row) => ({
+export type PublicProfileCard = {
+    id: string;
+    nombre: string | null;
+    nombre_usuario: string | null;
+    avatar_url: string | null;
+    genero: string | null;
+    edad: number | null;
+    ambientes_preferidos: string[];
+    etiquetas: string[];
+    es_organizador?: boolean;
+};
+
+function toProfileCard(row: PublicProfileRow): PublicProfileCard {
+    return {
         id: row.id,
         nombre: row.nombre,
         nombre_usuario: row.nombre_usuario,
@@ -96,7 +149,30 @@ export async function getPublicProfileCards(userIds: string[]): Promise<
         ambientes_preferidos: row.ambientes_preferidos,
         etiquetas: row.etiquetas,
         es_organizador: row.es_organizador === true,
-    }));
+    };
+}
+
+export async function getPublicProfileCards(userIds: string[]): Promise<PublicProfileCard[]> {
+    return (await getPublicProfiles(userIds)).map(toProfileCard);
+}
+
+/** Fichas ya en caché, sin esperar a red. Para pintar la lista al abrir. */
+export function peekPublicProfileCards(userIds: string[]): PublicProfileCard[] {
+    return peekPublicProfiles(userIds).map(toProfileCard);
+}
+
+/**
+ * Fichas a partir de filas crudas que ya vienen con otra consulta
+ * (get_plan_detail las trae junto al plan). También las deja en caché.
+ */
+export function profileCardsFromRows(rows: unknown): PublicProfileCard[] {
+    if (!Array.isArray(rows)) return [];
+    const valid = rows.filter(
+        (row): row is PublicProfileRow =>
+            !!row && typeof row === 'object' && typeof (row as { id?: unknown }).id === 'string',
+    );
+    rememberPublicProfiles(valid);
+    return valid.map(toProfileCard);
 }
 
 export async function getAdminProfileAccess(userId: string): Promise<{

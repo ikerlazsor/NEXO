@@ -64,6 +64,7 @@ export type AffinityPlan = {
     categoria?: string | null;
     tipo_deporte?: string | null;
     fecha_evento?: string | null;
+    solo_chicas?: boolean | null;
     creado_en?: string | null;
     creador_id?: string | null;
     latitud?: number | null;

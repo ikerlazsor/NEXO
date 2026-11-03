@@ -17,7 +17,7 @@ export type OnboardingData = {
 export async function fetchOnboardingStatus(
     userId: string,
     options: { signal?: AbortSignal; throwOnError?: boolean } = {},
-): Promise<boolean> {
+): Promise<boolean | null> {
     const maxAttempts = 2;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -27,7 +27,8 @@ export async function fetchOnboardingStatus(
             throw abortError;
         }
         const session = await getAuthSession();
-        if (session?.user.id !== userId) return false;
+        // Sesión a medias (cambio de red, refresh): no sabemos si el registro está hecho.
+        if (session?.user.id !== userId) return null;
         const { data, error } = await getMyProfile();
 
         if (error) {
@@ -38,7 +39,7 @@ export async function fetchOnboardingStatus(
             }
             console.warn('fetchOnboardingStatus:', error.message);
             if (options.throwOnError) throw new Error(error.message);
-            return false;
+            return null;
         }
 
         if (!data) {
@@ -69,12 +70,11 @@ export async function fetchOnboardingStatus(
 
 export async function resolveOnboardingDone(
     userId: string,
-    metadata?: Record<string, unknown> | null
-): Promise<boolean> {
-    const dbDone = await fetchOnboardingStatus(userId);
-    if (dbDone) return true;
-    if (metadata?.registro_completado === true || metadata?.onboarding_completed === true) return true;
-    return false;
+    _metadata?: Record<string, unknown> | null
+): Promise<boolean | null> {
+    // user_metadata lo puede escribir el cliente: solo cuenta la fila en perfiles.
+    // null = no se pudo leer (red); no equivale a "registro sin terminar".
+    return fetchOnboardingStatus(userId);
 }
 
 export async function saveOnboardingPreferences(
@@ -97,34 +97,8 @@ export async function saveOnboardingPreferences(
     };
     if (nombre) preferencePayload.nombre = nombre;
 
-    const { error } = await supabase
-        .from('perfiles')
-        .update(preferencePayload)
-        .eq('id', userId);
-
-    if (error) {
-        return { error: error.message };
-    }
-
-    let { data: savedProfile } = await getMyProfile();
-    if (!savedProfile?.registro_completado) {
-        const upsertPayload: Record<string, unknown> = {
-            id: userId,
-            ...preferencePayload,
-        };
-
-        const { error: upsertError } = await supabase
-            .from('perfiles')
-            .insert(upsertPayload);
-
-        if (upsertError) {
-            return { error: upsertError.message };
-        }
-        ({ data: savedProfile } = await getMyProfile());
-        if (!savedProfile?.registro_completado) {
-            return { error: 'No se pudo guardar el perfil.' };
-        }
-    }
+    const saved = await persistOnboardingProfile(userId, preferencePayload);
+    if (saved.error) return saved;
 
     void supabase.auth
         .updateUser({
@@ -147,4 +121,57 @@ export async function saveOnboardingPreferences(
     }
 
     return { error: null };
+}
+
+function isDuplicateProfile(message: string): boolean {
+    return /duplicate key|23505|already exists|perfiles_pkey/i.test(message);
+}
+
+function wait(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * El update puede haber quedado escrito y la lectura siguiente fallar (red justo
+ * al terminar). Insertar entonces choca con la fila que ya existe y la pantalla
+ * enseña error aunque el perfil esté guardado. Aquí se relee y, si la fila ya
+ * estaba, se da por bueno.
+ */
+async function persistOnboardingProfile(
+    userId: string,
+    payload: Record<string, unknown>,
+): Promise<{ error: string | null }> {
+    const { error } = await supabase.from('perfiles').update(payload).eq('id', userId);
+    if (error) return { error: error.message };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { data, error: readError } = await getMyProfile();
+        if (data?.registro_completado) return { error: null };
+
+        if (readError) {
+            await wait(280);
+            continue;
+        }
+
+        if (!data) {
+            const { error: insertError } = await supabase
+                .from('perfiles')
+                .insert({ id: userId, ...payload });
+            if (insertError && !isDuplicateProfile(insertError.message)) {
+                return { error: insertError.message };
+            }
+            await wait(220);
+            continue;
+        }
+
+        if (attempt === 0) {
+            const { error: again } = await supabase.from('perfiles').update(payload).eq('id', userId);
+            if (again) return { error: again.message };
+        }
+        await wait(280);
+    }
+
+    const { data } = await getMyProfile();
+    if (data?.registro_completado) return { error: null };
+    return { error: 'No se pudo guardar el perfil.' };
 }

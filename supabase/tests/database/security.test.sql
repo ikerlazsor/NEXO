@@ -86,6 +86,20 @@ select ok(
   'signed-out clients cannot call the authenticated feed people RPC'
 );
 
+select ok(
+  has_function_privilege(
+    'anon',
+    'public.search_feed_plans(text)',
+    'execute'
+  )
+  and has_function_privilege(
+    'authenticated',
+    'public.search_feed_plans(text)',
+    'execute'
+  ),
+  'feed search RPC is callable from the app'
+);
+
 select is(
   (
     select count(*)::bigint

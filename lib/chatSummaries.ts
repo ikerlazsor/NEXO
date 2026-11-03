@@ -3,7 +3,17 @@ import { supabase } from './supabase';
 import { cacheGetOrFetch, cacheInvalidate } from './ttlCache';
 
 const READ_PREFIX = '@nexo_chat_read:';
+const READ_INDEX_PREFIX = '@nexo_chat_read_index:';
 const SUMMARY_TTL_MS = 25_000;
+
+type ChatReadIndex = {
+    plans: Record<string, string>;
+    directs: Record<string, string>;
+};
+
+function readIndexKey(userId: string) {
+    return `${READ_INDEX_PREFIX}${userId}`;
+}
 
 export type ChatSummary = {
     conversation_kind: 'plan' | 'direct';
@@ -27,16 +37,12 @@ function summaryKey(userId: string) {
     return `chatSummaries:${userId}`;
 }
 
-async function readStoredCursors(userId: string): Promise<{
-    planReads: Record<string, string>;
-    directReads: Record<string, string>;
-}> {
+async function migrateReadIndex(userId: string): Promise<ChatReadIndex> {
     const keys = await AsyncStorage.getAllKeys();
     const relevant = keys.filter((key) => key.startsWith(READ_PREFIX));
     const pairs = relevant.length > 0 ? await AsyncStorage.multiGet(relevant) : [];
 
-    const planReads: Record<string, string> = {};
-    const directReads: Record<string, string> = {};
+    const index: ChatReadIndex = { plans: {}, directs: {} };
     const planPrefix = `${READ_PREFIX}plan:${userId}:`;
     const directPrefix = `${READ_PREFIX}direct:`;
 
@@ -45,7 +51,7 @@ async function readStoredCursors(userId: string): Promise<{
 
         if (key.startsWith(planPrefix)) {
             const planId = key.slice(planPrefix.length);
-            if (planId) planReads[planId] = value;
+            if (planId) index.plans[planId] = value;
             continue;
         }
 
@@ -53,17 +59,48 @@ async function readStoredCursors(userId: string): Promise<{
         const participants = key.slice(directPrefix.length).split(':');
         if (participants.length !== 2 || !participants.includes(userId)) continue;
         const peerId = participants[0] === userId ? participants[1] : participants[0];
-        if (peerId) directReads[peerId] = value;
+        if (peerId) index.directs[peerId] = value;
     }
 
-    return { planReads, directReads };
+    await AsyncStorage.setItem(readIndexKey(userId), JSON.stringify(index));
+    return index;
+}
+
+async function readStoredCursors(userId: string): Promise<ChatReadIndex> {
+    try {
+        const raw = await AsyncStorage.getItem(readIndexKey(userId));
+        if (raw) {
+            const parsed = JSON.parse(raw) as ChatReadIndex;
+            if (parsed && typeof parsed === 'object') {
+                return {
+                    plans: parsed.plans ?? {},
+                    directs: parsed.directs ?? {},
+                };
+            }
+        }
+    } catch {
+        /* índice corrupto: se reconstruye */
+    }
+    return migrateReadIndex(userId);
+}
+
+export async function rememberChatReadCursor(
+    userId: string,
+    kind: 'plan' | 'direct',
+    id: string,
+    at: string,
+): Promise<void> {
+    const index = await readStoredCursors(userId);
+    if (kind === 'plan') index.plans[id] = at;
+    else index.directs[id] = at;
+    await AsyncStorage.setItem(readIndexKey(userId), JSON.stringify(index));
 }
 
 async function fetchChatSummaries(userId: string): Promise<ChatSummary[]> {
-    const { planReads, directReads } = await readStoredCursors(userId);
+    const cursors = await readStoredCursors(userId);
     const { data, error } = await supabase.rpc('get_chat_summaries', {
-        p_plan_read_at: planReads,
-        p_direct_read_at: directReads,
+        p_plan_read_at: cursors.plans,
+        p_direct_read_at: cursors.directs,
     });
     if (error) throw error;
 

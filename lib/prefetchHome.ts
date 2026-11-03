@@ -8,9 +8,7 @@ import { getAuthUser } from './auth';
 import { fetchGuestFeedPlans } from './guestFeed';
 import { getUserBadges } from './badges';
 import { getBadgeStats } from './badgeStats';
-import { formatChatListPreview } from './chatSystem';
-import { getChatUnreadMap } from './chatUnread';
-import { getDirectConversations } from './directChat';
+import { getChatSummaries } from './chatSummaries';
 import {
     FEED_CACHE_KEY,
     FEED_CACHE_TTL_MS,
@@ -20,7 +18,6 @@ import {
 import { attachFeedPlanPeople } from './feedQuery';
 import { emptyGuestFeedSnapshot, fetchSignedInFeedSnapshot } from './feedLoad';
 import { fetchMyPlansSnapshot } from './myPlansQuery';
-import { isGroupChatPlan } from './feedPlans';
 import {
     getFriends,
     getFriendsCount,
@@ -30,7 +27,7 @@ import {
 import { getProfileNotificationCount } from './notifications';
 import { mapEstadoToMembership } from './participants';
 import { getIncomingPlanInvites } from './planInvites';
-import { isPlanActiveForSaved, isPlanChatAlive, purgePastSavedPlansForUser } from './planLifecycle';
+import { isPlanActiveForSaved, purgePastSavedPlansForUser } from './planLifecycle';
 import { calcAge, parseHabitos, parsePrivacy, type Genero } from './profileFields';
 import { loadProfileRow, resolveDisplayName, syncProfileFromAuth } from './profile';
 import { getMyProfile } from './profileData';
@@ -79,29 +76,6 @@ type MyPlansDiskSnap = {
 
 let inflight: Promise<void> | null = null;
 let publicInflight: Promise<void> | null = null;
-
-function previewLine(
-    msg: { tipo: string; contenido: string; emisor_id: string },
-    names: Record<string, string>,
-    youLabel: string,
-    currentUserId?: string,
-): string {
-    return formatChatListPreview(msg, {
-        names,
-        currentUserId,
-        youLabel,
-        userFallback: 'Usuario',
-        labels: {
-            joinedPlanSelf: '¡Te has unido al plan!',
-            joinedGroupSelf: '¡Te has unido al grupo!',
-            joinedPlan: (name) => `¡${name} se ha unido al plan!`,
-            joinedGroup: (name) => `¡${name} se ha unido al grupo!`,
-            image: '📷',
-            video: '🎬',
-            voice: '🎤',
-        },
-    });
-}
 
 async function prefetchProfile(userId: string, authUser: Awaited<ReturnType<typeof getAuthUser>>) {
     if (!authUser || cacheIsFresh(screenCacheKey.profileUI(userId))) return;
@@ -273,113 +247,27 @@ export function schedulePersonalRewarm(userId?: string | null): void {
 }
 
 async function prefetchChats(userId: string) {
-    const key = screenCacheKey.chatsList(userId);
-    const existing = cacheGetStale<unknown[]>(key);
-    // Caché vacía no cuenta: hay que ir a red (igual que Mis planes).
-    if (cacheIsFresh(key) && Array.isArray(existing) && existing.length > 0) return;
     if (!getIsOnline()) return;
-
-    const [{ data: myParts }, directConversations, unreadMap] = await withRetry(() =>
-        Promise.all([
-            supabase.from('participantes').select('plan_id').eq('usuario_id', userId).eq('estado', 'aceptado'),
-            getDirectConversations(userId).catch(() => []),
-            getChatUnreadMap(userId),
-        ]),
+    const summaries = await getChatSummaries(userId);
+    prefetchRemoteImages(summaries.map((row) => row.image_url), 24);
+    prefetchRecentChatThreads(
+        userId,
+        summaries.map((row) => ({
+            id: row.conversation_id,
+            title: row.title,
+            image_url: row.image_url,
+            kind: row.conversation_kind === 'direct'
+                ? 'direct'
+                : row.category === 'Grupo'
+                    ? 'group'
+                    : 'plan',
+            peerId: row.conversation_kind === 'direct' ? row.conversation_id : undefined,
+            creadorId: row.creator_id ?? undefined,
+            fechaEvento: row.event_at,
+            unread: row.unread_count,
+            lastAt: row.last_at ?? undefined,
+        })),
     );
-
-    const planIds = [...new Set((myParts ?? []).map((p) => p.plan_id))].filter(Boolean);
-    let planRows: Array<{
-        id: string;
-        title: string;
-        image_url: string | null;
-        kind: 'plan' | 'group' | 'direct';
-        peerId?: string;
-        ultimoTexto: string;
-        lastAt: string;
-        unread: number;
-    }> = [];
-
-    if (planIds.length > 0) {
-        const { data: plans } = await supabase
-            .from('planes')
-            .select('id, titulo, imagen_url, categoria, creador_id, creado_en, fecha_evento, chat_eliminado_en')
-            .in('id', planIds);
-
-        const alivePlans = (plans ?? []).filter((p) => isPlanChatAlive(p));
-        const ids = alivePlans.map((p) => p.id);
-        const msgLimit = Math.min(Math.max(ids.length * 4, 40), 300);
-
-        let lastMsgs: any[] = [];
-        if (ids.length > 0) {
-            const { data } = await supabase
-                .from('mensajes')
-                .select('plan_id, contenido, tipo, creado_en, emisor_id')
-                .in('plan_id', ids)
-                .order('creado_en', { ascending: false })
-                .limit(msgLimit);
-            lastMsgs = data ?? [];
-        }
-
-        const lastByPlan = new Map<string, any>();
-        lastMsgs.forEach((m) => {
-            if (!lastByPlan.has(m.plan_id)) lastByPlan.set(m.plan_id, m);
-        });
-
-        const nameIds = new Set<string>(lastMsgs.map((m) => m.emisor_id));
-        const names: Record<string, string> = {};
-        if (nameIds.size > 0) {
-            const { data: profiles } = await supabase
-                .from('perfiles')
-                .select('id, nombre')
-                .in('id', Array.from(nameIds));
-            (profiles ?? []).forEach((pr) => { names[pr.id] = pr.nombre; });
-        }
-
-        planRows = alivePlans.map((p) => {
-            const ult = lastByPlan.get(p.id);
-            return {
-                id: p.id,
-                title: p.titulo,
-                image_url: p.imagen_url,
-                kind: isGroupChatPlan(p) ? 'group' as const : 'plan' as const,
-                creadorId: p.creador_id ?? undefined,
-                fechaEvento: p.fecha_evento ?? null,
-                ultimoTexto: ult ? previewLine(ult, names, 'Tú', userId) : 'Sin mensajes',
-                lastAt: ult?.creado_en ?? p.creado_en ?? '',
-                unread: unreadMap.plans[p.id] ?? 0,
-            };
-        });
-    }
-
-    const directRows = directConversations.map((c) => ({
-        id: `direct-${c.peerId}`,
-        peerId: c.peerId,
-        title: c.nombre,
-        image_url: c.avatarUri,
-        kind: 'direct' as const,
-        ultimoTexto: c.lastMessage
-            ? previewLine(
-                {
-                    tipo: c.lastMessage.tipo,
-                    contenido: c.lastMessage.contenido,
-                    emisor_id: c.lastMessage.emisor_id,
-                },
-                { [c.peerId]: c.nombre, [userId]: 'Tú' },
-                'Tú',
-                userId,
-            )
-            : 'Sin mensajes',
-        lastAt: c.lastMessage?.creado_en ?? '',
-        unread: unreadMap.directs[c.peerId] ?? 0,
-    }));
-
-    const rows = [...planRows, ...directRows].sort(
-        (a, b) => new Date(b.lastAt || 0).getTime() - new Date(a.lastAt || 0).getTime(),
-    );
-    cacheSet(screenCacheKey.chatsList(userId), rows, ScreenCacheTTL.chatsList);
-    void diskSet(screenCacheKey.chatsList(userId), rows);
-    prefetchRemoteImages(rows.map((row) => row.image_url), 24);
-    prefetchRecentChatThreads(userId, rows);
 }
 
 async function prefetchMyPlans(userId: string) {

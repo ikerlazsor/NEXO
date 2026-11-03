@@ -10,36 +10,62 @@ import {
 } from '../lib/activeConversation';
 import { flushChatOutbox } from '../lib/chatOutbox';
 import { getMutedPlanChatIds, syncPlanChatMutesFromServer } from '../lib/chatMute';
-import { getUnreadChatCount, subscribeChatUnread } from '../lib/chatUnread';
+import { getChatUnreadMap, refreshChatUnreadBadge, subscribeChatUnread } from '../lib/chatUnread';
 import { resolveDeepLinkUrl } from '../lib/deepLinks';
 import { hapticMedium } from '../lib/haptics';
 import { presentInAppToast } from '../lib/inAppToast';
 import { getIsOnline, subscribeNetwork } from '../lib/network';
+import { isGroupOrChatPlan } from '../lib/planLifecycle';
+import { prefetchPlanDetail } from '../lib/planDetailCache';
+import { warmTournamentFromLink } from '../lib/tournamentLineupCache';
 import {
     getProfileNotificationCount,
+    invalidateProfileNotificationCount,
     subscribeProfileNotifications,
 } from '../lib/notifications';
 import { dismissPushFromPayload } from '../lib/presentedPush';
-import { syncNotificationCategoryPrefsFromServer } from '../lib/notificationPrefs';
+import {
+    getNotificationCategoryPrefs,
+    syncNotificationCategoryPrefsFromServer,
+} from '../lib/notificationPrefs';
 import {
     bootstrapPushForUser,
+    claimPushResponse,
+    fallbackPushHref,
+    navigateAppHref,
     normalizePushData,
+    pruneStaleLocalReminders,
+    queuePushHref,
     registerPushToken,
     resolvePushNavigation,
     schedulePlanLifecycleReminders,
     syncPushPreferenceFromServer,
+    takeQueuedPushHref,
     unregisterPushToken,
+    wasPushResponseHandled,
 } from '../lib/push';
 import { warmPushDestination } from '../lib/pushWarm';
 import { getPendingRatingPlans } from '../lib/ratings';
+import { screenCacheKey } from '../lib/screenCaches';
 import { supabase } from '../lib/supabase';
+import { cacheInvalidate } from '../lib/ttlCache';
+
+function clearInviteSideEffects(userId: string) {
+    invalidateProfileNotificationCount(userId);
+    cacheInvalidate(screenCacheKey.friends(userId));
+    void syncAppBadge(userId);
+}
 
 async function syncAppBadge(userId: string) {
     try {
-        const [chats, notifs] = await Promise.all([
-            getUnreadChatCount(userId),
+        const [unread, notifs, muted] = await Promise.all([
+            getChatUnreadMap(userId),
             getProfileNotificationCount(userId),
+            getMutedPlanChatIds(),
         ]);
+        // Un chat silenciado tampoco debe subir el número del icono.
+        const mutedTotal = muted.reduce((sum, planId) => sum + (unread.plans[planId] ?? 0), 0);
+        const chats = Math.max(0, unread.total - mutedTotal);
         await Notifications.setBadgeCountAsync(Math.max(0, chats + notifs.total));
     } catch {
         /* ignore */
@@ -81,8 +107,9 @@ function shouldSuppressForeground(raw: Record<string, unknown> | undefined): boo
  */
 export function PushBootstrap({ userId, ready = true }: { userId: string | null; ready?: boolean }) {
     const router = useRouter();
-    const handledRef = useRef<string | null>(null);
     const handledUrlRef = useRef<string | null>(null);
+    const readyRef = useRef(ready);
+    readyRef.current = ready;
 
     useEffect(() => {
         if (Platform.OS === 'web') return;
@@ -115,15 +142,27 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
                     }
                 }
 
-                if (AppState.currentState === 'active') {
-                    return {
-                        shouldShowBanner: false,
-                        shouldShowList: false,
-                        shouldPlaySound: false,
-                        shouldSetBadge: true,
-                    };
+                // Red de seguridad: el push pudo salir antes de guardarse la preferencia.
+                if (type) {
+                    const cats = await getNotificationCategoryPrefs();
+                    const isMessage = type === 'plan_message' || type === 'direct_message';
+                    const isReminder = type === 'plan_today' || type === 'plan_rating';
+                    const allowed = isMessage
+                        ? cats.messages
+                        : isReminder
+                            ? cats.reminders
+                            : cats.social;
+                    if (!allowed) {
+                        return {
+                            shouldShowBanner: false,
+                            shouldShowList: false,
+                            shouldPlaySound: false,
+                            shouldSetBadge: true,
+                        };
+                    }
                 }
 
+                // En primer plano también banner (salvo chat activo / mute arriba).
                 return {
                     shouldShowBanner: true,
                     shouldShowList: true,
@@ -152,6 +191,7 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
         })();
 
         if (getIsOnline()) void flushChatOutbox();
+        void pruneStaleLocalReminders(userId);
 
         const unsubUnread = subscribeChatUnread(() => {
             void syncAppBadge(userId);
@@ -159,6 +199,42 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
         const unsubNotif = subscribeProfileNotifications(() => {
             void syncAppBadge(userId);
         });
+
+        // Solo DMs hacia mí. Los de plan se actualizan al volver a la app / abrir chats.
+        const msgChannel = supabase
+            .channel(`badge-mensajes-${userId}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: 'INSERT',
+                    schema: 'public',
+                    table: 'mensajes',
+                    filter: `receptor_id=eq.${userId}`,
+                },
+                (payload) => {
+                    const row = payload.new as { emisor_id?: string } | null;
+                    if (row?.emisor_id && row.emisor_id === userId) return;
+                    void refreshChatUnreadBadge(userId).then(() => syncAppBadge(userId));
+                },
+            )
+            .subscribe();
+
+        // Invitaciones de plan: al borrarse (p. ej. plan eliminado) baja el badge de solicitudes.
+        const inviteChannel = supabase
+            .channel(`badge-invites-${userId}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'invitaciones_planes',
+                    filter: `invitado_id=eq.${userId}`,
+                },
+                () => {
+                    clearInviteSideEffects(userId);
+                },
+            )
+            .subscribe();
 
         const subNet = subscribeNetwork((online) => {
             if (online) void flushChatOutbox();
@@ -175,36 +251,75 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
         void (async () => {
             try {
                 await new Promise<void>((r) => setTimeout(r, 80));
+                const scheduledIds = new Set<string>();
+                try {
+                    const existing = await Notifications.getAllScheduledNotificationsAsync();
+                    for (const item of existing) scheduledIds.add(item.identifier);
+                } catch {
+                    /* ignore */
+                }
+                const needsReminder = (planId: string, categoria?: string | null) => {
+                    const group = isGroupOrChatPlan({ categoria });
+                    const needToday = !group && !scheduledIds.has(`plan-today:${planId}`);
+                    const needRating = !scheduledIds.has(`rating:${planId}`);
+                    return needToday || needRating;
+                };
+                const markScheduled = (planId: string) => {
+                    scheduledIds.add(`plan-today:${planId}`);
+                    scheduledIds.add(`rating:${planId}`);
+                };
+
                 const pending = await getPendingRatingPlans(userId);
+                const pendingIds = new Set(pending.map((plan) => plan.planId));
                 for (const plan of pending) {
+                    if (!needsReminder(plan.planId)) continue;
                     await schedulePlanLifecycleReminders({
                         planId: plan.planId,
                         planTitle: plan.titulo,
                         fechaEvento: plan.fecha_evento,
                     });
-                    await new Promise<void>((r) => setTimeout(r, 40));
+                    markScheduled(plan.planId);
                 }
 
-                const nowIso = new Date().toISOString();
+                const nowMs = Date.now();
                 const { data: parts } = await supabase
                     .from('participantes')
                     .select('plan_id, planes(id, titulo, fecha_evento, categoria, nombre_ubicacion)')
                     .eq('usuario_id', userId)
                     .eq('estado', 'aceptado')
                     .limit(40);
+                const eventAtByPlan = new Map<string, number>();
                 for (const row of parts ?? []) {
                     const p = Array.isArray(row.planes) ? row.planes[0] : row.planes;
-                    if (!p?.id) continue;
+                    if (!p?.id || !p.fecha_evento) continue;
+                    const at = new Date(p.fecha_evento).getTime();
+                    if (Number.isFinite(at)) eventAtByPlan.set(p.id, at);
+                }
+                for (const ident of [...scheduledIds]) {
+                    if (!ident.startsWith('rating:')) continue;
+                    const planId = ident.slice('rating:'.length);
+                    if (pendingIds.has(planId)) continue;
+                    const at = eventAtByPlan.get(planId);
+                    // Plan futuro: el aviso de valorar sigue programado. Si ya pasó y no está pendiente, era fantasma.
+                    if (at != null && at < nowMs) {
+                        await Notifications.cancelScheduledNotificationAsync(ident).catch(() => {});
+                        scheduledIds.delete(ident);
+                    }
+                }
+                for (const row of parts ?? []) {
+                    const p = Array.isArray(row.planes) ? row.planes[0] : row.planes;
+                    if (!p?.id || !needsReminder(p.id, p.categoria)) continue;
                     const eventAt = p.fecha_evento ? new Date(p.fecha_evento).getTime() : 0;
-                    if (eventAt && eventAt < Date.parse(nowIso) - 6 * 60 * 60 * 1000) continue;
+                    if (eventAt && eventAt < nowMs - 6 * 60 * 60 * 1000) continue;
                     await schedulePlanLifecycleReminders({
                         planId: p.id,
                         planTitle: p.titulo,
                         fechaEvento: p.fecha_evento,
                         categoria: p.categoria,
                         locationName: (p as { nombre_ubicacion?: string }).nombre_ubicacion,
+                        includeRating: pendingIds.has(p.id),
                     });
-                    await new Promise<void>((r) => setTimeout(r, 40));
+                    markScheduled(p.id);
                 }
             } catch {
                 /* ignore */
@@ -216,6 +331,8 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
             subNet();
             unsubUnread();
             unsubNotif();
+            supabase.removeChannel(msgChannel);
+            supabase.removeChannel(inviteChannel);
         };
     }, [userId, ready]);
 
@@ -225,39 +342,46 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
         const go = (raw: Record<string, unknown> | undefined) => {
             const data = normalizePushData(raw);
             const target = resolvePushNavigation(data);
-            if (!target) return;
-            // Navegar YA; calentar en paralelo (antes se esperaba warm → freeze / destino perdido).
-            let tries = 0;
-            const attempt = () => {
-                tries += 1;
-                try {
-                    router.push(target.href as never);
-                } catch {
-                    if (tries < 8) setTimeout(attempt, 140 * tries);
-                }
-            };
-            attempt();
+            const href = target?.href ?? fallbackPushHref(data);
+            if (!readyRef.current) {
+                queuePushHref(href);
+                return;
+            }
+            navigateAppHref(router, href);
             void warmPushDestination(data);
         };
 
-        const handleResponse = (response: Notifications.NotificationResponse | null | undefined) => {
+        const handleResponse = (
+            response: Notifications.NotificationResponse | null | undefined,
+            fromColdStart = false,
+        ) => {
             if (!response) return;
             const id = response.notification.request.identifier;
-            if (handledRef.current === id) return;
-            handledRef.current = id;
-            const data = response.notification.request.content.data as Record<string, unknown>;
-            dismissPushFromPayload(data);
-            void Notifications.dismissNotificationAsync(id).catch(() => {});
-            // Evita re-navegar en el siguiente cold start con la misma respuesta.
-            const clearLast = (
-                Notifications as typeof Notifications & {
-                    clearLastNotificationResponseAsync?: () => Promise<void>;
+            void (async () => {
+                if (fromColdStart) {
+                    const raw = response.notification.date;
+                    const at = raw > 1e12 ? raw : raw * 1000;
+                    if (Number.isFinite(at) && Date.now() - at > 3 * 60 * 1000) {
+                        await wasPushResponseHandled(id);
+                        claimPushResponse(id);
+                        return;
+                    }
                 }
-            ).clearLastNotificationResponseAsync;
-            if (typeof clearLast === 'function') {
-                void clearLast().catch(() => {});
-            }
-            go(data);
+                await wasPushResponseHandled(id);
+                if (!claimPushResponse(id)) return;
+                const data = response.notification.request.content.data as Record<string, unknown>;
+                dismissPushFromPayload(data);
+                void Notifications.dismissNotificationAsync(id).catch(() => {});
+                const clearLast = (
+                    Notifications as typeof Notifications & {
+                        clearLastNotificationResponseAsync?: () => Promise<void>;
+                    }
+                ).clearLastNotificationResponseAsync;
+                if (typeof clearLast === 'function') {
+                    void clearLast().catch(() => {});
+                }
+                go(data);
+            })();
         };
 
         const subRecv = Notifications.addNotificationResponseReceivedListener(handleResponse);
@@ -269,6 +393,13 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
             );
             // Calentar destino en cuanto llega la noti (antes de que el usuario pulse).
             if (data) void warmPushDestination(data);
+            if (userId) {
+                void refreshChatUnreadBadge(userId);
+                const type = String(data?.type ?? '');
+                if (type === 'plan_cancelled' || type === 'plan_invite') {
+                    clearInviteSideEffects(userId);
+                }
+            }
             if (AppState.currentState !== 'active') return;
             if (shouldSuppressForeground(data)) return;
             const planId = data?.planId ? String(data.planId) : '';
@@ -282,6 +413,9 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
                     const muted = await getMutedPlanChatIds();
                     if (muted.includes(planId)) return;
                 }
+                // iOS: el banner del sistema ya cubre el “arriba”.
+                // Android: el heads-up en primer plano es poco fiable → toast in-app.
+                if (Platform.OS !== 'android') return;
                 hapticMedium();
                 presentInAppToast({
                     id: notification.request.identifier,
@@ -293,13 +427,22 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
             })();
         });
 
-        void Notifications.getLastNotificationResponseAsync().then(handleResponse);
+        void Notifications.getLastNotificationResponseAsync().then((response) => {
+            handleResponse(response, true);
+        });
 
         return () => {
             subRecv.remove();
             subShown.remove();
         };
-    }, [router]);
+    }, [router, userId]);
+
+    useEffect(() => {
+        if (!ready) return;
+        const href = takeQueuedPushHref();
+        if (!href) return;
+        navigateAppHref(router, href);
+    }, [ready, router]);
 
     useEffect(() => {
         if (Platform.OS === 'web') return;
@@ -323,6 +466,13 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
             handledUrlRef.current = url;
             handledHrefRef.current = target.href;
             handledHrefAtRef.current = now;
+
+            // Calentar detalle/torneo en cuanto llega el link (antes de pintar).
+            const planWarm = target.href.match(/^\/plan\/([0-9a-f-]{36})/i);
+            if (planWarm?.[1]) {
+                void prefetchPlanDetail(planWarm[1]);
+                warmTournamentFromLink(planWarm[1]);
+            }
 
             // Rutas de archivo (/plan/…) las abre Expo Router vía Universal/App Links.
             // Solo empujamos a mano share-plan (Supabase) y deep links tipo open?type=…

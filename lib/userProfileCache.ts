@@ -128,6 +128,8 @@ export function prefetchUserProfile(userId: string): void {
                 { readCoverUrl },
                 { getAuthUser },
                 { ensureViewerAffinityPerson },
+                { getPublicAttendedPlans },
+                { getFriendStatus },
             ] = await Promise.all([
                 import('./profileData'),
                 import('./badgeStats'),
@@ -137,31 +139,59 @@ export function prefetchUserProfile(userId: string): void {
                 import('./profileCover'),
                 import('./auth'),
                 import('./viewerAffinityCache'),
+                import('./profileSocial'),
+                import('./friends'),
             ]);
 
-            const me = await getAuthUser();
+            // Lo que no depende de quién mira arranca sin esperar a la sesión.
+            const profilePromise = getPublicProfile(userId);
+            const statsPromise = getUserStats(userId);
+            const friendsCountPromise = getFriendsCount(userId);
+
+            // Si ya sabemos si es organizador (lo trae la semilla de la tarjeta),
+            // la segunda tanda sale a la vez: una vuelta a red menos antes de ver
+            // «repetirían», amigos y planes.
+            const orgHint = existing?.userProfile?.es_organizador;
+            // Con `.catch` porque si la pista falla estas promesas se descartan
+            // y un rechazo suelto rompería la precarga entera.
+            const personWave = () => ({
+                badge: getBadgeStats(userId).catch(() => EMPTY_BADGE_STATS),
+                attended: getPublicAttendedPlans(userId, 12).catch(() => []),
+            });
+            const orgWave = () => ({
+                follow: getOrganizerFollowStats(userId).catch(() => ({ followers: 0, following: false })),
+                upcoming: getOrganizerUpcomingPlans(userId, 8).catch(() => []),
+                plansCount: getOrganizerPlansCount(userId).catch(() => 0),
+            });
+            let early =
+                orgHint === true
+                    ? { kind: 'org' as const, ...orgWave() }
+                    : orgHint === false
+                      ? { kind: 'person' as const, ...personWave() }
+                      : null;
+
+            const me = await getAuthUser().catch(() => null);
             const [profile, stats, friendsCount, viewerAffinity, friendSt] = await Promise.all([
-                getPublicProfile(userId),
-                getUserStats(userId),
-                getFriendsCount(userId),
+                profilePromise,
+                statsPromise,
+                friendsCountPromise,
                 me && me.id !== userId ? ensureViewerAffinityPerson(me.id) : Promise.resolve(null),
-                me && me.id !== userId
-                    ? import('./friends').then(({ getFriendStatus }) => getFriendStatus(me.id, userId))
-                    : Promise.resolve(null),
+                me && me.id !== userId ? getFriendStatus(me.id, userId) : Promise.resolve(null),
             ]);
             if (!profile) return;
 
             const isOrg = profile.es_organizador === true;
+            // La pista falló (o no la había): pedir ahora lo que toca.
+            if (!early || (early.kind === 'org') !== isOrg) {
+                early = isOrg ? { kind: 'org', ...orgWave() } : { kind: 'person', ...personWave() };
+            }
+
             const [badgeStats, orgFollow, upcoming, orgPlansCount, attendedPlans] = await Promise.all([
-                isOrg ? Promise.resolve(EMPTY_BADGE_STATS) : getBadgeStats(userId),
-                isOrg ? getOrganizerFollowStats(userId) : Promise.resolve({ followers: 0, following: false }),
-                isOrg ? getOrganizerUpcomingPlans(userId, 8) : Promise.resolve([]),
-                isOrg ? getOrganizerPlansCount(userId) : Promise.resolve(0),
-                isOrg
-                    ? Promise.resolve([])
-                    : import('./profileSocial').then(({ getPublicAttendedPlans }) =>
-                          getPublicAttendedPlans(userId, 12),
-                      ),
+                early.kind === 'person' ? early.badge : Promise.resolve(EMPTY_BADGE_STATS),
+                early.kind === 'org' ? early.follow : Promise.resolve({ followers: 0, following: false }),
+                early.kind === 'org' ? early.upcoming : Promise.resolve([]),
+                early.kind === 'org' ? early.plansCount : Promise.resolve(0),
+                early.kind === 'person' ? early.attended : Promise.resolve([]),
             ]);
 
             if (friendSt) {

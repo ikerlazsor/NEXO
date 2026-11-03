@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { type AuthIntent } from './authIntent';
 import { showAuthPrompt } from './authPrompt';
@@ -37,15 +37,18 @@ export function AuthSessionProvider({
         [isGuest],
     );
 
+    const value = useMemo<AuthSessionValue>(
+        () => ({
+            session,
+            userId: session?.user.id ?? null,
+            isGuest,
+            requireAccount,
+        }),
+        [session, isGuest, requireAccount],
+    );
+
     return (
-        <AuthSessionContext.Provider
-            value={{
-                session,
-                userId: session?.user.id ?? null,
-                isGuest,
-                requireAccount,
-            }}
-        >
+        <AuthSessionContext.Provider value={value}>
             {children}
         </AuthSessionContext.Provider>
     );

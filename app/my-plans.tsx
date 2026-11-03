@@ -21,6 +21,7 @@ import { type ThemeColors } from '../theme';
 import { MyPlanListRow } from '../components/MyPlanListRow';
 import { NexoEmptyState } from '../components/ui/NexoState';
 import { MyPlansSkeletonList } from '../components/SkeletonShimmer';
+import { useDelayedVisible } from '../lib/useDelayedVisible';
 import { useListScrollRestore } from '../hooks/useListScrollRestore';
 import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../lib/planDetailCache';
 import { seedChatThreadPeek } from '../lib/prefetchChats';
@@ -67,6 +68,7 @@ export default function MyPlansScreen() {
     const [loading, setLoading] = useState(() => !cachedMyPlans);
     const [loadError, setLoadError] = useState(false);
     const [plans, setPlans] = useState<PlanItem[]>(() => cachedMyPlans?.plans ?? []);
+    const showPlansSkeleton = useDelayedVisible(loading && plans.length === 0);
     const [pendingCount, setPendingCount] = useState(() => cachedMyPlans?.pendingCount ?? 0);
     const [ratingByPlan, setRatingByPlan] = useState<Record<string, PendingRatingPlan>>(
         () => cachedMyPlans?.ratingByPlan ?? {},
@@ -439,7 +441,7 @@ export default function MyPlansScreen() {
                 </View>
 
                 <View style={{ flex: 1 }}>
-                    {loading && plans.length === 0 ? (
+                    {showPlansSkeleton ? (
                         <MyPlansSkeletonList count={5} />
                     ) : (
                         <FlashList

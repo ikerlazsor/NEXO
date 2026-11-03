@@ -1,0 +1,57 @@
+{
+  "id": "7e8cdf8f-d0de-4636-a702-66279bf20c98",
+  "status": "ERRORED",
+  "platform": "ANDROID",
+  "error": {
+    "errorCode": "EAS_BUILD_UNKNOWN_GRADLE_ERROR",
+    "message": "Gradle build failed with unknown error. See logs for the \"Run gradlew\" phase for more information."
+  },
+  "artifacts": {},
+  "fingerprint": {
+    "id": "01a0d7f3-8b0b-7c18-a3b8-d273ad17ca0d",
+    "hash": "3478c6ad8c55c1c76e2a2ae3c7ff017c27bb5c8f"
+  },
+  "initiatingActor": {
+    "id": "c16d1dc2-3ef5-41a9-a305-6f4287a306d6",
+    "displayName": "ikerlazsor"
+  },
+  "logFiles": [
+    "https://storage.googleapis.com/eas-workflows-production/logs/edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e/7e8cdf8f-d0de-4636-a702-66279bf20c98/2026-09-25T09%3A44%3A19Z-608fafb3-1956-434a-9949-648b6b5d8455.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260925%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260925T095708Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=6d87eb979368f0472e2564e0aaf26dcff296f0dfa08e35fa0351eee13ee3be4a2ac53426ef96ae5fbef6fed82e5878f2bc399793805c7ae1465132fab5c916e186abdd6ec8fc2f3bd87ac2c97eb238501be75356ecb614e81e8cb32484d509c110d869e9c540dbee629fe039229e71490e40c7400cc4ebd7cc7e6ed987e44f6a8aef649d8d5d3ad55776941631d0ddad0854dc630d8390485ae3500dc906842ed3b15d233974a83d97b566b96c3b1cd94455042ebb52aaa23e09647880e5286ef48d4373810b92b6443096b7bc9f85e12e5e1d9f9bf48f58ca64948d7b520128979e4caf63dc593668633f6fb84d56d9e0b31358d2e818eb4a9e6215e1e80768"
+  ],
+  "app": {
+    "id": "edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e",
+    "name": "nexo",
+    "slug": "nexo",
+    "ownerAccount": {
+      "id": "6f061dba-13c1-4f88-9df6-b9be1443838f",
+      "name": "ikerlazsor"
+    }
+  },
+  "updateChannel": {
+    "id": "01a03744-b5a8-7ebe-ac0f-e7cb4f44b708",
+    "name": "production"
+  },
+  "distribution": "STORE",
+  "buildProfile": "production",
+  "appIdentifier": "com.ikerlazsor.nexo",
+  "sdkVersion": "54.0.0",
+  "appVersion": "1.0.0",
+  "appBuildVersion": "8",
+  "runtime": {
+    "id": "01a03748-78d5-7140-b650-39359b114430",
+    "version": "1.0.0"
+  },
+  "gitCommitHash": "36b9277c763f04bcc42a9ef1e6dff2733f0a52b0",
+  "gitCommitMessage": "Fix guest language screen redirect; bump 1.0.8",
+  "priority": "NORMAL",
+  "createdAt": "2026-09-25T09:44:17.314Z",
+  "updatedAt": "2026-09-25T09:47:51.874Z",
+  "completedAt": "2026-09-25T09:47:51.604Z",
+  "expirationDate": "2026-10-25T09:44:17.409Z",
+  "isForIosSimulator": false,
+  "metrics": {
+    "buildWaitTime": 836,
+    "buildQueueTime": 6484,
+    "buildDuration": 206970
+  }
+}

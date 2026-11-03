@@ -196,8 +196,40 @@ export function applyStickyPlanDeletes<T extends { id?: string | number | null }
     return plans.filter((p) => !ban.has(String(p.id)));
 }
 
+/** Tras editar: portada / fecha / sitio en la tarjeta sin esperar el fetch. */
+export function patchCachedFeedPlan(planId: string, patch: Record<string, unknown>): void {
+    if (!planId) return;
+    try {
+        const snap = cacheGetStale<{
+            plans?: Record<string, unknown>[];
+            [k: string]: unknown;
+        }>(FEED_CACHE_KEY);
+        const oid = String(planId);
+        let nextRow: Record<string, unknown> | null = null;
+        if (snap?.plans?.length) {
+            let changed = false;
+            const plans = snap.plans.map((row) => {
+                if (String(row.id) !== oid) return row;
+                changed = true;
+                nextRow = { ...row, ...patch };
+                return nextRow;
+            });
+            if (changed) {
+                cacheSet(FEED_CACHE_KEY, { ...snap, plans }, FEED_CACHE_TTL_MS);
+            }
+        }
+        optimisticPlan = nextRow ?? { id: oid, ...patch };
+        feedNeedsRefresh = true;
+    } catch {
+        /* ignore */
+    }
+}
+
 /** Plan recién creado: aparece en el feed al instante sin esperar la red. */
-export function injectOptimisticFeedPlan(plan: Record<string, unknown>): void {
+export function injectOptimisticFeedPlan(
+    plan: Record<string, unknown>,
+    opts?: { emit?: boolean },
+): void {
     if (!plan?.id) return;
     optimisticPlan = plan;
     stickyCreatedPlan = plan;
@@ -229,7 +261,9 @@ export function injectOptimisticFeedPlan(plan: Record<string, unknown>): void {
     } catch {
         /* ignore */
     }
-    emitFeedRefreshSignal();
+    // No emitir mientras el modal de crear sigue abierto: en Android el mapa nativo
+    // + refresh del feed + dismiss a la vez tumban el proceso.
+    if (opts?.emit !== false) emitFeedRefreshSignal();
 }
 
 export function takeOptimisticFeedPlan(): Record<string, unknown> | null {

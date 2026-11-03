@@ -44,6 +44,7 @@ import type { Genero } from '../lib/profileFields';
 import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
 import { ScreenKeys } from '../lib/screenState';
 import { canJoinPlanByGender } from '../lib/soloChicas';
+import { wasKickedFromPlan } from '../lib/planKicks';
 import { supabase } from '../lib/supabase';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 
@@ -210,6 +211,11 @@ export default function SavedPlansScreen() {
 
         if (!canJoinPlanByGender(plan, currentUserGenero)) {
             Alert.alert(t('feed.error'), t('card.soloChicasOnly'));
+            return;
+        }
+
+        if (await wasKickedFromPlan(planId, currentUserId)) {
+            Alert.alert(t('feed.error'), t('plan.kickedCannotJoin'));
             return;
         }
 

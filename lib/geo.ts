@@ -42,6 +42,22 @@ export function isLocationInEurope(lat: number, lng: number): boolean {
     return isSouthernEuropeanException(lat, lng);
 }
 
+/**
+ * Coordenadas de un plan. `Number(null) === 0` en JS: hay que rechazar null/''
+ * (ubicación "por determinar") para no calcular distancias a (0,0).
+ */
+export function parsePlanCoords(plan: {
+    latitud?: unknown;
+    longitud?: unknown;
+}): { latitude: number; longitude: number } | null {
+    if (plan.latitud == null || plan.longitud == null) return null;
+    if (plan.latitud === '' || plan.longitud === '') return null;
+    const latitude = Number(plan.latitud);
+    const longitude = Number(plan.longitud);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+    return { latitude, longitude };
+}
+
 /** Distancia en km entre dos coordenadas (haversine). */
 /** Caja aproximada de `km` alrededor de un punto (para consultas geo). */
 export function boundingBox(

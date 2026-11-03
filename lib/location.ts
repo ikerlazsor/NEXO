@@ -9,6 +9,8 @@ const COORDS_KEY = 'userCoords';
 const COORDS_TTL_MS = 5 * 60 * 1000;
 const COORDS_DISK_KEY = 'userCoords';
 const COORDS_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** En Android real getCurrentPositionAsync a veces no resuelve nunca → mapa “pensando”. */
+const POSITION_TIMEOUT_MS = 8_000;
 
 function isValidCoords(value: unknown): value is UserCoords {
     if (!value || typeof value !== 'object') return false;
@@ -20,6 +22,22 @@ function rememberCoords(coords: UserCoords): UserCoords {
     cacheSet(COORDS_KEY, coords, COORDS_TTL_MS);
     void diskSet(COORDS_DISK_KEY, coords);
     return coords;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('location_timeout')), ms);
+        promise.then(
+            (v) => {
+                clearTimeout(t);
+                resolve(v);
+            },
+            (e) => {
+                clearTimeout(t);
+                reject(e);
+            },
+        );
+    });
 }
 
 /** Restaura la última GPS conocida (feed “Cerca” / ranking sin red). */
@@ -52,9 +70,35 @@ export async function getUserCoords(opts?: {
             return peekUserCoords() ?? (await hydrateUserCoordsFromDisk());
         }
 
-        const pos = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-        });
+        // lastKnown primero: en testers Android evita quedar bloqueado en GPS frío.
+        try {
+            const last = await Location.getLastKnownPositionAsync();
+            if (last?.coords && Number.isFinite(last.coords.latitude)) {
+                const quick = rememberCoords({
+                    latitude: last.coords.latitude,
+                    longitude: last.coords.longitude,
+                });
+                // Refresco en background (sin await).
+                void Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+                    .then((pos) => {
+                        rememberCoords({
+                            latitude: pos.coords.latitude,
+                            longitude: pos.coords.longitude,
+                        });
+                    })
+                    .catch(() => undefined);
+                return quick;
+            }
+        } catch {
+            /* seguir a current */
+        }
+
+        const pos = await withTimeout(
+            Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Balanced,
+            }),
+            POSITION_TIMEOUT_MS,
+        );
         return rememberCoords({
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,

@@ -103,7 +103,11 @@ function catBlurbText(
 }
 
 function ArtImage({ source }: { source: number }) {
-    return <Image source={source} style={stylesStatic.artImage} resizeMode="contain" />;
+    return (
+        <View style={stylesStatic.artSlot} pointerEvents="none">
+            <Image source={source} style={stylesStatic.artImage} resizeMode="contain" />
+        </View>
+    );
 }
 
 export function ProfileReputationStats({
@@ -249,9 +253,16 @@ export function ProfileReputationStats({
 }
 
 const stylesStatic = StyleSheet.create({
+    artSlot: {
+        width: 152,
+        height: 152,
+        marginRight: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     artImage: {
-        width: 134,
-        height: 134,
+        width: 152,
+        height: 152,
     },
     improveIcon: {
         width: 72,
@@ -274,10 +285,11 @@ function createRepStyles(c: ThemeColors) {
         highlightCard: {
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 6,
+            gap: 4,
             borderRadius: 22,
-            paddingVertical: 16,
-            paddingHorizontal: 14,
+            paddingVertical: 7,
+            paddingLeft: 14,
+            paddingRight: 10,
             borderWidth: 1,
             overflow: 'hidden',
         },
@@ -297,7 +309,7 @@ function createRepStyles(c: ThemeColors) {
             flex: 1,
             minWidth: 0,
             gap: 4,
-            paddingRight: 2,
+            paddingRight: 8,
         },
         highlightKicker: {
             fontSize: 13,

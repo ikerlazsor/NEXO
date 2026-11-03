@@ -100,6 +100,9 @@ export interface ProfilePrivacy {
     mostrar_tabaco: boolean;
     mostrar_aficiones: boolean;
     mostrar_planes: boolean;
+    mostrar_ubicacion: boolean;
+    mostrar_instagram: boolean;
+    mostrar_nacionalidad: boolean;
     momentos: MomentsVisibility;
 }
 
@@ -110,6 +113,9 @@ export const DEFAULT_PRIVACY: ProfilePrivacy = {
     mostrar_tabaco: true,
     mostrar_aficiones: true,
     mostrar_planes: true,
+    mostrar_ubicacion: true,
+    mostrar_instagram: true,
+    mostrar_nacionalidad: true,
     momentos: 'public',
 };
 
@@ -170,37 +176,37 @@ export async function searchProfilesByName(
     if (raw.length < 2) return [];
 
     const deep = !!opts?.deep;
-    const cacheKey = `${raw.toLowerCase()}|${excludeUserId ?? ''}|${deep ? 'd' : 'f'}`;
+    const cacheKey = `rc3|${raw.toLowerCase()}|${excludeUserId ?? ''}|${deep ? 'd' : 'f'}`;
     const cached = PROFILE_SEARCH_CACHE.get(cacheKey);
     if (cached && Date.now() - cached.at < PROFILE_SEARCH_TTL_MS) {
         return cached.rows;
     }
 
     const select = 'id, nombre, nombre_usuario, avatar_url, es_organizador';
-    let byName = supabase
+    const needle = raw.toLowerCase();
+
+    let byPrefix = supabase
         .from('perfiles')
         .select(select)
-        .ilike('nombre', `${raw}%`)
+        .eq('registro_completado', true)
+        .ilike('nombre', `${needle}%`)
         .limit(20);
-    if (excludeUserId) byName = byName.neq('id', excludeUserId);
+    if (excludeUserId) byPrefix = byPrefix.neq('id', excludeUserId);
 
-    const settled = [await byName];
-    for (const res of settled) {
-        if (res.error) throw res.error;
-    }
+    const first = await byPrefix;
+    if (first.error) throw first.error;
 
     const byId = new Map<string, ProfileSearchRow>();
-    for (const res of settled) {
-        for (const row of res.data ?? []) {
-            if (row?.id) byId.set(row.id as string, row as ProfileSearchRow);
-        }
+    for (const row of first.data ?? []) {
+        if (row?.id) byId.set(row.id as string, row as ProfileSearchRow);
     }
 
-    if (deep && byId.size < 8 && raw.length >= 3) {
+    if (deep && byId.size < 8 && needle.length >= 3) {
         let contains = supabase
             .from('perfiles')
             .select(select)
-            .ilike('nombre', `%${raw}%`)
+            .eq('registro_completado', true)
+            .ilike('nombre', `%${needle}%`)
             .limit(12);
         if (excludeUserId) contains = contains.neq('id', excludeUserId);
         const more = await contains;
@@ -211,7 +217,6 @@ export async function searchProfilesByName(
         }
     }
 
-    const needle = raw.toLowerCase();
     const list = [...byId.values()];
     list.sort((a, b) => {
         const an = (a.nombre ?? '').toLowerCase();
@@ -230,7 +235,7 @@ export async function searchProfilesByName(
     PROFILE_SEARCH_CACHE.set(cacheKey, { at: Date.now(), rows });
     if (deep) {
         PROFILE_SEARCH_CACHE.set(
-            `${raw.toLowerCase()}|${excludeUserId ?? ''}|f`,
+            `rc3|${raw.toLowerCase()}|${excludeUserId ?? ''}|f`,
             { at: Date.now(), rows },
         );
     }
@@ -255,6 +260,7 @@ export async function listPublicDirectory(opts: {
         .from('perfiles')
         .select('id, nombre, nombre_usuario, avatar_url, es_organizador')
         .eq('es_organizador', opts.organizers)
+        .eq('registro_completado', true)
         .not('nombre', 'is', null)
         .order('nombre', { ascending: true })
         .range(offset, offset + limit - 1);
@@ -269,6 +275,7 @@ async function fetchProfilesByOrderedIds(ids: string[]): Promise<ProfileSearchRo
     const { data, error } = await supabase
         .from('perfiles')
         .select('id, nombre, nombre_usuario, avatar_url, es_organizador')
+        .eq('registro_completado', true)
         .in('id', ids);
     if (error || !data) return [];
     const byId = new Map((data as ProfileSearchRow[]).map((row) => [row.id, row]));

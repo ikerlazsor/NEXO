@@ -16,11 +16,28 @@ serve(async (req: Request) => {
   try {
     const { userClient, admin } = createClients(req);
     const caller = await requireUser(userClient);
-    const body = await req.json().catch(() => ({})) as { targetUserId?: unknown };
+    const body = await req.json().catch(() => ({})) as {
+      targetUserId?: unknown;
+      confirmDelete?: unknown;
+    };
     const requestedTarget = typeof body.targetUserId === 'string' ? body.targetUserId.trim() : '';
     const targetUserId = requestedTarget || caller.id;
+    const confirmDelete = body.confirmDelete === true;
 
     if (!UUID_RE.test(targetUserId)) return jsonResponse(400, { error: 'invalid_target' });
+
+    // Antes de tocar storage: cancelar registro no puede vaciar una cuenta ya terminada.
+    if (targetUserId === caller.id && !confirmDelete) {
+      const { data: selfProfile, error: selfError } = await admin
+        .from('perfiles')
+        .select('registro_completado')
+        .eq('id', caller.id)
+        .maybeSingle();
+      if (selfError) return jsonResponse(500, { error: 'profile_lookup_failed' });
+      if (selfProfile?.registro_completado === true) {
+        return jsonResponse(409, { error: 'account_already_registered' });
+      }
+    }
 
     if (targetUserId !== caller.id) {
       const [{ data: callerProfile }, { data: targetProfile }] = await Promise.all([
@@ -33,9 +50,7 @@ serve(async (req: Request) => {
       if (!targetProfile && !(await admin.auth.admin.getUserById(targetUserId)).data.user) {
         return jsonResponse(404, { error: 'user_not_found' });
       }
-      if (targetProfile?.rol === 'owner' || targetProfile?.rol === 'admin') {
-        return jsonResponse(403, { error: 'cannot_moderate_staff' });
-      }
+      // Owner puede eliminar cualquier cuenta (admin incluida).
     }
 
     // Storage: best-effort.
@@ -58,9 +73,14 @@ serve(async (req: Request) => {
     const { error: deleteError } = await admin.rpc('service_delete_account', {
       p_user_id: targetUserId,
       p_actor_id: caller.id,
+      // Sin confirmDelete, un self-delete solo vale para un registro a medias.
+      p_force: targetUserId !== caller.id || confirmDelete,
     });
     if (deleteError) {
       const msg = deleteError.message || 'delete_account_failed';
+      if (/account_already_registered/i.test(msg)) {
+        return jsonResponse(409, { error: 'account_already_registered' });
+      }
       if (/not_authorized/i.test(msg)) return jsonResponse(403, { error: 'not_authorized' });
       if (/cannot_moderate_staff/i.test(msg)) return jsonResponse(403, { error: 'cannot_moderate_staff' });
       if (/invalid_target/i.test(msg)) return jsonResponse(400, { error: 'invalid_target' });

@@ -46,6 +46,8 @@ export function formatChatListPreview(
             joinedGroupSelf: string;
             joinedPlan: (name: string) => string;
             joinedGroup: (name: string) => string;
+            planInviteCard?: string;
+            messageDeleted?: string;
             image: string;
             video: string;
             voice: string;
@@ -56,12 +58,21 @@ export function formatChatListPreview(
     const isSelf =
         (!!opts.currentUserId && msg.emisor_id === opts.currentUserId)
         || nombre === opts.youLabel;
+    if ((msg.contenido ?? '').trim() === '@@nexo_deleted@@') {
+        return opts.labels.messageDeleted ?? 'Mensaje eliminado';
+    }
     const systemKind = msg.tipo === 'texto' ? parseSystemContent(msg.contenido) : null;
     if (systemKind === 'join_group') {
         return isSelf ? opts.labels.joinedGroupSelf : opts.labels.joinedGroup(nombre);
     }
     if (systemKind === 'join_plan') {
         return isSelf ? opts.labels.joinedPlanSelf : opts.labels.joinedPlan(nombre);
+    }
+    if (msg.tipo === 'texto' && msg.contenido?.startsWith('@@nexo_plan_invite:')) {
+        return opts.labels.planInviteCard ?? 'Invitación a un plan';
+    }
+    if ((msg.contenido ?? '').startsWith('nexo_moments:v1:')) {
+        return `${nombre}: ${opts.labels.image}`;
     }
     if (msg.tipo === 'imagen') return `${nombre}: ${opts.labels.image}`;
     if (msg.tipo === 'video') return `${nombre}: ${opts.labels.video}`;
@@ -83,5 +94,15 @@ export function formatChatListPreview(
     if (isLegacyPlanCreatedNotice(msg.contenido)) {
         return '';
     }
-    return `${nombre}: ${msg.contenido}`;
+    const body = stripReplyMarkup(msg.contenido);
+    return `${nombre}: ${body}`;
+}
+
+/** Quita el sobre de una respuesta para no enseñar `@@nexo_reply:…` en la lista. */
+function stripReplyMarkup(contenido: string): string {
+    const mark = '@@nexo_reply:';
+    if (!contenido?.startsWith(mark)) return contenido;
+    const end = contenido.indexOf('@@\n', mark.length);
+    if (end < 0) return contenido.replace(mark, '').trim();
+    return contenido.slice(end + 3).replace(/\s+/g, ' ').trim();
 }

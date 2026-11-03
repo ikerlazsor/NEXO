@@ -2,8 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCoincidedUserIds } from './coincidences';
 import { attachFeedPlanPeople } from './feedQuery';
 import { getFriendIds, getFriendOfFriendIds } from './friends';
+import { getPublicProfileCards } from './profileData';
 import { invalidatePlanDetailCache } from './planDetailCache';
-import { getRatingPhase, getRatingsUnlockMs, isGroupOrChatPlan, runPlanLifecycleMaintenance } from './planLifecycle';
+import { getRatingPhase, getRatingsUnlockMs, isStandaloneGroupChat, runPlanLifecycleMaintenance } from './planLifecycle';
 import { invalidateProfileNotificationCount, patchProfileNotificationCount } from './profileNotificationBus';
 import type { PublicAttendedPlan } from './profileSocial';
 import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from './screenCaches';
@@ -159,6 +160,7 @@ function ratingDoneKey(userId: string, planId: string) {
 /** Hechos locales aún no confirmados por AsyncStorage (evita que el refetch re-enseñe el plan). */
 const ratingDoneMemory = new Set<string>();
 const ratingSkipMemory = new Set<string>();
+const ratingStartedMemory = new Set<string>();
 
 function ratingMemoryId(userId: string, planId: string) {
     return `${userId}:${planId}`;
@@ -275,11 +277,26 @@ export async function getDismissedPlanIdSet(userId: string, planIds: string[]): 
     return dismissed;
 }
 
+async function getDonePlanIdSet(userId: string, planIds: string[]): Promise<Set<string>> {
+    if (planIds.length === 0) return new Set();
+    const done = new Set<string>();
+    for (const id of planIds) {
+        if (ratingDoneMemory.has(ratingMemoryId(userId, id))) done.add(id);
+    }
+    const pairs = await AsyncStorage.multiGet(planIds.map((id) => ratingDoneKey(userId, id)));
+    for (let i = 0; i < planIds.length; i++) {
+        if (pairs[i]?.[1] === '1') done.add(planIds[i]);
+    }
+    return done;
+}
+
 export async function markRatingSessionStarted(userId: string, planId: string): Promise<void> {
+    ratingStartedMemory.add(ratingMemoryId(userId, planId));
     await AsyncStorage.setItem(ratingStartedKey(userId, planId), '1');
 }
 
 export async function clearRatingSessionFlags(userId: string, planId: string): Promise<void> {
+    ratingStartedMemory.delete(ratingMemoryId(userId, planId));
     await AsyncStorage.multiRemove([
         ratingSkipKey(userId, planId),
         ratingStartedKey(userId, planId),
@@ -292,14 +309,10 @@ async function isRatingDismissed(userId: string, planId: string): Promise<boolea
     return !!v;
 }
 
-async function isRatingFlowDone(userId: string, planId: string): Promise<boolean> {
-    if (ratingDoneMemory.has(ratingMemoryId(userId, planId))) return true;
-    const v = await AsyncStorage.getItem(ratingDoneKey(userId, planId));
-    return v === '1';
-}
-
 export async function hasRatingSessionStarted(userId: string, planId: string): Promise<boolean> {
+    if (ratingStartedMemory.has(ratingMemoryId(userId, planId))) return true;
     const v = await AsyncStorage.getItem(ratingStartedKey(userId, planId));
+    if (v === '1') ratingStartedMemory.add(ratingMemoryId(userId, planId));
     return v === '1';
 }
 
@@ -308,6 +321,7 @@ export async function undoAttendanceSkip(userId: string, planId: string): Promis
     const mid = ratingMemoryId(userId, planId);
     ratingDoneMemory.delete(mid);
     ratingSkipMemory.delete(mid);
+    ratingStartedMemory.delete(mid);
     await AsyncStorage.multiRemove([
         ratingSkipKey(userId, planId),
         ratingStartedKey(userId, planId),
@@ -360,7 +374,7 @@ export const MAX_ASPECTS = 2;
 /** Caras visibles en el cierre. Si hay más, se priorizan amigos / amigos de amigos / coincidencias. */
 export const MAX_FACE_PEERS = 20;
 /** Tope de personas a valorar en un mismo plan. */
-export const MAX_PEOPLE_RATINGS_COMPACT = 30;
+export const MAX_PEOPLE_RATINGS_COMPACT = 40;
 /** A partir de este número de asistentes, un plan de persona también usa lista compacta. */
 export const COMPACT_PEOPLE_THRESHOLD = 15;
 
@@ -598,6 +612,51 @@ export function filterPeersByQuery(peers: RatingPeer[], query: string): RatingPe
     return peers.filter((p) => p.nombre.toLowerCase().includes(q)).slice(0, 8);
 }
 
+/** Todos los aceptados del plan, no la muestra de 8 caras del feed. */
+async function fetchAcceptedParticipantRows(planIds: string[]): Promise<ParticipanteProfileRow[]> {
+    if (planIds.length === 0) return [];
+    const raw: { plan_id: string; usuario_id: string }[] = [];
+    const pageSize = 500;
+    for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+            .from('participantes')
+            .select('plan_id, usuario_id')
+            .in('plan_id', planIds)
+            .eq('estado', 'aceptado')
+            .range(from, from + pageSize - 1);
+        if (error || !data?.length) break;
+        raw.push(...data);
+        if (data.length < pageSize) break;
+    }
+
+    const ids = [...new Set(raw.map((row) => row.usuario_id))];
+    const cards = [];
+    try {
+        for (let i = 0; i < ids.length; i += 200) {
+            cards.push(...await getPublicProfileCards(ids.slice(i, i + 200)));
+        }
+    } catch {
+        /* Sin ficha pública igual salen en la lista. */
+    }
+    const byId = new Map(cards.map((card) => [card.id, card]));
+
+    return raw.map((row) => {
+        const card = byId.get(row.usuario_id);
+        return {
+            plan_id: row.plan_id,
+            usuario_id: row.usuario_id,
+            perfiles: card
+                ? {
+                    id: card.id,
+                    nombre: card.nombre || 'Usuario',
+                    avatar_url: card.avatar_url,
+                    genero: card.genero,
+                }
+                : null,
+        };
+    });
+}
+
 async function getAcceptedPeers(planId: string, excludeUserId: string): Promise<RatingPeer[]> {
     const { data } = await supabase
         .from('participantes')
@@ -831,17 +890,18 @@ export async function addPlanToHistory(userId: string, planId: string): Promise<
 }
 
 async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPlan[]> {
-    await runPlanLifecycleMaintenance();
+    // La purga global (archivar, borrar chats, invitaciones) no puede retener el perfil.
+    void runPlanLifecycleMaintenance();
 
     const [partsRes, createdRes] = await Promise.all([
         supabase
             .from('participantes')
-            .select('plan_id, planes:plan_id(id, titulo, imagen_url, fecha_evento, categoria, creador_id)')
+            .select('plan_id, planes:plan_id(id, titulo, titulo_cierre, imagen_url, imagen_cierre, fecha_evento, categoria, creador_id)')
             .eq('usuario_id', userId)
             .eq('estado', 'aceptado'),
         supabase
             .from('planes')
-            .select('id, titulo, imagen_url, fecha_evento, categoria, creador_id')
+            .select('id, titulo, titulo_cierre, imagen_url, imagen_cierre, fecha_evento, categoria, creador_id')
             .eq('creador_id', userId),
     ]);
 
@@ -858,21 +918,32 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
     const pushCandidate = (plan: {
         id?: unknown;
         titulo?: unknown;
+        titulo_cierre?: unknown;
         imagen_url?: unknown;
+        imagen_cierre?: unknown;
         fecha_evento?: unknown;
         categoria?: unknown;
         creador_id?: unknown;
     } | null | undefined) => {
-        if (!plan?.fecha_evento || isGroupOrChatPlan(plan)) return;
+        if (
+            !plan?.fecha_evento ||
+            isStandaloneGroupChat({
+                categoria: typeof plan.categoria === 'string' ? plan.categoria : null,
+                fecha_evento: typeof plan.fecha_evento === 'string' ? plan.fecha_evento : null,
+            })
+        )
+            return;
         const planId = String(plan.id ?? '');
         if (!planId || seen.has(planId)) return;
         const phase = getRatingPhase(String(plan.fecha_evento));
         if (phase !== 'waiting' && phase !== 'open') return;
         seen.add(planId);
+        const closedTitle = typeof plan.titulo_cierre === 'string' ? plan.titulo_cierre.trim() : '';
+        const closedCover = typeof plan.imagen_cierre === 'string' ? plan.imagen_cierre : '';
         candidates.push({
             planId,
-            titulo: (plan.titulo as string) || 'Plan',
-            imagen_url: (plan.imagen_url as string | null) ?? null,
+            titulo: closedTitle || (plan.titulo as string) || 'Plan',
+            imagen_url: closedCover || ((plan.imagen_url as string | null) ?? null),
             fecha_evento: plan.fecha_evento as string,
             creadorId: (plan.creador_id as string | null) ?? null,
         });
@@ -892,7 +963,7 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
     if (orphanPartPlanIds.length > 0) {
         const { data: orphanPlans } = await supabase
             .from('planes')
-            .select('id, titulo, imagen_url, fecha_evento, categoria, creador_id')
+            .select('id, titulo, titulo_cierre, imagen_url, imagen_cierre, fecha_evento, categoria, creador_id')
             .in('id', [...new Set(orphanPartPlanIds)]);
         for (const plan of orphanPlans ?? []) {
             pushCandidate(plan);
@@ -941,7 +1012,7 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
 
     const [
         { data: done },
-        { data: allPartsRows },
+        allPartsRows,
         dismissedFlags,
         doneFlags,
         friendIds,
@@ -954,13 +1025,9 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
             .select('plan_id, evaluado_id')
             .eq('evaluador_id', userId)
             .in('plan_id', planIds),
-        supabase
-            .from('participantes')
-            .select('plan_id, usuario_id, perfiles:usuario_id(id, nombre, avatar_url, genero)')
-            .in('plan_id', planIds)
-            .eq('estado', 'aceptado'),
-        Promise.all(planIds.map(async (id) => [id, await isRatingDismissed(userId, id)] as const)),
-        Promise.all(planIds.map(async (id) => [id, await isRatingFlowDone(userId, id)] as const)),
+        fetchAcceptedParticipantRows(planIds),
+        getDismissedPlanIdSet(userId, planIds).then((set) => [...set].map((id) => [id, true] as const)),
+        getDonePlanIdSet(userId, planIds).then((set) => [...set].map((id) => [id, true] as const)),
         getFriendIds(userId),
         getCoincidedUserIds(userId),
         creatorIds.length
@@ -1072,10 +1139,9 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
         if (!isOrganizerPlan && searchPeers.length === 0) return;
         if (isOrganizerPlan && searchPeers.length === 0 && !hasOrgPending) return;
 
-        const compactPeople = searchPeers.length > MAX_FACE_PEERS;
         const peerRankIds = rankPeerIds(searchPeers, friendIds, fofIds, coincidedIds);
         const ratedIds = searchPeers.filter((p) => rated.has(`${c.planId}:${p.id}`)).map((p) => p.id);
-        const peers = visibleRatingPeers(searchPeers, new Set(ratedIds), peerRankIds);
+        const peers = searchPeers;
         const peoplePending = Math.max(0, searchPeers.length - ratedIds.length);
         const orgPending = isOrganizerPlan && !organizerRated ? 1 : 0;
         const pendingCount = peoplePending + orgPending;
@@ -1095,7 +1161,7 @@ async function fetchPendingRatingPlans(userId: string): Promise<PendingRatingPla
             ratedIds,
             pendingCount,
             totalPeers: searchPeers.length,
-            compactPeople,
+            compactPeople: false,
             organizer,
             organizerRated,
         });
@@ -1253,9 +1319,9 @@ export async function submitValoracion(params: {
         invalidatePendingRatingsCache(evaluadorId);
         invalidatePlanDetailCache(planId);
         void import('./stats').then(({ invalidateUserStatsCache }) => invalidateUserStatsCache(evaluadoId));
-        void import('./screenCaches').then(({ screenCacheKey, cacheInvalidate }) => {
-            cacheInvalidate(screenCacheKey.feedSnapshot);
-        });
+        // cacheInvalidate vive en ./ttlCache, no en ./screenCaches: el import
+        // dinámico daba undefined y el feed nunca se refrescaba tras valorar.
+        cacheInvalidate(screenCacheKey.feedSnapshot);
         return { error: null };
     }
 
@@ -1270,9 +1336,8 @@ export async function submitValoracion(params: {
         evaluado_id: evaluadoId,
         asistencia,
         puntuacion_general: asistencia ? draft.puntuacion_general : null,
-        repetiria_experiencia: asistencia
-            ? draft.repetiria_experiencia ?? (tipo === 'organizacion' ? repetiriaFromStars(draft.puntuacion_general) : null)
-            : null,
+        // Aquí `tipo` ya es 'persona': el fallback de organización sale arriba.
+        repetiria_experiencia: asistencia ? draft.repetiria_experiencia ?? null : null,
         aspectos_positivos: asistencia ? pos : ([] as string[]),
         aspectos_negativos: asistencia ? neg : ([] as string[]),
         motivos_seguridad: [] as string[],

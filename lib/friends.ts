@@ -168,6 +168,10 @@ export async function acceptFriendRequest(requestId: string) {
         .eq('id', requestId)
         .eq('estado', 'pendiente');
 
+    if (result.error && /only_recipient_can_accept/i.test(result.error.message)) {
+        return { data: null, error: { message: 'only_recipient_can_accept' } as any };
+    }
+
     if (!result.error && row?.usuario_origen_id) {
         const { notifyFriendAccepted } = await import('./push');
         notifyFriendAccepted(row.usuario_origen_id);

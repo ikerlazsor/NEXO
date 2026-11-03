@@ -44,4 +44,5 @@ export type ProfileUiSnapshot = {
   isOrganizer?: boolean;
   organizer?: OrganizerMeta;
   followersCount?: number;
+  attendedPlans?: { id: string; titulo: string; imagen_url: string | null; fecha_evento: string | null; nombre_ubicacion: string | null; categoria: string | null }[];
 };

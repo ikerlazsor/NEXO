@@ -54,6 +54,7 @@ import {
     acceptPlanInvite,
     getIncomingPlanInvites,
     rejectPlanInvite,
+    reopenPlanInvite,
     type PlanInvite,
 } from '../lib/planInvites';
 import {
@@ -314,7 +315,12 @@ export default function FriendsScreen() {
                     setFriends((prev) => prev.filter((f) => f.friendshipId !== requestId));
                 }
                 hapticError();
-                Alert.alert(t('profile.error'), error.message);
+                Alert.alert(
+                    t('profile.error'),
+                    error.message === 'only_recipient_can_accept'
+                        ? t('friends.onlyRecipient')
+                        : error.message,
+                );
             } else {
                 markFeedNeedsRefresh();
                 rememberFriendStatus(removed?.perfil.id, 'friends', requestId);
@@ -409,7 +415,11 @@ export default function FriendsScreen() {
                         invalidateFriends: true,
                     });
                     if (error === 'full') Alert.alert(t('profile.error'), t('friends.inviteFull'));
-                    else if (error === 'limit') {
+                    else if (error === 'gender_restricted') {
+                        Alert.alert(t('profile.error'), t('friends.inviteGenderBlocked'));
+                    } else if (error === 'kicked') {
+                        Alert.alert(t('profile.error'), t('plan.kickedCannotJoin'));
+                    } else if (error === 'limit') {
                         Alert.alert(t('profile.error'), t('feed.planLimitReached', { max: max ?? 5 }));
                     } else if (error === 'organizer_cannot_join') {
                         Alert.alert(t('profile.error'), t('organizer.cannotJoin'));
@@ -417,6 +427,9 @@ export default function FriendsScreen() {
                     return;
                 }
                 hapticSuccess();
+                if (estado === 'lista_espera') {
+                    Alert.alert(t('friends.inviteWaitlistedTitle'), t('friends.inviteWaitlisted'));
+                }
                 const membership =
                     estado === 'pendiente' ? 'requested' : estado === 'lista_espera' ? 'waitlist' : 'joined';
                 const bumpJoined = !alreadyMember && estado === 'aceptado';
@@ -444,7 +457,30 @@ export default function FriendsScreen() {
                 if (removed) setPlanInvites((prev) => [removed, ...prev]);
                 hapticError();
                 Alert.alert(t('profile.error'), error);
+                return;
             }
+            // Arrepentirse es fácil: la invitación vuelve a pendiente.
+            Alert.alert(t('friends.inviteRejectedTitle'), t('friends.inviteRejectedBody'), [
+                { text: t('friends.inviteKeepRejected'), style: 'cancel' },
+                {
+                    text: t('friends.inviteUndoReject'),
+                    onPress: () => {
+                        void reopenPlanInvite(inviteId).then(({ error: undoError }) => {
+                            if (undoError) {
+                                hapticError();
+                                Alert.alert(t('profile.error'), t('friends.inviteUndoRejectError'));
+                                return;
+                            }
+                            hapticSuccess();
+                            if (removed) {
+                                setPlanInvites((prev) =>
+                                    prev.some((i) => i.id === inviteId) ? prev : [removed, ...prev],
+                                );
+                            }
+                        });
+                    },
+                },
+            ]);
         });
     };
 

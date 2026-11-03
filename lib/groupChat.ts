@@ -1,10 +1,25 @@
 import { decode } from 'base64-arraybuffer';
 import { isGroupChatPlan } from './feedPlans';
+import { isConvertedPlanChat } from './planLifecycle';
 import { supabase } from './supabase';
 
-/** Grupo creado en Chats (+): plan con categoría interna 'Grupo'. */
-export function isUserCreatedGroupChat(plan: { categoria?: string | null }): boolean {
-    return isGroupChatPlan(plan);
+export const MAX_GROUP_NAME_LENGTH = 40;
+
+/** Grupo creado en Chats (+). Un plan convertido en chat fijo no cuenta. */
+export function isUserCreatedGroupChat(plan: {
+    categoria?: string | null;
+    fecha_evento?: string | null;
+}): boolean {
+    if (!isGroupChatPlan(plan)) return false;
+    if (!plan.fecha_evento) return true;
+    return !isConvertedPlanChat(plan);
+}
+
+export async function updateGroupChatName(planId: string, name: string): Promise<{ error: string | null }> {
+    const titulo = name.trim().slice(0, MAX_GROUP_NAME_LENGTH);
+    if (!titulo) return { error: 'empty' };
+    const { error } = await supabase.from('planes').update({ titulo }).eq('id', planId);
+    return { error: error?.message ?? null };
 }
 
 export async function uploadGroupChatPhoto(planId: string, uri: string): Promise<string | null> {

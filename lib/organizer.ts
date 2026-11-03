@@ -242,7 +242,7 @@ export async function getMyOrganizerRequest(): Promise<OrganizerRequest | null> 
             .order('creado_en', { ascending: false })
             .limit(1)
             .maybeSingle();
-        data = fallback.data;
+        data = fallback.data as typeof data;
         error = fallback.error;
     }
     if (error || !data) return null;
@@ -305,7 +305,7 @@ export async function fetchOrganizerRequests(onlyPending = true): Promise<Organi
     let { data, error } = await run(selectFull);
     if (error) {
         const fallback = await run(selectLegacy);
-        data = fallback.data;
+        data = fallback.data as typeof data;
         error = fallback.error;
     }
     if (error) return [];

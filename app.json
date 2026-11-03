@@ -2,7 +2,7 @@
   "expo": {
     "name": "Nexo",
     "slug": "nexo",
-    "version": "1.0.8",
+    "version": "1.0.10",
     "runtimeVersion": "1.0.0",
     "updates": {
       "url": "https://u.expo.dev/edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e",
@@ -10,6 +10,10 @@
       "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0
     },
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "nexo",
@@ -122,7 +126,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/images/nexo-logo-ui.png",
+          "icon": "./assets/images/android-icon-monochrome.png",
           "color": "#4DA6FF",
           "defaultChannel": "default",
           "sounds": []

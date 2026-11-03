@@ -26,6 +26,8 @@ import {
 import { useT } from '../lib/i18n';
 import { clearPendingSignup } from '../lib/pendingSignup';
 import { deleteAccount, ensureProfile } from '../lib/profile';
+import { getMyProfile } from '../lib/profileData';
+import { holdAppUpdateReload } from '../lib/appUpdates';
 import { supabase } from '../lib/supabase';
 import { signOutAndClearLocalData } from '../lib/session';
 
@@ -130,21 +132,26 @@ export default function VerifyEmailScreen() {
         }
         if (verifying) return;
         setVerifying(true);
+        const releaseUpdateHold = holdAppUpdateReload();
         try {
-            const { error } = await supabase.auth.verifyOtp({
-                email,
-                token,
-                type: 'signup',
-            });
-            if (error) throw error;
+            // El código puede venir del alta por OTP ('email') o del correo de
+            // confirmación clásico ('signup'): se prueban los dos.
+            const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
+            if (error) {
+                const retry = await supabase.auth.verifyOtp({ email, token, type: 'signup' });
+                if (retry.error) throw retry.error;
+            }
             await refreshStatus();
         } catch (e: any) {
             const msg = typeof e?.message === 'string' ? e.message : '';
             Alert.alert(
                 t('verifyEmail.error'),
-                /expired|invalid|otp/i.test(msg) ? t('verifyEmail.invalidCode') : msg || t('verifyEmail.invalidCode'),
+                /rate limit|too many|security purposes/i.test(msg)
+                    ? t('verifyEmail.tooMany')
+                    : t('verifyEmail.invalidCode'),
             );
         } finally {
+            releaseUpdateHold();
             setVerifying(false);
         }
     };
@@ -165,16 +172,29 @@ export default function VerifyEmailScreen() {
         setResending(true);
         try {
             const redirectTo = authRedirectPath('verify-email');
-            const { error } = await supabase.auth.resend({
-                type: 'signup',
+            // Mismo envío que en login; si la cuenta espera confirmación clásica, se reenvía esa.
+            const { error } = await supabase.auth.signInWithOtp({
                 email,
-                options: { emailRedirectTo: redirectTo },
+                options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
             });
-            if (error) throw error;
+            if (error) {
+                const retry = await supabase.auth.resend({
+                    type: 'signup',
+                    email,
+                    options: { emailRedirectTo: redirectTo },
+                });
+                if (retry.error) throw retry.error;
+            }
             setCode('');
             Alert.alert(t('verifyEmail.resentTitle'), t('verifyEmail.resentMsg'));
         } catch (e: any) {
-            Alert.alert(t('verifyEmail.error'), e?.message || t('verifyEmail.resendError'));
+            const msg = typeof e?.message === 'string' ? e.message : '';
+            Alert.alert(
+                t('verifyEmail.error'),
+                /rate limit|too many|security purposes/i.test(msg)
+                    ? t('verifyEmail.tooMany')
+                    : t('verifyEmail.resendError'),
+            );
         } finally {
             setResending(false);
         }
@@ -194,8 +214,12 @@ export default function VerifyEmailScreen() {
                             let deleted = false;
                             const user = await getAuthUser();
                             if (user) {
-                                const { error } = await deleteAccount();
-                                deleted = !error;
+                                const { data: profile, error: profileError } = await getMyProfile();
+                                // Una cuenta ya terminada, o que no se pudo leer, no se borra al cambiar el email.
+                                if (!profileError && profile?.registro_completado !== true) {
+                                    const { error } = await deleteAccount();
+                                    deleted = !error && error !== 'account_already_registered';
+                                }
                             }
                             if (!deleted) {
                                 await signOutAndClearLocalData({ scope: 'local' });

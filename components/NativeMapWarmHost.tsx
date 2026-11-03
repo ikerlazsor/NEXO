@@ -62,7 +62,12 @@ export function NativeMapWarmHost() {
     if (!isNativeMapsAvailable()) return null;
 
     return (
-        <View style={styles.host} pointerEvents="none" collapsable={false}>
+        <View
+            style={styles.host}
+            pointerEvents="none"
+            collapsable={false}
+            importantForAccessibility="no-hide-descendants"
+        >
             <NexoMapView
                 style={styles.map}
                 pointerEvents="none"
@@ -89,16 +94,17 @@ export function NativeMapWarmHost() {
 const styles = StyleSheet.create({
     host: {
         position: 'absolute',
-        width: 1,
-        height: 1,
-        opacity: 0.01,
-        left: 0,
-        top: 0,
+        width: 2,
+        height: 2,
+        opacity: 0,
+        left: -4000,
+        top: -4000,
         overflow: 'hidden',
         zIndex: -1,
+        elevation: 0,
     },
     map: {
-        width: 1,
-        height: 1,
+        width: 2,
+        height: 2,
     },
 });

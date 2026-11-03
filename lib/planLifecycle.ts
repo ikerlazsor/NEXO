@@ -11,9 +11,49 @@ export const RATINGS_DELAY_MS = 60 * 60 * 1000;
 /** Ventana para valorar tras el plan (20 días). */
 export const RATINGS_WINDOW_MS = 20 * 24 * 60 * 60 * 1000;
 
+/** Título y portada de cuando el plan acabó, si luego se cambió el chat fijo. */
+export function withEndedPlanPresentation<T extends {
+    titulo?: string | null;
+    imagen_url?: string | null;
+    titulo_cierre?: string | null;
+    imagen_cierre?: string | null;
+}>(plan: T): T {
+    const title = typeof plan.titulo_cierre === 'string' ? plan.titulo_cierre.trim() : '';
+    const cover = typeof plan.imagen_cierre === 'string' ? plan.imagen_cierre.trim() : '';
+    if (!title && !cover) return plan;
+    return {
+        ...plan,
+        ...(title ? { titulo: title } : {}),
+        ...(cover ? { imagen_url: cover } : {}),
+    };
+}
+
 export function isGroupOrChatPlan(plan: { categoria?: string | null }): boolean {
     const cat = plan.categoria ?? '';
     return cat === 'Grupo' || cat === 'Chat';
+}
+
+/**
+ * Plan real que se dejó como chat fijo: sigue siendo valorable.
+ * El grupo creado en Chats tiene la fecha en el futuro.
+ */
+export function isConvertedPlanChat(plan: {
+    categoria?: string | null;
+    fecha_evento?: string | null;
+}): boolean {
+    if ((plan.categoria ?? '') !== 'Grupo' || !plan.fecha_evento) return false;
+    const end = new Date(plan.fecha_evento).getTime();
+    return Number.isFinite(end) && end <= Date.now();
+}
+
+/** Chat de grupo o directo que nunca fue un plan con fecha ya pasada. */
+export function isStandaloneGroupChat(plan: {
+    categoria?: string | null;
+    fecha_evento?: string | null;
+}): boolean {
+    if ((plan.categoria ?? '') === 'Chat') return true;
+    if ((plan.categoria ?? '') !== 'Grupo') return false;
+    return !isConvertedPlanChat(plan);
 }
 
 export function getPlanEndMs(fechaEvento?: string | null): number | null {
@@ -102,23 +142,27 @@ export function isPlanActiveForSaved(plan: { fecha_evento?: string | null }): bo
 }
 
 let lastPurgeAt = 0;
+let maintenanceTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Purga chats caducados, archiva historial y limpia guardados pasados (máx. 1 vez / 60s). */
+/** Purga chats caducados, archiva historial y limpia guardados pasados.
+ *  No corre al abrir la app: esa limpieza bloqueaba el perfil varios segundos. */
 export async function runPlanLifecycleMaintenance(): Promise<void> {
     const now = Date.now();
     if (now - lastPurgeAt < 60_000) return;
-    lastPurgeAt = now;
-    try {
-        await Promise.all([
+    if (maintenanceTimer) return;
+    maintenanceTimer = setTimeout(() => {
+        maintenanceTimer = null;
+        lastPurgeAt = Date.now();
+        void Promise.all([
             supabase.rpc('archive_all_ended_plans'),
             supabase.rpc('purge_ended_plan_invites'),
             supabase.rpc('purge_expired_plan_chats'),
             supabase.rpc('purge_past_saved_plans'),
             materializeOrganizerRecurrence(),
-        ]);
-    } catch {
-        // RPC puede no existir hasta ejecutar plan-lifecycle.sql
-    }
+        ]).catch(() => {
+            /* RPC puede no existir hasta ejecutar plan-lifecycle.sql */
+        });
+    }, 8000);
 }
 
 /** Quita de planes_guardados los que ya han llegado a su fecha (best effort). */

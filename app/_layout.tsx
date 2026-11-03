@@ -22,10 +22,11 @@ import { NexoAlertHost } from '../components/NexoAlertHost';
 import { InAppToastHost } from '../components/InAppToastHost';
 import { PushBootstrap } from '../components/PushBootstrap';
 import { NexoButton } from '../components/ui/NexoButton';
+import { ScreenErrorBoundary } from '../components/ScreenErrorBoundary';
 import { NexoLoadingState } from '../components/ui/NexoState';
 import { scheduleCoverPrefetch } from '../lib/prefetchCovers';
 import { hydrateFeedFromDisk, hydrateChatsFromDisk, hydrateMyPlansFromDisk, scheduleOnboardingPrefetch } from '../lib/prefetchHome';
-import { FEED_CACHE_KEY } from '../lib/feedCache';
+import { screenCacheKey } from '../lib/screenCaches';
 import { hydrateUserCoordsFromDisk } from '../lib/location';
 import { getIsOnline, subscribeNetwork } from '../lib/network';
 import { flushOfflineActions } from '../lib/offlineActions';
@@ -42,7 +43,7 @@ import { LaunchRevealHost, willShowLaunchSplashOverlay } from '../components/Lau
 import { LAUNCH_SPLASH_BG } from '../components/LaunchMaskReveal';
 import { AuthSessionProvider } from '../lib/authSession';
 import { takePendingAuthRoute } from '../lib/authIntent';
-import { I18nProvider } from '../lib/i18n';
+import { I18nProvider, useT } from '../lib/i18n';
 import { ingestAuthDeepLink } from '../lib/authDeepLink';
 import { isPasswordRecoveryPending, setPasswordRecoveryPending } from '../lib/passwordRecovery';
 import { fetchAccountAccess } from '../lib/roles';
@@ -54,7 +55,9 @@ import {
   type StartupFailure,
 } from '../lib/startupControl';
 import { supabase } from '../lib/supabase';
-import { ensureStartupAppUpdateCheck, startAppUpdateListener } from '../lib/appUpdates';
+import { ensureStartupAppUpdateCheck, markAuthTransitionGrace, setAppUpdateReloadBlocked, startAppUpdateListener } from '../lib/appUpdates';
+import { ShareTouchGuardHost } from '../lib/shareTouchGuard';
+import { TournamentShareHost } from '../components/TournamentShareHost';
 import { AppThemeProvider, useAppTheme } from '../lib/appTheme';
 import { theme } from '../theme';
 
@@ -98,6 +101,17 @@ function metaOnboardingDone(user: Session['user'] | null | undefined): boolean {
   return meta?.registro_completado === true || meta?.onboarding_completed === true;
 }
 
+/**
+ * Señal de que esta cuenta ya usó la app: la caché del feed también existe
+ * navegando como invitado, así que no sirve para dar el onboarding por hecho.
+ */
+function hasOwnSessionCache(userId: string): boolean {
+  return (
+    cacheGetStale(screenCacheKey.myPlans(userId)) != null
+    || cacheGetStale(screenCacheKey.chatsList(userId)) != null
+  );
+}
+
 function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
@@ -110,9 +124,14 @@ function AuthGate({ children }: { children: ReactNode }) {
   const retryRef = useRef<() => void>(() => {});
   const splashReleasedRef = useRef(false);
   const startupReadyRef = useRef(false);
+  const onboardingDoneRef = useRef<boolean | null>(null);
+  onboardingDoneRef.current = onboardingDone;
+  /** Usuario cuya cuenta ya vimos terminada. Un rearranque por cambio de red no lo baja a onboarding. */
+  const doneUserIdRef = useRef<string | null>(null);
   const segments = useSegments();
   const router = useRouter();
   const { colors } = useAppTheme();
+  const { t } = useT();
   const ready = startupPhase === 'ready';
 
   useEffect(() => {
@@ -140,11 +159,14 @@ function AuthGate({ children }: { children: ReactNode }) {
           setBanned(true);
           return;
         }
-        if (access.verified && !metaOnboardingDone(s.user)) {
+        if (access.verified) {
           const dbDone = await fetchOnboardingStatus(s.user.id);
           if (!mounted) return;
+          // null = fallo de red o sesión a medias. No pisar un registro ya hecho.
+          if (dbDone === null) return;
+          doneUserIdRef.current = dbDone ? s.user.id : null;
           setOnboardingDone(dbDone);
-          if (dbDone) {
+          if (dbDone && !metaOnboardingDone(s.user)) {
             void supabase.auth.updateUser({
               data: { registro_completado: true, onboarding_completed: true },
             });
@@ -189,6 +211,7 @@ function AuthGate({ children }: { children: ReactNode }) {
           throwIfAborted(signal);
 
           if (!nextSession) {
+            doneUserIdRef.current = null;
             return { session: null, onboardingDone: null, banned: false, deferNetwork: false };
           }
 
@@ -200,12 +223,13 @@ function AuthGate({ children }: { children: ReactNode }) {
             return { session: nextSession, onboardingDone: null, banned: false, deferNetwork: false };
           }
 
-          const hadCache = cacheGetStale(FEED_CACHE_KEY) != null;
+          const hadCache = hasOwnSessionCache(nextSession.user.id);
           const metaDone = metaOnboardingDone(nextSession.user);
+          const alreadyDone = doneUserIdRef.current === nextSession.user.id;
           // Instagram-style: pintar ya (disco/caché) y validar ban/onboarding en background.
           return {
             session: nextSession,
-            onboardingDone: metaDone || hadCache,
+            onboardingDone: metaDone || hadCache || alreadyDone,
             banned: false,
             deferNetwork: true,
           };
@@ -218,32 +242,36 @@ function AuthGate({ children }: { children: ReactNode }) {
       if (result.status === 'failure') {
         await releaseSplash();
         if (!mounted) return;
-        const offlineLike =
-          result.failure.kind === 'offline' || result.failure.kind === 'timeout';
-        if (offlineLike) {
-          const localSession =
-            latestSessionRef.current
-            ?? (await supabase.auth.getSession()).data.session
-            ?? null;
-          if (localSession && isEmailVerified(localSession.user)) {
-            await hydrateUserCoordsFromDisk();
-            await Promise.all([
-              hydrateFeedFromDisk(localSession.user.id),
-              hydrateChatsFromDisk(localSession.user.id),
-              hydrateMyPlansFromDisk(localSession.user.id),
-            ]);
-            const hadCache = cacheGetStale(FEED_CACHE_KEY) != null;
-            if (metaOnboardingDone(localSession.user) || hadCache) {
-              sessionKnownRef.current = true;
-              latestSessionRef.current = localSession;
-              setSession(localSession);
-              setOnboardingDone(true);
-              setBanned(false);
-              startupReadyRef.current = true;
-              setStartupPhase('ready');
-              return;
-            }
-          }
+        const localSession =
+          latestSessionRef.current
+          ?? (await supabase.auth.getSession()).data.session
+          ?? null;
+        // Sesión recién creada (Google/OTP): no echar de la app si el arranque
+        // tarda o Supabase va justo de cupo. El usuario reabría y sí pasaba.
+        if (localSession) {
+          await hydrateUserCoordsFromDisk().catch(() => undefined);
+          await Promise.all([
+            hydrateFeedFromDisk(localSession.user.id),
+            hydrateChatsFromDisk(localSession.user.id),
+            hydrateMyPlansFromDisk(localSession.user.id),
+          ]).catch(() => undefined);
+          const hadCache = hasOwnSessionCache(localSession.user.id);
+          const verified = isEmailVerified(localSession.user);
+          const done =
+            verified &&
+            (metaOnboardingDone(localSession.user) ||
+              hadCache ||
+              doneUserIdRef.current === localSession.user.id);
+          sessionKnownRef.current = true;
+          latestSessionRef.current = localSession;
+          setSession(localSession);
+          if (done) doneUserIdRef.current = localSession.user.id;
+          setOnboardingDone(verified ? done : null);
+          setBanned(false);
+          startupReadyRef.current = true;
+          setStartupPhase('ready');
+          markAuthTransitionGrace();
+          return;
         }
         startupReadyRef.current = false;
         setStartupFailure(result.failure);
@@ -254,6 +282,9 @@ function AuthGate({ children }: { children: ReactNode }) {
       sessionKnownRef.current = true;
       latestSessionRef.current = result.value.session;
       setSession(result.value.session);
+      if (result.value.onboardingDone === true && result.value.session?.user.id) {
+        doneUserIdRef.current = result.value.session.user.id;
+      }
       setOnboardingDone(result.value.onboardingDone);
       setBanned(result.value.banned);
       startupReadyRef.current = true;
@@ -290,9 +321,17 @@ function AuthGate({ children }: { children: ReactNode }) {
       void flushOfflineActions();
       const s = latestSessionRef.current;
       if (!s?.user?.id || !startupReadyRef.current) return;
-      void fetchAccountAccess(s.user.id).then((access) => {
+      void fetchAccountAccess(s.user.id).then(async (access) => {
         if (!mounted || !access.verified) return;
-        if (access.banned) setBanned(true);
+        if (access.banned) {
+          setBanned(true);
+          return;
+        }
+        if (onboardingDoneRef.current !== false) return;
+        const dbDone = await fetchOnboardingStatus(s.user.id);
+        if (!mounted || dbDone !== true) return;
+        doneUserIdRef.current = s.user.id;
+        setOnboardingDone(true);
       });
     });
 
@@ -319,7 +358,10 @@ function AuthGate({ children }: { children: ReactNode }) {
         )
       ) {
         setSession(s);
-        if (metaOnboardingDone(s?.user)) setOnboardingDone(true);
+        if (metaOnboardingDone(s?.user)) {
+          if (s?.user.id) doneUserIdRef.current = s.user.id;
+          setOnboardingDone(true);
+        }
         return;
       }
       void runStartup(s);
@@ -442,9 +484,27 @@ function AuthGate({ children }: { children: ReactNode }) {
     }
   }, [ready, rootSegment, inLogin, inOnboarding, inBanned, inVerifyEmail, inResetPassword]);
 
+  // No aplicar OTA en login/registro; al salir, gracia para no recargar al momento.
+  const onAuthScreen = inLogin || inOnboarding || inBanned || inVerifyEmail || inResetPassword;
+  const wasAuthScreenRef = useRef(onAuthScreen);
+  useEffect(() => {
+    setAppUpdateReloadBlocked(onAuthScreen);
+    if (wasAuthScreenRef.current && !onAuthScreen) {
+      markAuthTransitionGrace();
+    }
+    wasAuthScreenRef.current = onAuthScreen;
+  }, [onAuthScreen]);
+
   const gateBlocked =
     inLogin || inOnboarding || inBanned || inVerifyEmail || inResetPassword;
-  const booting = startupPhase === 'loading';
+  const resolvingOnboarding = Boolean(
+    session &&
+      isEmailVerified(session.user) &&
+      onboardingDone === null &&
+      !inResetPassword &&
+      !inVerifyEmail,
+  );
+  const booting = startupPhase === 'loading' || resolvingOnboarding;
 
   let body: ReactNode = null;
   if (startupPhase === 'error') {
@@ -454,20 +514,20 @@ function AuthGate({ children }: { children: ReactNode }) {
       <View style={[styles.accessUnavailable, { backgroundColor: colors.backgroundAlt }]}>
         <Text style={[styles.accessUnavailableTitle, { color: colors.text }]}>
           {isOffline
-            ? 'Sin conexión'
+            ? t('startup.offlineTitle')
             : isTimeout
-              ? 'La comprobación está tardando demasiado'
-              : 'No se pudo iniciar Nexo!'}
+              ? t('startup.timeoutTitle')
+              : t('startup.errorTitle')}
         </Text>
         <Text style={[styles.accessUnavailableBody, { color: colors.textMuted }]}>
           {isOffline
-            ? 'Conéctate a Internet y vuelve a intentarlo. Si ya usaste Nexo!, al reintentar se abrirá lo último guardado.'
+            ? t('startup.offlineBody')
             : isTimeout
-              ? 'La verificación superó el tiempo máximo de espera. Puedes reintentarlo sin cerrar la aplicación.'
-              : 'No se ha podido comprobar la sesión de forma segura. Inténtalo de nuevo.'}
+              ? t('startup.timeoutBody')
+              : t('startup.errorBody')}
         </Text>
         <NexoButton
-          label="Reintentar"
+          label={t('common.retry')}
           onPress={() => retryRef.current()}
           style={styles.accessRetryButton}
         />
@@ -475,7 +535,7 @@ function AuthGate({ children }: { children: ReactNode }) {
     );
   } else if (booting) {
     body = splashReleasedRef.current ? (
-      <NexoLoadingState label="Verificando tu cuenta…" />
+      <NexoLoadingState label={t('startup.verifying')} />
     ) : (
       <View style={{ flex: 1, backgroundColor: LAUNCH_SPLASH_BG }} />
     );
@@ -486,7 +546,9 @@ function AuthGate({ children }: { children: ReactNode }) {
           userId={session?.user?.id ?? null}
           ready={Boolean(session && onboardingDone === true && !banned)}
         />
-        {children}
+        <ScreenErrorBoundary key={String(rootSegment ?? 'root')}>
+          {children}
+        </ScreenErrorBoundary>
         <AuthPromptHost />
       </AuthSessionProvider>
     );
@@ -496,7 +558,7 @@ function AuthGate({ children }: { children: ReactNode }) {
     <LaunchRevealHost
       booting={booting}
       ready={startupPhase === 'ready' || startupPhase === 'error'}
-      blocked={startupPhase === 'error' ? true : gateBlocked}
+      blocked={startupPhase === 'error' ? true : gateBlocked || resolvingOnboarding}
     >
       {body}
     </LaunchRevealHost>
@@ -527,6 +589,8 @@ function RootLayout() {
               <RootStack />
               <AndroidSwipeBack />
             </AuthGate>
+            <ShareTouchGuardHost />
+            <TournamentShareHost />
           </ThemedNavigation>
           </InAppToastHost>
         </NexoAlertHost>
@@ -554,10 +618,13 @@ function RootStack() {
               >
                 <Stack.Screen
                   name="(tabs)"
-                  options={{ animation: 'none', gestureEnabled: false, freezeOnBlur: false }}
+                  options={{ animation: 'none', gestureEnabled: false, freezeOnBlur: true }}
                 />
                 <Stack.Screen name="my-plans" options={{ animation: 'slide_from_right' }} />
-                <Stack.Screen name="search-profiles" options={{ animation: 'slide_from_right' }} />
+                <Stack.Screen
+                  name="search-profiles"
+                  options={{ animation: 'fade', animationDuration: 180 }}
+                />
                 <Stack.Screen name="onboarding" options={{ gestureEnabled: false, animation: 'none' }} />
                 <Stack.Screen name="verify-email" options={{ gestureEnabled: false, animation: 'fade' }} />
                 <Stack.Screen name="reset-password" options={{ gestureEnabled: false, animation: 'fade' }} />
@@ -566,10 +633,11 @@ function RootStack() {
                   name="create-plan"
                   options={{
                     presentation: 'modal',
-                    animation: 'slide_from_bottom',
-                    animationDuration: 320,
-                    gestureEnabled: Platform.OS === 'ios',
+                    animation: Platform.OS === 'android' ? 'fade_from_bottom' : 'slide_from_bottom',
+                    animationDuration: 420,
+                    gestureEnabled: true,
                     fullScreenGestureEnabled: false,
+                    animationMatchesGesture: false,
                     freezeOnBlur: false,
                     contentStyle: { backgroundColor: colors.surface },
                   }}
@@ -578,25 +646,31 @@ function RootStack() {
                   name="rate-plan"
                   options={{
                     presentation: 'modal',
-                    animation: 'slide_from_bottom',
-                    animationDuration: 300,
-                    gestureEnabled: Platform.OS === 'ios',
+                    animation: Platform.OS === 'android' ? 'fade_from_bottom' : 'slide_from_bottom',
+                    animationDuration: 420,
+                    gestureEnabled: true,
                     fullScreenGestureEnabled: false,
+                    animationMatchesGesture: false,
+                    freezeOnBlur: false,
                   }}
                 />
                 <Stack.Screen
                   name="profile"
                   options={{
                     animation: 'slide_from_bottom',
-                    animationDuration: 380,
-                    gestureEnabled: Platform.OS === 'ios',
-                    fullScreenGestureEnabled: false,
+                    animationDuration: 280,
+                    gestureEnabled: true,
+                    animationMatchesGesture: false,
                     freezeOnBlur: false,
                     contentStyle: { backgroundColor: colors.surface },
                   }}
                 />
                 <Stack.Screen
                   name="edit-profile"
+                  options={{ animation: 'slide_from_right', freezeOnBlur: false }}
+                />
+                <Stack.Screen
+                  name="edit-profile-place"
                   options={{ animation: 'slide_from_right', freezeOnBlur: false }}
                 />
                 <Stack.Screen

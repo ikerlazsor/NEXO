@@ -1,6 +1,6 @@
 import type { UserStats } from './stats';
 import { EMPTY_STATS, getUserStats } from './stats';
-import { cacheGet, cacheInvalidate, cacheSet } from './ttlCache';
+import { cacheGet, cacheGetStale, cacheInvalidate, cacheSet } from './ttlCache';
 import { supabase } from './supabase';
 import { isFeedPlan } from './feedPlans';
 import { normalizeMainCategory } from './categories';
@@ -39,6 +39,11 @@ export const EMPTY_BADGE_STATS: BadgeStats = {
 
 function badgeCacheKey(userId: string) {
     return `badgeStats:v2:${userId}`;
+}
+
+/** Soft-stale peek para pintar «La gente destaca» / «Lo tuyo» al instante. */
+export function peekBadgeStats(userId: string): BadgeStats | null {
+    return cacheGetStale<BadgeStats>(badgeCacheKey(userId));
 }
 
 function applyCategoryCounts(
@@ -325,13 +330,17 @@ export async function getBadgeStats(
         if (cached) return cached;
     }
 
+    const materialized = await fetchBadgeStatsTable(userId, options?.userCreatedAt);
+    if (materialized) {
+        cacheSet(badgeCacheKey(userId), materialized, BADGE_STATS_TTL_MS);
+        return materialized;
+    }
+
     const [rpcStats, attended] = await Promise.all([
         fetchBadgeStatsRpc(userId),
         fetchAttendedCategories(userId),
     ]);
-    const tableStats =
-        rpcStats ??
-        (await fetchBadgeStatsTable(userId, options?.userCreatedAt));
+    const tableStats = rpcStats;
     let stats =
         tableStats ?? (await fetchBadgeStatsClient(userId, options));
     // El RPC/materializado cuenta Tapas/Deporte legacy y deja AIRE_LIBRE/SHOWTIME a 0.

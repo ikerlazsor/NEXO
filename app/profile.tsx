@@ -28,6 +28,7 @@ import {
     AttendedPlansRow,
     EditProfileButton,
     FrostedIconButton,
+    ProfileStickyBack,
     GalleryThumb,
     InterestTiles,
     OrganizerIdentity,
@@ -76,11 +77,13 @@ import {
     resolveDisplayName,
     syncProfileFromAuth,
 } from '../lib/profile';
+import { diskGet, diskSet } from '../lib/diskCache';
+import { loadProfileScreen } from '../lib/profileScreen';
 import { screenCacheKey, ScreenCacheTTL } from '../lib/screenCaches';
 import { rememberChromeAvatar, peekChromeAvatar } from '../lib/chromeAvatar';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 import { EMPTY_STATS, getUserStats, personRepeatStat, type UserStats } from '../lib/stats';
-import { EMPTY_BADGE_STATS, getBadgeStats, type BadgeStats } from '../lib/badgeStats';
+import { EMPTY_BADGE_STATS, getBadgeStats, peekBadgeStats, type BadgeStats } from '../lib/badgeStats';
 import { getUserBadges } from '../lib/badges';
 import { perfEnd, perfStart, perfTimed } from '../lib/perfLog';
 import {
@@ -93,6 +96,12 @@ import {
     type ProfilePrivacy,
 } from '../lib/profileFields';
 import { parseCountryCode } from '../lib/countryFlags';
+import {
+    hydrateEditProfileHints,
+    shouldShowEditProfileHints,
+    subscribeEditProfileHints,
+} from '../lib/editProfileHints';
+import { formatProfilePlace, parseProfilePlace, ensureAutoProfilePlace, mergePerfilGustosPlace, isManualProfilePlace } from '../lib/profilePlace';
 import { readCoverUrl } from '../lib/profileCover';
 import { theme } from '../theme';
 import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
@@ -118,7 +127,7 @@ export default function ProfileScreen() {
         return typeof meta === 'string' ? meta : null;
     });
     const [coverUrl, setCoverUrl] = useState<string | null>(() => cachedProfile?.coverUrl ?? null);
-    const [attendedPlans, setAttendedPlans] = useState<PublicAttendedPlan[]>([]);
+    const [attendedPlans, setAttendedPlans] = useState<PublicAttendedPlan[]>(() => cachedProfile?.attendedPlans ?? []);
     const [upcomingPlans, setUpcomingPlans] = useState<OrganizerUpcomingPlan[]>([]);
     const [organizedPlans, setOrganizedPlans] = useState<OrganizerUpcomingPlan[]>([]);
     const [friendsCount, setFriendsCount] = useState(() => cachedProfile?.friendsCount ?? 0);
@@ -142,7 +151,10 @@ export default function ProfileScreen() {
     const [aficiones, setAficiones] = useState<string[]>(() => cachedProfile?.aficiones ?? []);
     const [privacy, setPrivacy] = useState<ProfilePrivacy>(() => cachedProfile?.privacy ?? DEFAULT_PRIVACY);
     const [perfilGustos, setPerfilGustos] = useState<Record<string, unknown>>(() => cachedProfile?.perfilGustos ?? {});
+    const [showEditHints, setShowEditHints] = useState(() => shouldShowEditProfileHints());
     const hasHydratedRef = useRef(!!cachedProfile);
+    const sessionUserRef = useRef(session?.user ?? null);
+    sessionUserRef.current = session?.user ?? null;
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(ScreenKeys.PROFILE, {
         restore: false,
     });
@@ -167,7 +179,13 @@ export default function ProfileScreen() {
         setFollowersCount(snap.followersCount ?? 0);
         setPendingRatings(snap.pendingRatings);
         setBadgeStats(snap.badgeStats ?? EMPTY_BADGE_STATS);
+        if (snap.attendedPlans?.length) setAttendedPlans(snap.attendedPlans);
         hasHydratedRef.current = true;
+    }, []);
+
+    useEffect(() => {
+        void hydrateEditProfileHints().then(() => setShowEditHints(shouldShowEditProfileHints()));
+        return subscribeEditProfileHints((seen) => setShowEditHints(!seen));
     }, []);
 
     useEffect(() => {
@@ -221,20 +239,36 @@ export default function ProfileScreen() {
 
     const fetchUserData = useCallback(async () => {
         perfStart('profile.total');
-        const authUser = await getAuthUser();
+        const authUser = sessionUserRef.current ?? (await getAuthUser());
         if (!authUser) return;
 
         setUser(authUser);
 
-        const stale = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
+        let stale = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
+        if (!stale) {
+            stale = await diskGet<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id), 3 * 24 * 60 * 60 * 1000);
+            if (stale?.userId === authUser.id) {
+                cacheSet(screenCacheKey.profileUI(authUser.id), stale, ScreenCacheTTL.profileUI);
+            } else {
+                stale = null;
+            }
+        }
         if (stale && stale.userId === authUser.id) {
             applyProfileSnapshot(stale);
             if (shouldPreferProfileCache()) {
-                // Edit reciente: no pisar con red hasta que el write termine.
+                // Edit reciente: pintar ya la caché (ubicación/nacionalidad) y no pisar con red.
                 hasHydratedRef.current = true;
                 perfEnd('profile.total');
                 return;
             }
+        } else if (shouldPreferProfileCache()) {
+            // Guardado reciente sin snap usable: no abortar; la fila de red traerá la ubi.
+        }
+
+        // Si hay soft-stale de badges y el snap no traía, pintar ya.
+        if (!stale?.badgeStats) {
+            const peeked = peekBadgeStats(authUser.id);
+            if (peeked) setBadgeStats(peeked);
         }
 
         const applyProfileFields = (profile: {
@@ -264,7 +298,109 @@ export default function ProfileScreen() {
             setPrivacy(parsePrivacy(profile.perfil_gustos));
         };
 
+        const screen = await loadProfileScreen(authUser.id);
+        if (screen && !shouldPreferProfileCache()) {
+            applyProfileFields({
+                nombre: screen.profile.nombre ?? '',
+                nombre_usuario: screen.profile.nombre_usuario,
+                avatar_url: screen.profile.avatar_url,
+                cover_url: screen.profile.cover_url,
+                descripcion: screen.profile.descripcion ?? '',
+                etiquetas: screen.profile.etiquetas,
+                fecha_nacimiento: screen.profile.fecha_nacimiento,
+                genero: screen.profile.genero,
+                habitos_consumo: screen.profile.habitos_consumo,
+                ambientes_preferidos: screen.profile.ambientes_preferidos,
+                perfil_gustos: screen.profile.perfil_gustos,
+            });
+            const organizer = screen.profile.es_organizador;
+            const orgMeta = parseOrganizerMeta(screen.profile.organizador);
+            setIsOrganizer(organizer);
+            setOrganizerMeta(orgMeta);
+            const attended = organizer ? [] : mergeAttendedPlansOptimistic(authUser.id, screen.attended);
+            setAttendedPlans(attended);
+            setStats(screen.stats);
+            setBadgeStats(screen.badges);
+            setFriendsCount(Math.max(screen.stats.numeroAmistades || 0, friendsCount));
+            hasHydratedRef.current = true;
+            if (organizer) {
+                const [followStats, upcoming, organized, orgPlanCount, orgMembers] = await Promise.all([
+                    getOrganizerFollowStats(authUser.id),
+                    getOrganizerUpcomingPlans(authUser.id, 8),
+                    getOrganizerPastPlans(authUser.id, 12),
+                    getOrganizerPlansCount(authUser.id),
+                    getOrganizerMembers(authUser.id),
+                ]);
+                setFollowersCount(followStats.followers ?? 0);
+                setUpcomingPlans(upcoming);
+                setOrganizedPlans(organized);
+                setOrganizerPlansCount(orgPlanCount);
+                setFollowerPreviews(orgMembers.map((member) => ({
+                    id: member.id,
+                    nombre: member.nombre ?? '',
+                    avatar_url: member.avatar_url,
+                })));
+            }
+            const snap: ProfileUiSnapshot = {
+                userId: authUser.id,
+                nombre: screen.profile.nombre ?? '',
+                nombreUsuario: screen.profile.nombre_usuario,
+                aboutMe: screen.profile.descripcion ?? '',
+                avatarUrl: screen.profile.avatar_url,
+                coverUrl: screen.profile.cover_url,
+                age: calcAge(screen.profile.fecha_nacimiento),
+                genero: (screen.profile.genero as Genero) || null,
+                habitoBebida: parseHabitos(screen.profile.habitos_consumo).bebida,
+                habitoTabaco: parseHabitos(screen.profile.habitos_consumo).tabaco,
+                aficiones: screen.profile.ambientes_preferidos.length
+                    ? screen.profile.ambientes_preferidos
+                    : screen.profile.etiquetas,
+                perfilGustos: screen.profile.perfil_gustos,
+                privacy: parsePrivacy(screen.profile.perfil_gustos),
+                stats: screen.stats,
+                friendsCount: screen.stats.numeroAmistades || 0,
+                friendsNotifCount,
+                planRequests: planNotifCount,
+                pendingRatings,
+                badges: getUserBadges(screen.badges),
+                badgeStats: screen.badges,
+                isOrganizer: organizer,
+                organizer: orgMeta,
+                followersCount,
+                attendedPlans: attended,
+            };
+            cacheSet(screenCacheKey.profileUI(authUser.id), snap, ScreenCacheTTL.profileUI);
+            void diskSet(screenCacheKey.profileUI(authUser.id), snap);
+            rememberChromeAvatar(authUser.id, screen.profile.avatar_url);
+            void (async () => {
+                const [exactFriends, notifs, nextRatings] = await Promise.all([
+                    getFriendsCount(authUser.id).catch(() => screen.stats.numeroAmistades || 0),
+                    getProfileNotificationCount(authUser.id).catch(() => null),
+                    getPendingRatingPlans(authUser.id).catch(() => [] as PendingRatingPlan[]),
+                ]);
+                setFriendsCount(exactFriends);
+                setPendingRatings(nextRatings);
+                if (notifs) {
+                    setFriendsNotifCount(notifs.friendRequests + notifs.planInvites + notifs.planRequests);
+                    setPlanNotifCount(notifs.planRequests);
+                }
+            })();
+            perfEnd('profile.total');
+            return;
+        }
+
         const row = await perfTimed('profile.loadRow', () => loadProfileRow(authUser.id));
+        // Edit optimista terminado mientras cargábamos: preferir caché si existe.
+        if (shouldPreferProfileCache()) {
+            const fresh = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
+            if (fresh && fresh.userId === authUser.id) {
+                applyProfileSnapshot(fresh);
+                hasHydratedRef.current = true;
+                perfEnd('profile.total');
+                return;
+            }
+            // Sin caché: seguir con la fila de red (ya tiene la ubi del RPC).
+        }
         let profileFields: {
             nombre: string;
             nombre_usuario: string | null;
@@ -302,22 +438,27 @@ export default function ProfileScreen() {
         }
         applyProfileFields(profileFields);
         const organizer = row.data?.es_organizador === true;
+        // Auto-ubicación en background: no pisa una ciudad ya mostrada / elegida.
+        if (!organizer) {
+            void ensureAutoProfilePlace(authUser.id).then((autoPlace) => {
+                if (!autoPlace || shouldPreferProfileCache()) return;
+                setPerfilGustos((prev) => {
+                    if (isManualProfilePlace(prev) || parseProfilePlace(prev)?.ciudad) return prev;
+                    return mergePerfilGustosPlace(prev, autoPlace);
+                });
+            });
+        }
         if (organizer) {
-            const syncedAvatar = await syncOrganizerAvatarFromRequest(authUser.id);
-            if (syncedAvatar && syncedAvatar !== profileFields.avatar_url) {
-                profileFields = { ...profileFields, avatar_url: syncedAvatar };
-                applyProfileFields(profileFields);
-            }
+            void syncOrganizerAvatarFromRequest(authUser.id).then((syncedAvatar) => {
+                if (syncedAvatar) setAvatarUrl(syncedAvatar);
+            });
         }
         const orgMeta = parseOrganizerMeta(row.data?.organizador);
         setIsOrganizer(organizer);
         setOrganizerMeta(orgMeta);
 
-        const [userStats, friendsCountVal, notifs, ratings, followStats, attended, upcoming, organized, orgPlanCount, badgeStats, orgMembers] = await Promise.all([
+        const [userStats, followStats, attended, upcoming, organized, orgPlanCount, badgeStats, orgMembers] = await Promise.all([
             perfTimed('profile.userStats', () => getUserStats(authUser.id)),
-            perfTimed('profile.friendsCount', () => getFriendsCount(authUser.id)),
-            perfTimed('profile.notifications', () => getProfileNotificationCount(authUser.id)),
-            perfTimed('profile.ratings', () => getPendingRatingPlans(authUser.id)),
             organizer
                 ? perfTimed('profile.followers', () => getOrganizerFollowStats(authUser.id))
                 : Promise.resolve({ followers: 0, following: false }),
@@ -325,14 +466,22 @@ export default function ProfileScreen() {
             organizer ? getOrganizerUpcomingPlans(authUser.id, 8) : Promise.resolve([]),
             organizer ? getOrganizerPastPlans(authUser.id, 12) : Promise.resolve([]),
             organizer ? getOrganizerPlansCount(authUser.id) : Promise.resolve(0),
-            organizer
-                ? Promise.resolve(null)
-                : getBadgeStats(authUser.id, { userCreatedAt: authUser.created_at }),
+            organizer ? Promise.resolve(null) : getBadgeStats(authUser.id, { userCreatedAt: authUser.created_at }),
             organizer ? getOrganizerMembers(authUser.id) : Promise.resolve([]),
         ]);
+        if (shouldPreferProfileCache()) {
+            const fresh = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
+            if (fresh && fresh.userId === authUser.id) {
+                applyProfileSnapshot(fresh);
+                hasHydratedRef.current = true;
+                perfEnd('profile.total');
+                return;
+            }
+            // Sin caché: continuar y pintar la fila de red.
+        }
         setAttendedPlans(organizer ? [] : mergeAttendedPlansOptimistic(authUser.id, attended));
         if (!organizer) {
-            for (const p of attended.slice(0, 12)) {
+            for (const p of attended.slice(0, 3)) {
                 void import('../lib/planDetailCache').then(({ prefetchPlanDetail }) => {
                     prefetchPlanDetail(p.id);
                 });
@@ -342,13 +491,13 @@ export default function ProfileScreen() {
         setOrganizedPlans(organized);
         setOrganizerPlansCount(orgPlanCount);
 
-        const friendsNotif = notifs.friendRequests + notifs.planInvites + notifs.planRequests;
+        const friendsCountVal = Math.max(userStats.numeroAmistades || 0, friendsCount);
+        const friendsNotif = friendsNotifCount;
+        const ratings = pendingRatings;
 
         setStats(userStats);
         if (badgeStats) setBadgeStats(badgeStats);
         setFriendsCount(friendsCountVal);
-        setFriendsNotifCount(friendsNotif);
-        setPlanNotifCount(notifs.planRequests);
         setFollowersCount(followStats.followers ?? 0);
         setFollowerPreviews(
             orgMembers.map((row) => ({
@@ -379,18 +528,56 @@ export default function ProfileScreen() {
             stats: userStats,
             friendsCount: friendsCountVal,
             friendsNotifCount: friendsNotif,
-            planRequests: notifs.planRequests,
+            planRequests: planNotifCount,
             pendingRatings: ratings,
             badges: badgeStats ? getUserBadges(badgeStats) : [],
             badgeStats: badgeStats ?? undefined,
             isOrganizer: organizer,
             organizer: orgMeta,
             followersCount: followStats.followers ?? 0,
+            attendedPlans: organizer ? [] : mergeAttendedPlansOptimistic(authUser.id, attended),
         };
         cacheSet(screenCacheKey.profileUI(authUser.id), snap, ScreenCacheTTL.profileUI);
+        void diskSet(screenCacheKey.profileUI(authUser.id), snap);
+
+        void (async () => {
+            const [exactFriends, notifs, nextRatings] = await Promise.all([
+                getFriendsCount(authUser.id).catch(() => friendsCountVal),
+                getProfileNotificationCount(authUser.id).catch(() => null),
+                getPendingRatingPlans(authUser.id).catch(() => [] as PendingRatingPlan[]),
+            ]);
+            if (shouldPreferProfileCache()) return;
+            setFriendsCount(exactFriends);
+            if (notifs) {
+                const nextNotif = notifs.friendRequests + notifs.planInvites + notifs.planRequests;
+                setFriendsNotifCount(nextNotif);
+                setPlanNotifCount(notifs.planRequests);
+                snap.friendsNotifCount = nextNotif;
+                snap.planRequests = notifs.planRequests;
+            }
+            setPendingRatings(nextRatings);
+            snap.friendsCount = exactFriends;
+            snap.pendingRatings = nextRatings;
+            cacheSet(screenCacheKey.profileUI(authUser.id), snap, ScreenCacheTTL.profileUI);
+            void diskSet(screenCacheKey.profileUI(authUser.id), snap);
+        })();
         rememberChromeAvatar(authUser.id, profileFields.avatar_url ?? null);
         perfEnd('profile.total');
     }, [applyProfileSnapshot]);
+
+    useEffect(() => {
+        if (!userId || cachedProfile) return;
+        let alive = true;
+        void diskGet<ProfileUiSnapshot>(screenCacheKey.profileUI(userId), 3 * 24 * 60 * 60 * 1000).then((snap) => {
+            if (!alive || !snap || snap.userId !== userId) return;
+            if (hasHydratedRef.current) return;
+            cacheSet(screenCacheKey.profileUI(userId), snap, ScreenCacheTTL.profileUI);
+            applyProfileSnapshot(snap);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [userId, cachedProfile, applyProfileSnapshot]);
 
     useFocusEffect(
         useCallback(() => {
@@ -419,6 +606,8 @@ export default function ProfileScreen() {
           )}`
         : personRep.label;
 
+    const openRatingCount = pendingRatings.filter((p) => resolveRatingUiPhase(p, nowTick) === 'open').length;
+
     return (
         <View style={[styles.safe, { backgroundColor: colors.background }]}>
             <SafeAreaView style={styles.safeInner} edges={['left', 'right']}>
@@ -437,13 +626,19 @@ export default function ProfileScreen() {
                         avatarUrl={avatarUrl}
                         name={displayName}
                         age={isOrganizer || privacy.mostrar_edad === false ? null : age}
-                        genero={isOrganizer || privacy.mostrar_genero === false ? null : genero}
                         flagCode={
-                            isOrganizer || privacy.mostrar_edad === false || privacy.mostrar_genero === false
+                            isOrganizer || privacy.mostrar_nacionalidad === false
                                 ? null
                                 : parseCountryCode(perfilGustos)
                         }
+                        placeLabel={
+                            isOrganizer || privacy.mostrar_ubicacion === false
+                                ? null
+                                : formatProfilePlace(parseProfilePlace(perfilGustos))
+                        }
+                        instagram={null}
                         verified={isOrganizer}
+                        stickyBack
                         onBack={() => router.back()}
                         onCoverPress={undefined}
                         coverEdit={false}
@@ -521,6 +716,7 @@ export default function ProfileScreen() {
                         label={t('settings.editProfile')}
                         onPress={() => router.push('/edit-profile')}
                         tone={isOrganizer ? 'purple' : 'green'}
+                        showHintBadge={!isOrganizer && showEditHints}
                     />
 
                     {pendingRatings.length > 0 ? (
@@ -532,13 +728,15 @@ export default function ProfileScreen() {
                                 <View style={{ flex: 1 }}>
                                     <Text style={styles.ratingsHighlightTitle}>{t('ratings.section')}</Text>
                                     <Text style={styles.ratingsHighlightSub}>
-                                        {pendingRatings.length === 1
-                                            ? t('ratings.sectionHintOne')
-                                            : t('ratings.sectionHint', { n: pendingRatings.length })}
+                                        {openRatingCount === 0
+                                            ? t('ratings.waitingTitle')
+                                            : openRatingCount === 1
+                                                ? t('ratings.sectionHintOne')
+                                                : t('ratings.sectionHint', { n: openRatingCount })}
                                     </Text>
                                 </View>
                                 <View style={styles.ratingsHighlightBadge}>
-                                    <Text style={styles.ratingsHighlightBadgeText}>{pendingRatings.length}</Text>
+                                    <Text style={styles.ratingsHighlightBadgeText}>{openRatingCount}</Text>
                                 </View>
                             </View>
                             <View style={styles.ratingsList}>
@@ -716,6 +914,8 @@ export default function ProfileScreen() {
                 ) : null}
                 </View>
             </ScrollView>
+
+            <ProfileStickyBack onBack={() => router.back()} backLabel={t('common.back')} />
 
             <MediaLightbox
                 visible={galleryIndex != null}

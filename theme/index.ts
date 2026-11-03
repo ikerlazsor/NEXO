@@ -36,7 +36,8 @@ const lightColors = {
   bubbleMine: '#70B7FF',
   bubbleMineText: '#0F2A4A',
   mapPinBorder: '#FFFFFF',
-  statusBar: 'dark' as const,
+  // Sin la unión, el tipo se fija en 'dark' y el tema oscuro no encaja.
+  statusBar: 'dark' as 'dark' | 'light',
 };
 
 const darkColors: typeof lightColors = {

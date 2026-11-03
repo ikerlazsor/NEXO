@@ -2,6 +2,11 @@ import { supabase } from './supabase';
 import { canJoinMorePlans } from './planLimits';
 import { invalidateProfileNotificationCount } from './profileNotificationBus';
 import { isUserOrganizer } from './organizer';
+import { canJoinPlanByGender, isSoloChicasPlan } from './soloChicas';
+import { canJoinWaitlist } from './participants';
+import { clearPlanKickIfHost, wasKickedFromPlan } from './planKicks';
+import { isBlockedEitherWay } from './blocks';
+import type { Genero } from './profileFields';
 
 export type PlanInviteType = 'plan' | 'grupo';
 
@@ -48,11 +53,33 @@ function firstRow<T>(raw: T | T[] | null | undefined): T | undefined {
     return Array.isArray(raw) ? raw[0] : raw;
 }
 
+/**
+ * Plan en modo solo chicas: quien no sea de género femenino no puede ser
+ * invitado ni unirse, aunque la invitación llegue por un grupo mixto.
+ */
+export async function isGenderBlockedForPlan(planId: string, userId: string): Promise<boolean> {
+    const { data: plan } = await supabase
+        .from('planes')
+        .select('categoria, solo_chicas')
+        .eq('id', planId)
+        .maybeSingle();
+    if (!plan || !isSoloChicasPlan(plan)) return false;
+
+    const { data: profile } = await supabase
+        .from('perfiles')
+        .select('genero')
+        .eq('id', userId)
+        .maybeSingle();
+    return !canJoinPlanByGender(plan, (profile?.genero as Genero | null) ?? null);
+}
+
 export async function sendPlanInvite(
     planId: string,
     invitadorId: string,
     invitadoId: string,
-    tipo: PlanInviteType
+    tipo: PlanInviteType,
+    /** El invitado por grupo ya viene filtrado: evita repetir la consulta por miembro. */
+    opts?: { skipGenderCheck?: boolean }
 ): Promise<{ error: string | null }> {
     // Si ya está unido (aceptado) o tiene solicitud pendiente, no se invita de nuevo
     const { data: existing } = await supabase
@@ -75,17 +102,61 @@ export async function sendPlanInvite(
         }
     }
 
-    const { data: pending } = await supabase
+    // Hay índice único (plan_id, invitado_id): si ya existe fila hay que reutilizarla,
+    // si no el insert falla aunque la invitación anterior estuviera rechazada.
+    const { data: previous } = await supabase
         .from('invitaciones_planes')
-        .select('id')
+        .select('id, estado')
         .eq('plan_id', planId)
         .eq('invitado_id', invitadoId)
-        .eq('estado', 'pendiente')
+        .limit(1)
         .maybeSingle();
 
-    if (pending) return { error: 'already_invited' };
+    if (previous?.estado === 'pendiente') return { error: 'already_invited' };
 
     if (await isUserOrganizer(invitadoId)) return { error: 'organizer_cannot_join' };
+
+    if (await isBlockedEitherWay(invitadorId, invitadoId)) return { error: 'blocked' };
+
+    if (!opts?.skipGenderCheck && (await isGenderBlockedForPlan(planId, invitadoId))) {
+        return { error: 'gender_restricted' };
+    }
+
+    // Volver a invitar a alguien expulsado es la forma de readmitirle.
+    void clearPlanKickIfHost(planId, invitadorId, invitadoId);
+
+    const announceInvite = async () => {
+        const { notifyPlanInvite } = await import('./push');
+        notifyPlanInvite(planId, invitadoId);
+        invalidateProfileNotificationCount(invitadoId);
+    };
+
+    if (previous?.id) {
+        const { data: revived, error: reviveError } = await supabase
+            .from('invitaciones_planes')
+            .update({
+                estado: 'pendiente',
+                invitador_id: invitadorId,
+                tipo,
+                creado_en: new Date().toISOString(),
+            })
+            .eq('id', previous.id)
+            .select('id')
+            .maybeSingle();
+
+        if (revived?.id) {
+            await announceInvite();
+            return { error: null };
+        }
+
+        // Invitación de otra persona: RLS no deja actualizarla, pero el anfitrión sí
+        // puede borrarla y volver a crearla.
+        const { error: dropError } = await supabase
+            .from('invitaciones_planes')
+            .delete()
+            .eq('id', previous.id);
+        if (dropError) return { error: reviveError?.message ?? dropError.message };
+    }
 
     const { error } = await supabase.from('invitaciones_planes').insert({
         plan_id: planId,
@@ -95,11 +166,7 @@ export async function sendPlanInvite(
         estado: 'pendiente',
     });
 
-    if (!error) {
-        const { notifyPlanInvite } = await import('./push');
-        notifyPlanInvite(planId, invitadoId);
-        invalidateProfileNotificationCount(invitadoId);
-    }
+    if (!error) await announceInvite();
 
     return { error: error?.message ?? null };
 }
@@ -122,6 +189,95 @@ export async function clearPendingPlanInvitesForMember(
         .eq('invitado_id', userId)
         .eq('estado', 'pendiente');
     if (!error) invalidateProfileNotificationCount(userId);
+}
+
+/** Invitación pendiente concreta de un plan (p. ej. tarjeta en chat de grupo). */
+export async function getPendingInviteForPlan(
+    planId: string,
+    userId: string,
+): Promise<PlanInvite | null> {
+    const { data, error } = await supabase
+        .from('invitaciones_planes')
+        .select(INVITE_SELECT)
+        .eq('plan_id', planId)
+        .eq('invitado_id', userId)
+        .eq('estado', 'pendiente')
+        .order('creado_en', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    if (error || !data) return null;
+    const row = data as any;
+    return {
+        id: row.id,
+        plan_id: row.plan_id,
+        invitador_id: row.invitador_id,
+        invitado_id: row.invitado_id,
+        tipo: row.tipo,
+        estado: row.estado,
+        creado_en: row.creado_en,
+        plan: firstRow(row.planes),
+        invitador: firstRow(row.invitador),
+    };
+}
+
+/** Invitación más reciente de un plan, en cualquier estado. */
+export async function getAnyInviteForPlan(
+    planId: string,
+    userId: string,
+): Promise<PlanInvite | null> {
+    const { data, error } = await supabase
+        .from('invitaciones_planes')
+        .select(INVITE_SELECT)
+        .eq('plan_id', planId)
+        .eq('invitado_id', userId)
+        .order('creado_en', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    if (error || !data) return null;
+    const row = data as any;
+    return {
+        id: row.id,
+        plan_id: row.plan_id,
+        invitador_id: row.invitador_id,
+        invitado_id: row.invitado_id,
+        tipo: row.tipo,
+        estado: row.estado,
+        creado_en: row.creado_en,
+        plan: firstRow(row.planes),
+        invitador: firstRow(row.invitador),
+    };
+}
+
+/** Devuelve una invitación a pendiente: deshacer un rechazo o volver tras desunirse. */
+export async function reopenPlanInvite(inviteId: string): Promise<{ error: string | null }> {
+    const { data, error } = await supabase
+        .from('invitaciones_planes')
+        .update({ estado: 'pendiente' })
+        .eq('id', inviteId)
+        .select('id, invitado_id')
+        .maybeSingle();
+    if (error) return { error: error.message };
+    if (!data?.id) return { error: 'not_reopenable' };
+    if (data.invitado_id) invalidateProfileNotificationCount(data.invitado_id as string);
+    return { error: null };
+}
+
+/** Plazas del plan: unidos aceptados y máximo (null = sin límite). */
+export async function getPlanCapacity(
+    planId: string,
+): Promise<{ joined: number; max: number | null }> {
+    const [{ data: planRow }, { count }] = await Promise.all([
+        supabase.from('planes').select('maximo_participantes').eq('id', planId).maybeSingle(),
+        supabase
+            .from('participantes')
+            .select('id', { count: 'exact', head: true })
+            .eq('plan_id', planId)
+            .eq('estado', 'aceptado'),
+    ]);
+    return {
+        joined: count ?? 0,
+        max: (planRow?.maximo_participantes as number | null) ?? null,
+    };
 }
 
 export async function getIncomingPlanInvites(userId: string): Promise<PlanInvite[]> {
@@ -192,6 +348,11 @@ export async function acceptPlanInvite(
     if (!plan) return { error: 'no_plan' };
     if (!isInvitePlanStillActive(plan)) return { error: 'plan_ended' };
     if (await isUserOrganizer(userId)) return { error: 'organizer_cannot_join' };
+    // Red de seguridad para invitaciones antiguas o llegadas por un grupo mixto.
+    if (await isGenderBlockedForPlan(invite.plan_id, userId)) {
+        return { error: 'gender_restricted' };
+    }
+    if (await wasKickedFromPlan(invite.plan_id, userId)) return { error: 'kicked' };
 
     const { data: existing } = await supabase
         .from('participantes')
@@ -224,10 +385,16 @@ export async function acceptPlanInvite(
 
     const joined = count ?? 0;
     const max = plan.maximo_participantes ?? 999;
-    if (joined >= max) return { error: 'full' };
+    // Plan completo: se entra en lista de espera mientras quede margen antes del evento.
+    const isFull = joined >= max;
+    if (isFull && !canJoinWaitlist(plan.fecha_evento)) return { error: 'full' };
 
     const isGroup = invite.tipo === 'grupo' || plan.categoria === 'Grupo';
-    const estado = isGroup || !plan.requiere_aprobacion ? 'aceptado' : 'pendiente';
+    const estado = isFull
+        ? 'lista_espera'
+        : isGroup || !plan.requiere_aprobacion
+          ? 'aceptado'
+          : 'pendiente';
 
     const { error: partError } = await supabase.from('participantes').insert({
         plan_id: invite.plan_id,
@@ -241,6 +408,11 @@ export async function acceptPlanInvite(
             await clearPendingPlanInvitesForMember(invite.plan_id, userId);
             return { error: null, chatId: invite.plan_id, estado, alreadyMember: true };
         }
+        // Reglas que valida la base de datos: mejor un código que el mensaje crudo.
+        if (msg.includes('solo_chicas_only')) return { error: 'gender_restricted' };
+        if (msg.includes('plan_full')) return { error: 'full' };
+        if (msg.includes('friends_only_plan')) return { error: 'friends_only' };
+        if (msg.includes('plan_private_invite_required')) return { error: 'private_plan' };
         return { error: partError.message };
     }
 
@@ -368,11 +540,16 @@ export async function cancelPlanInvite(
     planId: string,
     invitadoId: string,
 ): Promise<{ error: string | null }> {
-    const { error } = await supabase
+    const { data, error } = await supabase
         .from('invitaciones_planes')
         .delete()
         .eq('plan_id', planId)
         .eq('invitado_id', invitadoId)
-        .eq('estado', 'pendiente');
-    return { error: error?.message ?? null };
+        .eq('estado', 'pendiente')
+        .select('id');
+    if (error) return { error: error.message };
+    // RLS filtra en silencio: sin filas devueltas la invitación sigue en pie.
+    if (!data?.length) return { error: 'not_removable' };
+    invalidateProfileNotificationCount(invitadoId);
+    return { error: null };
 }

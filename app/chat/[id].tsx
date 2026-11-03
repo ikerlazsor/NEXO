@@ -1,6 +1,5 @@
 import {
     Ionicons } from '@expo/vector-icons';
-import { useHeaderHeight } from '@react-navigation/elements';
 import React, { useCallback,
     useEffect,
     useMemo,
@@ -17,8 +16,6 @@ import { Image } from 'expo-image';
 import {
     ActivityIndicator,
     FlatList,
-    Keyboard,
-    KeyboardAvoidingView,
     Modal,
     Platform,
     Text,
@@ -31,6 +28,7 @@ import { theme } from '../../theme';
 import { createChatStyles } from '../../features/chat/chatStyles';
 import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
 import { ChatMediaModals } from '../../features/chat/ChatMediaModals';
+import { MomentsAlbum } from '../../components/MomentsAlbum';
 import {
     PAGE_SIZE,
     PLAN_CHAT_TTL_MS,
@@ -39,6 +37,9 @@ import {
     parseStoredDuration,
     mapMessageRow,
     mergeMessages,
+    chatListKey,
+    reconcileIncomingChatMessage,
+    withFallbackProfile,
     type Message,
     type PlanChatSnapshot,
 } from '../../features/chat/chatModel';
@@ -47,6 +48,7 @@ import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessag
 import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
 import { PlanImage } from '../../components/PlanImage';
 import { PressScale } from '../../components/PressScale';
+import { ChatKeyboardAnimated, useChatKeyboardBottomPad } from '../../lib/chatKeyboard';
 import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import {
     isSameChatFile,
@@ -54,12 +56,14 @@ import {
     resolveChatFileUrls,
     uploadChatFile,
 } from '../../lib/chatUpload';
+import { encodeMoments, type MomentItem } from '../../lib/planMoments';
 import { markPlanChatRead } from '../../lib/chatUnread';
+import { useInvertedChatStickiness } from '../../lib/chatScroll';
 import { clearChatOpenedFromPlan, wasChatOpenedFromPlan } from '../../lib/chatFromPlan';
 import { getCoincidedUserIds } from '../../lib/coincidences';
 import { getAvatarUri, getFriends, type FriendProfile } from '../../lib/friends';
 import { kickParticipant } from '../../lib/kickParticipant';
-import { isUserCreatedGroupChat, updateGroupChatPhoto, uploadGroupChatPhoto } from '../../lib/groupChat';
+import { isUserCreatedGroupChat, MAX_GROUP_NAME_LENGTH, updateGroupChatName, updateGroupChatPhoto, uploadGroupChatPhoto } from '../../lib/groupChat';
 import {
     enqueueChatOutbox,
     flushChatOutbox,
@@ -67,35 +71,43 @@ import {
 } from '../../lib/chatOutbox';
 import { encodeReplyContent, previewForReply, type ReplyQuote } from '../../lib/chatReply';
 import { isLegacyPlanCreatedNotice } from '../../lib/chatSystem';
+import { parsePlanInviteCard } from '../../lib/chatPlanInviteCard';
 import { isPlanChatMuted, setPlanChatMuted } from '../../lib/chatMute';
 import { hapticLight, hapticMedium, hapticToggle } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { getIsOnline } from '../../lib/network';
 import { hidePlanChat, unhidePlanChat } from '../../lib/planChatHide';
-import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../../lib/planDetailCache';
+import { peekPlanMembers, prefetchPlanDetail, seedPlanDetailFromFeed } from '../../lib/planDetailCache';
 import { setActiveConversation } from '../../lib/activeConversation';
 import { cancelPlanLifecycleReminders } from '../../lib/push';
 import { trackFunnel } from '../../lib/analytics';
 import { sendPlanInvite } from '../../lib/planInvites';
 import {
+    DELETED_MESSAGE_MARK,
+    isDeletedMessage,
+    softDeleteMensaje,
+} from '../../lib/softDeleteMessage';
+import {
     CHAT_EXPIRY_WARN_MS,
     formatCountdown,
     getChatExpiryMs,
+    isConvertedPlanChat,
     isGroupOrChatPlan,
     isPlanActiveForSaved,
     isPlanChatAlive,
     runPlanLifecycleMaintenance,
 } from '../../lib/planLifecycle';
-import { PlanShareModal, buildPlanSharePayload, type PlanSharePayload } from '../../components/PlanShareModal';
+import { sharePlanLink } from '../../lib/sharePlan';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
 import { useAuthSession } from '../../lib/authSession';
 import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
 import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
+import { diskGet, diskSet } from '../../lib/diskCache';
 import { cacheGetStale, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
-import { getPublicProfileCards } from '../../lib/profileData';
+import { getPublicProfileCards, peekPublicProfileCards } from '../../lib/profileData';
 
 const PRIMARY = theme.colors.brand;
 const DANGER = theme.colors.danger;
@@ -108,20 +120,9 @@ export default function ChatScreen() {
     const { userId: sessionUserId } = useAuthSession();
     const { scheme } = useAppTheme();
     const styles = useThemedStyles(createChatStyles);
-    const headerHeight = useHeaderHeight();
     const insets = useSafeAreaInsets();
-    const [keyboardOpen, setKeyboardOpen] = useState(false);
-
-    useEffect(() => {
-        const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-        const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-        const show = Keyboard.addListener(showEvt, () => setKeyboardOpen(true));
-        const hide = Keyboard.addListener(hideEvt, () => setKeyboardOpen(false));
-        return () => {
-            show.remove();
-            hide.remove();
-        };
-    }, []);
+    // Subida del teclado animada (iOS/Android), sin el corte de KeyboardAvoidingView.
+    const keyboardBottomStyle = useChatKeyboardBottomPad(insets.bottom);
 
     const cachedChat = planId ? cacheGetStale<PlanChatSnapshot>(planChatKey(planId)) : null;
 
@@ -132,8 +133,13 @@ export default function ChatScreen() {
     const [planCategory, setPlanCategory] = useState<string | null>(() => cachedChat?.planCategory ?? null);
     const [planOwnerId, setPlanOwnerId] = useState<string | null>(() => cachedChat?.planOwnerId ?? null);
     const [uploadingGroupPhoto, setUploadingGroupPhoto] = useState(false);
+    const [renamingGroup, setRenamingGroup] = useState(false);
+    const [groupNameDraft, setGroupNameDraft] = useState('');
+    const [savingGroupName, setSavingGroupName] = useState(false);
     const [members, setMembers] = useState<{ id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }[]>(
-        () => cachedChat?.members ?? [],
+        // Sin caché del chat, los integrantes salían a 0 hasta terminar la red; el
+        // detalle del plan ya los tiene, así que se pintan desde ahí al abrir.
+        () => cachedChat?.members ?? (planId ? peekPlanMembers(planId) : []),
     );
     const [showInviteFriends, setShowInviteFriends] = useState(false);
     const [inviteFriends, setInviteFriends] = useState<(FriendProfile & { friendshipId: string })[]>([]);
@@ -156,6 +162,8 @@ export default function ChatScreen() {
     const [planFechaEvento, setPlanFechaEvento] = useState<string | null>(() => cachedChat?.planFechaEvento ?? null);
     const [planLocationName, setPlanLocationName] = useState<string | null>(null);
     const [chatExpiryLabel, setChatExpiryLabel] = useState<string | null>(null);
+    const [canKeepChat, setCanKeepChat] = useState(false);
+    const [pendingFiles, setPendingFiles] = useState<{ uri: string; type: 'image' | 'video' }[]>([]);
     const [friendIds, setFriendIds] = useState<Set<string>>(() => new Set());
     const [coincidedIds, setCoincidedIds] = useState<Set<string>>(() => new Set());
     const [isSaved, setIsSaved] = useState(false);
@@ -163,6 +171,7 @@ export default function ChatScreen() {
     const [recording, setRecording] = useState<Audio.Recording | null>(null);
     const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
     const [modalImage, setModalImage] = useState<string | null>(null);
+    const [momentsAlbum, setMomentsAlbum] = useState<MomentItem[] | null>(null);
     const [modalVideo, setModalVideo] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [isSending, setIsSending] = useState(false);
@@ -173,9 +182,75 @@ export default function ChatScreen() {
 
     const soundRef = useRef<Audio.Sound | null>(null);
     const isMountedRef = useRef(true);
+    const deadChatNavRef = useRef(false);
+    /** Cada carga de chat tiene su turno: una carga vieja no pisa la nueva. */
+    const initGenRef = useRef(0);
     const loadingDurationsRef = useRef<Set<string>>(new Set());
     const messagesRef = useRef(messages);
     messagesRef.current = messages;
+    const {
+        listRef: messagesListRef,
+        onScroll: onMessagesScroll,
+        onScrollBeginDrag: onMessagesScrollBeginDrag,
+        onScrollEndDrag: onMessagesScrollEndDrag,
+        onMomentumScrollEnd: onMessagesMomentumScrollEnd,
+        onContentSizeChange: onMessagesContentSizeChange,
+        scrollToLatest,
+        maybeStickAfterIncoming,
+    } = useInvertedChatStickiness<Message>();
+
+    useEffect(() => {
+        if (!planId || messages.length > 0) return;
+        let alive = true;
+        void diskGet<PlanChatSnapshot>(planChatKey(planId), 2 * 24 * 60 * 60 * 1000).then((snap) => {
+            if (!alive || !snap?.messages?.length) return;
+            setMessages((prev) => (prev.length > 0 ? prev : snap.messages));
+            if (snap.planName) setPlanName((prev) => prev || snap.planName);
+            setLoading(false);
+            cacheSet(planChatKey(planId), snap, PLAN_CHAT_TTL_MS);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [planId, messages.length]);
+
+    useEffect(() => {
+        scrollToLatest(false);
+        if (!planId) return;
+        let ticks = 0;
+        let pinnedOnce = false;
+        const syncFromCache = () => {
+            const latest = cacheGetStale<PlanChatSnapshot>(planChatKey(planId));
+            if (!latest?.messages?.length) return;
+            let changed = false;
+            setMessages((prev) => {
+                const next = mergeMessages(latest.messages, prev);
+                if (
+                    next.length === prev.length &&
+                    next[0]?.id === prev[0]?.id &&
+                    next[next.length - 1]?.id === prev[prev.length - 1]?.id
+                ) {
+                    return prev;
+                }
+                changed = true;
+                return next;
+            });
+            // Solo pin si hubo mensajes nuevos y el usuario no está deslizando.
+            if (changed && !pinnedOnce) {
+                pinnedOnce = true;
+                scrollToLatest(false);
+            }
+        };
+        syncFromCache();
+        const poll = setInterval(() => {
+            ticks += 1;
+            syncFromCache();
+            if (ticks >= 12) clearInterval(poll);
+        }, 80);
+        return () => {
+            clearInterval(poll);
+        };
+    }, [planId, scrollToLatest]);
 
     const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
     const { reactions, setReactions } = useMessageReactions(messageIds);
@@ -196,19 +271,25 @@ export default function ChatScreen() {
         setPlayingMessageId(null);
     }, []);
 
-    const fetchParticipants = useCallback(async (pid: string) => {
-        const { data: planData } = await supabase
-            .from('planes')
-            .select('creador_id')
-            .eq('id', pid)
-            .single();
-
-        const { data: parts } = await supabase
+    const fetchParticipants = useCallback(async (pid: string, ownerIdHint?: string | null) => {
+        // El creador ya viene del plan en la carga inicial: una consulta menos antes
+        // de poder pintar la lista de integrantes.
+        const partsPromise = supabase
             .from('participantes')
             .select('usuario_id, estado')
             .eq('plan_id', pid);
 
-        const ownerId = (planData?.creador_id as string) ?? null;
+        let ownerId = ownerIdHint ?? null;
+        if (!ownerId) {
+            const { data: planData } = await supabase
+                .from('planes')
+                .select('creador_id')
+                .eq('id', pid)
+                .single();
+            ownerId = (planData?.creador_id as string) ?? null;
+        }
+
+        const { data: parts } = await partsPromise;
         setCreatorId(ownerId);
 
         const byId = new Map<string, { id: string; nombre: string; avatar_url: string | null; isCreator: boolean; genero?: string | null }>();
@@ -219,6 +300,21 @@ export default function ChatScreen() {
                 .filter((part) => part.estado === 'aceptado')
                 .map((part) => part.usuario_id),
         ];
+        // Si ya conocemos a todos, se pintan sin esperar a la red: así «Integrantes»
+        // nunca se queda en 0 mientras llegan las fichas.
+        const known = peekPublicProfileCards(profileIds);
+        if (known.length >= new Set(profileIds).size && known.length > 0) {
+            const knownById = new Map(known.map((p) => [p.id, p]));
+            setMembers(
+                [...new Set(profileIds)].map((id) => ({
+                    id,
+                    nombre: knownById.get(id)?.nombre || t('profile.user'),
+                    avatar_url: knownById.get(id)?.avatar_url ?? null,
+                    isCreator: id === ownerId,
+                    genero: knownById.get(id)?.genero ?? null,
+                })),
+            );
+        }
         const publicProfiles = await getPublicProfileCards(profileIds);
         const profileMap = new Map(publicProfiles.map((profile) => [profile.id, profile]));
         const creator = ownerId ? profileMap.get(ownerId) : null;
@@ -260,22 +356,32 @@ export default function ChatScreen() {
         pid: string,
         patch: Partial<PlanChatSnapshot> & { messages: Message[] },
     ) => {
-        const prev = cacheGetStale<PlanChatSnapshot>(planChatKey(pid));
-        cacheSet(planChatKey(pid), {
-            messages: patch.messages,
-            planName: patch.planName ?? prev?.planName ?? '',
-            planImage: patch.planImage !== undefined ? patch.planImage : (prev?.planImage ?? null),
-            participantNames: patch.participantNames ?? prev?.participantNames ?? '',
-            isGroupChat: patch.isGroupChat ?? prev?.isGroupChat ?? false,
-            planCategory: patch.planCategory !== undefined ? patch.planCategory : (prev?.planCategory ?? null),
-            planOwnerId: patch.planOwnerId !== undefined ? patch.planOwnerId : (prev?.planOwnerId ?? null),
-            members: patch.members ?? prev?.members ?? [],
-            creatorId: patch.creatorId !== undefined ? patch.creatorId : (prev?.creatorId ?? null),
-            planFechaEvento: patch.planFechaEvento !== undefined ? patch.planFechaEvento : (prev?.planFechaEvento ?? null),
-            modoPrivado: patch.modoPrivado ?? prev?.modoPrivado ?? false,
-            accessDenied: patch.accessDenied ?? prev?.accessDenied ?? false,
-            hasMore: patch.hasMore ?? prev?.hasMore ?? true,
-        }, PLAN_CHAT_TTL_MS);
+        // Fuera del updater de React: copiar el hilo entero en el mismo tick congelaba.
+        requestAnimationFrame(() => {
+            const prev = cacheGetStale<PlanChatSnapshot>(planChatKey(pid));
+            cacheSet(planChatKey(pid), {
+                messages: patch.messages,
+                planName: patch.planName ?? prev?.planName ?? '',
+                planImage: patch.planImage !== undefined ? patch.planImage : (prev?.planImage ?? null),
+                participantNames: patch.participantNames ?? prev?.participantNames ?? '',
+                isGroupChat: patch.isGroupChat ?? prev?.isGroupChat ?? false,
+                planCategory: patch.planCategory !== undefined ? patch.planCategory : (prev?.planCategory ?? null),
+                planOwnerId: patch.planOwnerId !== undefined ? patch.planOwnerId : (prev?.planOwnerId ?? null),
+                members: patch.members ?? prev?.members ?? [],
+                creatorId: patch.creatorId !== undefined ? patch.creatorId : (prev?.creatorId ?? null),
+                planFechaEvento: patch.planFechaEvento !== undefined ? patch.planFechaEvento : (prev?.planFechaEvento ?? null),
+                modoPrivado: patch.modoPrivado ?? prev?.modoPrivado ?? false,
+                accessDenied: patch.accessDenied ?? prev?.accessDenied ?? false,
+                hasMore: patch.hasMore ?? prev?.hasMore ?? true,
+            }, PLAN_CHAT_TTL_MS);
+            const saved = cacheGetStale<PlanChatSnapshot>(planChatKey(pid));
+            if (saved) {
+                void diskSet(planChatKey(pid), {
+                    ...saved,
+                    messages: saved.messages.slice(0, 40),
+                });
+            }
+        });
     }, []);
 
     const canInvitePeople =
@@ -323,15 +429,30 @@ export default function ChatScreen() {
         [planId, currentUserId, isGroupChat, canInvitePeople, t]
     );
 
-    const isCreatedGroupChat = isUserCreatedGroupChat({ categoria: planCategory });
+    const isCreatedGroupChat = isUserCreatedGroupChat({
+        categoria: planCategory,
+        fecha_evento: planFechaEvento,
+    });
+
+    const isFixedGroupChat =
+        isCreatedGroupChat ||
+        isConvertedPlanChat({ categoria: planCategory, fecha_evento: planFechaEvento });
 
     const canEditGroupPhoto =
         !!planId &&
         !!currentUserId &&
         !accessDenied &&
-        isCreatedGroupChat &&
+        isFixedGroupChat &&
         !!planOwnerId &&
         planOwnerId === currentUserId;
+
+    const canRenameGroup =
+        !!planId &&
+        !!currentUserId &&
+        !accessDenied &&
+        !!planOwnerId &&
+        planOwnerId === currentUserId &&
+        isFixedGroupChat;
 
     const handleGroupPhotoPicked = useCallback(
         async (uri: string) => {
@@ -412,6 +533,38 @@ export default function ChatScreen() {
             { text: t('common.cancel'), style: 'cancel' },
         ]);
     }, [canEditGroupPhoto, uploadingGroupPhoto, handleGroupPhotoPicked, t]);
+
+    const saveGroupName = useCallback(async () => {
+        if (!planId || savingGroupName) return;
+        const name = groupNameDraft.trim().slice(0, MAX_GROUP_NAME_LENGTH);
+        if (!name) return;
+        if (name === planName.trim()) {
+            setRenamingGroup(false);
+            return;
+        }
+        setSavingGroupName(true);
+        const { error } = await updateGroupChatName(planId, name);
+        setSavingGroupName(false);
+        if (error) {
+            Alert.alert(t('profile.error'), t('chat.renameGroupError'));
+            return;
+        }
+        setPlanName(name);
+        setMessages((prev) => {
+            persistPlanChatCache(planId, { messages: prev, planName: name });
+            return prev;
+        });
+        if (currentUserId) invalidatePlanMembershipCaches(currentUserId);
+        setRenamingGroup(false);
+    }, [
+        planId,
+        savingGroupName,
+        groupNameDraft,
+        planName,
+        t,
+        persistPlanChatCache,
+        currentUserId,
+    ]);
 
     const handleDeleteChat = useCallback(() => {
         if (!planId || !currentUserId) return;
@@ -495,6 +648,7 @@ export default function ChatScreen() {
                     creado_en,
                     tipo,
                     archivo_url,
+                    eliminado_en,
                     perfiles:perfiles!mensajes_emisor_fkey (
                         nombre,
                         avatar_url
@@ -609,6 +763,8 @@ export default function ChatScreen() {
         if (!planId) return;
 
         let channel: ReturnType<typeof supabase.channel> | null = null;
+        const gen = ++initGenRef.current;
+        const isCurrent = () => isMountedRef.current && initGenRef.current === gen;
 
         const initChat = async () => {
             const stale = cacheGetStale<PlanChatSnapshot>(planChatKey(planId));
@@ -620,7 +776,8 @@ export default function ChatScreen() {
                 setIsGroupChat(stale.isGroupChat);
                 setPlanCategory(stale.planCategory);
                 setPlanOwnerId(stale.planOwnerId);
-                setMembers(stale.members);
+                // Una caché vieja sin integrantes no debe borrar los que ya pintamos.
+                setMembers((prev) => (stale.members?.length ? stale.members : prev));
                 setCreatorId(stale.creatorId);
                 setPlanFechaEvento(stale.planFechaEvento);
                 setModoPrivado(stale.modoPrivado ?? false);
@@ -629,6 +786,8 @@ export default function ChatScreen() {
                 // Header al instante; spinner solo si aún no hay mensajes.
                 setLoading(!(stale.messages?.length));
             } else {
+                // Sin caché del chat nuevo: fuera los mensajes del anterior.
+                setMessages([]);
                 setLoading(true);
                 setAccessDenied(false);
                 setHasMore(true);
@@ -663,6 +822,14 @@ export default function ChatScreen() {
                     setIsSaved(!!savedRes.data);
                 });
 
+                // Mi fila de participante no depende del plan: se pide a la vez.
+                const membershipPromise = supabase
+                    .from('participantes')
+                    .select('usuario_id, estado')
+                    .eq('plan_id', planId)
+                    .eq('usuario_id', userId)
+                    .maybeSingle();
+
                 const { data: planData, error: planError } = await supabase
                     .from('planes')
                     .select('titulo, imagen_url, creador_id, categoria, fecha_evento, chat_eliminado_en, modo_privado, nombre_ubicacion')
@@ -670,26 +837,28 @@ export default function ChatScreen() {
                     .single();
 
                 if (planError || !planData) {
-                    Alert.alert(t('chat.errorTitle'), t('chat.planNotFound'));
-                    router.back();
+                    if (!deadChatNavRef.current) {
+                        deadChatNavRef.current = true;
+                        Alert.alert(t('chat.errorTitle'), t('chat.planNotFound'));
+                        router.replace('/my-plans');
+                    }
                     return;
                 }
 
                 if (!isPlanChatAlive(planData)) {
-                    Alert.alert(t('chat.errorTitle'), t('chat.expired'));
-                    router.back();
+                    if (!deadChatNavRef.current) {
+                        deadChatNavRef.current = true;
+                        void cancelPlanLifecycleReminders(planId);
+                        Alert.alert(t('chat.errorTitle'), t('chat.expired'));
+                        router.replace({ pathname: '/plan/[id]', params: { id: planId } });
+                    }
                     return;
                 }
 
                 setPlanFechaEvento(planData.fecha_evento ?? null);
                 setPlanLocationName(planData.nombre_ubicacion ?? null);
 
-                const { data: membership } = await supabase
-                    .from('participantes')
-                    .select('usuario_id, estado')
-                    .eq('plan_id', planId)
-                    .eq('usuario_id', userId)
-                    .maybeSingle();
+                const { data: membership } = await membershipPromise;
 
                 const isCreator = planData.creador_id === userId;
                 const canAccessChat = isCreator || membership?.estado === 'aceptado';
@@ -707,7 +876,7 @@ export default function ChatScreen() {
                     return;
                 }
 
-                if (!isMountedRef.current) return;
+                if (!isCurrent()) return;
 
                 setAccessDenied(false);
                 setPlanCategory(planData.categoria ?? null);
@@ -721,13 +890,49 @@ export default function ChatScreen() {
 
                 const [initialMessages, partsMeta] = await Promise.all([
                     fetchMessages(planId),
-                    fetchParticipants(planId),
+                    fetchParticipants(planId, planData.creador_id ?? null),
                 ]);
 
-                if (!isMountedRef.current) return;
+                if (!isCurrent()) return;
 
-                const merged = mergeMessages(initialMessages, stale?.messages ?? []);
+                let merged = mergeMessages(
+                    initialMessages,
+                    cacheGetStale<PlanChatSnapshot>(planChatKey(planId))?.messages ?? stale?.messages ?? [],
+                );
+                // Quitar tarjetas de planes ya borrados antes de pintar (evita tirón al “desaparecer”).
+                const invitePlanIds = [
+                    ...new Set(
+                        merged
+                            .map((m) =>
+                                m.tipo === 'texto' ? parsePlanInviteCard(m.contenido)?.planId : null,
+                            )
+                            .filter(Boolean) as string[],
+                    ),
+                ];
+                if (invitePlanIds.length) {
+                    const { data: alivePlans } = await supabase
+                        .from('planes')
+                        .select('id')
+                        .in('id', invitePlanIds);
+                    const alive = new Set((alivePlans ?? []).map((p) => p.id as string));
+                    merged = merged.filter((m) => {
+                        if (m.tipo !== 'texto') return true;
+                        const card = parsePlanInviteCard(m.contenido);
+                        if (!card) return true;
+                        return alive.has(card.planId);
+                    });
+                    // Precarga estado de tarjetas vivas antes de pintar.
+                    const { warmInviteCardsFromContents } = await import('../../lib/planInviteCardStatus');
+                    warmInviteCardsFromContents(
+                        merged.map((m) => m.contenido),
+                        userId,
+                    );
+                    const { warmInviteCardPeopleFromContents } = await import('../../lib/inviteCardPeopleBus');
+                    warmInviteCardPeopleFromContents(merged.map((m) => m.contenido));
+                }
+                if (!isCurrent()) return;
                 setMessages(merged);
+                scrollToLatest(false);
                 const nextHasMore = initialMessages.length >= PAGE_SIZE || (stale?.hasMore ?? false);
                 setHasMore(nextHasMore);
                 void markPlanChatRead(userId, planId);
@@ -765,7 +970,7 @@ export default function ChatScreen() {
                                 .from('perfiles')
                                 .select('nombre, avatar_url')
                                 .eq('id', payload.new.emisor_id)
-                                .single();
+                                .maybeSingle();
 
                             const rawFileUrl = (payload.new.archivo_url as string | null) ?? null;
                             const newMessage: Message = {
@@ -776,6 +981,7 @@ export default function ChatScreen() {
                                 tipo: (payload.new.tipo as Message['tipo']) ?? 'texto',
                                 archivo_url: await resolveChatFileUrl(rawFileUrl),
                                 perfiles: perfil,
+                                eliminado_en: (payload.new.eliminado_en as string | null) ?? null,
                             };
 
                             if (
@@ -785,47 +991,148 @@ export default function ChatScreen() {
                                 return;
                             }
 
-                            if (isMountedRef.current) {
+                            const isInviteCard =
+                                newMessage.tipo === 'texto'
+                                && !!parsePlanInviteCard(newMessage.contenido);
+
+                            if (isCurrent()) {
                                 setMessages((prev) => {
-                                    if (prev.some((m) => m.id === newMessage.id)) return prev;
-                                    const withoutOptimistic = prev.filter(
+                                    const reconciled = reconcileIncomingChatMessage(
+                                        prev,
+                                        newMessage,
                                         (m) =>
-                                            !(
-                                                m.id.startsWith('local-') &&
-                                                m.emisor_id === newMessage.emisor_id &&
-                                                m.tipo === newMessage.tipo &&
-                                                m.contenido === newMessage.contenido &&
-                                                isSameChatFile(m.archivo_url, rawFileUrl)
-                                            ),
+                                            m.emisor_id === newMessage.emisor_id &&
+                                            m.tipo === newMessage.tipo &&
+                                            m.contenido === newMessage.contenido &&
+                                            isSameChatFile(m.archivo_url, rawFileUrl),
                                     );
-                                    const next = [newMessage, ...withoutOptimistic];
-                                    persistPlanChatCache(planId, { messages: next });
-                                    return next;
+                                    if (reconciled.kind === 'dup') return prev;
+                                    persistPlanChatCache(planId, { messages: reconciled.next });
+                                    if (reconciled.kind === 'insert') {
+                                        queueMicrotask(() => {
+                                            if (!isCurrent()) return;
+                                            if (isInviteCard || payload.new.emisor_id === userId) {
+                                                scrollToLatest(true);
+                                            } else {
+                                                maybeStickAfterIncoming();
+                                                void unhidePlanChat(userId, planId);
+                                                void markPlanChatRead(userId, planId);
+                                            }
+                                        });
+                                    }
+                                    return reconciled.next;
                                 });
-                                if (payload.new.emisor_id !== userId) {
-                                    void unhidePlanChat(userId, planId);
-                                    void markPlanChatRead(userId, planId);
-                                }
                             }
                         }
                     )
-                    .subscribe();
+                    .on(
+                        'postgres_changes',
+                        {
+                            event: 'UPDATE',
+                            schema: 'public',
+                            table: 'mensajes',
+                            filter: `plan_id=eq.${planId}`,
+                        },
+                        (payload) => {
+                            const row = payload.new as Record<string, unknown> | null;
+                            const id = String(row?.id ?? '');
+                            if (!id || !isCurrent()) return;
+                            if (!isDeletedMessage({
+                                eliminado_en: (row?.eliminado_en as string | null) ?? null,
+                                contenido: (row?.contenido as string) ?? '',
+                            })) {
+                                return;
+                            }
+                            setMessages((prev) => {
+                                if (!prev.some((m) => m.id === id) || prev.some((m) => m.id === id && isDeletedMessage(m))) {
+                                    return prev;
+                                }
+                                const next = prev.map((m) =>
+                                    m.id === id
+                                        ? {
+                                              ...m,
+                                              eliminado_en:
+                                                  (row?.eliminado_en as string | null) ??
+                                                  new Date().toISOString(),
+                                              contenido: DELETED_MESSAGE_MARK,
+                                              archivo_url: null,
+                                              tipo: 'texto' as const,
+                                          }
+                                        : m,
+                                );
+                                persistPlanChatCache(planId, { messages: next });
+                                return next;
+                            });
+                        },
+                    )
+                    .on(
+                        'postgres_changes',
+                        {
+                            event: 'DELETE',
+                            schema: 'public',
+                            table: 'mensajes',
+                            filter: `plan_id=eq.${planId}`,
+                        },
+                        (payload) => {
+                            const deletedId = String(
+                                (payload.old as { id?: string } | null)?.id ?? '',
+                            );
+                            if (!deletedId || !isCurrent()) return;
+                            setMessages((prev) => {
+                                if (!prev.some((m) => m.id === deletedId)) return prev;
+                                const next = prev.filter((m) => m.id !== deletedId);
+                                persistPlanChatCache(planId, { messages: next });
+                                return next;
+                            });
+                        },
+                    )
+                    .subscribe((status) => {
+                        if (status !== 'SUBSCRIBED') return;
+                        // Entre la carga inicial y la suscripción pueden colarse mensajes.
+                        void (async () => {
+                            const latest = await fetchMessages(planId);
+                            if (!isCurrent() || !latest.length) return;
+                            setMessages((prev) => {
+                                const next = mergeMessages(latest, prev);
+                                if (next.length === prev.length) return prev;
+                                persistPlanChatCache(planId, { messages: next });
+                                return next;
+                            });
+                        })();
+                    });
+
+                if (!isCurrent()) {
+                    // El efecto ya se limpió: sin esto el canal quedaría suelto.
+                    supabase.removeChannel(channel);
+                    channel = null;
+                }
             } catch (error) {
-                console.error('Error en initChat:', error);
+                if (__DEV__) console.error('Error en initChat:', error);
                 if (!stale?.messages?.length) {
                     Alert.alert(t('chat.errorTitle'), t('chat.loadError'));
                 }
             } finally {
-                if (isMountedRef.current) setLoading(false);
+                if (isCurrent()) setLoading(false);
             }
         };
 
         initChat();
 
         return () => {
+            initGenRef.current += 1;
             if (channel) supabase.removeChannel(channel);
         };
-    }, [planId, router, fetchMessages, fetchParticipants, persistPlanChatCache, sessionUserId, t]);
+    }, [
+        planId,
+        router,
+        fetchMessages,
+        fetchParticipants,
+        persistPlanChatCache,
+        sessionUserId,
+        t,
+        scrollToLatest,
+        maybeStickAfterIncoming,
+    ]);
 
     const refreshChatHeader = useCallback(async () => {
         if (!planId || !currentUserId || accessDenied) return;
@@ -843,27 +1150,42 @@ export default function ChatScreen() {
     useEffect(() => {
         if (!planFechaEvento || isGroupOrChatPlan({ categoria: planCategory })) {
             setChatExpiryLabel(null);
+            setCanKeepChat(false);
             return;
         }
         const end = new Date(planFechaEvento).getTime();
         if (!Number.isFinite(end) || Date.now() < end) {
             setChatExpiryLabel(null);
+            setCanKeepChat(false);
             return;
         }
+        let expiredHandled = false;
+        let intervalId: ReturnType<typeof setInterval> | undefined;
         const tick = () => {
             const expiry = getChatExpiryMs(planFechaEvento);
             if (!expiry) {
                 setChatExpiryLabel(null);
+                setCanKeepChat(false);
                 return;
             }
             const remaining = expiry - Date.now();
             if (remaining <= 0) {
+                if (intervalId) clearInterval(intervalId);
+                if (expiredHandled) return;
+                expiredHandled = true;
+                setCanKeepChat(false);
                 setChatExpiryLabel('0:00');
                 void runPlanLifecycleMaintenance();
-                Alert.alert(t('chat.errorTitle'), t('chat.expired'));
-                router.back();
+                if (!deadChatNavRef.current) {
+                    deadChatNavRef.current = true;
+                    void cancelPlanLifecycleReminders(planId);
+                    Alert.alert(t('chat.errorTitle'), t('chat.expired'));
+                    router.replace({ pathname: '/plan/[id]', params: { id: planId } });
+                }
                 return;
             }
+            const hostCanKeep = creatorId === currentUserId && !isGroupOrChatPlan({ categoria: planCategory });
+            setCanKeepChat(hostCanKeep);
             if (remaining > CHAT_EXPIRY_WARN_MS) {
                 setChatExpiryLabel(null);
                 return;
@@ -871,9 +1193,9 @@ export default function ChatScreen() {
             setChatExpiryLabel(formatCountdown(remaining));
         };
         tick();
-        const id = setInterval(tick, 1000);
-        return () => clearInterval(id);
-    }, [planFechaEvento, planCategory, router, t]);
+        intervalId = setInterval(tick, 1000);
+        return () => clearInterval(intervalId);
+    }, [planFechaEvento, planCategory, creatorId, currentUserId, router, t]);
 
     useEffect(() => {
         if (!planId) return;
@@ -882,7 +1204,13 @@ export default function ChatScreen() {
             setMessages((prev) => {
                 const next = prev.map((m) =>
                     m.id === ev.tempId
-                        ? { ...m, id: ev.serverId, creado_en: ev.creadoEn, pending: false }
+                        ? {
+                              ...m,
+                              id: ev.serverId,
+                              creado_en: ev.creadoEn,
+                              pending: false,
+                              clientKey: m.clientKey ?? ev.tempId,
+                          }
                         : m,
                 );
                 persistPlanChatCache(planId, { messages: next });
@@ -983,7 +1311,8 @@ export default function ChatScreen() {
     const sendMessage = async (
         tipo: 'texto' | 'imagen' | 'video' | 'audio' = 'texto',
         archivoUrl: string | null = null,
-        audioDurationSec?: number
+        audioDurationSec?: number,
+        contenidoOverride?: string,
     ) => {
         if (!currentUserId || !planId || accessDenied || isSending || sendLockRef.current) return;
 
@@ -1001,8 +1330,9 @@ export default function ChatScreen() {
             setReplyTo(null);
         }
 
-        const contenidoPayload =
-            tipo === 'texto'
+        const contenidoPayload = contenidoOverride != null
+            ? contenidoOverride
+            : tipo === 'texto'
                 ? (replySnapshot ? encodeReplyContent(tempText, replySnapshot) : tempText)
                 : tipo === 'audio' && audioDurationSec
                   ? String(audioDurationSec)
@@ -1018,12 +1348,14 @@ export default function ChatScreen() {
             archivo_url: archivoUrl,
             perfiles: myProfile,
             pending: !getIsOnline() && tipo === 'texto',
+            clientKey: tempId,
         };
         setMessages((prev) => {
             const next = [optimistic, ...prev];
             persistPlanChatCache(planId, { messages: next });
             return next;
         });
+        scrollToLatest(true);
         // Liberar input al instante; el mensaje ya es optimista.
         setIsSending(false);
         setTimeout(() => {
@@ -1094,6 +1426,7 @@ export default function ChatScreen() {
                               id: data.id as string,
                               creado_en: (data.creado_en as string) || m.creado_en,
                               pending: false,
+                              clientKey: m.clientKey ?? tempId,
                           }
                         : m,
                 );
@@ -1125,21 +1458,79 @@ export default function ChatScreen() {
             videoMaxDuration: 120,
         });
 
-        if (result.canceled || !planId) return;
-
+        if (result.canceled || !result.assets[0]) return;
         const selectedAsset = result.assets[0];
-        const fileType = selectedAsset.type === 'video' ? 'video' : 'image';
-        const messageType = fileType === 'image' ? 'imagen' : 'video';
+        setPendingFiles([{
+            uri: selectedAsset.uri,
+            type: selectedAsset.type === 'video' ? 'video' : 'image',
+        }]);
+    };
 
-        setIsUploading(true);
-        const uploadedUrl = await uploadChatFile(selectedAsset.uri, fileType, planId);
-        setIsUploading(false);
-
-        if (uploadedUrl) {
-            await sendMessage(messageType, uploadedUrl);
-        } else {
-            Alert.alert(t('chat.errorTitle'), t('chat.uploadError'));
+    const pickMoments = async () => {
+        if (isUploading || accessDenied) return;
+        const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permissionResult.granted) {
+            Alert.alert(t('chat.permRequired'), t('chat.galleryPerm'));
+            return;
         }
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images', 'videos'],
+            allowsMultipleSelection: true,
+            selectionLimit: 12,
+            quality: 0.7,
+            videoMaxDuration: 60,
+        });
+        if (result.canceled || !result.assets?.length) return;
+        setPendingFiles(result.assets.slice(0, 12).map((asset) => ({
+            uri: asset.uri,
+            type: asset.type === 'video' ? 'video' : 'image',
+        })));
+    };
+
+    const sendPendingFiles = async () => {
+        if (!pendingFiles.length || !planId || isUploading || sendLockRef.current) return;
+        const batch = pendingFiles;
+        setPendingFiles([]);
+        setIsUploading(true);
+        const uploaded: MomentItem[] = [];
+        for (const file of batch) {
+            const url = await uploadChatFile(file.uri, file.type === 'video' ? 'video' : 'image', planId);
+            if (url) uploaded.push({ url, type: file.type });
+        }
+        setIsUploading(false);
+        if (!uploaded.length) {
+            Alert.alert(t('chat.errorTitle'), t('chat.uploadError'));
+            return;
+        }
+        if (uploaded.length === 1) {
+            await sendMessage(uploaded[0].type === 'video' ? 'video' : 'imagen', uploaded[0].url);
+            return;
+        }
+        await sendMessage('imagen', uploaded[0].url, undefined, encodeMoments(uploaded));
+    };
+
+    const confirmKeepChat = () => {
+        if (!planId) return;
+        Alert.alert(t('chat.keepForeverTitle'), t('chat.keepForeverMsg'), [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: t('chat.keepForever'),
+                onPress: () => {
+                    void (async () => {
+                        const { error } = await supabase.rpc('keep_plan_chat_forever', { p_plan_id: planId });
+                        if (error) {
+                            Alert.alert(t('chat.errorTitle'), t('chat.keepForeverError'));
+                            return;
+                        }
+                        setPlanCategory('Grupo');
+                        setIsGroupChat(true);
+                        setCanKeepChat(false);
+                        setChatExpiryLabel(null);
+                        Alert.alert(t('chat.keepForeverTitle'), t('chat.keepForeverDone'));
+                    })();
+                },
+            },
+        ]);
     };
 
     const startRecording = async () => {
@@ -1208,7 +1599,9 @@ export default function ChatScreen() {
     const handleActionPress = () => {
         if (isUploading || isSending) return;
 
-        if (messageText.trim()) {
+        if (pendingFiles.length) {
+            void sendPendingFiles();
+        } else if (messageText.trim()) {
             sendMessage();
         } else if (recording) {
             stopRecording();
@@ -1253,10 +1646,10 @@ export default function ChatScreen() {
     const inputDisabled = isUploading || isSending || accessDenied;
     const actionIcon = useMemo(() => {
         if (isUploading || isSending) return 'hourglass';
-        if (messageText.trim()) return 'send';
+        if (pendingFiles.length || messageText.trim()) return 'send';
         if (recording) return 'stop';
         return 'mic';
-    }, [isUploading, isSending, messageText, recording]);
+    }, [isUploading, isSending, messageText, recording, pendingFiles.length]);
 
     const openMessageProfile = useCallback(
         (userId: string) => {
@@ -1301,47 +1694,15 @@ export default function ChatScreen() {
         }
     }, [currentUserId, planId, creatorId, isSaved, planFechaEvento, t]);
 
-    const [sharePayload, setSharePayload] = useState<PlanSharePayload | null>(null);
-
     const handleSharePlan = useCallback(() => {
         if (!planId) return;
         const title = planName.trim() || 'Plan';
-        let when = '';
-        if (planFechaEvento) {
-            const d = new Date(planFechaEvento);
-            if (Number.isFinite(d.getTime())) {
-                when = d.toLocaleString(undefined, {
-                    weekday: 'short',
-                    day: 'numeric',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                });
-            }
-        }
-        const start = () => {
-            setSharePayload(
-                buildPlanSharePayload({
-                    planId,
-                    title,
-                    coverUrl: planImage,
-                    when,
-                    location: planLocationName,
-                    participants: members.map((m) => ({
-                        id: m.id,
-                        nombre: m.nombre,
-                        avatar_url: m.avatar_url,
-                    })),
-                    maxPeople: members.length,
-                }),
-            );
-        };
         Alert.alert(t('card.share'), `"${title}"`, [
-            { text: t('card.shareWhats'), onPress: start },
-            { text: t('card.shareOther'), onPress: start },
+            { text: t('card.shareWhats'), onPress: () => void sharePlanLink(planId, title) },
+            { text: t('card.shareOther'), onPress: () => void sharePlanLink(planId, title) },
             { text: t('common.cancel'), style: 'cancel' },
         ]);
-    }, [planId, planName, planFechaEvento, planLocationName, planImage, members, t]);
+    }, [planId, planName, t]);
 
     const relationFor = useCallback(
         (userId: string): 'friend' | 'acquaintance' | null => {
@@ -1412,12 +1773,12 @@ export default function ChatScreen() {
     }, [planId, router, seedPlanFromChat, openedFromPlan]);
 
     const openChatHeaderInfo = useCallback(() => {
-        if (isCreatedGroupChat) {
+        if (isFixedGroupChat) {
             setShowMembers(true);
             return;
         }
         openPlanFromChat();
-    }, [isCreatedGroupChat, openPlanFromChat]);
+    }, [isFixedGroupChat, openPlanFromChat]);
 
     const onPickMessageReaction = useCallback(
         (messageId: string, emoji: string) => {
@@ -1434,10 +1795,31 @@ export default function ChatScreen() {
         [currentUserId, reactions, setReactions],
     );
 
+    const onInviteCardGone = useCallback(
+        (messageId: string) => {
+            setMessages((prev) => {
+                if (!prev.some((m) => m.id === messageId)) return prev;
+                const next = prev.filter((m) => m.id !== messageId);
+                persistPlanChatCache(planId, { messages: next });
+                return next;
+            });
+        },
+        [planId, persistPlanChatCache],
+    );
+
+    const profileByUserId = useMemo(() => {
+        const map = new Map<string, { nombre: string; avatar_url: string | null }>();
+        for (const m of members) {
+            map.set(m.id, { nombre: m.nombre, avatar_url: m.avatar_url });
+        }
+        if (currentUserId) map.set(currentUserId, myProfile);
+        return map;
+    }, [members, currentUserId, myProfile]);
+
     const renderItem = useCallback(
         ({ item }: { item: Message }) => (
             <ChatMessageRow
-                item={item}
+                item={withFallbackProfile(item, profileByUserId.get(item.emisor_id))}
                 currentUserId={currentUserId}
                 isPlaying={playingMessageId === item.id}
                 audioDurationSec={audioDurations[item.id]}
@@ -1446,6 +1828,7 @@ export default function ChatScreen() {
                 onOpenProfile={openMessageProfile}
                 onOpenImage={setModalImage}
                 onOpenVideo={setModalVideo}
+                onOpenMoments={setMomentsAlbum}
                 onPlayAudio={playAudio}
                 onLongPressMessage={setReactionPickerId}
                 onReplyMessage={(messageId) => {
@@ -1461,6 +1844,8 @@ export default function ChatScreen() {
                     });
                 }}
                 onPickReaction={onPickMessageReaction}
+                onOpenPlan={(pid) => router.push(`/plan/${pid}`)}
+                onInviteCardGone={onInviteCardGone}
             />
         ),
         [
@@ -1472,6 +1857,9 @@ export default function ChatScreen() {
             openMessageProfile,
             playAudio,
             onPickMessageReaction,
+            onInviteCardGone,
+            router,
+            profileByUserId,
         ],
     );
 
@@ -1503,7 +1891,7 @@ export default function ChatScreen() {
                             ? showGroupPhotoMenu
                             : openChatHeaderInfo
                     }
-                    onPressIn={canEditGroupPhoto || isCreatedGroupChat ? undefined : seedPlanFromChat}
+                    onPressIn={canEditGroupPhoto || isFixedGroupChat ? undefined : seedPlanFromChat}
                     activeOpacity={0.7}
                     disabled={uploadingGroupPhoto}
                     style={styles.planHeaderImageWrap}
@@ -1524,6 +1912,7 @@ export default function ChatScreen() {
                             source={resolvePlanImageSource(planImage)}
                             style={styles.planHeaderImage}
                             recyclingKey={planId}
+                            thumbWidth={48}
                         />
                     )}
                     {canEditGroupPhoto && (
@@ -1540,7 +1929,7 @@ export default function ChatScreen() {
                 <TouchableOpacity
                     style={styles.headerTitleContainer}
                     activeOpacity={0.7}
-                    onPressIn={isCreatedGroupChat ? undefined : seedPlanFromChat}
+                    onPressIn={isFixedGroupChat ? undefined : seedPlanFromChat}
                     onPress={openChatHeaderInfo}
                 >
                     <Text style={styles.headerTitle} numberOfLines={1}>
@@ -1565,20 +1954,29 @@ export default function ChatScreen() {
                 </TouchableOpacity>
             </View>
 
-            {chatExpiryLabel ? (
+            {chatExpiryLabel || canKeepChat ? (
                 <View style={styles.expiryBanner}>
-                    <Ionicons name="time-outline" size={16} color="#B45309" />
+                    {chatExpiryLabel ? (
+                        <Ionicons name="time-outline" size={16} color="#B45309" />
+                    ) : (
+                        <Ionicons name="infinite" size={16} color="#B45309" />
+                    )}
                     <Text style={styles.expiryBannerText}>
-                        {t('chat.expiresIn', { time: chatExpiryLabel })}
+                        {chatExpiryLabel
+                            ? t('chat.expiresIn', { time: chatExpiryLabel })
+                            : t('chat.keepForeverTitle')}
                     </Text>
+                    {canKeepChat ? (
+                        <TouchableOpacity onPress={confirmKeepChat} hitSlop={8}>
+                            <Text style={{ color: '#B45309', fontWeight: '800', fontSize: 13 }}>
+                                {t('chat.keepForever')}
+                            </Text>
+                        </TouchableOpacity>
+                    ) : null}
                 </View>
             ) : null}
 
-            <KeyboardAvoidingView
-                style={{ flex: 1 }}
-                behavior="padding"
-                keyboardVerticalOffset={Platform.OS === 'ios' ? Math.max(0, headerHeight - 10) : 0}
-            >
+            <ChatKeyboardAnimated.View style={[{ flex: 1 }, keyboardBottomStyle]}>
                 {loading && !planName && messages.length === 0 ? (
                     <View style={styles.loading}>
                         <ActivityIndicator color={PRIMARY} size="large" />
@@ -1594,15 +1992,22 @@ export default function ChatScreen() {
                 ) : (
                     <View style={styles.messagesPanel}>
                         <FlashList
+                            ref={messagesListRef}
                             style={{ flex: 1 }}
                             data={messages}
-                            keyExtractor={(item) => item.id}
+                            keyExtractor={chatListKey}
                             renderItem={renderItem}
                             getItemType={chatMessageItemType}
                             inverted
                             drawDistance={FLASH_LIST_DRAW_DISTANCE}
                             contentContainerStyle={styles.listContent}
                             keyboardShouldPersistTaps="handled"
+                            onScroll={onMessagesScroll}
+                            onScrollBeginDrag={onMessagesScrollBeginDrag}
+                            onScrollEndDrag={onMessagesScrollEndDrag}
+                            onMomentumScrollEnd={onMessagesMomentumScrollEnd}
+                            onContentSizeChange={onMessagesContentSizeChange}
+                            scrollEventThrottle={16}
                             onEndReached={loadMoreMessages}
                             onEndReachedThreshold={0.3}
                             ListFooterComponent={renderListFooter}
@@ -1643,7 +2048,25 @@ export default function ChatScreen() {
                     </View>
                 ) : null}
 
-                <View style={[styles.inputBar, { paddingBottom: keyboardOpen ? 4 : (Platform.OS === 'android' ? 12 : Math.max(insets.bottom, 10)) + 10 }]}>
+                {pendingFiles.length ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingBottom: 8 }}>
+                        <Image
+                            source={{ uri: pendingFiles[0].uri }}
+                            style={{ width: 48, height: 48, borderRadius: 10 }}
+                            contentFit="cover"
+                        />
+                        <Text style={{ flex: 1, color: theme.colors.text, fontWeight: '700' }} numberOfLines={1}>
+                            {pendingFiles.length > 1
+                                ? `${t('chat.moments')} · ${pendingFiles.length}`
+                                : t('chat.readyToSend')}
+                        </Text>
+                        <TouchableOpacity onPress={() => setPendingFiles([])} hitSlop={8}>
+                            <Ionicons name="close" size={20} color={theme.colors.textMuted} />
+                        </TouchableOpacity>
+                    </View>
+                ) : null}
+
+                <View style={styles.inputBar}>
                     <TouchableOpacity
                         onPress={pickMedia}
                         style={styles.attachBtn}
@@ -1652,6 +2075,18 @@ export default function ChatScreen() {
                         <Ionicons
                             name="add"
                             size={26}
+                            color={inputDisabled ? '#CBD5E1' : theme.colors.textMuted}
+                        />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={() => void pickMoments()}
+                        style={styles.attachBtn}
+                        disabled={inputDisabled}
+                        accessibilityLabel={t('chat.moments')}
+                    >
+                        <Ionicons
+                            name="folder-outline"
+                            size={22}
                             color={inputDisabled ? '#CBD5E1' : theme.colors.textMuted}
                         />
                     </TouchableOpacity>
@@ -1693,12 +2128,62 @@ export default function ChatScreen() {
                         <Ionicons name={actionIcon} size={18} color="white" />
                     </PressScale>
                 </View>
-            </KeyboardAvoidingView>
+            </ChatKeyboardAnimated.View>
 
             <ReactionEmojiPicker
                 visible={!!reactionPickerId}
                 onClose={() => setReactionPickerId(null)}
                 reportLabel={t('report.messageAction')}
+                deleteLabel={t('chat.deleteMessage')}
+                onDelete={
+                    (() => {
+                        const target = reactionPickerId
+                            ? messages.find((message) => message.id === reactionPickerId)
+                            : undefined;
+                        if (
+                            !target
+                            || !planId
+                            || target.id.startsWith('local-')
+                            || target.emisor_id !== currentUserId
+                            || isDeletedMessage(target)
+                        ) {
+                            return undefined;
+                        }
+                        return () => {
+                            const messageId = target.id;
+                            setReactionPickerId(null);
+                            Alert.alert(t('chat.deleteMessage'), t('chat.deleteMessageConfirm'), [
+                                { text: t('common.cancel'), style: 'cancel' },
+                                {
+                                    text: t('chat.deleteMessage'),
+                                    style: 'destructive',
+                                    onPress: () => {
+                                        setMessages((prev) => {
+                                            const next = prev.map((m) =>
+                                                m.id === messageId
+                                                    ? {
+                                                          ...m,
+                                                          eliminado_en: new Date().toISOString(),
+                                                          contenido: DELETED_MESSAGE_MARK,
+                                                          archivo_url: null,
+                                                          tipo: 'texto' as const,
+                                                      }
+                                                    : m,
+                                            );
+                                            persistPlanChatCache(planId, { messages: next });
+                                            return next;
+                                        });
+                                        void softDeleteMensaje(messageId).then(({ error }) => {
+                                            if (error) {
+                                                Alert.alert(t('profile.error'), t('chat.deleteMessageError'));
+                                            }
+                                        });
+                                    },
+                                },
+                            ]);
+                        };
+                    })()
+                }
                 onReport={
                     reactionPickerId
                     && !reactionPickerId.startsWith('local-')
@@ -1724,6 +2209,13 @@ export default function ChatScreen() {
                 }}
             />
 
+            <MomentsAlbum
+                items={momentsAlbum}
+                onClose={() => setMomentsAlbum(null)}
+                onOpenImage={setModalImage}
+                onOpenVideo={setModalVideo}
+            />
+
             <ChatMediaModals
                 imageUrl={modalImage}
                 videoUrl={modalVideo}
@@ -1735,17 +2227,78 @@ export default function ChatScreen() {
                 visible={showMembers}
                 transparent
                 animationType="slide"
-                onRequestClose={() => setShowMembers(false)}
+                onRequestClose={() => {
+                    if (renamingGroup) {
+                        if (!savingGroupName) setRenamingGroup(false);
+                        return;
+                    }
+                    setShowMembers(false);
+                }}
             >
-                <TouchableOpacity style={styles.membersOverlay} activeOpacity={1} onPress={() => setShowMembers(false)}>
+                {renamingGroup ? (
+                    <View style={[styles.renameOverlay, { paddingTop: insets.top + 12 }]}>
+                        <View style={styles.renameCard}>
+                            <Text style={styles.membersTitle}>{t('chat.renameGroup')}</Text>
+                            <TextInput
+                                value={groupNameDraft}
+                                onChangeText={(value) => setGroupNameDraft(value.slice(0, MAX_GROUP_NAME_LENGTH))}
+                                placeholder={t('chats.groupNamePlaceholder')}
+                                placeholderTextColor={theme.colors.textMuted}
+                                style={styles.renameGroupInput}
+                                maxLength={MAX_GROUP_NAME_LENGTH}
+                                autoFocus
+                                editable={!savingGroupName}
+                            />
+                            <View style={styles.renameGroupActions}>
+                                <TouchableOpacity
+                                    style={styles.renameGroupCancel}
+                                    onPress={() => setRenamingGroup(false)}
+                                    disabled={savingGroupName}
+                                >
+                                    <Text style={styles.renameGroupCancelText}>{t('common.cancel')}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.renameGroupSave}
+                                    onPress={() => { void saveGroupName(); }}
+                                    disabled={savingGroupName || !groupNameDraft.trim()}
+                                >
+                                    {savingGroupName ? (
+                                        <ActivityIndicator size="small" color={theme.colors.surface} />
+                                    ) : (
+                                        <Text style={styles.renameGroupSaveText}>{t('common.save')}</Text>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </View>
+                ) : (
+                <TouchableOpacity
+                    style={styles.membersOverlay}
+                    activeOpacity={1}
+                    onPress={() => setShowMembers(false)}
+                >
                     <TouchableOpacity style={styles.membersSheet} activeOpacity={1}>
                         <View style={styles.membersHandle} />
                         <Text style={styles.membersTitle}>{t('chat.members')} · {members.length}</Text>
+
+                        {canRenameGroup ? (
+                            <TouchableOpacity
+                                style={styles.changeGroupPhotoBtn}
+                                onPress={() => {
+                                    setGroupNameDraft(planName);
+                                    setRenamingGroup(true);
+                                }}
+                            >
+                                <Ionicons name="pencil-outline" size={20} color={PRIMARY} />
+                                <Text style={styles.changeGroupPhotoText}>{t('chat.renameGroup')}</Text>
+                            </TouchableOpacity>
+                        ) : null}
 
                         {canEditGroupPhoto && (
                             <TouchableOpacity
                                 style={styles.changeGroupPhotoBtn}
                                 onPress={() => {
+                                    setRenamingGroup(false);
                                     setShowMembers(false);
                                     showGroupPhotoMenu();
                                 }}
@@ -1879,6 +2432,7 @@ export default function ChatScreen() {
                         </TouchableOpacity>
                     </TouchableOpacity>
                 </TouchableOpacity>
+                )}
             </Modal>
 
             <Modal
@@ -1933,8 +2487,6 @@ export default function ChatScreen() {
                     </View>
                 </View>
             </Modal>
-
-            <PlanShareModal payload={sharePayload} onDone={() => setSharePayload(null)} />
         </View>
     );
 }

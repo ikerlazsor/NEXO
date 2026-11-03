@@ -42,6 +42,7 @@ import { getUserCoords, peekUserCoords, type UserCoords } from '../lib/location'
 import { hydrateFeedFromDisk } from '../lib/prefetchHome';
 import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../lib/planDetailCache';
 import { formatProfilePlanWhen } from '../lib/profileSocial';
+import { ensureAutoProfilePlace } from '../lib/profilePlace';
 import { resolvePlanImageSource } from '../lib/sports';
 import { theme } from '../theme';
 import { cacheGetStale } from '../lib/ttlCache';
@@ -87,9 +88,10 @@ function planAccentColor(plan: { categoria?: string | null; tipo_deporte?: strin
     return getCategoryColor(plan.categoria ?? null, plan.tipo_deporte ?? null);
 }
 
-function hasMapCoords(p: { latitud?: unknown; longitud?: unknown }): boolean {
-    const lat = Number(p.latitud);
-    const lng = Number(p.longitud);
+function hasMapCoords(p: object): boolean {
+    const rec = p as { latitud?: unknown; longitud?: unknown };
+    const lat = Number(rec.latitud);
+    const lng = Number(rec.longitud);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
     if (Math.abs(lat) < 0.01 && Math.abs(lng) < 0.01) return false;
     return true;
@@ -144,11 +146,26 @@ function FeedMapPin({
 }) {
     const styles = useThemedStyles(createFeedStyles);
     // iOS/Android a menudo pintan el marker custom vacío si tracksViewChanges
-    // empieza en false; un frame en true fija el color de categoría.
+    // empieza en false. En Android dejamos unos frames extra para que onLayout
+    // fije el bitmap al tamaño real (si no, el pin sale cortado a la derecha).
     const [tracks, setTracks] = useState(true);
     useEffect(() => {
-        const t = requestAnimationFrame(() => setTracks(false));
-        return () => cancelAnimationFrame(t);
+        let cancelled = false;
+        let inner: ReturnType<typeof requestAnimationFrame> | null = null;
+        const outer = requestAnimationFrame(() => {
+            inner = requestAnimationFrame(() => {
+                if (!cancelled) setTracks(false);
+            });
+        });
+        const fallback = setTimeout(() => {
+            if (!cancelled) setTracks(false);
+        }, Platform.OS === 'android' ? 450 : 80);
+        return () => {
+            cancelled = true;
+            cancelAnimationFrame(outer);
+            if (inner != null) cancelAnimationFrame(inner);
+            clearTimeout(fallback);
+        };
     }, [color, count]);
 
     return (
@@ -201,6 +218,8 @@ export function FeedMapHost() {
     const scrollOffsetRef = useRef(0);
     const loadGenRef = useRef(0);
     const slideY = useSharedValue(SCREEN_H);
+    const mapReadyRef = useRef(false);
+    const sheetOpenedRef = useRef(false);
 
     const sheetStyle = useAnimatedStyle(() => ({
         transform: [{ translateY: slideY.value }],
@@ -213,16 +232,18 @@ export function FeedMapHost() {
         selectedIdRef.current = null;
         didInitCarousel.current = false;
         userEngagedRef.current = false;
-    }, []);
+        mapReadyRef.current = false;
+        sheetOpenedRef.current = false;
+        slideY.value = SCREEN_H;
+    }, [slideY]);
 
     const animateSheetOpen = useCallback(() => {
+        if (sheetOpenedRef.current) return;
+        sheetOpenedRef.current = true;
         cancelAnimation(slideY);
-        slideY.value = SCREEN_H;
-        requestAnimationFrame(() => {
-            slideY.value = withTiming(0, {
-                duration: MAP_SLIDE_MS,
-                easing: Easing.out(Easing.cubic),
-            });
+        slideY.value = withTiming(0, {
+            duration: MAP_SLIDE_MS,
+            easing: Easing.out(Easing.cubic),
         });
     }, [slideY]);
 
@@ -271,13 +292,13 @@ export function FeedMapHost() {
                     let enriched: MapPlan[] = [];
                     if (!userId) {
                         const guestRows = await fetchGuestFeedPlans(fallbackCoords);
-                        enriched = guestRows.filter(hasMapCoords) as MapPlan[];
+                        enriched = guestRows.filter((row) => hasMapCoords(row)) as MapPlan[];
                     } else {
                         const rows = await fetchUpcomingFeedPlanRows({
                             nowIso,
                             coords: fallbackCoords,
                         });
-                        const withCoords = rows.filter(hasMapCoords) as MapPlan[];
+                        const withCoords = rows.filter((row) => hasMapCoords(row)) as MapPlan[];
                         try {
                             enriched = withCoords.length > 0
                                 ? ((await attachFeedPlanPeople(withCoords as any)) as MapPlan[])
@@ -287,7 +308,7 @@ export function FeedMapHost() {
                         }
                     }
                     if (gen !== loadGenRef.current) return;
-                    const sorted = sortMapPlans(enriched.filter(hasMapCoords) as MapPlan[], coords);
+                    const sorted = sortMapPlans(enriched.filter((row) => hasMapCoords(row)) as MapPlan[], coords);
                     if (sorted.length > 0) setRemotePlans(sorted);
                 } catch (e) {
                     if (__DEV__) console.error('map plans refresh:', e);
@@ -323,8 +344,11 @@ export function FeedMapHost() {
     const open = useCallback(() => {
         const gen = ++loadGenRef.current;
         setTick((n) => n + 1);
+        mapReadyRef.current = false;
+        sheetOpenedRef.current = false;
+        cancelAnimation(slideY);
+        slideY.value = SCREEN_H;
         setVisible(true);
-        animateSheetOpen();
         didInitCarousel.current = false;
         userEngagedRef.current = false;
         selectedIdRef.current = null;
@@ -335,6 +359,7 @@ export function FeedMapHost() {
 
         const peeked = peekUserCoords();
         if (peeked) setUserCoords(peeked);
+        else setUserCoords(null);
 
         const initial = readMapPlans(peeked);
         if (initial.length > 0) {
@@ -348,9 +373,14 @@ export function FeedMapHost() {
 
         void (async () => {
             try {
-                let coords = peeked ?? (await getUserCoords({ requestPermission: true }));
+                // No bloquear el mapa si el GPS tarda: Madrid/fallback ya está en initialRegion.
+                const coordsPromise = peeked
+                    ? Promise.resolve(peeked)
+                    : getUserCoords({ requestPermission: true });
+                let coords = await coordsPromise;
                 if (gen !== loadGenRef.current) return;
-                if (coords) setUserCoords(coords);
+                setUserCoords(coords);
+                if (coords && userId) void ensureAutoProfilePlace(userId);
 
                 let geo = readMapPlans(coords);
                 if (geo.length === 0) {
@@ -374,13 +404,13 @@ export function FeedMapHost() {
                 let enriched: MapPlan[] = [];
                 if (!userId) {
                     const guestRows = await fetchGuestFeedPlans(fallbackCoords);
-                    enriched = guestRows.filter(hasMapCoords) as MapPlan[];
+                    enriched = guestRows.filter((row) => hasMapCoords(row)) as MapPlan[];
                 } else {
                     const rows = await fetchUpcomingFeedPlanRows({
                         nowIso,
                         coords: fallbackCoords,
                     });
-                    const withCoords = rows.filter(hasMapCoords) as MapPlan[];
+                    const withCoords = rows.filter((row) => hasMapCoords(row)) as MapPlan[];
                     try {
                         enriched = withCoords.length > 0
                             ? ((await attachFeedPlanPeople(withCoords as any)) as MapPlan[])
@@ -390,14 +420,14 @@ export function FeedMapHost() {
                     }
                 }
                 if (gen !== loadGenRef.current) return;
-                setRemotePlans(sortMapPlans(enriched.filter(hasMapCoords) as MapPlan[], coords));
+                setRemotePlans(sortMapPlans(enriched.filter((row) => hasMapCoords(row)) as MapPlan[], coords));
             } catch (e) {
                 if (__DEV__) console.error('map plans load:', e);
             } finally {
                 if (gen === loadGenRef.current) setLoadingPlans(false);
             }
         })();
-    }, [userId, refreshPlansInBackground, animateSheetOpen]);
+    }, [userId, refreshPlansInBackground, slideY]);
 
     useEffect(() => {
         const unsub = subscribeOpenFeedMap(open);
@@ -411,12 +441,40 @@ export function FeedMapHost() {
         });
     }, []);
 
+    /** Misma distancia (delta) que Madrid; centro = usuario si hay permiso, si no Madrid. */
+    useEffect(() => {
+        if (!visible) return;
+        const target = userCoords
+            ? {
+                  latitude: userCoords.latitude,
+                  longitude: userCoords.longitude,
+                  latitudeDelta: MADRID_REGION.latitudeDelta,
+                  longitudeDelta: MADRID_REGION.longitudeDelta,
+              }
+            : MADRID_REGION;
+        const t = setTimeout(() => {
+            try {
+                mapRef.current?.animateToRegion(target, 280);
+            } catch {
+                /* ignore */
+            }
+        }, MAP_SLIDE_MS + 80);
+        return () => clearTimeout(t);
+    }, [visible, userCoords?.latitude, userCoords?.longitude]);
+
     useEffect(() => {
         if (!visible) return;
         closeHandledRef.current = false;
         lockTabPager();
         return () => unlockTabPager();
     }, [visible]);
+
+    useEffect(() => {
+        if (!visible) return;
+        // Si onMapReady tarda, no dejar el sheet colgado fuera de pantalla.
+        const fallback = setTimeout(() => animateSheetOpen(), 220);
+        return () => clearTimeout(fallback);
+    }, [visible, animateSheetOpen]);
 
     useEffect(() => {
         if (visible) return;
@@ -626,6 +684,8 @@ export function FeedMapHost() {
         animateSheetClose();
     }, [animateSheetClose]);
 
+    if (!visible) return null;
+
     return (
         <View style={mapHostStyles.host} pointerEvents="box-none">
             <Animated.View
@@ -645,6 +705,7 @@ export function FeedMapHost() {
                     initialRegion={MADRID_REGION}
                     minZoomLevel={2}
                     maxZoomLevel={19}
+                    onMapReady={() => animateSheetOpen()}
                 >
                     {plans.map((p) => {
                         const lat = Number(p.latitud);
@@ -718,7 +779,9 @@ export function FeedMapHost() {
                                 const showAccent = selected || peeked;
                                 const count = Number(item.joinedCount ?? item.participantsList?.length ?? 0);
                                 const max = Number(item.maximo_participantes) || 0;
-                                const people = Array.isArray(item.participantsList)
+                                const people: NonNullable<MapPlan['participantsList']> = Array.isArray(
+                                    item.participantsList,
+                                )
                                     ? item.participantsList.slice(0, 5)
                                     : [];
                                 const when = formatProfilePlanWhen(item.fecha_evento, lang);
@@ -758,6 +821,7 @@ export function FeedMapHost() {
                                                 source={resolvePlanImageSource(item.imagen_url)}
                                                 style={styles.mapMiniImage}
                                                 recyclingKey={String(item.id)}
+                                                thumbWidth={280}
                                             />
                                             <LinearGradient
                                                 colors={['rgba(15,23,42,0.15)', 'transparent', 'rgba(15,23,42,0.55)']}

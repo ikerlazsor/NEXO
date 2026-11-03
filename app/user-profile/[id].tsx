@@ -5,6 +5,7 @@ import { useFocusEffect,
     useRouter } from 'expo-router';
 import { startTransition,
     useCallback,
+    useEffect,
     useRef,
     useState } from 'react';
 import {
@@ -18,6 +19,8 @@ import {
 import { Alert } from '../../lib/nexoAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AvatarLightbox } from '../../components/AvatarLightbox';
+import { ProfileScreenSkeleton } from '../../components/SkeletonShimmer';
+import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { MediaLightbox } from '../../components/MediaLightbox';
 import { TranslatedText } from '../../components/TranslatedText';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
@@ -34,6 +37,7 @@ import {
     ProfileHero,
     ProfileSection,
     ProfileStatsCard,
+    ProfileStickyBack,
     formatMembers,
 } from '../../components/profile-ui/ProfileRedesign';
 import { getAuthUser } from '../../lib/auth';
@@ -63,19 +67,22 @@ import {
     type FirstRepeatVote,
 } from '../../lib/profileAffinity';
 import { resolveAndRememberPairAffinity } from '../../lib/pairAffinityCache';
+import { loadProfileScreen } from '../../lib/profileScreen';
+import { diskGet, diskSet } from '../../lib/diskCache';
 import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { USER_PROFILE_TTL_MS, userProfileKey } from '../../lib/userProfileCache';
 import { rememberFriendStatus, resolveKnownFriendStatus } from '../../lib/friendStatusPeek';
 import { ensureViewerAffinityPerson } from '../../lib/viewerAffinityCache';
 import { peekChromeAvatar } from '../../lib/chromeAvatar';
 import { screenCacheKey } from '../../lib/screenCaches';
-import { getAdminProfileAccess, getMyProfile, getPublicProfile } from '../../lib/profileData';
+import { getMyProfile, getPublicProfile } from '../../lib/profileData';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../../lib/screenState';
 import { bothFemaleGenero, calcAge, parseHabitos, parsePrivacy } from '../../lib/profileFields';
 import { parseCountryCode } from '../../lib/countryFlags';
+import { formatProfilePlace, parseProfilePlace } from '../../lib/profilePlace';
 import { deleteUserAdmin } from '../../lib/moderation';
-import { fetchAccountAccess } from '../../lib/roles';
+import { fetchAccountAccess, peekIsOwner } from '../../lib/roles';
 import { ownerActionsVisible } from '../../lib/ownerSecretActions';
 import {
     followOrganizer,
@@ -198,8 +205,7 @@ export default function UserProfileScreen() {
     const [currentUserNombre, setCurrentUserNombre] = useState<string | null>(
         () => cached?.currentUserNombre ?? null,
     );
-    const [isOwner, setIsOwner] = useState(false);
-    const [targetIsStaff, setTargetIsStaff] = useState(false);
+    const [isOwner, setIsOwner] = useState(() => peekIsOwner());
     const [deletingUser, setDeletingUser] = useState(false);
     const [followersCount, setFollowersCount] = useState(() => cached?.followersCount ?? 0);
     const [organizerPlansCount, setOrganizerPlansCount] = useState(() => cached?.organizerPlansCount ?? 0);
@@ -298,6 +304,20 @@ export default function UserProfileScreen() {
         hasDataRef.current = true;
     }, [friendHint, profileId, sessionUserId]);
 
+    useEffect(() => {
+        if (!profileId || cached?.userProfile) return;
+        let alive = true;
+        void diskGet<UserProfileSnapshot>(userProfileKey(profileId), 3 * 24 * 60 * 60 * 1000).then((snap) => {
+            if (!alive || !snap?.userProfile || hasDataRef.current) return;
+            cacheSet(userProfileKey(profileId), snap, USER_PROFILE_TTL_MS);
+            applySnapshot(snap);
+            setLoading(false);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [profileId, cached?.userProfile, applySnapshot]);
+
     const loadProfile = useCallback(async (opts?: { force?: boolean }) => {
         if (!profileId) return;
         const profileKey = userProfileKey(profileId);
@@ -315,6 +335,10 @@ export default function UserProfileScreen() {
                     applySnapshot(stale);
                 }
                 setLoading(false);
+                // El early-return de caché no debe dejar isOwner a false para siempre.
+                void fetchAccountAccess(sessionUserId ?? undefined).then((access) => {
+                    setIsOwner(!!access?.isOwner);
+                });
                 if (!opts?.force && cacheIsFresh(profileKey) && stale.badgeStats) {
                     if (!viewerNeeded || stale.viewerAffinity) return;
                 }
@@ -341,30 +365,56 @@ export default function UserProfileScreen() {
                       ])
                     : Promise.resolve(null);
 
-            // Planes asistidos en 1ª oleada (antes iban en la 2ª y tardaban mucho).
-            const attendedEarlyPromise = peekIsOrg
-                ? Promise.resolve([] as PublicAttendedPlan[])
-                : getPublicAttendedPlans(profileId, 12);
+            const [screen, friendData, access] = await Promise.all([
+                loadProfileScreen(profileId),
+                friendPromise,
+                user ? fetchAccountAccess(user.id) : Promise.resolve(null),
+            ]);
 
-            const [profile, count, userStats, friendData, access, earlyBadgeStats, attendedEarly] =
-                await Promise.all([
+            let profile = screen
+                ? {
+                      id: screen.profile.id,
+                      nombre: screen.profile.nombre,
+                      nombre_usuario: screen.profile.nombre_usuario,
+                      avatar_url: screen.profile.avatar_url,
+                      cover_url: screen.profile.cover_url,
+                      descripcion: screen.profile.descripcion,
+                      etiquetas: screen.profile.etiquetas,
+                      edad: calcAge(screen.profile.fecha_nacimiento),
+                      genero: screen.profile.genero,
+                      habitos_consumo: screen.profile.habitos_consumo,
+                      ambientes_preferidos: screen.profile.ambientes_preferidos,
+                      perfil_gustos: screen.profile.perfil_gustos,
+                      es_organizador: screen.profile.es_organizador,
+                      organizador: screen.profile.organizador,
+                  }
+                : null;
+            let count = screen?.stats.numeroAmistades ?? 0;
+            let userStats = screen?.stats ?? EMPTY_STATS;
+            let earlyBadgeStats = screen?.badges ?? EMPTY_BADGE_STATS;
+            let attendedEarly = screen?.attended ?? [];
+
+            if (!profile) {
+                const attendedEarlyPromise = peekIsOrg
+                    ? Promise.resolve([] as PublicAttendedPlan[])
+                    : getPublicAttendedPlans(profileId, 12);
+                const fallback = await Promise.all([
                     getPublicProfile(profileId),
                     getFriendsCount(profileId),
                     getUserStats(profileId),
-                    friendPromise,
-                    user ? fetchAccountAccess(user.id) : Promise.resolve(null),
                     peekIsOrg ? Promise.resolve(EMPTY_BADGE_STATS) : getBadgeStats(profileId),
                     attendedEarlyPromise,
                 ]);
+                profile = fallback[0];
+                count = fallback[1];
+                userStats = fallback[2];
+                earlyBadgeStats = fallback[3];
+                attendedEarly = fallback[4];
+            }
 
             if (!profile) throw new Error('profile_missing');
 
             setIsOwner(!!access?.isOwner);
-            const targetAccess = access?.isOwner
-                ? await getAdminProfileAccess(profileId)
-                : null;
-            const targetRol = targetAccess?.rol;
-            setTargetIsStaff(targetRol === 'owner' || targetRol === 'admin');
 
             // Pintar planes asistidos en cuanto llegan (no esperar al resto del shell).
             if (profile.es_organizador !== true && attendedEarly.length > 0) {
@@ -465,6 +515,7 @@ export default function UserProfileScreen() {
                 firstRepeat: nextFirstRepeat,
             };
             cacheSet(profileKey, earlySnap, USER_PROFILE_TTL_MS);
+            void diskSet(profileKey, earlySnap);
             if (!hasDataRef.current) {
                 applySnapshot(earlySnap);
             } else {
@@ -569,6 +620,7 @@ export default function UserProfileScreen() {
             };
 
             cacheSet(profileKey, snap, USER_PROFILE_TTL_MS);
+            void diskSet(profileKey, snap);
             startTransition(() => applySnapshot(snap));
         } catch (error) {
             if (__DEV__) console.error('Error fetching user profile:', error);
@@ -741,7 +793,7 @@ export default function UserProfileScreen() {
     };
 
     const handleOwnerDeleteUser = () => {
-        if (!ownerActionsVisible(isOwner) || !profileId || friendStatus === 'self' || targetIsStaff || deletingUser) return;
+        if (!ownerActionsVisible(isOwner || peekIsOwner()) || !profileId || friendStatus === 'self' || deletingUser) return;
         const isCommunity = userProfile?.es_organizador === true;
         Alert.alert(
             t(isCommunity ? 'admin.deleteCommunityTitle' : 'admin.deleteUserTitle'),
@@ -1007,7 +1059,16 @@ export default function UserProfileScreen() {
 
     const openMoreMenu = () => {
         if (!userProfile || friendStatus === 'self') return;
+        const ownerUx = ownerActionsVisible(isOwner || peekIsOwner());
         const buttons: Array<{ text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }> = [];
+        // Eliminar primero: debe verse siempre en el menú del owner (no perderse entre otras opciones).
+        if (ownerUx) {
+            buttons.push({
+                text: t(isOrganizerProfile ? 'admin.deleteCommunityConfirm' : 'admin.deleteUserConfirm'),
+                style: 'destructive',
+                onPress: handleOwnerDeleteUser,
+            });
+        }
         if (friendStatus === 'friends') {
             buttons.push({
                 text: t(femalePair ? 'userprofile.unfriendF' : 'userprofile.unfriend'),
@@ -1027,13 +1088,6 @@ export default function UserProfileScreen() {
             style: blocked ? undefined : 'destructive',
             onPress: handleToggleBlock,
         });
-        if (ownerActionsVisible(isOwner) && !targetIsStaff) {
-            buttons.push({
-                text: t(isOrganizerProfile ? 'admin.deleteCommunityConfirm' : 'admin.deleteUserConfirm'),
-                style: 'destructive',
-                onPress: handleOwnerDeleteUser,
-            });
-        }
         buttons.push({ text: t('common.cancel'), style: 'cancel' });
         Alert.alert(displayName, undefined, buttons);
     };
@@ -1042,6 +1096,7 @@ export default function UserProfileScreen() {
         ? userProfile.ambientes_preferidos
         : (userProfile?.etiquetas ?? []);
     const ready = !!userProfile;
+    const showProfileSkeleton = useDelayedVisible(loading && !ready);
     const viewerFemale = currentUserGenero === 'femenino';
 
     const personRep = personRepeatStat(stats, {
@@ -1110,9 +1165,9 @@ export default function UserProfileScreen() {
                         <FrostedIconButton icon="chevron-back" onPress={() => router.back()} accessibilityLabel={t('common.back')} />
                     </View>
                     <View style={styles.loadingBody}>
-                        {loading ? (
-                            <ActivityIndicator size="large" color={PRIMARY_DARK} />
-                        ) : (
+                        {showProfileSkeleton ? (
+                            <ProfileScreenSkeleton />
+                        ) : loading ? null : (
                             <>
                                 <Ionicons name="alert-circle-outline" size={40} color="#94A3B8" />
                                 <Text style={[styles.errorText, { color: colors.textMuted }]}>{t('userprofile.loadError')}</Text>
@@ -1141,22 +1196,23 @@ export default function UserProfileScreen() {
                                   ? null
                                   : userProfile.edad
                         }
-                        genero={
-                            isOrganizerProfile
-                                ? null
-                                : parsePrivacy(userProfile.perfil_gustos).mostrar_genero === false
-                                  ? null
-                                  : userProfile.genero
-                        }
                         flagCode={
                             isOrganizerProfile
                                 ? null
-                                : parsePrivacy(userProfile.perfil_gustos).mostrar_edad === false ||
-                                    parsePrivacy(userProfile.perfil_gustos).mostrar_genero === false
+                                : parsePrivacy(userProfile.perfil_gustos).mostrar_nacionalidad === false
                                   ? null
                                   : parseCountryCode(userProfile.perfil_gustos)
                         }
+                        placeLabel={
+                            isOrganizerProfile
+                                ? null
+                                : parsePrivacy(userProfile.perfil_gustos).mostrar_ubicacion === false
+                                  ? null
+                                  : formatProfilePlace(parseProfilePlace(userProfile.perfil_gustos))
+                        }
+                        instagram={null}
                         verified={isOrganizerProfile}
+                        stickyBack
                         onBack={() => router.back()}
                         onMore={friendStatus === 'self' ? undefined : openMoreMenu}
                         onCoverPress={undefined}
@@ -1370,6 +1426,10 @@ export default function UserProfileScreen() {
                     )}
                 </ScrollView>
             )}
+
+            {ready ? (
+                <ProfileStickyBack onBack={() => router.back()} backLabel={t('common.back')} />
+            ) : null}
 
             <AvatarLightbox
                 visible={avatarOpen}

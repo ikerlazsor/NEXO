@@ -65,3 +65,6 @@ verify_jwt = false
 
 [functions.share-plan]
 verify_jwt = false
+
+[functions.share-card]
+verify_jwt = false

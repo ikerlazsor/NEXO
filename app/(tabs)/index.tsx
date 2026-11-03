@@ -69,6 +69,7 @@ import {
     MAIN_CATEGORY_ICONS,
     MAIN_CATEGORY_IDS,
     resolvePlanCategories,
+    resolvePlanSport,
     SUBCATEGORIES,
     type MainCategoryId,
 } from '../../lib/categories';
@@ -86,7 +87,7 @@ import {
 } from '../../lib/feedCache';
 import { emptyGuestFeedSnapshot, fetchSignedInFeedSnapshot } from '../../lib/feedLoad';
 import { requestOpenFeedMap } from '../../lib/feedMapIntent';
-import { attachFeedPlanPeople, fetchMoreFeedPlanRows, type FeedMoreCursor } from '../../lib/feedQuery';
+import { attachFeedPlanPeople, fetchMoreFeedPlanRows, fetchSearchFeedPlans, type FeedMoreCursor } from '../../lib/feedQuery';
 import {
     applyStickyInviteClears,
     applyStickyPlanDeletes,
@@ -107,7 +108,7 @@ import { expandSearchQuery, planMatchesSearch } from '../../lib/feedSearch';
 import { buildFeedRows, type FeedRow } from '../../lib/feedSections';
 import { consumeFirstRunPending } from '../../lib/firstRun';
 import { rememberFriendsSet } from '../../lib/friendStatusPeek';
-import { distanceKm, formatDistanceKm } from '../../lib/geo';
+import { distanceKm, formatDistanceKm, parsePlanCoords } from '../../lib/geo';
 import { fetchGuestFeedPlans } from '../../lib/guestFeed';
 import { hapticError, hapticSave, hapticSelection, hapticSuccess } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
@@ -134,13 +135,17 @@ import {
 import {
     prefetchPlanDetail,
     seedPlanDetailFromFeed,
+    syncPlanDetailParticipantsFromFeed,
 } from '../../lib/planDetailCache';
+import { prefetchTournamentLineup } from '../../lib/tournamentLineupCache';
 import { isPlanActiveForFeed, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
 import { canJoinMorePlans, countLocalActivePlans, MAX_ACTIVE_PLANS } from '../../lib/planLimits';
 import { canSeePlanInFeed } from '../../lib/planVisibility';
 import { type Genero } from '../../lib/profileFields';
+import { ensureAutoProfilePlace } from '../../lib/profilePlace';
 import { withRetry } from '../../lib/retry';
 import { fetchAccountAccess } from '../../lib/roles';
+import { runWhenIdle } from '../../lib/runWhenIdle';
 import { invalidatePlanMembershipCaches } from '../../lib/screenCaches';
 import {
     getScreenFilters,
@@ -150,8 +155,11 @@ import {
     setScreenScrollOffset,
 } from '../../lib/screenState';
 import { canJoinPlanByGender, isSoloChicasPlan } from '../../lib/soloChicas';
+import { wasKickedFromPlan } from '../../lib/planKicks';
 import { supabase } from '../../lib/supabase';
 import { cacheGetStale, cacheInvalidate, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
+import { prefetchRemoteImages } from '../../lib/prefetchCovers';
+import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
 import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
@@ -312,6 +320,7 @@ export default function HomeScreen() {
     const [isOwner, setIsOwner] = useState(false);
     const secretOwnerUx = ownerActionsVisible(isOwner);
     const [loading, setLoading] = useState(() => cachedFeed == null);
+    const showFeedSkeleton = useDelayedVisible(loading && plans.length === 0);
     const [refreshing, setRefreshing] = useState(false);
     const [loadError, setLoadError] = useState(false);
     const [joiningPlanId, setJoiningPlanId] = useState<string | null>(null);
@@ -335,10 +344,12 @@ export default function HomeScreen() {
     const loadingMoreRef = useRef(false);
     const endReachedLockRef = useRef(false);
     const [searchExpanded, setSearchExpanded] = useState<string[]>([]);
+    const [searchHits, setSearchHits] = useState<any[]>([]);
     const plansRef = useRef<any[]>([]);
     const currentUserIdRef = useRef<string | null>(null);
     const friendIdsRef = useRef<Set<string>>(new Set());
     const coincidedIdsRef = useRef<Set<string>>(new Set());
+    const requestFeedLoadRef = useRef<(opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => void>(() => {});
     const { listRef, onScroll, onListLayout, restoreScroll, scrollEventThrottle } = useListScrollRestore<FeedRow>(
         ScreenKeys.FEED,
         { restoreOnFocus: false },
@@ -346,7 +357,7 @@ export default function HomeScreen() {
 
     const onFeedRefresh = useCallback(() => {
         hapticSelection();
-        void fetchDataRef.current({ refresh: true });
+        requestFeedLoadRef.current({ refresh: true });
     }, []);
 
     useEffect(() => {
@@ -358,7 +369,7 @@ export default function HomeScreen() {
         void getUserCoords({ requestPermission: false }).then((c) => {
             if (!c) return;
             setUserCoords(c);
-            if (!hadPeek) void fetchDataRef.current({ skipScrollJump: true });
+            if (!hadPeek) requestFeedLoadRef.current({ skipScrollJump: true });
         });
     }, []);
 
@@ -372,7 +383,10 @@ export default function HomeScreen() {
         setNearbyKm(radius);
         setShowFirstRun(false);
         hapticSelection();
-        void fetchDataRef.current({ refresh: true, skipScrollJump: true });
+        void getAuthUser().then((u) => {
+            if (u?.id) void ensureAutoProfilePlace(u.id);
+        });
+        requestFeedLoadRef.current({ refresh: true, skipScrollJump: true });
     }, [t]);
 
     useEffect(() => {
@@ -388,6 +402,7 @@ export default function HomeScreen() {
         const q = search.trim();
         if (q.length < 2) {
             setSearchExpanded([]);
+            setSearchHits([]);
             return;
         }
         let cancelled = false;
@@ -395,7 +410,14 @@ export default function HomeScreen() {
             void expandSearchQuery(q).then((terms) => {
                 if (!cancelled) setSearchExpanded(terms);
             });
-        }, 280);
+            void fetchSearchFeedPlans(q)
+                .then((hits) => {
+                    if (!cancelled) setSearchHits(hits);
+                })
+                .catch(() => {
+                    if (!cancelled) setSearchHits([]);
+                });
+        }, 520);
         return () => {
             cancelled = true;
             clearTimeout(timer);
@@ -431,7 +453,9 @@ export default function HomeScreen() {
             const userId = sessionUserId ?? (await getAuthUser())?.id ?? null;
             setCurrentUserId(userId);
             if (userId) {
-                void fetchAccountAccess(userId).then((access) => setIsOwner(access.isOwner));
+                runWhenIdle(() => {
+                    void fetchAccountAccess(userId).then((access) => setIsOwner(access.isOwner));
+                }, 900);
             } else {
                 setIsOwner(false);
             }
@@ -608,6 +632,7 @@ export default function HomeScreen() {
             }
         });
     }, [restoreScroll]);
+    requestFeedLoadRef.current = requestFeedLoad;
 
     useEffect(() => {
         let seenInitial = false;
@@ -682,9 +707,14 @@ export default function HomeScreen() {
                         requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true });
                     }
                 }, delay);
-            } else if (!hasDataRef.current || !didSessionFeedLoadRef.current) {
+            } else if (!hasDataRef.current) {
                 didSessionFeedLoadRef.current = true;
                 requestFeedLoad();
+            } else if (!didSessionFeedLoadRef.current) {
+                didSessionFeedLoadRef.current = true;
+                if (!cacheIsFresh(FEED_CACHE_KEY)) {
+                    requestFeedLoad({ quiet: true, skipScrollJump: true });
+                }
             }
 
             return () => {
@@ -738,51 +768,21 @@ export default function HomeScreen() {
         return saveUnsub;
     }, []);
 
-    // Integrantes / aforo en vivo mientras el feed está abierto.
+    // Tu propia fila de participante: el botón de unido. El aforo de los demás
+    // no se reconsulta aquí: escuchar toda la tabla no escala y el feed ya se refresca.
     useEffect(() => {
         if (!currentUserId) return;
-        const pending = new Set<string>();
-        let timer: ReturnType<typeof setTimeout> | null = null;
-
-        const flush = () => {
-            timer = null;
-            const ids = [...pending];
-            pending.clear();
-            if (ids.length === 0) return;
-            const known = plansRef.current.filter((p) => ids.includes(String(p.id)));
-            if (known.length === 0) return;
-            void attachFeedPlanPeople(known).then((updated) => {
-                if (!updated.length) return;
-                const byId = new Map(updated.map((p) => [String(p.id), p]));
-                setPlans((prev) =>
-                    prev.map((p) => {
-                        const next = byId.get(String(p.id));
-                        if (!next) return p;
-                        return {
-                            ...p,
-                            participantsList: next.participantsList,
-                            joinedCount: next.joinedCount,
-                            host: next.host ?? p.host,
-                            es_organizador: next.es_organizador ?? p.es_organizador,
-                        };
-                    }),
-                );
-            });
-        };
-
-        const queue = (planId: string | null | undefined) => {
-            if (!planId) return;
-            if (!plansRef.current.some((p) => String(p.id) === String(planId))) return;
-            pending.add(String(planId));
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(flush, 280);
-        };
 
         const channel = supabase
-            .channel(`feed-participantes:${currentUserId}:${Math.random().toString(36).slice(2, 8)}`)
+            .channel(`feed-participantes:${currentUserId}`)
             .on(
                 'postgres_changes',
-                { event: '*', schema: 'public', table: 'participantes' },
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'participantes',
+                    filter: `usuario_id=eq.${currentUserId}`,
+                },
                 (payload) => {
                     const rowNew = payload.new as
                         | { plan_id?: string; usuario_id?: string; estado?: string }
@@ -791,7 +791,6 @@ export default function HomeScreen() {
                         | { plan_id?: string; usuario_id?: string; estado?: string }
                         | null;
                     const planId = rowNew?.plan_id ?? rowOld?.plan_id;
-                    queue(planId);
 
                     const uid = currentUserIdRef.current;
                     const touchedUser = rowNew?.usuario_id ?? rowOld?.usuario_id;
@@ -841,7 +840,6 @@ export default function HomeScreen() {
             .subscribe();
 
         return () => {
-            if (timer) clearTimeout(timer);
             void supabase.removeChannel(channel);
         };
     }, [currentUserId]);
@@ -892,6 +890,12 @@ export default function HomeScreen() {
             return;
         }
 
+        if (await wasKickedFromPlan(planId, currentUserId)) {
+            hapticError();
+            Alert.alert(t('feed.error'), t('plan.kickedCannotJoin'));
+            return;
+        }
+
         const existingMembership = membershipMap[planId];
         const alreadyIn =
             existingMembership === 'joined' ||
@@ -933,7 +937,45 @@ export default function HomeScreen() {
         deferMineSortIdsRef.current.add(planId);
         setMembershipMap(prev => ({ ...prev, [planId]: nextMembership }));
         if (estado === 'aceptado') {
-            setPlans(prev => prev.map(p => p.id === planId ? { ...p, joinedCount: p.joinedCount + 1 } : p));
+            setPlans(prev =>
+                prev.map((p) => {
+                    if (p.id !== planId) return p;
+                    const list = Array.isArray(p.participantsList) ? [...p.participantsList] : [];
+                    if (!list.some((x: { id?: string }) => String(x.id) === String(currentUserId))) {
+                        list.push({
+                            id: currentUserId,
+                            nombre: t('chats.you'),
+                            avatar_url: null,
+                            isCreator: false,
+                        });
+                    }
+                    return { ...p, joinedCount: p.joinedCount + 1, participantsList: list };
+                }),
+            );
+            void import('../../lib/profileData').then(({ getMyProfile }) => {
+                // getMyProfile no recibe id y devuelve { data, error }: leerlo mal
+                // dejaba tu burbuja sin tu nombre ni tu foto al unirte.
+                void getMyProfile().then(({ data: me }) => {
+                    if (!me) return;
+                    setPlans((prev) =>
+                        prev.map((p) => {
+                            if (p.id !== planId || !Array.isArray(p.participantsList)) return p;
+                            return {
+                                ...p,
+                                participantsList: p.participantsList.map((x: { id?: string }) =>
+                                    String(x.id) === String(currentUserId)
+                                        ? {
+                                              ...x,
+                                              nombre: me.nombre || (x as { nombre?: string }).nombre,
+                                              avatar_url: me.avatar_url ?? null,
+                                          }
+                                        : x,
+                                ),
+                            };
+                        }),
+                    );
+                });
+            });
         }
         try {
             const { queued, error, estado: applied } = await persistJoinWithWaitlistFallback(
@@ -978,6 +1020,14 @@ export default function HomeScreen() {
                     userId: currentUserId,
                     bumpJoined: finalMembership === 'joined',
                     clearInvite: true,
+                    addParticipant:
+                        finalMembership === 'joined'
+                            ? {
+                                  id: currentUserId,
+                                  nombre: t('chats.you'),
+                                  avatar_url: null,
+                              }
+                            : null,
                 });
                 setInvitedPlanIds((prev) => {
                     if (!prev.has(planId)) return prev;
@@ -1057,7 +1107,7 @@ export default function HomeScreen() {
                     });
                     if (wasJoined && !queued) {
                         await promoteWaitlist(planId);
-                        fetchData();
+                        requestFeedLoadRef.current({ skipScrollJump: true, quiet: true });
                     }
                 },
             },
@@ -1139,10 +1189,17 @@ export default function HomeScreen() {
     const planDistanceLabel = useCallback(
         (plan: any): string | undefined => {
             if (!userCoords) return undefined;
-            const lat = Number(plan.latitud);
-            const lng = Number(plan.longitud);
-            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
-            return formatDistanceKm(distanceKm(userCoords.latitude, userCoords.longitude, lat, lng), lang);
+            const coords = parsePlanCoords(plan);
+            if (!coords) return undefined;
+            return formatDistanceKm(
+                distanceKm(
+                    userCoords.latitude,
+                    userCoords.longitude,
+                    coords.latitude,
+                    coords.longitude,
+                ),
+                lang,
+            );
         },
         [userCoords, lang],
     );
@@ -1167,8 +1224,15 @@ export default function HomeScreen() {
 
     const filteredPlans = useMemo(() => {
         const membershipPlanIds = new Set(Object.keys(membershipMap));
+        const hitIds = new Set(searchHits.map((p) => String(p.id)));
+        const merged = search.trim().length < 2
+            ? plans
+            : (() => {
+                const seen = new Set(plans.map((p) => String(p.id)));
+                return [...plans, ...searchHits.filter((p) => !seen.has(String(p.id)))];
+            })();
 
-        return plans.filter(p => {
+        return merged.filter(p => {
             const { main, sub } = resolvePlanCategories(p);
             const categoryOk =
                 selectedCategories.length === 0
@@ -1180,11 +1244,15 @@ export default function HomeScreen() {
 
             let distanceOk = true;
             if (nearbyKm != null && userCoords) {
-                const lat = Number(p.latitud);
-                const lng = Number(p.longitud);
-                if (!Number.isFinite(lat) || !Number.isFinite(lng)) distanceOk = false;
+                const coords = parsePlanCoords(p);
+                if (!coords) distanceOk = false;
                 else {
-                    const d = distanceKm(userCoords.latitude, userCoords.longitude, lat, lng);
+                    const d = distanceKm(
+                        userCoords.latitude,
+                        userCoords.longitude,
+                        coords.latitude,
+                        coords.longitude,
+                    );
                     distanceOk = d <= nearbyKm;
                 }
             }
@@ -1201,7 +1269,7 @@ export default function HomeScreen() {
                 && categoryOk
                 && subcategoryOk
                 && distanceOk
-                && planMatchesSearch(p, search, searchExpanded)
+                && (hitIds.has(String(p.id)) || planMatchesSearch(p, search, searchExpanded))
                 && matchesDate(p);
         });
     }, [
@@ -1216,6 +1284,7 @@ export default function HomeScreen() {
         selectedSubcategories,
         search,
         searchExpanded,
+        searchHits,
         matchesDate,
         nearbyKm,
         userCoords,
@@ -1234,6 +1303,7 @@ export default function HomeScreen() {
         taste: feedTaste,
         coords: userCoords,
         flatten: feedFlatten,
+        searchQuery: search,
         deferMineIds: mineSortEpoch >= 0 ? deferMineSortIdsRef.current : undefined,
     }), [
         filteredPlans,
@@ -1244,6 +1314,7 @@ export default function HomeScreen() {
         feedTaste,
         userCoords,
         feedFlatten,
+        search,
         mineSortEpoch,
     ]);
 
@@ -1321,6 +1392,14 @@ export default function HomeScreen() {
                                   )
                                 : null,
                     });
+                    // Feed people can be newer than a fresh plan-detail cache.
+                    syncPlanDetailParticipantsFromFeed(
+                        mid,
+                        Array.isArray(found.participantsList) ? found.participantsList : null,
+                        Number.isFinite(Number(found.joinedCount))
+                            ? Number(found.joinedCount)
+                            : undefined,
+                    );
                 }
                 prefetchPlanDetail(mid);
             } catch (e) {
@@ -1409,7 +1488,7 @@ export default function HomeScreen() {
                     onEdit={onEditStable}
                     onToggleSave={onSaveStable}
                     onOpenDetail={openPlanDetail}
-                    onParticipantsChanged={() => void fetchDataRef.current()}
+                    onParticipantsChanged={() => requestFeedLoadRef.current({ skipScrollJump: true, quiet: true })}
                     onOpenProfile={openProfile}
                     router={router}
                 />
@@ -1449,10 +1528,14 @@ export default function HomeScreen() {
                 invitedPlanIds,
                 isOwner: secretOwnerUx,
             })) continue;
-            const lat = Number(p.latitud);
-            const lng = Number(p.longitud);
-            if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-            const km = distanceKm(userCoords.latitude, userCoords.longitude, lat, lng);
+            const coords = parsePlanCoords(p);
+            if (!coords) continue;
+            const km = distanceKm(
+                userCoords.latitude,
+                userCoords.longitude,
+                coords.latitude,
+                coords.longitude,
+            );
             if (!best || km < best.km) best = { plan: p, km };
         }
         return best;
@@ -1481,11 +1564,24 @@ export default function HomeScreen() {
             currentUserGenero,
         });
         prefetchPlanDetail(mid);
+        if (resolvePlanSport(row.plan)?.tipo === 'futbol') {
+            prefetchTournamentLineup(mid);
+        }
         const host =
             row.plan.host ||
             (Array.isArray(row.plan.participantsList)
                 ? row.plan.participantsList.find((p: { isCreator?: boolean }) => p.isCreator)
                 : null);
+        prefetchRemoteImages(
+            [
+                row.plan.imagen_url,
+                host?.avatar_url,
+                ...((Array.isArray(row.plan.participantsList)
+                    ? row.plan.participantsList.slice(0, 6)
+                    : []) as Array<{ avatar_url?: string | null }>).map((p) => p.avatar_url),
+            ],
+            8,
+        );
         if (!host?.id) return;
         seedUserProfilePeek({
             id: host.id,
@@ -1530,8 +1626,15 @@ export default function HomeScreen() {
         prefetchedAheadRef.current.clear();
     }, [currentUserId]);
 
+    const lastWarmKeyRef = useRef('');
     useEffect(() => {
-        // Al cargar el feed: calentar detalle + afinidad (no al press).
+        const key = feedRowsUi
+            .filter((row): row is Extract<FeedRow, { kind: 'plan' }> => row.kind === 'plan' && !!row.plan?.id)
+            .slice(0, 8)
+            .map((row) => row.plan.id)
+            .join(',');
+        if (!key || key === lastWarmKeyRef.current) return;
+        lastWarmKeyRef.current = key;
         let n = 0;
         for (const row of feedRowsUi) {
             if (n >= 8) break;
@@ -1541,7 +1644,7 @@ export default function HomeScreen() {
         }
     }, [feedRowsUi, warmFeedPlan]);
 
-    const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 20, minimumViewTime: 40 }).current;
+    const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 20, minimumViewTime: 220 }).current;
 
     useEffect(() => {
         if (nearbyKm === 10) setNearbyKm(null);
@@ -1618,7 +1721,24 @@ export default function HomeScreen() {
                         keyboardAppearance={scheme}
                         autoCorrect={false}
                         autoCapitalize="none"
+                        returnKeyType="search"
                     />
+                    {search.length > 0 ? (
+                        <Pressable
+                            onPress={() => {
+                                hapticSelection();
+                                setSearch('');
+                                setSearchHits([]);
+                                setSearchExpanded([]);
+                            }}
+                            hitSlop={10}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('feed.clearSearch')}
+                            style={styles.searchClear}
+                        >
+                            <Ionicons name="close-circle" size={20} color={colors.textSubtle} />
+                        </Pressable>
+                    ) : null}
                 </View>
             </View>
 
@@ -1729,9 +1849,11 @@ export default function HomeScreen() {
                                         ? formatDistanceKm(nearestOutsideNearby.km, lang)
                                         : undefined
                                 }
-                                onRetry={() => void fetchData({ refresh: true })}
+                                onRetry={() => requestFeedLoadRef.current({ refresh: true })}
                                 onClear={() => {
                                     setSearch('');
+                                    setSearchHits([]);
+                                    setSearchExpanded([]);
                                     clearAllFilters();
                                     setLoadError(false);
                                 }}
@@ -1774,7 +1896,7 @@ export default function HomeScreen() {
                         )
                     }
                 />
-                {loading && !refreshing && plans.length === 0 ? (
+                {showFeedSkeleton && !refreshing ? (
                     <View style={styles.listLoadingOverlay} pointerEvents="none">
                         <FeedSkeletonList count={3} />
                     </View>

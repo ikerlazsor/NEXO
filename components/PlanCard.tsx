@@ -1,7 +1,7 @@
 import {
     Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Image as ExpoImage } from 'expo-image';
+import { Image as ExpoImage, type ImageStyle } from 'expo-image';
 import { useCallback,
     useEffect,
     useMemo,
@@ -16,6 +16,7 @@ import {
     Platform,
     Pressable,
     StyleSheet,
+    type StyleProp,
     Text,
     TouchableOpacity,
     View,
@@ -33,13 +34,21 @@ import { emitHeartBurst } from '../lib/heartBurst';
 import { useAuthSession } from '../lib/authSession';
 import { useT } from '../lib/i18n';
 import { localeTag } from '../lib/locale';
-import { PlanShareModal, buildPlanSharePayload, type PlanSharePayload } from './PlanShareModal';
+import { sharePlanLink } from '../lib/sharePlan';
+import { fetchTournamentConfig } from '../lib/footballTournament';
+import { requestTournamentShare } from '../lib/shareTournamentPitch';
+import { resolvePlanSport } from '../lib/categories';
+import { prioritizeTournamentPrefetch } from '../lib/tournamentLineupCache';
+import { prefetchPlanDetail } from '../lib/planDetailCache';
 import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../lib/planInvites';
 import { formatSocialJoinedBanner } from '../lib/socialJoinedBanner';
 import { feedFitPercent, type FeedTaste } from '../lib/feedAffinity';
+import { storageThumbUrl, WEBP_ACCEPT_HEADERS } from '../lib/storageImage';
 import { FitMatchBanner } from './FitMatchBanner';
 import { PlanCoverCarousel } from './PlanCoverCarousel';
 import { InvitePeopleSheet, type InviteProfile } from './InvitePeopleSheet';
+import type { ChatGroupOption } from '../lib/inviteChatGroup';
+import { listGroupsInvitedToPlan, listMyChatGroups } from '../lib/inviteChatGroup';
 import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
 import { TranslatedText } from './TranslatedText';
@@ -61,12 +70,63 @@ const DANGER_DARK = '#DC2626';
 const DANGER_BG = '#FEF2F2';
 const GOLD = '#D4AF37';
 
-const MAX_VISIBLE_AVATARS = 5;
 /** Feed listContent paddingHorizontal 20 + 20 */
 const COVER_W = Dimensions.get('window').width - 40;
 
+const AVATAR_SIZE = 45;
+/** Lo que cada burbuja monta sobre la anterior. */
+const AVATAR_OVERLAP = 18;
+const AVATAR_ADVANCE = AVATAR_SIZE - AVATAR_OVERLAP;
+/** Hueco reservado al «somos N» para que no acabe en puntos suspensivos. */
+const GOING_TEXT_MIN_W = 76;
+/**
+ * Seis avatares más el «+N», o los que quepan si el móvil es muy estrecho:
+ * con un número fijo el texto de al lado se cortaba en pantallas pequeñas.
+ */
+const MAX_VISIBLE_AVATARS = (() => {
+    const stackWidth = COVER_W - 36 - GOING_TEXT_MIN_W;
+    const bubbles = Math.floor((stackWidth - AVATAR_SIZE) / AVATAR_ADVANCE) + 1;
+    // `bubbles` cuenta también la del «+N», que puede estar o no.
+    return Math.max(3, Math.min(6, bubbles - 1));
+})();
+
 const avatarFallback = (name?: string) =>
     `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'N')}&background=4DA6FF&color=fff`;
+
+/**
+ * Avatar de lista servido como miniatura: una foto de 145 kB se queda en ~10 kB.
+ * Si la miniatura falla, cae a la original para no dejar el hueco gris.
+ */
+const ListAvatar = ({
+    uri,
+    name,
+    size,
+    style,
+    recyclingKey,
+}: {
+    uri?: string | null;
+    name?: string;
+    /** Lado en puntos con el que se pinta (el del estilo). */
+    size: number;
+    style: StyleProp<ImageStyle>;
+    recyclingKey?: string;
+}) => {
+    const [thumbFailed, setThumbFailed] = useState(false);
+    const original = uri || avatarFallback(name);
+    const thumb = thumbFailed ? original : storageThumbUrl(original, size) ?? original;
+
+    return (
+        <ExpoImage
+            source={thumb === original ? { uri: original } : { uri: thumb, headers: WEBP_ACCEPT_HEADERS }}
+            style={style}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={recyclingKey}
+            transition={0}
+            onError={thumbFailed ? undefined : () => setThumbFailed(true)}
+        />
+    );
+};
 
 export type { Membership } from '../lib/participants';
 
@@ -75,12 +135,13 @@ const isSameCalendarDay = (a: Date, b: Date) =>
 
 const AvatarStack = ({
     participants,
-    maxPeople,
+    joinedCount,
     onOpenRoster,
     dark,
 }: {
     participants: any[];
-    maxPeople: number;
+    /** Total real de unidos; participants solo trae una muestra para los avatares. */
+    joinedCount: number;
     onOpenRoster: () => void;
     dark?: boolean;
 }) => {
@@ -89,13 +150,13 @@ const AvatarStack = ({
     if (!participants || participants.length === 0) {
         return (
             <View style={styles.avatarStackRow}>
-                <Text style={[styles.beFirstText, dark && styles.beFirstTextDark]}>{t('card.beFirst')} · </Text>
-                <Text style={[styles.maxText, dark && styles.maxTextDark]}>({t('card.max', { n: maxPeople })})</Text>
+                <Text style={[styles.beFirstText, dark && styles.beFirstTextDark]}>{t('card.beFirst')}</Text>
             </View>
         );
     }
     const visible = participants.slice(0, MAX_VISIBLE_AVATARS);
-    const extra = participants.length - visible.length;
+    const total = Math.max(joinedCount || 0, participants.length);
+    const extra = total - visible.length;
 
     return (
         <View style={styles.avatarStackRow}>
@@ -104,29 +165,46 @@ const AvatarStack = ({
                     {visible.map((p, index) => (
                         <View
                             key={p.id ?? index}
-                            style={[styles.stackAvatarWrap, { marginLeft: index === 0 ? 0 : -16, zIndex: visible.length - index }]}
+                            style={[
+                                styles.stackAvatarWrap,
+                                {
+                                    marginLeft: index === 0 ? 0 : -AVATAR_OVERLAP,
+                                    zIndex: visible.length - index,
+                                },
+                            ]}
                         >
-                            <ExpoImage
-                                source={{ uri: p.avatar_url || avatarFallback(p.nombre) }}
+                            <ListAvatar
+                                uri={p.avatar_url}
+                                name={p.nombre}
+                                size={AVATAR_SIZE}
                                 style={styles.stackAvatar}
-                                contentFit="cover"
-                                cachePolicy="memory-disk"
                                 recyclingKey={p.id ?? p.avatar_url}
-                                transition={0}
                             />
                         </View>
                     ))}
                     {extra > 0 && (
-                        <View style={[styles.stackAvatarWrap, styles.extraBubble, { marginLeft: -16, zIndex: 0 }]}>
+                        // Encima de todas: debajo, el último avatar le tapaba el «+».
+                        <View
+                            style={[
+                                styles.stackAvatarWrap,
+                                styles.extraBubble,
+                                { marginLeft: -AVATAR_OVERLAP, zIndex: visible.length + 1 },
+                            ]}
+                        >
                             <Text style={styles.extraBubbleText}>+{extra}</Text>
                         </View>
                     )}
                 </View>
             </TouchableOpacity>
-            <TouchableOpacity activeOpacity={0.85} onPress={onOpenRoster}>
-                <Text style={[styles.goingText, dark && styles.goingTextDark]}>{t('card.weAre', { n: participants.length })}</Text>
+            <TouchableOpacity activeOpacity={0.85} onPress={onOpenRoster} style={styles.goingTextWrap}>
+                <Text
+                    style={[styles.goingText, dark && styles.goingTextDark]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                >
+                    {t('card.weAre', { n: total })}
+                </Text>
             </TouchableOpacity>
-            <Text style={[styles.maxText, dark && styles.maxTextDark]}> ({t('card.max', { n: maxPeople })})</Text>
         </View>
     );
 };
@@ -193,7 +271,7 @@ function PlanCardInner({
     const [showRoster, setShowRoster] = useState(false);
     const [showInviteSheet, setShowInviteSheet] = useState(false);
     const [invitees, setInvitees] = useState<InviteProfile[]>([]);
-    const [sharePayload, setSharePayload] = useState<PlanSharePayload | null>(null);
+    const [invitedGroups, setInvitedGroups] = useState<ChatGroupOption[]>([]);
     const heartHostRef = useRef<View>(null);
     const entrance = useRef(new Animated.Value(0)).current;
     const scale = useRef(new Animated.Value(1)).current;
@@ -300,6 +378,13 @@ function PlanCardInner({
     };
     const pressIn = () => {
         Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
+        // Empieza a calentar detalle + torneo mientras baja el dedo.
+        const pid = String(item.id);
+        prefetchPlanDetail(pid);
+        if (resolvePlanSport(item)?.tipo === 'futbol') {
+            // Torneo del feed: force refresh si ya lo conocemos (plan clave).
+            prioritizeTournamentPrefetch(pid);
+        }
     };
     const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
 
@@ -315,33 +400,28 @@ function PlanCardInner({
             ? 'soloChicas'
             : null;
 
-    const coverUrl = planCoverList(item)[0] ?? item.imagen_url ?? null;
-
     const handleShare = () => {
         hapticLight();
-        const when = eventDate ? `${dateString}${timeString ? ` · ${timeString}` : ''}` : '';
-        const location = (distanceLabel || item.nombre_ubicacion || '').trim();
-        setSharePayload(
-            buildPlanSharePayload({
-                planId: String(item.id),
-                title: item.titulo,
-                coverUrl,
-                when,
-                location,
-                participants: (item.participantsList || []).map((p: { id?: string; nombre?: string; avatar_url?: string }) => ({
-                    id: p.id,
-                    nombre: p.nombre,
-                    avatar_url: p.avatar_url,
-                })),
-                maxPeople: item.maximo_participantes,
-            }),
-        );
+        void (async () => {
+            const planId = String(item.id);
+            const torneo = await fetchTournamentConfig(planId);
+            if (torneo) {
+                requestTournamentShare(planId);
+                return;
+            }
+            await sharePlanLink(planId, item.titulo);
+        })();
     };
 
-    const openInviteSheet = async () => {
-        setShowInviteSheet(true);
+    const loadInviteState = useCallback(async () => {
+        if (!canInvite || !currentUserId) {
+            setInvitees([]);
+            setInvitedGroups([]);
+            return;
+        }
+        const planId = String(item.id);
         try {
-            const list = await getPlanPendingInvitees(String(item.id));
+            const list = await getPlanPendingInvitees(planId);
             setInvitees(
                 list.map((i) => ({
                     id: i.id,
@@ -354,6 +434,30 @@ function PlanCardInner({
         } catch {
             setInvitees([]);
         }
+        try {
+            const groups = await listMyChatGroups(currentUserId);
+            const already = await listGroupsInvitedToPlan(
+                planId,
+                groups.map((g) => g.id),
+            );
+            setInvitedGroups(
+                already.map((g) => {
+                    const full = groups.find((r) => r.id === g.id);
+                    return full ?? g;
+                }),
+            );
+        } catch {
+            setInvitedGroups([]);
+        }
+    }, [canInvite, currentUserId, item.id]);
+
+    useEffect(() => {
+        void loadInviteState();
+    }, [loadInviteState]);
+
+    const openInviteSheet = () => {
+        setShowInviteSheet(true);
+        void loadInviteState();
     };
 
     const handleInviteAdd = useCallback(
@@ -579,6 +683,7 @@ function PlanCardInner({
                             recyclingKey={String(item.id)}
                             priority={index < 3 ? 'high' : 'normal'}
                             deferExtraSlides
+                            thumbWidth={720}
                             onPress={onOpenDetail ? () => onOpenDetail(item.id) : openDetail}
                         />
                         <LinearGradient
@@ -691,7 +796,7 @@ function PlanCardInner({
                     ]}>
                         <AvatarStack
                             participants={participants}
-                            maxPeople={item.maximo_participantes}
+                            joinedCount={Number(item.joinedCount) || 0}
                             onOpenRoster={() => {
                                 if (onOpenDetail) onOpenDetail(item.id);
                                 else if (participants.length > 0) setShowRoster(true);
@@ -751,11 +856,55 @@ function PlanCardInner({
                                     styles.metaTextLoc,
                                     isFriendsOnly && styles.metaTextFriends,
                                     isPrivate && styles.metaTextPrivate,
-                                ]} numberOfLines={1}>
-                                    {distanceLabel || t('card.location')}
+                                ]} numberOfLines={1} ellipsizeMode="tail">
+                                    {(() => {
+                                        const place =
+                                            typeof item.nombre_ubicacion === 'string'
+                                                ? item.nombre_ubicacion.trim()
+                                                : '';
+                                        const hasCoords =
+                                            item.latitud != null &&
+                                            item.longitud != null &&
+                                            item.latitud !== '' &&
+                                            item.longitud !== '' &&
+                                            Number.isFinite(Number(item.latitud)) &&
+                                            Number.isFinite(Number(item.longitud));
+                                        if (distanceLabel && hasCoords) return distanceLabel;
+                                        if (place) return place;
+                                        return t('createplan.tbd');
+                                    })()}
                                 </Text>
                             </View>
                         </View>
+
+                        {(() => {
+                            const sport = resolvePlanSport(item);
+                            if (sport?.tipo !== 'futbol' && sport?.tipo !== 'padel') return null;
+                            return (
+                            <TouchableOpacity
+                                style={styles.futbolChip}
+                                activeOpacity={0.88}
+                                onPress={() => {
+                                    hapticSelection();
+                                    if (onOpenDetail) onOpenDetail(item.id);
+                                    else router.push(`/plan/${item.id}`);
+                                }}
+                            >
+                                <View style={styles.futbolBall}>
+                                    <Ionicons
+                                        name={sport.tipo === 'padel' ? 'tennisball' : 'football'}
+                                        size={18}
+                                        color="#FFF"
+                                    />
+                                </View>
+                                <Text style={styles.futbolFormatText}>{t('card.lineups')}</Text>
+                                <Text style={styles.futbolChipHint} numberOfLines={1}>
+                                    {t('card.lineupsHint')}
+                                </Text>
+                                <Ionicons name="chevron-forward" size={18} color="#1B7A42" />
+                            </TouchableOpacity>
+                            );
+                        })()}
 
                         {expanded && !onOpenDetail && (
                             <View style={styles.expandedSection}>
@@ -859,7 +1008,7 @@ function PlanCardInner({
                     <Pressable style={styles.rosterSheet} onPress={(e) => e.stopPropagation()}>
                         <View style={styles.rosterHandle} />
                         <Text style={styles.rosterTitle}>
-                            {t('card.participants')} · {participants.length}
+                            {t('card.participants')} · {Math.max(Number(item.joinedCount) || 0, participants.length)}
                         </Text>
                         {participants.map((p: any) => (
                             <View key={p.id} style={styles.rosterRowWrap}>
@@ -884,13 +1033,12 @@ function PlanCardInner({
                                         }
                                     }}
                                 >
-                                    <ExpoImage
-                                        source={{ uri: p.avatar_url || avatarFallback(p.nombre) }}
+                                    <ListAvatar
+                                        uri={p.avatar_url}
+                                        name={p.nombre}
+                                        size={44}
                                         style={[styles.rosterAvatar, p.isCreator && styles.stackAvatarCreator]}
-                                        contentFit="cover"
-                                        cachePolicy="memory-disk"
                                         recyclingKey={p.id ?? p.avatar_url}
-                                        transition={0}
                                     />
                                     <View style={{ flex: 1 }}>
                                         <Text style={styles.rosterName}>{p.nombre || t('profile.user')}</Text>
@@ -950,13 +1098,19 @@ function PlanCardInner({
                     onClose={() => setShowInviteSheet(false)}
                     currentUserId={currentUserId}
                     selected={invitees}
+                    selectedGroups={invitedGroups}
                     excludeIds={memberExcludeIds}
+                    targetPlanId={String(item.id)}
                     onAdd={handleInviteAdd}
                     onRemove={handleInviteRemove}
+                    onGroupInvited={(group) => {
+                        setInvitedGroups((prev) =>
+                            prev.some((g) => g.id === group.id) ? prev : [...prev, group],
+                        );
+                        void loadInviteState();
+                    }}
                 />
             ) : null}
-
-            <PlanShareModal payload={sharePayload} onDone={() => setSharePayload(null)} />
         </Animated.View>
     );
 }
@@ -1143,7 +1297,7 @@ function createPlanCardStyles(c: ThemeColors) {
         backgroundColor: c.surface,
         zIndex: 2,
     },
-    avatarStackRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' },
+    avatarStackRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
     avatarStack: { flexDirection: 'row', alignItems: 'center' },
     stackAvatarWrap: { position: 'relative' },
     stackAvatar: { width: 45, height: 45, borderRadius: 23, borderWidth: 2, borderColor: c.surface, backgroundColor: c.surfaceSubtle },
@@ -1151,7 +1305,9 @@ function createPlanCardStyles(c: ThemeColors) {
     creatorDot: { position: 'absolute', bottom: -1, right: -1, backgroundColor: GOLD, borderRadius: 6, width: 13, height: 13, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#FFF' },
     extraBubble: { width: 45, height: 45, borderRadius: 23, borderWidth: 2, borderColor: c.surface, backgroundColor: PRIMARY_DARK, justifyContent: 'center', alignItems: 'center' },
     extraBubbleText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
-    goingText: { marginLeft: 10, fontSize: 13, fontWeight: '800', color: INK },
+    /** flexShrink: el “· máx N” va en la misma línea aunque el nombre sea largo. */
+    goingTextWrap: { flexShrink: 1, marginLeft: 10 },
+    goingText: { fontSize: 13, fontWeight: '800', color: INK },
     goingTextDark: { color: '#F1F5F9' },
     maxText: { fontSize: 13, fontWeight: '700', color: '#94A3B8' },
     maxTextDark: { color: '#CBD5E1' },
@@ -1182,9 +1338,9 @@ function createPlanCardStyles(c: ThemeColors) {
     metaRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 6 },
     metaItem: { flexDirection: 'row', alignItems: 'center' },
     metaItemDate: { flexShrink: 1, minWidth: 0 },
-    metaItemLoc: { flexShrink: 1, maxWidth: '40%' },
+    metaItemLoc: { flexShrink: 1, flexGrow: 1, minWidth: 0, maxWidth: '48%' },
     metaText: { marginLeft: 7, fontSize: 14, color: c.textMuted, fontWeight: '600', flexShrink: 1 },
-    metaTextLoc: { marginLeft: 4 },
+    metaTextLoc: { marginLeft: 4, flexShrink: 1, minWidth: 0 },
 
     expandedSection: { marginTop: 14, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
     descLabel: { fontSize: 11, fontWeight: '800', color: c.textSubtle, textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.3 },

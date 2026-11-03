@@ -10,8 +10,8 @@ type Props = MapViewProps & {
 };
 
 /**
- * MapView seguro: sin API key de Google en builds Android standalone,
- * no montamos el nativo (evita el crash al abrir crear plan / detalle).
+ * MapView nativo en iOS/Android. El fallback gris solo queda para web
+ * u otros; en Android ya no se apaga por un flag de OTA.
  */
 const mapFallbackStyles = StyleSheet.create({
     fallback: {

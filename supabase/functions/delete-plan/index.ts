@@ -120,14 +120,34 @@ serve(async (req: Request) => {
       .map((m) => m.usuario_id as string)
       .filter((id) => id && id !== caller.id && id !== plan.creador_id);
 
+    // Invitees con solicitud pendiente (para limpiar badge de perfil en cliente vía push).
+    const { data: pendingInvites } = await admin
+      .from('invitaciones_planes')
+      .select('invitado_id')
+      .eq('plan_id', planId)
+      .eq('estado', 'pendiente');
+    const inviteeIds = [...new Set(
+      (pendingInvites ?? [])
+        .map((r) => r.invitado_id as string)
+        .filter((id) => id && id !== caller.id),
+    )];
+
     // Avisar antes de borrar (el plan aún existe; luego desaparece).
     await notifyPlanCancelled({
       admin,
       planId,
       planTitle: (plan.titulo as string) || 'tu plan',
       actorId: caller.id,
-      recipientIds,
+      recipientIds: [...new Set([...recipientIds, ...inviteeIds])],
     }).catch(() => {});
+
+    // Quitar tarjetas de invitación en chats de grupo que apuntan a este plan.
+    await admin
+      .from('mensajes')
+      .delete()
+      .like('contenido', `@@nexo_plan_invite:%"planId":"${planId}"%`)
+      .then(() => undefined)
+      .catch(() => undefined);
 
     const { data: paths, error: pathError } = await admin.rpc(
       'get_plan_storage_cleanup_paths',
@@ -143,7 +163,7 @@ serve(async (req: Request) => {
     });
     if (deleteError) throw new Error(`plan_delete_failed:${deleteError.message}`);
 
-    return jsonResponse(200, { ok: true });
+    return jsonResponse(200, { ok: true, clearedInvitees: inviteeIds });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'delete_plan_failed';
     const status = message === 'not_authenticated' ? 401 : 500;

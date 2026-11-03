@@ -1,0 +1,59 @@
+{
+  "fr": {
+    "status": "ok",
+    "keys": 1736,
+    "extraKeys": 0,
+    "likelyUntranslated": 10,
+    "sampleUntranslated": [
+      "feed.provincesSelected",
+      "card.minMax",
+      "card.participants",
+      "settings.notifications",
+      "organizer.fieldWhatsappPlaceholder",
+      "organizer.fieldAbout",
+      "onboarding.stepOf",
+      "createplan.coverPhotoOf",
+      "createplan.description",
+      "createplan.spotsHintSport"
+    ]
+  },
+  "de": {
+    "status": "ok",
+    "keys": 1736,
+    "extraKeys": 0,
+    "likelyUntranslated": 7,
+    "sampleUntranslated": [
+      "friends.invitePlan",
+      "settings.organizersInbox",
+      "organizer.fieldWhatsappPlaceholder",
+      "search.filterCommunities",
+      "search.rankCommunities",
+      "onboarding.stepOf",
+      "createplan.coverPhotoOf"
+    ]
+  },
+  "pt": {
+    "status": "ok",
+    "keys": 1736,
+    "extraKeys": 0,
+    "likelyUntranslated": 3,
+    "sampleUntranslated": [
+      "organizer.fieldWhatsappPlaceholder",
+      "onboarding.stepOf",
+      "createplan.coverPhotoOf"
+    ]
+  },
+  "it": {
+    "status": "ok",
+    "keys": 1736,
+    "extraKeys": 0,
+    "likelyUntranslated": 5,
+    "sampleUntranslated": [
+      "card.minMax",
+      "organizer.fieldWhatsappPlaceholder",
+      "onboarding.stepOf",
+      "createplan.coverPhotoOf",
+      "createplan.spotsHintSport"
+    ]
+  }
+}

@@ -6,6 +6,7 @@ import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { type MyPlanItem } from '../lib/myPlansQuery';
+import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../lib/planDetailCache';
 import { stripPlanTitleSuffix } from '../lib/planDisplay';
 import { formatCountdown, resolveRatingUiPhase } from '../lib/planLifecycle';
 import { type PendingRatingPlan } from '../lib/ratings';
@@ -91,6 +92,10 @@ export const MyPlanListRow = memo(function MyPlanListRow({
                 style={[styles.card, item.isPast && styles.cardPast]}
                 pressedScale={0.98}
                 minTouch={false}
+                onPressIn={() => {
+                    seedPlanDetailFromFeed(item as unknown as Record<string, unknown>);
+                    prefetchPlanDetail(item.id);
+                }}
                 onPress={() => onOpenPlan(item)}
             >
                 <View style={styles.cardHeader}>
@@ -98,6 +103,7 @@ export const MyPlanListRow = memo(function MyPlanListRow({
                         source={resolvePlanImageSource(item.imagen_url)}
                         style={styles.thumb}
                         recyclingKey={String(item.id)}
+                        thumbWidth={240}
                     />
                     <View style={{ flex: 1, marginLeft: 12 }}>
                         <Text style={styles.cardTitle} numberOfLines={1}>{stripPlanTitleSuffix(item.titulo)}</Text>

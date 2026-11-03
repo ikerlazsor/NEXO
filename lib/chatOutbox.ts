@@ -85,6 +85,28 @@ export async function discardChatOutbox(): Promise<void> {
     await AsyncStorage.removeItem(OUTBOX_KEY);
 }
 
+/** Busca el mensaje que un intento anterior pudo dejar ya enviado. */
+async function findSentMessage(
+    item: OutboxItem,
+): Promise<{ id: string; creado_en: string } | null> {
+    const since = new Date(new Date(item.createdAt).getTime() - 60_000).toISOString();
+    let query = supabase
+        .from('mensajes')
+        .select('id, creado_en')
+        .eq('emisor_id', item.emisorId)
+        .eq('tipo', item.tipo)
+        .eq('contenido', item.contenido)
+        .gte('creado_en', since)
+        .limit(1);
+
+    query = item.kind === 'plan'
+        ? query.eq('plan_id', item.planId ?? '')
+        : query.is('plan_id', null).eq('receptor_id', item.receptorId ?? '');
+
+    const { data } = await query.maybeSingle();
+    return data?.id ? { id: data.id as string, creado_en: data.creado_en as string } : null;
+}
+
 export async function flushChatOutbox(): Promise<void> {
     ensureNetworkHook();
     if (!getIsOnline()) return;
@@ -122,15 +144,22 @@ export async function flushChatOutbox(): Promise<void> {
                               archivo_url: item.archivoUrl,
                           };
 
-                const data = await withRetry(async () => {
-                    const res = await supabase
-                        .from('mensajes')
-                        .insert(row)
-                        .select('id, creado_en')
-                        .maybeSingle();
-                    if (res.error) throw res.error;
-                    return res.data;
-                }, { retries: 2, baseMs: 500 });
+                // Un intento anterior pudo llegar al servidor y perderse la respuesta:
+                // sin esto el reintento crearía un mensaje repetido.
+                let data = await findSentMessage(item);
+
+                if (!data?.id) {
+                    // Sin reintentos: el insert no es idempotente, ya se reintenta en el flush.
+                    data = await withRetry(async () => {
+                        const res = await supabase
+                            .from('mensajes')
+                            .insert(row)
+                            .select('id, creado_en')
+                            .maybeSingle();
+                        if (res.error) throw res.error;
+                        return res.data;
+                    }, { retries: 0, baseMs: 500 });
+                }
 
                 if (!data?.id) {
                     remaining.push(item);

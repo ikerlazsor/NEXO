@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useAppTheme } from '../lib/appTheme';
-import { StyleSheet, Text, View, type ReactNode } from 'react-native';
+import type { ReactNode } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PressScale } from './PressScale';
 

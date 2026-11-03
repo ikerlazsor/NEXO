@@ -21,4 +21,4 @@ export const COMPACT_LIST_PROPS = {
  * FlashList v2 (New Architecture) no necesita estimatedItemSize ni los props
  * de virtualización de FlatList. Mantener el contenedor con flex:1.
  */
-export const FLASH_LIST_DRAW_DISTANCE = 900;
+export const FLASH_LIST_DRAW_DISTANCE = 420;

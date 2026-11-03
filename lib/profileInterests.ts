@@ -122,3 +122,5 @@ export function getInterestAccent(tag: string): InterestAccent {
 
 export const PERSONALITY_MAX = 4;
 export const PERSONALITY_MIN = 1;
+/** Cuántas aficiones se muestran en el perfil antes del “+N”. */
+export const INTEREST_VISIBLE_MAX = 6;

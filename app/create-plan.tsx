@@ -3,10 +3,12 @@ import {
 } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import {
+    useFocusEffect,
     useLocalSearchParams,
     useRouter
 } from 'expo-router';
 import {
+    useCallback,
     useEffect,
     useRef,
     useState
@@ -15,13 +17,13 @@ import {
     ActivityIndicator,
     Dimensions,
     Image,
-    InteractionManager,
     Keyboard,
     KeyboardAvoidingView,
     Platform,
     Modal,
     Pressable,
     ScrollView,
+    Share,
     StyleSheet,
     Switch,
     Text,
@@ -33,6 +35,13 @@ import type MapView from 'react-native-maps';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { InvitePeopleSheet, type InviteProfile } from '../components/InvitePeopleSheet';
+import type { ChatGroupOption } from '../lib/inviteChatGroup';
+import {
+    cancelChatGroupInvite,
+    inviteChatGroupToPlan,
+    listGroupsInvitedToPlan,
+    listMyChatGroups,
+} from '../lib/inviteChatGroup';
 import { PlanCoverPicker } from '../components/PlanCoverPicker';
 import { PlanDayCalendar } from '../components/PlanDayCalendar';
 import { PlanLocationPicker } from '../components/PlanLocationPicker';
@@ -52,22 +61,39 @@ import {
     resolvePlanCategories,
     type MainCategoryId,
 } from '../lib/categories';
+import { holdAppUpdateReload } from '../lib/appUpdates';
+import {
+    DEFAULT_TOURNAMENT_BENCH,
+    DEFAULT_TOURNAMENT_TEAMS,
+    TOURNAMENT_TEAM_MAX,
+    TOURNAMENT_TEAM_MIN,
+    defaultTeamNames,
+    defaultTournamentConfig,
+    isTournamentConfig,
+    saveTournamentConfig,
+    tournamentCapacity,
+} from '../lib/footballTournament';
+import { formatDisplayLabel, type FootballFormat } from '../lib/footballLineup';
 import { FEED_CACHE_KEY } from '../lib/feedCache';
-import { injectOptimisticFeedPlan, markFeedNeedsRefresh } from '../lib/feedReload';
-import { hapticCelebrate, hapticError, hapticLight, hapticMedium, hapticSelection, hapticSuccess, hapticToggle } from '../lib/haptics';
+import { injectOptimisticFeedPlan, markFeedNeedsRefresh, patchCachedFeedPlan } from '../lib/feedReload';
+import { patchPlanDetailFromEdit } from '../lib/planDetailCache';
+import { hapticError, hapticMedium, hapticSelection, hapticSuccess, hapticToggle } from '../lib/haptics';
 import { useT } from '../lib/i18n';
 import { localeTag } from '../lib/locale';
-import { broadcastPlanMembership } from '../lib/membershipBroadcast';
-import { Alert, dismissAllNexoAlerts } from '../lib/nexoAlert';
+import { dismissAllNexoAlerts } from '../lib/nexoAlert';
 import { MAX_ORGANIZER_COVERS, uploadOrganizerCover } from '../lib/planCovers';
 import { cancelPlanInvite, getPlanPendingInvitees, sendPlanInvite } from '../lib/planInvites';
 import { canCreateMorePlans, maxActivePlansFor } from '../lib/planLimits';
-import { scheduleCoverPrefetch, warmCoverImages } from '../lib/prefetchCovers';
+import { promoteWaitlist } from '../lib/participants';
+import { warmCoverImages } from '../lib/prefetchCovers';
 import { getMyProfile } from '../lib/profileData';
 import type { Genero } from '../lib/profileFields';
-import { PLAN_DESCRIPTION_MAX } from '../lib/profileSocial';
+import { PLAN_DESCRIPTION_MAX, PLAN_TITLE_MAX } from '../lib/profileSocial';
 import { notifyPlanUpdated, schedulePlanLifecycleReminders } from '../lib/push';
 import { invalidatePlanMembershipCaches } from '../lib/screenCaches';
+import { planShareUrl } from '../lib/shareLinks';
+import { withShareTouchGuard } from '../lib/shareTouchGuard';
+import { runWhenIdle } from '../lib/runWhenIdle';
 import { supabase } from '../lib/supabase';
 import { moderatePlanTitle, type TitleModerationReason } from '../lib/titleModeration';
 import { cacheInvalidate } from '../lib/ttlCache';
@@ -80,7 +106,7 @@ const DANGER = '#EF4444';
 const SOLO_PINK = '#DB2777';
 const SOLO_PINK_LIGHT = '#FDF2F8';
 
-const MAX_PEOPLE = 25;
+const MAX_PEOPLE = 200;
 const MAX_PEOPLE_ORGANIZER = 800;
 const MIN_PEOPLE = 2;
 /** No se puede crear un plan con menos de 30 minutos de margen. */
@@ -112,13 +138,15 @@ export default function CreatePlanScreen() {
         else router.replace('/(tabs)');
     }, [isGuest, requireAccount, router]);
 
+    // Montar el mapa cuando el modal ya asentó (evita el tirón del cold open).
     useEffect(() => {
-        const task = InteractionManager.runAfterInteractions(() => {
-            scheduleCoverPrefetch();
-            warmCoverImages(MAIN_CATEGORIES[0], SUBCATEGORIES[MAIN_CATEGORIES[0]][0]);
-        });
-        return () => task.cancel();
+        const cancel = runWhenIdle(() => {
+            setMapMounted(true);
+        }, 180);
+        return cancel;
     }, []);
+
+    // El mapa nativo en el primer frame choca con el slide del modal → tirón solo en cold open.
     const { editId, duplicateId } = useLocalSearchParams<{ editId?: string; duplicateId?: string }>();
     const sourcePlanId = editId ? String(editId) : duplicateId ? String(duplicateId) : null;
     const isDuplicate = !!duplicateId && !editId;
@@ -126,11 +154,14 @@ export default function CreatePlanScreen() {
     const scrollRef = useRef<ScrollView>(null);
     const titleFieldRef = useRef<View>(null);
     const descFieldRef = useRef<View>(null);
+    const descInputRef = useRef<TextInput>(null);
     const focusedFieldRef = useRef<'title' | 'desc' | null>(null);
     const scrollYRef = useRef(0);
     const keyboardHeightRef = useRef(0);
     const publishingRef = useRef(false);
+    const leavingRef = useRef(false);
     const mountedRef = useRef(true);
+    const [mapMounted, setMapMounted] = useState(false);
     const [loading, setLoading] = useState(false);
     /** Aviso visible en pantalla (el Alert nativo queda detrás del modal de crear). */
     const [formBanner, setFormBanner] = useState<string | null>(null);
@@ -143,6 +174,16 @@ export default function CreatePlanScreen() {
     const holdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const holdingPeopleRef = useRef(false);
     const peopleTouchRef = useRef({ x: 0, y: 0 });
+
+    useFocusEffect(
+        useCallback(() => {
+            mountedRef.current = true;
+            return () => {
+                mountedRef.current = false;
+                publishingRef.current = false;
+            };
+        }, []),
+    );
 
     useEffect(() => {
         mountedRef.current = true;
@@ -165,7 +206,7 @@ export default function CreatePlanScreen() {
         node.measureInWindow((_x, winY, _w, h) => {
             const screenH = Dimensions.get('window').height;
             const footerH = 96;
-            const kb = Platform.OS === 'ios' ? keyboardHeightRef.current : 0;
+            const kb = keyboardHeightRef.current;
             const visibleBottom = screenH - kb - footerH;
             const overflow = winY + h - visibleBottom;
             if (overflow <= 8 && winY >= 72) return;
@@ -256,6 +297,19 @@ export default function CreatePlanScreen() {
     const titleCheckGen = useRef(0);
     const [category, setCategory] = useState<MainCategoryId>(MAIN_CATEGORIES[0]);
     const [subcategory, setSubcategory] = useState<string>(SUBCATEGORIES[MAIN_CATEGORIES[0]][0]);
+    /** Fútbol: partido clásico (2 equipos) o torneo multi-equipo. */
+    const [footballMode, setFootballMode] = useState<'partido' | 'torneo'>('partido');
+    const [tournamentFormat, setTournamentFormat] = useState<FootballFormat>('7v7');
+    const [tournamentTeamCount, setTournamentTeamCount] = useState(DEFAULT_TOURNAMENT_TEAMS);
+    const [tournamentTeamNames, setTournamentTeamNames] = useState(() =>
+        defaultTeamNames(DEFAULT_TOURNAMENT_TEAMS),
+    );
+    const [tournamentBench, setTournamentBench] = useState(DEFAULT_TOURNAMENT_BENCH);
+    /** Solo torneo: fecha/hora o ubicación por determinar. */
+    const [dateTbd, setDateTbd] = useState(false);
+    const [locationTbd, setLocationTbd] = useState(false);
+    const tournamentAllowsTbd =
+        category === 'DEPORTES' && subcategory === 'futbol' && footballMode === 'torneo';
     const [coverIndex, setCoverIndex] = useState(() => Math.floor(Math.random() * COVERS_PER_SUB));
     const categoryImages = getCoverImages(category, subcategory);
     const [maxPeople, setMaxPeople] = useState(() =>
@@ -266,11 +320,13 @@ export default function CreatePlanScreen() {
     const [soloChicas, setSoloChicas] = useState(false);
     const [visibility, setVisibility] = useState<PlanVisibility>('public');
     const [pendingInvites, setPendingInvites] = useState<InviteProfile[]>([]);
+    const [pendingGroups, setPendingGroups] = useState<ChatGroupOption[]>([]);
     const [showInviteSheet, setShowInviteSheet] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [userGenero, setUserGenero] = useState<Genero | null>(null);
     const [joinedCount, setJoinedCount] = useState(0);
     const [originalEventMs, setOriginalEventMs] = useState<number | null>(null);
+    const [originalMax, setOriginalMax] = useState<number | null>(null);
     const [originalPlace, setOriginalPlace] = useState<{
         address: string;
         latitude: number;
@@ -337,12 +393,13 @@ export default function CreatePlanScreen() {
                     Math.max(Math.max(MIN_PEOPLE, joined || MIN_PEOPLE), data.maximo_participantes ?? 5),
                 );
                 setMaxPeople(loadedMax);
+                if (editId) setOriginalMax(data.maximo_participantes ?? null);
                 setRequiereAprobacion(!!data.requiere_aprobacion);
                 setSoloChicas(!!data.solo_chicas);
                 setVisibility(
                     data.modo_privado ? 'private' : data.solo_amigos ? 'friends' : 'public',
                 );
-                if (data.modo_privado && editId) {
+                if (editId) {
                     try {
                         const invitees = await getPlanPendingInvitees(String(editId));
                         setPendingInvites(
@@ -357,36 +414,72 @@ export default function CreatePlanScreen() {
                     } catch {
                         setPendingInvites([]);
                     }
+                    try {
+                        const uid = (await getAuthUser())?.id;
+                        if (uid) {
+                            const groups = await listMyChatGroups(uid);
+                            const already = await listGroupsInvitedToPlan(
+                                String(editId),
+                                groups.map((g) => g.id),
+                            );
+                            setPendingGroups(
+                                already.map((g) => groups.find((r) => r.id === g.id) ?? g),
+                            );
+                        }
+                    } catch {
+                        /* keep queued groups if any */
+                    }
                 } else if (isDuplicate) {
                     setPendingInvites([]);
                 }
-                const eventDate = new Date(data.fecha_evento);
-                if (isDuplicate || eventDate.getTime() < Date.now() + MIN_LEAD_MS) {
+                const alineacionRaw = (data as { alineacion?: unknown }).alineacion;
+                if (isTournamentConfig(alineacionRaw)) {
+                    setFootballMode('torneo');
+                }
+                const hasFecha = !!data.fecha_evento;
+                if (!hasFecha) {
+                    setDateTbd(true);
                     setDate(defaultPlanDate());
                     setOriginalEventMs(null);
                 } else {
-                    setDate(eventDate);
-                    setOriginalEventMs(eventDate.getTime());
+                    const eventDate = new Date(data.fecha_evento as string);
+                    setDateTbd(false);
+                    // Una fecha ilegible en BD haría estallar toISOString() al publicar.
+                    if (
+                        isDuplicate ||
+                        !Number.isFinite(eventDate.getTime()) ||
+                        eventDate.getTime() < Date.now() + MIN_LEAD_MS
+                    ) {
+                        setDate(defaultPlanDate());
+                        setOriginalEventMs(null);
+                    } else {
+                        setDate(eventDate);
+                        setOriginalEventMs(eventDate.getTime());
+                    }
                 }
+                const locName = String(data.nombre_ubicacion ?? '').trim();
+                const hasCoords =
+                    data.latitud != null &&
+                    data.longitud != null &&
+                    Number.isFinite(Number(data.latitud)) &&
+                    Number.isFinite(Number(data.longitud));
+                const locIsTbd = !locName || !hasCoords;
+                setLocationTbd(locIsTbd && isTournamentConfig(alineacionRaw));
                 setLocation({
-                    latitude: data.latitud || 40.416775,
-                    longitude: data.longitud || -3.703790,
-                    address: data.nombre_ubicacion ?? '',
+                    latitude: hasCoords ? Number(data.latitud) : 40.416775,
+                    longitude: hasCoords ? Number(data.longitud) : -3.703790,
+                    address: locName,
                 });
                 if (editId) {
                     setOriginalPlace({
-                        address: String(data.nombre_ubicacion ?? '').trim(),
-                        latitude: Number(data.latitud) || 40.416775,
-                        longitude: Number(data.longitud) || -3.703790,
+                        address: locName,
+                        latitude: hasCoords ? Number(data.latitud) : 40.416775,
+                        longitude: hasCoords ? Number(data.longitud) : -3.703790,
                     });
                 } else {
                     setOriginalPlace(null);
                 }
-                setLocationPicked(
-                    Number.isFinite(Number(data.latitud))
-                    && Number.isFinite(Number(data.longitud))
-                    && String(data.nombre_ubicacion || '').trim().length > 0,
-                );
+                setLocationPicked(!locIsTbd);
 
                 const extras = Array.isArray(data.imagenes_url)
                     ? (data.imagenes_url as string[]).filter((u): u is string => typeof u === 'string' && u.trim().length > 0)
@@ -417,7 +510,39 @@ export default function CreatePlanScreen() {
     useEffect(() => {
         if (editId || isDuplicate) return;
         setMaxPeople(Math.max(MIN_PEOPLE, defaultMaxParticipants(category, subcategory)));
+        if (category !== 'DEPORTES' || subcategory !== 'futbol') {
+            setFootballMode('partido');
+            setDateTbd(false);
+            setLocationTbd(false);
+        }
     }, [category, subcategory, editId, isDuplicate]);
+
+    useEffect(() => {
+        if (footballMode !== 'torneo') {
+            setDateTbd(false);
+            setLocationTbd(false);
+        }
+    }, [footballMode]);
+
+    useEffect(() => {
+        if (editId || category !== 'DEPORTES' || subcategory !== 'futbol' || footballMode !== 'torneo') {
+            return;
+        }
+        setTournamentTeamNames((prev) => {
+            const base = defaultTeamNames(tournamentTeamCount);
+            return base.map((name, i) => (prev[i]?.trim() ? prev[i] : name));
+        });
+        // Torneos: cupo alto por defecto (titulares + banquillo + afición).
+        setMaxPeople(MAX_PEOPLE);
+    }, [
+        category,
+        subcategory,
+        footballMode,
+        tournamentTeamCount,
+        tournamentBench,
+        tournamentFormat,
+        editId,
+    ]);
 
     // Revisar título 3 s después de dejar de escribir (nunca al instante)
     const TITLE_CHECK_DELAY_MS = 3000;
@@ -530,6 +655,7 @@ export default function CreatePlanScreen() {
             return;
         }
         hapticSelection();
+        setDateTbd(false);
         setDate(selectedDate);
         setPickerVisible(false);
     };
@@ -548,7 +674,11 @@ export default function CreatePlanScreen() {
         if (customCovers.length >= MAX_ORGANIZER_COVERS) return;
         hapticMedium();
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permission.granted) return;
+        if (!permission.granted) {
+            // Sin Alert nativo: encima de este modal puede congelar al volver al feed.
+            showFormError(t('createplan.galleryPermission'));
+            return;
+        }
         const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
             quality: 0.7,
@@ -576,19 +706,58 @@ export default function CreatePlanScreen() {
         setPickerVisible(false);
         setDayCalendarOpen(false);
         setShowInviteSheet(false);
+        setMapMounted(false);
         dismissAllNexoAlerts();
     };
 
-    const leaveCreatePlan = () => {
-        publishingRef.current = false;
-        mountedRef.current = false;
-        dismissCreatePlanChrome();
+    const goBackFromCreatePlan = () => {
         try {
-            if (router.canGoBack()) router.back();
-            else router.replace('/(tabs)');
-        } catch {
+            const r = router as typeof router & {
+                dismiss?: () => void;
+                canDismiss?: () => boolean;
+            };
+            if (typeof r.canDismiss === 'function' && r.canDismiss()) {
+                r.dismiss?.();
+                return;
+            }
+            if (router.canGoBack()) {
+                router.back();
+                return;
+            }
             router.replace('/(tabs)');
+        } catch {
+            try {
+                router.replace('/(tabs)');
+            } catch {
+                /* ignore */
+            }
         }
+    };
+
+    /** Cierra overlays y desmonta el mapa ANTES de poppear el modal (si no, Android mata la app). */
+    const exitCreatePlanSafely = (afterLeave?: () => void) => {
+        if (leavingRef.current) return;
+        leavingRef.current = true;
+        publishingRef.current = false;
+        dismissCreatePlanChrome();
+        const delay = Platform.OS === 'android' ? 180 : 16;
+        requestAnimationFrame(() => {
+            setTimeout(() => {
+                goBackFromCreatePlan();
+                if (!afterLeave) return;
+                setTimeout(() => {
+                    try {
+                        afterLeave();
+                    } catch {
+                        /* ignore */
+                    }
+                }, Platform.OS === 'android' ? 700 : 400);
+            }, delay);
+        });
+    };
+
+    const leaveCreatePlan = () => {
+        exitCreatePlanSafely();
     };
 
     const handleCreatePlan = async () => {
@@ -604,13 +773,20 @@ export default function CreatePlanScreen() {
             showFormError(t('createplan.incompleteMsg'));
             return;
         }
+        if (title.trim().length > PLAN_TITLE_MAX) {
+            showFormError(t('createplan.titleTooLong', { max: PLAN_TITLE_MAX }));
+            return;
+        }
         if (description.trim().length > PLAN_DESCRIPTION_MAX) {
             showFormError(t('createplan.descTooLong', { max: PLAN_DESCRIPTION_MAX }));
             return;
         }
-        if (date.getTime() < minPlanDate().getTime()) {
-            showFormError(t('createplan.minLeadTime'));
-            return;
+        const allowTbd = tournamentAllowsTbd;
+        if (!dateTbd || !allowTbd) {
+            if (date.getTime() < minPlanDate().getTime()) {
+                showFormError(t('createplan.minLeadTime'));
+                return;
+            }
         }
         if (maxPeople < MIN_PEOPLE) {
             showFormError(t('createplan.incompleteMsg'));
@@ -622,16 +798,18 @@ export default function CreatePlanScreen() {
         }
         const locationAddress = location.address.trim();
         const resolvingLabel = t('createplan.mapResolving');
+        const locationIsTbd = allowTbd && locationTbd;
         if (
-            !locationPicked ||
-            !locationAddress ||
-            locationAddress === resolvingLabel ||
-            locationAddress === t('createplan.noLocationName')
+            !locationIsTbd &&
+            (!locationPicked ||
+                !locationAddress ||
+                locationAddress === resolvingLabel ||
+                locationAddress === t('createplan.noLocationName'))
         ) {
             showFormError(t('createplan.locationRequired'));
             return;
         }
-        if (visibility === 'private' && pendingInvites.length < 1) {
+        if (visibility === 'private' && pendingInvites.length < 1 && pendingGroups.length < 1) {
             showFormError(t('createplan.needInvite'));
             return;
         }
@@ -655,6 +833,8 @@ export default function CreatePlanScreen() {
         publishingRef.current = true;
         setLoading(true);
         setFormBanner(null);
+        // Publicar/editar no puede quedar a medias por un reinicio de OTA.
+        const releaseUpdateHold = holdAppUpdateReload();
 
         try {
             const user = await getAuthUser();
@@ -710,15 +890,25 @@ export default function CreatePlanScreen() {
 
             const visibilityForSave = isOrganizer ? 'public' : visibility;
 
+            const fechaFinal =
+                allowTbd && dateTbd
+                    ? null
+                    : Number.isFinite(date.getTime())
+                      ? date.toISOString()
+                      : defaultPlanDate().toISOString();
+            const placeFinal = locationIsTbd ? null : locationAddress;
+            const latFinal = locationIsTbd ? null : location.latitude;
+            const lonFinal = locationIsTbd ? null : location.longitude;
+
             const planPayload: Record<string, unknown> = {
                 descripcion: description.trim(),
-                nombre_ubicacion: locationAddress,
+                nombre_ubicacion: placeFinal,
                 maximo_participantes: maxPeople,
                 imagen_url: imageKey,
                 imagenes_url: isOrganizer && coverMode === 'custom' ? uploadedCovers : [],
-                fecha_evento: date.toISOString(),
-                latitud: location.latitude,
-                longitud: location.longitude,
+                fecha_evento: fechaFinal,
+                latitud: latFinal,
+                longitud: lonFinal,
                 requiere_aprobacion: requiereAprobacion,
                 solo_chicas: soloChicas,
                 solo_amigos: visibilityForSave === 'friends',
@@ -739,69 +929,127 @@ export default function CreatePlanScreen() {
             }
 
             if (editId) {
+                // Alguien puede haberse unido mientras se editaba: se comprueba el cupo real.
+                const { count: joinedNow } = await supabase
+                    .from('participantes')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('plan_id', String(editId))
+                    .eq('estado', 'aceptado');
+                const joinedReal = joinedNow ?? 0;
+                if (joinedReal > maxPeople) {
+                    setJoinedCount(joinedReal);
+                    setMaxPeople(joinedReal);
+                    showFormError(t('createplan.maxBelowJoined', { n: joinedReal }));
+                    return;
+                }
+
                 const { error: updateError } = await supabase
                     .from('planes')
                     .update(planPayload)
                     .eq('id', editId);
-                if (!mountedRef.current) return;
                 if (updateError) throw updateError;
 
                 const invitees =
                     visibility === 'private' && pendingInvites.length > 0 ? [...pendingInvites] : [];
+                const groups = pendingGroups.length > 0 ? [...pendingGroups] : [];
 
                 const dateChanged =
-                    originalEventMs != null &&
-                    Math.abs(date.getTime() - originalEventMs) >= 60_000;
+                    (originalEventMs == null && fechaFinal != null) ||
+                    (originalEventMs != null && fechaFinal == null) ||
+                    (originalEventMs != null &&
+                        fechaFinal != null &&
+                        Math.abs(new Date(fechaFinal).getTime() - originalEventMs) >= 60_000);
                 const placeChanged = !!(
                     originalPlace &&
-                    (originalPlace.address.trim() !== locationAddress.trim() ||
-                        Math.abs(originalPlace.latitude - location.latitude) > 0.0002 ||
-                        Math.abs(originalPlace.longitude - location.longitude) > 0.0002)
+                    (originalPlace.address.trim() !== (placeFinal ?? '').trim() ||
+                        (!!latFinal &&
+                            Math.abs(originalPlace.latitude - Number(latFinal)) > 0.0002) ||
+                        (!!lonFinal &&
+                            Math.abs(originalPlace.longitude - Number(lonFinal)) > 0.0002) ||
+                        (locationIsTbd && originalPlace.address.trim().length > 0))
                 );
                 if (dateChanged || placeChanged) {
-                    const timeLabel = date.toLocaleString(localeTag(lang), {
-                        weekday: 'short',
-                        day: 'numeric',
-                        month: 'short',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                    });
+                    const timeLabel = fechaFinal
+                        ? new Date(fechaFinal).toLocaleString(localeTag(lang), {
+                              weekday: 'short',
+                              day: 'numeric',
+                              month: 'short',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                          })
+                        : t('createplan.tbd');
                     notifyPlanUpdated({
                         planId: String(editId),
                         changedDate: dateChanged,
                         changedPlace: placeChanged,
                         time: timeLabel,
-                        place: locationAddress,
+                        place: placeFinal ?? t('createplan.tbd'),
                     });
                 }
 
                 hapticSuccess();
-                dismissCreatePlanChrome();
-                publishingRef.current = false;
-                if (mountedRef.current) setLoading(false);
 
                 const editedId = String(editId);
                 const editedTitle = title.trim();
-                const editedFecha = date.toISOString();
+                const editedFecha = fechaFinal;
                 const editedCategory = category;
-                const editedPlace = locationAddress;
+                const editedPlace = placeFinal;
                 const uid = user.id;
                 const shouldReschedule = dateChanged || placeChanged;
-
+                const addedSeats = originalMax != null ? maxPeople - originalMax : 0;
+                const editedPatch = {
+                    titulo: editedTitle,
+                    descripcion: description.trim(),
+                    imagen_url: imageKey,
+                    imagenes_url:
+                        isOrganizer && coverMode === 'custom' && uploadedCovers.length > 0
+                            ? uploadedCovers
+                            : [],
+                    categoria: editedCategory,
+                    tipo_deporte: subcategory,
+                    fecha_evento: editedFecha,
+                    nombre_ubicacion: editedPlace,
+                    latitud: latFinal,
+                    longitud: lonFinal,
+                    maximo_participantes: maxPeople,
+                    requiere_aprobacion: requiereAprobacion,
+                    solo_chicas: soloChicas,
+                    solo_amigos: visibilityForSave === 'friends',
+                    modo_privado: visibilityForSave === 'private',
+                };
                 try {
-                    if (router.canGoBack()) router.back();
-                    else router.replace('/(tabs)');
+                    patchPlanDetailFromEdit(editedId, editedPatch);
+                    patchCachedFeedPlan(editedId, editedPatch);
                 } catch {
-                    router.replace('/(tabs)');
+                    /* el update ya está en BD */
                 }
 
-                setTimeout(() => {
+                exitCreatePlanSafely(() => {
                     markFeedNeedsRefresh({ urgent: true });
                     invalidatePlanMembershipCaches(uid);
+                    if (addedSeats > 0) {
+                        void (async () => {
+                            for (let i = 0; i < addedSeats; i += 1) {
+                                await promoteWaitlist(editedId);
+                            }
+                            markFeedNeedsRefresh({ urgent: true });
+                        })();
+                    }
                     if (invitees.length > 0) {
                         void Promise.all(
                             invitees.map((p) => sendPlanInvite(editedId, uid, p.id, 'plan')),
-                        );
+                        ).catch(() => {});
+                    }
+                    if (groups.length > 0) {
+                        void (async () => {
+                            for (const g of groups) {
+                                await inviteChatGroupToPlan({
+                                    groupChatId: g.id,
+                                    targetPlanId: editedId,
+                                    invitadorId: uid,
+                                });
+                            }
+                        })();
                     }
                     if (shouldReschedule) {
                         void schedulePlanLifecycleReminders({
@@ -810,9 +1058,9 @@ export default function CreatePlanScreen() {
                             fechaEvento: editedFecha,
                             categoria: editedCategory,
                             locationName: editedPlace,
-                        });
+                        }).catch(() => {});
                     }
-                }, 500);
+                });
                 return;
             }
 
@@ -820,16 +1068,15 @@ export default function CreatePlanScreen() {
             const { data: planData, error: createError } = await supabase.rpc('create_meetup_plan', {
                 p_payload: planPayload,
             });
-            if (!mountedRef.current) return;
             if (createError) throw createError;
             if (!planData?.id) throw new Error('plan_insert_failed');
 
             const createdPlanId = String(planData.id);
             const createdTitle = title.trim();
-            const createdFecha = date.toISOString();
+            const createdFecha = fechaFinal;
             const createdCategory = category;
             const createdSub = subcategory;
-            const createdPlace = locationAddress;
+            const createdPlace = placeFinal;
             const createdImage = imageKey;
             const createdCovers =
                 isOrganizer && coverMode === 'custom' && uploadedCovers.length > 0
@@ -840,92 +1087,123 @@ export default function CreatePlanScreen() {
             const uid = user.id;
             const invitees =
                 visibility === 'private' && pendingInvites.length > 0 ? [...pendingInvites] : [];
+            const groups = pendingGroups.length > 0 ? [...pendingGroups] : [];
+            const lat = latFinal != null ? Number(latFinal) : NaN;
+            const lon = lonFinal != null ? Number(lonFinal) : NaN;
 
-            // UI al instante: nada de awaits ni InteractionManager aquí (congelaban el modal).
-            hapticCelebrate();
-            dismissCreatePlanChrome();
-            publishingRef.current = false;
-            if (mountedRef.current) setLoading(false);
+            const createdFootballMode = footballMode;
+            const createdTournament = {
+                formato: tournamentFormat,
+                teamCount: tournamentTeamCount,
+                teamNames: tournamentTeamNames.slice(0, tournamentTeamCount),
+                banquillo: tournamentBench,
+            };
 
-            injectOptimisticFeedPlan({
-                id: createdPlanId,
-                titulo: createdTitle,
-                descripcion: description.trim(),
-                imagen_url: createdImage,
-                imagenes_url: createdCovers,
-                categoria: createdCategory,
-                tipo_deporte: createdSub,
-                fecha_evento: createdFecha,
-                nombre_ubicacion: createdPlace,
-                latitud: location.latitude,
-                longitud: location.longitude,
-                maximo_participantes: createdMax,
-                creador_id: uid,
-                requiere_aprobacion: requiereAprobacion,
-                solo_chicas: soloChicas,
-                solo_amigos: createdVisibility === 'friends',
-                modo_privado: createdVisibility === 'private',
-                joinedCount: isOrganizer ? 0 : 1,
-                participantsList: [],
-                host: null,
-                es_organizador: isOrganizer,
-            });
-            // No invalidar el snapshot: inject ya lo parchea; invalidar dejaba el feed vacío un instante.
-            broadcastPlanMembership(createdPlanId, isOrganizer ? 'none' : 'joined', {
-                userId: uid,
-                bumpJoined: !isOrganizer,
-            });
-
-            // Salir al feed (replace evita el dismiss del modal + trabajo JS a la vez).
-            try {
-                router.replace('/(tabs)');
-            } catch {
-                if (router.canGoBack()) router.back();
-                else router.replace('/(tabs)');
-            }
-
-            // Todo lo pesado DESPUÉS, con margen para que el modal ya esté cerrado y el feed estable.
-            setTimeout(() => {
+            const afterPublish = () => {
                 markFeedNeedsRefresh({ urgent: true });
                 void (async () => {
                     try {
+                        if (
+                            createdCategory === 'DEPORTES' &&
+                            createdSub === 'futbol' &&
+                            createdFootballMode === 'torneo'
+                        ) {
+                            const cfg = defaultTournamentConfig({
+                                formato: createdTournament.formato,
+                                teamCount: createdTournament.teamCount,
+                                teamNames: createdTournament.teamNames,
+                                banquillo: createdTournament.banquillo,
+                            });
+                            await saveTournamentConfig(createdPlanId, cfg);
+                        }
                         if (invitees.length > 0) {
                             await Promise.all(
                                 invitees.map((p) => sendPlanInvite(createdPlanId, uid, p.id, 'plan')),
                             );
                         }
+                        if (groups.length > 0) {
+                            for (const g of groups) {
+                                await inviteChatGroupToPlan({
+                                    groupChatId: g.id,
+                                    targetPlanId: createdPlanId,
+                                    invitadorId: uid,
+                                });
+                            }
+                        }
                     } catch {
                         /* best-effort */
                     }
                 })();
-            }, 1100);
+                setTimeout(() => {
+                    void schedulePlanLifecycleReminders({
+                        planId: createdPlanId,
+                        planTitle: createdTitle,
+                        fechaEvento: createdFecha,
+                        categoria: createdCategory,
+                        locationName: createdPlace,
+                    }).catch(() => {});
+                }, 900);
+            };
 
-            setTimeout(() => {
-                void schedulePlanLifecycleReminders({
-                    planId: createdPlanId,
-                    planTitle: createdTitle,
-                    fechaEvento: createdFecha,
-                    categoria: createdCategory,
-                    locationName: createdPlace,
-                });
-            }, 1800);
+            try {
+                hapticSuccess();
+                injectOptimisticFeedPlan(
+                    {
+                        id: createdPlanId,
+                        titulo: createdTitle,
+                        descripcion: description.trim(),
+                        imagen_url: createdImage,
+                        imagenes_url: createdCovers,
+                        categoria: createdCategory,
+                        tipo_deporte: createdSub,
+                        fecha_evento: createdFecha,
+                        nombre_ubicacion: createdPlace,
+                        latitud: Number.isFinite(lat) ? lat : null,
+                        longitud: Number.isFinite(lon) ? lon : null,
+                        maximo_participantes: createdMax,
+                        creador_id: uid,
+                        requiere_aprobacion: requiereAprobacion,
+                        solo_chicas: soloChicas,
+                        solo_amigos: createdVisibility === 'friends',
+                        modo_privado: createdVisibility === 'private',
+                        joinedCount: isOrganizer ? 0 : 1,
+                        participantsList: [],
+                        host: null,
+                        es_organizador: isOrganizer,
+                    },
+                    { emit: false },
+                );
+            } catch {
+                /* el plan ya está en BD; no tumbar la salida */
+            }
+
+            if (leavingRef.current) {
+                setTimeout(() => {
+                    try {
+                        afterPublish();
+                    } catch {
+                        /* ignore */
+                    }
+                }, 400);
+            } else {
+                exitCreatePlanSafely(afterPublish);
+            }
             return;
         } catch (error: unknown) {
             if (__DEV__) console.error(error);
-            if (!mountedRef.current) return;
-            hapticError();
-            const msg = error instanceof Error ? error.message : '';
-            Alert.alert(t('profile.error'), t('createplan.saveError') + (msg ? `\n${msg}` : ''));
+            if (!mountedRef.current || leavingRef.current) return;
+            showFormError(t('createplan.saveError'));
         } finally {
+            releaseUpdateHold();
             publishingRef.current = false;
-            if (mountedRef.current) setLoading(false);
+            if (mountedRef.current && !leavingRef.current) setLoading(false);
         }
     };
 
     return (
         <SafeAreaView style={styles.safe} edges={['top', 'left', 'right', 'bottom']}>
             <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
                 style={{ flex: 1 }}
             >
@@ -949,7 +1227,7 @@ export default function CreatePlanScreen() {
                 {formBanner ? (
                     <View style={styles.formBannerSticky}>
                         <View style={styles.formBanner}>
-                            <Ionicons name="warning" size={18} color="#B45309" />
+                            <Ionicons name="warning" size={24} color="#B45309" />
                             <Text style={styles.formBannerText}>{formBanner}</Text>
                         </View>
                     </View>
@@ -1027,6 +1305,170 @@ export default function CreatePlanScreen() {
                                 );
                             })}
                         </View>
+
+                        {category === 'DEPORTES' && subcategory === 'futbol' ? (
+                            <View style={styles.tournamentBlock}>
+                                <Text style={styles.subSectionLabel}>{t('torneo.createMode')}</Text>
+                                <View style={styles.formatRow}>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.formatBtn,
+                                            footballMode === 'partido' && styles.formatBtnActive,
+                                        ]}
+                                        onPress={() => {
+                                            hapticSelection();
+                                            setFootballMode('partido');
+                                        }}
+                                        activeOpacity={0.85}
+                                    >
+                                        <Text
+                                            style={[
+                                                styles.formatText,
+                                                footballMode === 'partido' && styles.formatTextActive,
+                                            ]}
+                                        >
+                                            {t('torneo.modeMatch')}
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.formatBtn,
+                                            footballMode === 'torneo' && styles.formatBtnActive,
+                                        ]}
+                                        onPress={() => {
+                                            hapticSelection();
+                                            setFootballMode('torneo');
+                                            setMaxPeople(MAX_PEOPLE);
+                                        }}
+                                        activeOpacity={0.85}
+                                    >
+                                        <Text
+                                            style={[
+                                                styles.formatText,
+                                                footballMode === 'torneo' && styles.formatTextActive,
+                                            ]}
+                                        >
+                                            {t('torneo.modeTournament')}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+
+                                {footballMode === 'torneo' ? (
+                                    <View style={styles.tournamentSetup}>
+                                        <Text style={styles.spotsSubLabel}>{t('torneo.format')}</Text>
+                                        <View style={styles.formatRow}>
+                                            {(['7v7', '11v11', 'sala'] as FootballFormat[]).map((fmt) => (
+                                                <TouchableOpacity
+                                                    key={fmt}
+                                                    style={[
+                                                        styles.formatBtn,
+                                                        tournamentFormat === fmt && styles.formatBtnActive,
+                                                    ]}
+                                                    onPress={() => {
+                                                        hapticSelection();
+                                                        setTournamentFormat(fmt);
+                                                    }}
+                                                    activeOpacity={0.85}
+                                                >
+                                                    <Text
+                                                        style={[
+                                                            styles.formatText,
+                                                            tournamentFormat === fmt && styles.formatTextActive,
+                                                        ]}
+                                                    >
+                                                        {formatDisplayLabel(fmt)}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            ))}
+                                        </View>
+
+                                        <Text style={[styles.spotsSubLabel, { marginTop: 12 }]}>
+                                            {t('torneo.teamsCount')}
+                                        </Text>
+                                        <View style={styles.peopleSelector}>
+                                            <TouchableOpacity
+                                                style={styles.stepBtn}
+                                                onPress={() => {
+                                                    hapticSelection();
+                                                    setTournamentTeamCount((n) =>
+                                                        Math.max(TOURNAMENT_TEAM_MIN, n - 1),
+                                                    );
+                                                }}
+                                            >
+                                                <Ionicons name="remove" size={22} color={PRIMARY} />
+                                            </TouchableOpacity>
+                                            <Text style={styles.peopleNum}>{tournamentTeamCount}</Text>
+                                            <TouchableOpacity
+                                                style={styles.stepBtn}
+                                                onPress={() => {
+                                                    hapticSelection();
+                                                    setTournamentTeamCount((n) =>
+                                                        Math.min(TOURNAMENT_TEAM_MAX, n + 1),
+                                                    );
+                                                }}
+                                            >
+                                                <Ionicons name="add" size={22} color={PRIMARY} />
+                                            </TouchableOpacity>
+                                        </View>
+
+                                        <Text style={[styles.spotsSubLabel, { marginTop: 12 }]}>
+                                            {t('torneo.benchSize')}
+                                        </Text>
+                                        <View style={styles.peopleSelector}>
+                                            <TouchableOpacity
+                                                style={styles.stepBtn}
+                                                onPress={() => {
+                                                    hapticSelection();
+                                                    setTournamentBench((n) => Math.max(0, n - 1));
+                                                }}
+                                            >
+                                                <Ionicons name="remove" size={22} color={PRIMARY} />
+                                            </TouchableOpacity>
+                                            <Text style={styles.peopleNum}>{tournamentBench}</Text>
+                                            <TouchableOpacity
+                                                style={styles.stepBtn}
+                                                onPress={() => {
+                                                    hapticSelection();
+                                                    setTournamentBench((n) => Math.min(12, n + 1));
+                                                }}
+                                            >
+                                                <Ionicons name="add" size={22} color={PRIMARY} />
+                                            </TouchableOpacity>
+                                        </View>
+
+                                        <Text style={[styles.spotsSubLabel, { marginTop: 12 }]}>
+                                            {t('torneo.teamNames')}
+                                        </Text>
+                                        {tournamentTeamNames.slice(0, tournamentTeamCount).map((name, i) => (
+                                            <TextInput
+                                                key={`team-${i}`}
+                                                style={styles.tournamentNameInput}
+                                                value={name}
+                                                onChangeText={(text) => {
+                                                    setTournamentTeamNames((prev) => {
+                                                        const next = [...prev];
+                                                        next[i] = text;
+                                                        return next;
+                                                    });
+                                                }}
+                                                placeholder={defaultTeamNames(tournamentTeamCount)[i]}
+                                                placeholderTextColor={colors.textSubtle}
+                                                maxLength={22}
+                                            />
+                                        ))}
+                                        <Text style={styles.limitsHint}>
+                                            {t('torneo.createHint', {
+                                                n: tournamentCapacity(
+                                                    tournamentFormat,
+                                                    tournamentTeamCount,
+                                                    tournamentBench,
+                                                ),
+                                            })}
+                                        </Text>
+                                    </View>
+                                ) : null}
+                            </View>
+                        ) : null}
                     </View>
                     ) : (
                         <View style={styles.categorySection}>
@@ -1104,7 +1546,7 @@ export default function CreatePlanScreen() {
                         <View style={styles.copyLabelRow}>
                             <Text style={styles.fieldTitle}>{t('createplan.planTitle')}</Text>
                             {!nearStartLock ? (
-                                <Text style={[styles.charCount, title.length > 30 && {color: DANGER}]}>{title.length}/30</Text>
+                                <Text style={[styles.charCount, title.length >= PLAN_TITLE_MAX && {color: DANGER}]}>{title.length}/{PLAN_TITLE_MAX}</Text>
                             ) : null}
                         </View>
                         {nearStartLock ? (
@@ -1118,18 +1560,23 @@ export default function CreatePlanScreen() {
                                 styles.fieldInput,
                                 styles.titleInput,
                                 !title.trim() && styles.titleInputEmpty,
-                                title.length > 30 && styles.inputError,
+                                title.length >= PLAN_TITLE_MAX && styles.inputError,
                                 titleCheck.status === 'bad' &&
                                     titleCheck.title === title.trim() &&
                                     styles.inputError,
                             ]} 
-                            value={title} onChangeText={setTitle}
+                            value={title}
+                            onChangeText={(text) => setTitle(text.slice(0, PLAN_TITLE_MAX))}
+                            maxLength={PLAN_TITLE_MAX}
                             autoCapitalize="sentences"
                             autoCorrect={false}
                             autoComplete="off"
                             textContentType="none"
                             importantForAutofill="no"
                             spellCheck={false}
+                            returnKeyType="next"
+                            blurOnSubmit
+                            onSubmitEditing={() => descInputRef.current?.focus()}
                             onFocus={() => {
                                 focusedFieldRef.current = 'title';
                                 requestAnimationFrame(() => revealFocusedField());
@@ -1152,11 +1599,17 @@ export default function CreatePlanScreen() {
                             <Text style={[styles.charCount, description.length > PLAN_DESCRIPTION_MAX && {color: DANGER}]}>{description.length}/{PLAN_DESCRIPTION_MAX}</Text>
                         </View>
                         <TextInput 
+                            ref={descInputRef}
                             placeholder={t('createplan.descPlaceholder')} 
                             placeholderTextColor={PLACEHOLDER_COLOR}
-                            style={[styles.fieldInput, styles.descInput, description.length > PLAN_DESCRIPTION_MAX && styles.inputError]} 
-                            multiline value={description} onChangeText={(text) => setDescription(text.slice(0, PLAN_DESCRIPTION_MAX))} 
+                            style={[styles.fieldInput, styles.descInput, description.length >= PLAN_DESCRIPTION_MAX && styles.inputError]} 
+                            multiline
+                            value={description}
+                            onChangeText={(text) => setDescription(text.slice(0, PLAN_DESCRIPTION_MAX))} 
                             maxLength={PLAN_DESCRIPTION_MAX}
+                            autoCapitalize="sentences"
+                            autoCorrect
+                            textAlignVertical="top"
                             onFocus={() => {
                                 focusedFieldRef.current = 'desc';
                                 requestAnimationFrame(() => revealFocusedField());
@@ -1170,7 +1623,29 @@ export default function CreatePlanScreen() {
 
                     <View style={[styles.section, styles.whenSection]}>
                         <Text style={styles.sectionTitle}>{t('createplan.when')}</Text>
+                        {tournamentAllowsTbd ? (
+                            <TouchableOpacity
+                                style={[styles.tbdChip, dateTbd && styles.tbdChipOn]}
+                                onPress={() => {
+                                    hapticSelection();
+                                    setDateTbd((v) => !v);
+                                }}
+                                activeOpacity={0.85}
+                            >
+                                <Ionicons
+                                    name={dateTbd ? 'checkmark-circle' : 'help-circle-outline'}
+                                    size={18}
+                                    color={dateTbd ? '#FFF' : PRIMARY}
+                                />
+                                <Text style={[styles.tbdChipText, dateTbd && styles.tbdChipTextOn]}>
+                                    {t('createplan.tbd')}
+                                </Text>
+                            </TouchableOpacity>
+                        ) : null}
                         <View style={styles.whenCard}>
+                            {dateTbd && tournamentAllowsTbd ? (
+                                <Text style={styles.tbdHint}>{t('createplan.tbdDateHint')}</Text>
+                            ) : (
                             <View style={[styles.dateTimeContainer, { paddingHorizontal: 20 }]}>
                                 <TouchableOpacity
                                     style={styles.dateTimeBtn}
@@ -1200,6 +1675,7 @@ export default function CreatePlanScreen() {
                                     </Text>
                                 </TouchableOpacity>
                             </View>
+                            )}
 
                             <Modal
                                 visible={dayCalendarOpen}
@@ -1223,6 +1699,7 @@ export default function CreatePlanScreen() {
                                                 onChange={(next) => {
                                                     hapticMedium();
                                                     const min = minPlanDate();
+                                                    setDateTbd(false);
                                                     setDate(next.getTime() < min.getTime() ? min : next);
                                                     setDayCalendarOpen(false);
                                                 }}
@@ -1257,14 +1734,49 @@ export default function CreatePlanScreen() {
                         </View>
                     </View>
 
-                    <PlanLocationPicker
-                        location={location}
-                        onLocationChange={(loc) => {
-                            setLocationPicked(true);
-                            setLocation(loc);
-                        }}
-                        mapRef={mapRef}
-                    />
+                    {tournamentAllowsTbd ? (
+                        <View style={styles.tbdLocWrap}>
+                            <TouchableOpacity
+                                style={[styles.tbdChip, locationTbd && styles.tbdChipOn]}
+                                onPress={() => {
+                                    hapticSelection();
+                                    setLocationTbd((v) => {
+                                        if (!v) setLocationPicked(false);
+                                        return !v;
+                                    });
+                                }}
+                                activeOpacity={0.85}
+                            >
+                                <Ionicons
+                                    name={locationTbd ? 'checkmark-circle' : 'location-outline'}
+                                    size={18}
+                                    color={locationTbd ? '#FFF' : PRIMARY}
+                                />
+                                <Text style={[styles.tbdChipText, locationTbd && styles.tbdChipTextOn]}>
+                                    {t('createplan.tbd')} · {t('card.location')}
+                                </Text>
+                            </TouchableOpacity>
+                            {locationTbd ? (
+                                <Text style={styles.tbdHint}>{t('createplan.tbdLocationHint')}</Text>
+                            ) : null}
+                        </View>
+                    ) : null}
+
+                    {!locationTbd || !tournamentAllowsTbd ? (
+                        mapMounted ? (
+                            <PlanLocationPicker
+                                location={location}
+                                onLocationChange={(loc) => {
+                                    setLocationPicked(true);
+                                    setLocationTbd(false);
+                                    setLocation(loc);
+                                }}
+                                mapRef={mapRef}
+                            />
+                        ) : (
+                            <View style={{ height: 220, backgroundColor: colors.backgroundAlt }} />
+                        )
+                    ) : null}
 
                     {showAdvanced ? (
                     <>
@@ -1333,10 +1845,16 @@ export default function CreatePlanScreen() {
                                 </View>
                                 <View style={styles.soloChicasText}>
                                     <Text style={styles.soloChicasTitle}>{t('createplan.soloChicasTitle')}</Text>
-                                    <Text style={styles.soloChicasDesc}>{t('createplan.soloChicasDesc')}</Text>
+                                    <Text style={styles.soloChicasDesc}>
+                                        {editId
+                                            ? t('createplan.soloChicasLocked')
+                                            : t('createplan.soloChicasDesc')}
+                                    </Text>
                                 </View>
                                 <Switch
                                     value={soloChicas}
+                                    // Al editar no se toca: cambiaría quién puede estar en un plan en marcha.
+                                    disabled={!!editId}
                                     onValueChange={(v) => {
                                         hapticToggle(v);
                                         setSoloChicas(v);
@@ -1448,8 +1966,10 @@ export default function CreatePlanScreen() {
                                 <View style={{ flex: 1 }}>
                                     <Text style={styles.inviteOpenBtnText}>{t('invite.openBtn')}</Text>
                                     <Text style={styles.inviteOpenBtnSub}>
-                                        {pendingInvites.length > 0
-                                            ? t('invite.pendingCount', { n: pendingInvites.length })
+                                        {pendingInvites.length + pendingGroups.length > 0
+                                            ? t('invite.pendingCount', {
+                                                  n: pendingInvites.length + pendingGroups.length,
+                                              })
                                             : t('invite.noneYet')}
                                     </Text>
                                 </View>
@@ -1517,8 +2037,17 @@ export default function CreatePlanScreen() {
                     onClose={() => setShowInviteSheet(false)}
                     currentUserId={currentUserId}
                     selected={pendingInvites}
+                    selectedGroups={pendingGroups}
+                    targetPlanId={editId ? String(editId) : null}
                     onAdd={(profile) => {
                         setPendingInvites((prev) => (prev.some((p) => p.id === profile.id) ? prev : [...prev, profile]));
+                    }}
+                    onAddGroup={(group) => {
+                        setPendingGroups((prev) => (prev.some((g) => g.id === group.id) ? prev : [...prev, group]));
+                        return { error: null, silent: true };
+                    }}
+                    onGroupInvited={(group) => {
+                        setPendingGroups((prev) => (prev.some((g) => g.id === group.id) ? prev : [...prev, group]));
                     }}
                     onRemove={async (id) => {
                         let removed: InviteProfile | undefined;
@@ -1537,6 +2066,41 @@ export default function CreatePlanScreen() {
                         }
                         return { error: null };
                     }}
+                    onRemoveGroup={async (groupId) => {
+                        let removed: ChatGroupOption | undefined;
+                        setPendingGroups((prev) => {
+                            removed = prev.find((g) => g.id === groupId);
+                            return prev.filter((g) => g.id !== groupId);
+                        });
+                        if (editId) {
+                            const { error } = await cancelChatGroupInvite({
+                                groupChatId: groupId,
+                                targetPlanId: String(editId),
+                            });
+                            if (error && removed) {
+                                setPendingGroups((prev) =>
+                                    prev.some((g) => g.id === removed!.id) ? prev : [...prev, removed!],
+                                );
+                            }
+                            return { error };
+                        }
+                        return { error: null };
+                    }}
+                    onShare={
+                        editId
+                            ? () => {
+                                  setShowInviteSheet(false);
+                                  requestAnimationFrame(() => {
+                                      void withShareTouchGuard(() =>
+                                          Share.share({
+                                              message: planShareUrl(String(editId)),
+                                              title: 'Nexo',
+                                          }),
+                                      );
+                                  });
+                              }
+                            : undefined
+                    }
                 />
             </KeyboardAvoidingView>
         </SafeAreaView>
@@ -1646,6 +2210,42 @@ function createPlanFormStyles(c: ThemeColors) {
     },
     descInput: { minHeight: 108, textAlignVertical: 'top', marginBottom: 0 },
     whenSection: { paddingTop: 22, paddingBottom: 24 },
+    tbdChip: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        borderRadius: 999,
+        backgroundColor: c.surfaceSubtle,
+        borderWidth: 1.5,
+        borderColor: c.border,
+        marginBottom: 10,
+    },
+    tbdChipOn: {
+        backgroundColor: PRIMARY,
+        borderColor: PRIMARY,
+    },
+    tbdChipText: {
+        fontWeight: '800',
+        fontSize: 13,
+        color: c.text,
+    },
+    tbdChipTextOn: { color: '#FFF' },
+    tbdHint: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: c.textMuted,
+        paddingHorizontal: 16,
+        paddingVertical: 18,
+        textAlign: 'center',
+    },
+    tbdLocWrap: {
+        paddingHorizontal: 16,
+        marginBottom: 8,
+        gap: 4,
+    },
     whenCard: {
         backgroundColor: c.surface,
         borderRadius: 18,
@@ -1718,6 +2318,20 @@ function createPlanFormStyles(c: ThemeColors) {
     formatBtnActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
     formatText: { color: c.textMuted, fontWeight: '800', fontSize: 15 },
     formatTextActive: { color: '#FFF' },
+    tournamentBlock: { marginTop: 16, gap: 8 },
+    tournamentSetup: { marginTop: 8, gap: 4 },
+    tournamentNameInput: {
+        backgroundColor: c.surfaceSubtle,
+        borderWidth: 1,
+        borderColor: c.border,
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        fontSize: 15,
+        fontWeight: '700',
+        color: c.text,
+        marginBottom: 6,
+    },
     sportGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     subGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
     subBtn: {
@@ -1898,32 +2512,32 @@ function createPlanFormStyles(c: ThemeColors) {
         gap: 10,
     },
     formBannerSticky: {
-        paddingHorizontal: 20,
-        paddingTop: 4,
-        paddingBottom: 8,
+        paddingHorizontal: 16,
+        paddingTop: 6,
+        paddingBottom: 10,
         backgroundColor: '#FFF',
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: '#E2E8F0',
         zIndex: 2,
-        elevation: 3,
+        elevation: 4,
         shadowColor: '#0F172A',
-        shadowOpacity: 0.06,
-        shadowRadius: 6,
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
         shadowOffset: { width: 0, height: 3 },
     },
     formBanner: {
         flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 10,
-        backgroundColor: c.warningSoft,
-        borderWidth: 1,
-        borderColor: '#FCD34D',
-        borderRadius: 14,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
+        alignItems: 'center',
+        gap: 12,
+        backgroundColor: '#FFFBEB',
+        borderWidth: 2,
+        borderColor: '#F59E0B',
+        borderRadius: 16,
+        paddingHorizontal: 16,
+        paddingVertical: 16,
         marginBottom: 0,
     },
-    formBannerText: { flex: 1, fontSize: 13, fontWeight: '700', color: '#92400E', lineHeight: 18 },
+    formBannerText: { flex: 1, fontSize: 15, fontWeight: '800', color: '#92400E', lineHeight: 21 },
     createBtn: { backgroundColor: '#2563EB', padding: 18, borderRadius: 20, alignItems: 'center', elevation: 5, shadowColor: '#2563EB', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, flex: 1 },
     createBtnFlex: { flex: 1.35 },
     createBtnBlocked: { backgroundColor: '#94A3B8', shadowOpacity: 0 },

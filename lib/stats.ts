@@ -114,14 +114,28 @@ export async function getUserStats(userId: string, options?: { skipCache?: boole
 
     let row: Record<string, unknown> | null = null;
 
-    try {
-        const { data, error } = await supabase.rpc('get_user_public_stats', { p_user_id: userId });
-        if (!error && data != null) {
-            const raw = typeof data === 'string' ? JSON.parse(data) : data;
-            if (raw && typeof raw === 'object') row = raw as Record<string, unknown>;
+    // La tabla ya está materializada (índice por usuario). El RPC recalcula y añade un viaje.
+    const table = await supabase
+        .from('estadisticas_usuario')
+        .select(
+            'valoracion_media, porcentaje_repetiria, porcentaje_asistencia, numero_valoraciones, numero_evaluadores_distintos, numero_planes_realizados, numero_amistades, aspecto_positivo_mas_votado, aspecto_negativo_mas_votado',
+        )
+        .eq('usuario_id', userId)
+        .maybeSingle();
+    if (!table.error && table.data) {
+        row = table.data as unknown as Record<string, unknown>;
+    }
+
+    if (!row) {
+        try {
+            const { data, error } = await supabase.rpc('get_user_public_stats', { p_user_id: userId });
+            if (!error && data != null) {
+                const raw = typeof data === 'string' ? JSON.parse(data) : data;
+                if (raw && typeof raw === 'object') row = raw as Record<string, unknown>;
+            }
+        } catch {
+            /* fallback abajo */
         }
-    } catch {
-        // fallback abajo
     }
 
     if (!row) {
@@ -158,17 +172,6 @@ export async function getUserStats(userId: string, options?: { skipCache?: boole
         }
     }
 
-    let numeroExpulsiones = 0;
-    try {
-        const { count } = await supabase
-            .from('expulsiones_plan')
-            .select('id', { count: 'exact', head: true })
-            .eq('usuario_id', userId);
-        numeroExpulsiones = count ?? 0;
-    } catch {
-        numeroExpulsiones = 0;
-    }
-
     const stats: UserStats = {
         valoracionMedia: Number(row.valoracion_media) || 0,
         porcentajeRepetiria: Number(row.porcentaje_repetiria) || 0,
@@ -179,7 +182,7 @@ export async function getUserStats(userId: string, options?: { skipCache?: boole
         numeroAmistades: Number(row.numero_amistades) || 0,
         aspectoPositivoMasVotado: (row.aspecto_positivo_mas_votado as string | null) ?? null,
         aspectoNegativoMasVotado: (row.aspecto_negativo_mas_votado as string | null) ?? null,
-        numeroExpulsiones,
+        numeroExpulsiones: 0,
     };
 
     const cooled = await applyLowRatingCooling(userId, stats);

@@ -32,9 +32,15 @@ import { BounceHeart } from '../../components/BounceHeart';
 import { FeedHeartBurstHost } from '../../components/FeedHeartBurstHost';
 import { FitMatchBanner } from '../../components/FitMatchBanner';
 import { FootballLineupSection } from '../../components/FootballLineup';
-import { FootballShareCard } from '../../components/FootballShareCard';
-import { PlanShareModal, buildPlanSharePayload, type PlanSharePayload } from '../../components/PlanShareModal';
+import { FootballTournamentSection } from '../../components/FootballTournamentSection';
+import { TournamentEarlyPick } from '../../components/TournamentEarlyPick';
 import { InvitePeopleSheet, type InviteProfile } from '../../components/InvitePeopleSheet';
+import type { ChatGroupOption } from '../../lib/inviteChatGroup';
+import {
+    cancelChatGroupInvite,
+    listGroupsInvitedToPlan,
+    listMyChatGroups,
+} from '../../lib/inviteChatGroup';
 import { NexoMapView } from '../../components/NexoMapView';
 import { PadelLineupSection } from '../../components/PadelLineup';
 import { PlanCoverCarousel } from '../../components/PlanCoverCarousel';
@@ -57,14 +63,6 @@ import { FEED_CACHE_KEY, type FeedSnapshot } from '../../lib/feedCache';
 import { fetchFitPersonalityTags } from '../../lib/feedLoad';
 import { isGroupChatPlan } from '../../lib/feedPlans';
 import { noteFeedInviteCleared, takeFeedMembershipPatches } from '../../lib/feedReload';
-import {
-    fetchFootballConfig,
-    fetchFootballSlots,
-    formatDisplayLabel,
-    uiFormatFromConfig,
-    type FootballConfig,
-    type FootballOccupant,
-} from '../../lib/footballLineup';
 import { getFriends } from '../../lib/friends';
 import { distanceKm, formatDistanceKm, openDirectionsTo } from '../../lib/geo';
 import { fetchGuestPlanDetail } from '../../lib/guestFeed';
@@ -91,8 +89,13 @@ import {
 import { planCoverList } from '../../lib/planCovers';
 import {
     overlayOwnCreatorProfile,
+    hydratePlanDetailDisk,
     PLAN_DETAIL_TTL_MS,
     planDetailKey,
+    planDetailPrefetchJob,
+    rememberPlanDetailDisk,
+    prefetchPlanDetail,
+    syncPlanDetailParticipantsFromFeed,
 } from '../../lib/planDetailCache';
 import {
     acceptPlanInvite,
@@ -110,12 +113,18 @@ import {
     rejectPlanJoinRequest,
     type PlanJoinRequest,
 } from '../../lib/planJoinRequests';
-import { formatCountdown, isPlanActiveForSaved, isPlanChatAlive, resolveRatingUiPhase } from '../../lib/planLifecycle';
+import { formatCountdown, isPlanActiveForSaved, isPlanChatAlive, resolveRatingUiPhase, withEndedPlanPresentation } from '../../lib/planLifecycle';
 import { MAX_ACTIVE_PLANS } from '../../lib/planLimits';
 import { markChatOpenedFromPlan } from '../../lib/chatFromPlan';
 import { seedChatThreadPeek } from '../../lib/prefetchChats';
 import { dismissPushForPlanDetail } from '../../lib/presentedPush';
-import { getMyProfile, getPublicProfileCards } from '../../lib/profileData';
+import {
+    getMyProfile,
+    getPublicProfileCards,
+    peekPublicProfileCards,
+    profileCardsFromRows,
+    type PublicProfileCard,
+} from '../../lib/profileData';
 import { type Genero } from '../../lib/profileFields';
 import { type AffinityPerson } from '../../lib/profileAffinity';
 import {
@@ -128,9 +137,16 @@ import { renderRatingStars } from '../../lib/profileRating';
 import { getPendingRatingForPlan, subscribeRatingSession, type PendingRatingPlan } from '../../lib/ratings';
 import { ScreenKeys } from '../../lib/screenState';
 import { screenCacheKey } from '../../lib/screenCaches';
-import { shareFootballCard } from '../../lib/shareFootballPlan';
+import { sharePlanLink } from '../../lib/sharePlan';
+import { tryShareTournamentPitch } from '../../lib/shareTournamentPitch';
 import { canJoinPlanByGender } from '../../lib/soloChicas';
+import { wasKickedFromPlan } from '../../lib/planKicks';
 import { resolvePlanSport } from '../../lib/sports';
+import {
+    loadTournamentLineup,
+    peekTournamentLineup,
+    warmTournamentFromLink,
+} from '../../lib/tournamentLineupCache';
 import { EMPTY_STATS, formatRatingScore, getUserStats, peekUserStats, personRepeatStat, type UserStats } from '../../lib/stats';
 import { supabase } from '../../lib/supabase';
 import { lockTabPager, unlockTabPager } from '../../lib/tabPagerScroll';
@@ -138,6 +154,74 @@ import { cacheGetStale, cacheIsFresh, cacheSet } from '../../lib/ttlCache';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
 import { getWaitlistPosition } from '../../lib/waitlistPosition';
 import { theme } from '../../theme';
+
+const PLAN_DETAIL_COLUMNS =
+    'id, titulo, titulo_cierre, imagen_url, imagen_cierre, imagenes_url, recurrencia, categoria, tipo_deporte, solo_chicas, modo_privado, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion, chat_eliminado_en';
+
+/** Expo/WhatsApp a veces ensucian el id; extrae un UUID limpio. */
+function coercePlanId(raw: string | string[] | undefined): string | null {
+    const s = Array.isArray(raw) ? raw[0] : raw;
+    if (!s) return null;
+    const m = String(s).match(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+    );
+    return m ? m[0].toLowerCase() : null;
+}
+
+type PlanDetailBundle = {
+    plan: PlanRow;
+    acceptedIds: string[];
+    profiles: PublicProfileCard[];
+};
+
+/**
+ * `ok: false` = el RPC no contestó (red o función ausente). Es distinto de
+ * `bundle: null`, que significa que el plan no existe o no se puede ver.
+ */
+type PlanDetailFetch = { ok: true; bundle: PlanDetailBundle | null } | { ok: false };
+
+/** Lo que devuelve el RPC `get_plan_detail`, validado antes de usarlo. */
+function parsePlanDetailBundle(data: unknown): PlanDetailBundle | null {
+    if (!data || typeof data !== 'object') return null;
+    const raw = data as { plan?: unknown; acceptedIds?: unknown; profiles?: unknown };
+    if (!raw.plan || typeof raw.plan !== 'object') return null;
+    if (typeof (raw.plan as { id?: unknown }).id !== 'string') return null;
+    return {
+        plan: withEndedPlanPresentation(raw.plan as PlanRow & {
+            titulo_cierre?: string | null;
+            imagen_cierre?: string | null;
+        }),
+        acceptedIds: Array.isArray(raw.acceptedIds)
+            ? raw.acceptedIds.filter((id): id is string => typeof id === 'string')
+            : [],
+        // Guarda las fichas en caché, así el chat y los perfiles ya las tienen.
+        profiles: profileCardsFromRows(raw.profiles),
+    };
+}
+
+/** Camino de siempre por si el RPC no contesta: plan, aceptados y fichas por separado. */
+async function fetchPlanDetailFallback(planId: string): Promise<PlanDetailBundle | null> {
+    const [planRes, partsRes] = await Promise.all([
+        supabase.from('planes').select(PLAN_DETAIL_COLUMNS).eq('id', planId).maybeSingle(),
+        supabase
+            .from('participantes')
+            .select('usuario_id, estado')
+            .eq('plan_id', planId)
+            .eq('estado', 'aceptado'),
+    ]);
+    const plan = planRes.data
+        ? withEndedPlanPresentation(planRes.data as PlanRow & {
+            titulo_cierre?: string | null;
+            imagen_cierre?: string | null;
+        })
+        : null;
+    if (planRes.error || !plan) return null;
+    const acceptedIds = ((partsRes.data as { usuario_id: string; estado: string }[] | null) || [])
+        .filter((p) => isAcceptedParticipant(p.estado))
+        .map((p) => p.usuario_id);
+    const profiles = await getPublicProfileCards([plan.creador_id, ...acceptedIds]).catch(() => []);
+    return { plan, acceptedIds, profiles };
+}
 
 const PRIMARY = theme.colors.brand;
 const PRIMARY_DARK = theme.colors.primary;
@@ -155,7 +239,7 @@ export default function PlanDetailScreen() {
     const { colors } = useAppTheme();
     const { requireAccount, userId: sessionUserId, isGuest } = useAuthSession();
     const dateLocale = localeTag(lang);
-    const { id, inviteId, inviterId, inviterName, inviterAvatar, inviteTipo, from } = useLocalSearchParams<{
+    const { id, inviteId, inviterId, inviterName, inviterAvatar, inviteTipo, from, team } = useLocalSearchParams<{
         id: string | string[];
         inviteId?: string | string[];
         inviterId?: string | string[];
@@ -164,8 +248,15 @@ export default function PlanDetailScreen() {
         inviteTipo?: string | string[];
         /** attended = perfil «A los que he ido»; my-plans = Mis planes */
         from?: string | string[];
+        /** Invite torneo: índice de equipo (clase) */
+        team?: string | string[];
     }>();
-    const planId = Array.isArray(id) ? id[0] : id;
+    const planId = coercePlanId(id);
+    const preferredTeamRaw = Array.isArray(team) ? team[0] : team;
+    const preferredTeam =
+        preferredTeamRaw != null && preferredTeamRaw !== '' && Number.isFinite(Number(preferredTeamRaw))
+            ? Math.max(0, Math.floor(Number(preferredTeamRaw)))
+            : null;
     const openedFrom = Array.isArray(from) ? from[0] : from;
     const hideMode: 'attended' | 'my-plans' = openedFrom === 'attended' ? 'attended' : 'my-plans';
     const pendingInviteId = Array.isArray(inviteId) ? inviteId[0] : inviteId;
@@ -179,13 +270,17 @@ export default function PlanDetailScreen() {
     const [inviteHandled, setInviteHandled] = useState(false);
     const fromInvite = !!pendingInviteId && !inviteHandled;
     const scrollKey = planId ? `${ScreenKeys.PLAN_DETAIL}:${planId}` : ScreenKeys.PLAN_DETAIL;
-    const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(scrollKey);
+    const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(scrollKey, {
+        restore: false,
+    });
     const heartHostRef = useRef<View>(null);
 
     const cachedDetail = planId ? cacheGetStale<PlanDetailSnapshot>(planDetailKey(planId)) : null;
 
     const [loading, setLoading] = useState(() => !cachedDetail);
     const [plan, setPlan] = useState<PlanRow | null>(() => cachedDetail?.plan ?? null);
+    // Links fríos (WhatsApp): skeleton al instante. Con caché, delay corto evita flash.
+    const showDetailSkeleton = loading && !plan;
     const [participants, setParticipants] = useState<Participant[]>(() => cachedDetail?.participants ?? []);
     const [joinedCount, setJoinedCount] = useState(() => cachedDetail?.joinedCount ?? 0);
     const [creator, setCreator] = useState<Participant | null>(() => cachedDetail?.creator ?? null);
@@ -241,6 +336,7 @@ export default function PlanDetailScreen() {
     const [actionBusy, setActionBusy] = useState(false);
     const [mapExpanded, setMapExpanded] = useState(false);
     const [mapPreviewReady, setMapPreviewReady] = useState(false);
+    const [fullMapMounted, setFullMapMounted] = useState(false);
     const [openRating, setOpenRating] = useState<PendingRatingPlan | null>(
         () => cachedDetail?.openRating ?? null,
     );
@@ -248,12 +344,73 @@ export default function PlanDetailScreen() {
     const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
     const [showInviteSheet, setShowInviteSheet] = useState(false);
     const [invitees, setInvitees] = useState<InviteProfile[]>([]);
+    const [invitedGroups, setInvitedGroups] = useState<ChatGroupOption[]>([]);
     const [pendingJoinRequests, setPendingJoinRequests] = useState<PlanJoinRequest[]>([]);
     const joinRequestBusyRef = useRef<Set<string>>(new Set());
     const [waitlistPosition, setWaitlistPosition] = useState<number | null>(null);
-    const [lineupReady, setLineupReady] = useState(false);
+    // Visible desde el primer paint (alineación va arriba del detalle).
+    const [lineupReady, setLineupReady] = useState(true);
+    /** Evita montar FootballLineup en torneos (fetch + canal duplicados). */
+    const [footballLineupMode, setFootballLineupMode] = useState<
+        'unknown' | 'torneo' | 'partido'
+    >(() => {
+        if (!planId) return 'unknown';
+        const peek = peekTournamentLineup(planId);
+        if (!peek) return 'unknown';
+        return peek.config ? 'torneo' : 'partido';
+    });
     const hasLoadedRef = useRef(!!cachedDetail);
     const loadGenRef = useRef(0);
+
+    /** Early-pick (link) activo / ya resuelto → la sección no abre otro modal. */
+    const [earlyPickActive, setEarlyPickActive] = useState(false);
+    const [earlyPickSettled, setEarlyPickSettled] = useState(false);
+
+    // WhatsApp / cold open: lineup en paralelo (sin cancelar prefetch) + detalle.
+    useEffect(() => {
+        if (!planId) return;
+        setEarlyPickActive(false);
+        setEarlyPickSettled(false);
+        warmTournamentFromLink(planId);
+        void loadTournamentLineup(planId)
+            .then((snap) => {
+                setFootballLineupMode(snap.config ? 'torneo' : 'partido');
+            })
+            .catch(() => setFootballLineupMode('partido'));
+        void prefetchPlanDetail(planId).catch(() => undefined);
+    }, [planId]);
+
+    useEffect(() => {
+        if (!planId) return;
+
+        if (plan && resolvePlanSport(plan)?.tipo !== 'futbol') {
+            setFootballLineupMode('partido');
+            return;
+        }
+
+        const peek = peekTournamentLineup(planId);
+        if (peek) {
+            setFootballLineupMode(peek.config ? 'torneo' : 'partido');
+            if (peek.config) {
+                void loadTournamentLineup(planId).catch(() => undefined);
+            }
+            return;
+        }
+
+        // No dejar hueco vacío: fetch en paralelo al detalle del plan.
+        let cancelled = false;
+        void loadTournamentLineup(planId)
+            .then((snap) => {
+                if (cancelled) return;
+                setFootballLineupMode(snap.config ? 'torneo' : 'partido');
+            })
+            .catch(() => {
+                if (!cancelled) setFootballLineupMode('partido');
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [planId, plan]);
 
     useEffect(() => {
         creatorFitLockedRef.current = false;
@@ -310,22 +467,82 @@ export default function PlanDetailScreen() {
             setCurrentUserId(userId);
             const user = userId ? { id: userId } : null;
 
-            const stale = cacheGetStale<PlanDetailSnapshot>(detailKey);
+            let stale = cacheGetStale<PlanDetailSnapshot>(detailKey);
+            if (!stale?.plan) {
+                const fromDisk = await hydratePlanDetailDisk(planId);
+                if (fromDisk?.plan) {
+                    stale = fromDisk;
+                    if (gen === loadGenRef.current) applyDetailSnapshot(fromDisk);
+                }
+            }
             if (stale) {
+                // Feed may already show newer bubbles than a still-fresh detail cache.
+                try {
+                    const feedSnap = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY);
+                    const feedPlan = feedSnap?.plans?.find(
+                        (p) => String(p?.id) === String(planId),
+                    );
+                    if (feedPlan && Array.isArray(feedPlan.participantsList)) {
+                        syncPlanDetailParticipantsFromFeed(
+                            planId,
+                            feedPlan.participantsList,
+                            Number.isFinite(Number(feedPlan.joinedCount))
+                                ? Number(feedPlan.joinedCount)
+                                : undefined,
+                        );
+                    }
+                } catch {
+                    /* ignore */
+                }
+                stale = cacheGetStale<PlanDetailSnapshot>(detailKey) ?? stale;
                 applyDetailSnapshot(stale);
+                if (!opts?.force) {
+                    const pending = planDetailPrefetchJob(planId);
+                    if (pending) {
+                        await pending;
+                        if (gen !== loadGenRef.current) return;
+                        stale = cacheGetStale<PlanDetailSnapshot>(detailKey) ?? stale;
+                        applyDetailSnapshot(stale);
+                    }
+                }
                 setLoading(false);
                 // Semillas del feed vienen sin user/amigos/guardados → hay que completar.
                 const cacheComplete =
                     !stale.partial &&
+                    // Lista recortada (muestra del feed) → completar en red para ver a todos.
+                    (stale.participantsComplete === true ||
+                        (stale.participants?.length ?? 0) >= (stale.joinedCount ?? 0)) &&
                     (user ? stale.currentUserId === user.id : !stale.currentUserId) &&
                     (!stale.plan.es_organizador || stale.organizerFollowers != null);
                 if (!opts?.force && cacheIsFresh(detailKey) && cacheComplete) return;
-            } else if (!hasLoadedRef.current) {
-                setLoading(true);
+            } else {
+                const pending = !opts?.force ? planDetailPrefetchJob(planId) : null;
+                if (pending) {
+                    await pending;
+                    if (gen !== loadGenRef.current) return;
+                    stale = cacheGetStale<PlanDetailSnapshot>(detailKey);
+                    if (stale) {
+                        applyDetailSnapshot(stale);
+                        setLoading(false);
+                        const ready =
+                            !stale.partial &&
+                            (stale.participantsComplete === true ||
+                                (stale.participants?.length ?? 0) >= (stale.joinedCount ?? 0)) &&
+                            (user ? stale.currentUserId === user.id : !stale.currentUserId) &&
+                            (!stale.plan.es_organizador || stale.organizerFollowers != null);
+                        if (cacheIsFresh(detailKey) && ready) return;
+                    }
+                }
+                if (!hasLoadedRef.current) setLoading(true);
             }
 
             if (!user) {
-                const guest = await fetchGuestPlanDetail(planId);
+                let guest: Awaited<ReturnType<typeof fetchGuestPlanDetail>> = null;
+                try {
+                    guest = await fetchGuestPlanDetail(planId);
+                } catch {
+                    guest = null;
+                }
                 if (gen !== loadGenRef.current) return;
                 if (!guest) {
                     if (!stale) setPlan(null);
@@ -348,6 +565,7 @@ export default function PlanDetailScreen() {
                     plan: guest.plan as PlanRow,
                     participants: list,
                     joinedCount: guest.joinedCount,
+                    participantsComplete: list.length >= guest.joinedCount,
                     creator: creatorProfile,
                     creatorStats: EMPTY_STATS,
                     membership: 'none',
@@ -363,61 +581,112 @@ export default function PlanDetailScreen() {
                 applyDetailSnapshot(snap);
                 setCurrentUserIsOrganizer(false);
                 cacheSet(detailKey, snap, PLAN_DETAIL_TTL_MS);
+                rememberPlanDetailDisk(planId, snap);
                 return;
             }
 
-            const { data: planRow, error } = await supabase
-                .from('planes')
-                .select(
-                    'id, titulo, imagen_url, imagenes_url, recurrencia, categoria, tipo_deporte, solo_chicas, modo_privado, fecha_evento, nombre_ubicacion, latitud, longitud, maximo_participantes, creador_id, requiere_aprobacion, descripcion, chat_eliminado_en',
+            // Plan + unidos + sus fichas en una sola vuelta. Antes eran cuatro
+            // viajes encadenados y las burbujas de integrantes llegaban las últimas.
+            const bundlePromise: Promise<PlanDetailFetch> = Promise.resolve(
+                supabase.rpc('get_plan_detail', { p_plan_id: planId }),
+            )
+                .then(({ data, error }) =>
+                    error ? { ok: false as const } : { ok: true as const, bundle: parsePlanDetailBundle(data) },
                 )
-                .eq('id', planId)
-                .maybeSingle();
+                .catch(() => ({ ok: false as const }));
+            const myPartPromise = user
+                ? supabase
+                      .from('participantes')
+                      .select('estado')
+                      .eq('plan_id', planId)
+                      .eq('usuario_id', user.id)
+                      .maybeSingle()
+                : Promise.resolve({ data: null, error: null });
+            const savedPromise = user
+                ? supabase
+                      .from('planes_guardados')
+                      .select('plan_id')
+                      .eq('plan_id', planId)
+                      .eq('usuario_id', user.id)
+                      .maybeSingle()
+                : Promise.resolve({ data: null, error: null });
+            const friendsPromise = user ? getFriends(user.id).catch(() => []) : Promise.resolve([]);
+            const coincidedPromise = user
+                ? getCoincidedUserIds(user.id).catch(() => new Set<string>())
+                : Promise.resolve(new Set<string>());
+            const myProfilePromise = user
+                ? getMyProfile().catch(() => ({ data: null, error: null }))
+                : Promise.resolve({ data: null, error: null });
+            const openRatingPromise = user
+                ? getPendingRatingForPlan(user.id, planId, { force: true }).catch(() => null)
+                : Promise.resolve(null);
+
+            // El creador casi siempre se conoce ya (semilla del feed o caché): con eso,
+            // el «% repetirían» sale a la vez que el resto en vez de una vuelta después.
+            const knownCreatorId = stale?.plan?.creador_id ?? null;
+            // Lanzadas antes de los `await`: si salimos pronto no deben quedar colgando.
+            const statsPromise = knownCreatorId
+                ? getUserStats(knownCreatorId).catch(() => EMPTY_STATS)
+                : null;
+            const followPromise = knownCreatorId
+                ? getOrganizerFollowStats(knownCreatorId).catch(() => ({ followers: null, following: false }))
+                : null;
+
+            // Solo se reintenta por el camino antiguo si el RPC ha fallado; si ha
+            // contestado que no hay plan, no hay nada más que pedir.
+            const rpcResult = await bundlePromise;
+            let bundle = rpcResult.ok ? rpcResult.bundle : await fetchPlanDetailFallback(planId);
+
+            // Si RLS/detalle fallan pero el enlace es válido, intentar vista compartida (guest RPC).
+            if (!bundle) {
+                try {
+                    const guest = await fetchGuestPlanDetail(planId);
+                    if (guest?.plan) {
+                        bundle = {
+                            plan: guest.plan as PlanRow,
+                            acceptedIds: guest.participants.map((p) => p.id),
+                            profiles: guest.participants.map((p) => ({
+                                id: p.id,
+                                nombre: p.nombre,
+                                nombre_usuario: p.nombre_usuario ?? null,
+                                avatar_url: p.avatar_url ?? null,
+                                genero: null,
+                                edad: null,
+                                ambientes_preferidos: [] as string[],
+                                etiquetas: [] as string[],
+                                es_organizador: p.es_organizador === true,
+                            })),
+                        };
+                    }
+                } catch {
+                    /* ignore */
+                }
+            }
 
             if (gen !== loadGenRef.current) return;
-            if (error || !planRow) {
+            if (!bundle) {
                 if (!stale) setPlan(null);
                 return;
             }
 
-            setPlan(planRow as PlanRow);
+            const planRow = bundle.plan;
+            setPlan(planRow);
 
-            const [partsRes, myPartRes, savedRes, friendsData, coincidedSet, stats, followStats, myProfileRes, nextOpenRating] = await Promise.all([
-                supabase
-                    .from('participantes')
-                    .select('usuario_id, estado')
-                    .eq('plan_id', planId)
-                    .eq('estado', 'aceptado'),
-                user
-                    ? supabase
-                          .from('participantes')
-                          .select('estado')
-                          .eq('plan_id', planId)
-                          .eq('usuario_id', user.id)
-                          .maybeSingle()
-                    : Promise.resolve({ data: null, error: null }),
-                user
-                    ? supabase
-                          .from('planes_guardados')
-                          .select('plan_id')
-                          .eq('plan_id', planId)
-                          .eq('usuario_id', user.id)
-                          .maybeSingle()
-                    : Promise.resolve({ data: null, error: null }),
-                user ? getFriends(user.id) : Promise.resolve([]),
-                user ? getCoincidedUserIds(user.id) : Promise.resolve(new Set<string>()),
-                getUserStats(planRow.creador_id),
-                getOrganizerFollowStats(planRow.creador_id),
-                user
-                    ? getMyProfile()
-                    : Promise.resolve({ data: null, error: null }),
-                user ? getPendingRatingForPlan(user.id, planId, { force: true }) : Promise.resolve(null),
+            const [myPartRes, savedRes, friendsData, coincidedSet, stats, followStats, myProfileRes, nextOpenRating] = await Promise.all([
+                myPartPromise,
+                savedPromise,
+                friendsPromise,
+                coincidedPromise,
+                knownCreatorId === planRow.creador_id && statsPromise
+                    ? statsPromise
+                    : getUserStats(planRow.creador_id),
+                knownCreatorId === planRow.creador_id && followPromise
+                    ? followPromise
+                    : getOrganizerFollowStats(planRow.creador_id),
+                myProfilePromise,
+                openRatingPromise,
             ]);
             if (gen !== loadGenRef.current) return;
-
-            const accepted = (partsRes.data || []).filter((p: { estado: string }) =>
-                isAcceptedParticipant(p.estado),
-            );
 
             const nextMembership = myPartRes.data?.estado
                 ? (mapEstadoToMembership(myPartRes.data.estado) ?? 'none')
@@ -447,7 +716,7 @@ export default function PlanDetailScreen() {
             if (stale) {
                 applyDetailSnapshot({
                     ...stale,
-                    plan: { ...stale.plan, ...(planRow as PlanRow) },
+                    plan: { ...stale.plan, ...planRow },
                     friendIds: nextFriends,
                     coincidedIds: nextCoincided,
                     creatorStats: stats,
@@ -461,11 +730,10 @@ export default function PlanDetailScreen() {
                 });
             }
 
-            const profileIds = [
-                planRow.creador_id,
-                ...accepted.map((p: { usuario_id: string }) => p.usuario_id),
-            ];
-            const publicProfiles = await getPublicProfileCards(profileIds);
+            const basePeople = bundle.profiles;
+            const publicProfiles = basePeople.some((p) => p.id === planRow.creador_id)
+                ? basePeople
+                : [...basePeople, ...(await getPublicProfileCards([planRow.creador_id]))];
             const profileMap = new Map(publicProfiles.map((profile) => [profile.id, profile]));
             const creatorData = overlayOwnCreatorProfile(
                 profileMap.get(planRow.creador_id),
@@ -478,7 +746,7 @@ export default function PlanDetailScreen() {
                 creatorProfile: creatorData
                     ? { ...creatorData, nombre: creatorData.nombre ?? t('profile.user') }
                     : null,
-                acceptedUserIds: accepted.map((p: { usuario_id: string }) => p.usuario_id),
+                acceptedUserIds: bundle.acceptedIds,
                 profileOf: (id) => {
                     const prof = profileMap.get(id);
                     return prof ? { ...prof, nombre: prof.nombre ?? t('profile.user') } : undefined;
@@ -491,11 +759,13 @@ export default function PlanDetailScreen() {
 
             const snap: PlanDetailSnapshot = {
                 plan: {
-                    ...(planRow as PlanRow),
+                    ...planRow,
                     es_organizador: creatorData?.es_organizador === true,
                 },
                 participants: list,
                 joinedCount: people.joinedCount,
+                // Fetch completo: aquí están todos los aceptados, no la muestra del feed.
+                participantsComplete: true,
                 creator: creatorProfile,
                 creatorStats: stats,
                 membership: resolvedMembership,
@@ -510,6 +780,7 @@ export default function PlanDetailScreen() {
             };
             applyDetailSnapshot(snap);
             cacheSet(detailKey, snap, PLAN_DETAIL_TTL_MS);
+            rememberPlanDetailDisk(planId, snap);
         } finally {
             if (gen === loadGenRef.current) setLoading(false);
         }
@@ -523,6 +794,21 @@ export default function PlanDetailScreen() {
             return () => unlockTabPager();
         }, [loadPlan, planId]),
     );
+
+    // Desde el detalle casi siempre se toca al creador: su perfil se deja listo
+    // en segundo plano para que al abrirlo no haya espera.
+    useEffect(() => {
+        const creatorId = creator?.id ?? plan?.creador_id;
+        if (!creatorId) return;
+        seedUserProfilePeek({
+            id: creatorId,
+            nombre: creator?.nombre,
+            avatar_url: creator?.avatar_url,
+            es_organizador: plan?.es_organizador === true,
+        });
+        const task = InteractionManager.runAfterInteractions(() => prefetchUserProfile(creatorId));
+        return () => task.cancel();
+    }, [creator?.id, creator?.nombre, creator?.avatar_url, plan?.creador_id, plan?.es_organizador]);
 
     useEffect(() => {
         if (openRating?.phase !== 'waiting') return;
@@ -631,7 +917,50 @@ export default function PlanDetailScreen() {
                     table: 'participantes',
                     filter: `plan_id=eq.${planId}`,
                 },
-                () => {
+                (payload) => {
+                    // Pintar burbuja al instante si alguien entra aceptado.
+                    const row = payload.new as
+                        | { usuario_id?: string; estado?: string }
+                        | null;
+                    if (
+                        payload.eventType === 'INSERT' ||
+                        payload.eventType === 'UPDATE'
+                    ) {
+                        if (row?.usuario_id && isAcceptedParticipant(row.estado)) {
+                            const uid = String(row.usuario_id);
+                            // Si ya conocemos su ficha, la burbuja sale con nombre y
+                            // foto desde el primer frame en vez de «Usuario» en gris.
+                            const known = peekPublicProfileCards([uid])[0];
+                            setParticipants((prev) => {
+                                if (prev.some((p) => String(p.id) === uid)) return prev;
+                                return [
+                                    ...prev,
+                                    {
+                                        id: uid,
+                                        nombre: known?.nombre || t('profile.user'),
+                                        avatar_url: known?.avatar_url ?? null,
+                                        isCreator: false,
+                                    },
+                                ];
+                            });
+                            setJoinedCount((c) => c + (payload.eventType === 'INSERT' ? 1 : 0));
+                            void getPublicProfileCards([uid]).then((cards) => {
+                                const card = cards[0];
+                                if (!card) return;
+                                setParticipants((prev) =>
+                                    prev.map((p) =>
+                                        String(p.id) === uid
+                                            ? {
+                                                  ...p,
+                                                  nombre: card.nombre || p.nombre,
+                                                  avatar_url: card.avatar_url ?? null,
+                                              }
+                                            : p,
+                                    ),
+                                );
+                            });
+                        }
+                    }
                     void (async () => {
                         const { data } = await supabase
                             .from('participantes')
@@ -692,7 +1021,7 @@ export default function PlanDetailScreen() {
         };
     }, [planId, currentUserId, plan?.creador_id, plan?.es_organizador, t]);
 
-    const isCreator = currentUserId && plan && String(plan.creador_id) === String(currentUserId);
+    const isCreator = !!currentUserId && !!plan && String(plan.creador_id) === String(currentUserId);
     const planFitPct = useMemo(() => {
         if (!plan || !currentUserId || isCreator || currentUserIsOrganizer) return null;
         // Preferir el % del feed (ya visible en la card) para no esperar al fetch de tags.
@@ -813,9 +1142,12 @@ export default function PlanDetailScreen() {
         void loadPendingJoinRequests();
     }, [loadPendingJoinRequests]);
 
-    const openInviteSheet = async () => {
-        if (!planId || !canInvitePeople) return;
-        setShowInviteSheet(true);
+    const loadInviteState = useCallback(async () => {
+        if (!planId || !canInvitePeople) {
+            setInvitees([]);
+            setInvitedGroups([]);
+            return;
+        }
         try {
             const list = await getPlanPendingInvitees(planId);
             setInvitees(
@@ -830,6 +1162,36 @@ export default function PlanDetailScreen() {
         } catch {
             setInvitees([]);
         }
+        try {
+            if (!currentUserId) {
+                setInvitedGroups([]);
+                return;
+            }
+            const groups = await listMyChatGroups(currentUserId);
+            const already = await listGroupsInvitedToPlan(
+                planId,
+                groups.map((g) => g.id),
+            );
+            setInvitedGroups(
+                already.map((g) => {
+                    const full = groups.find((r) => r.id === g.id);
+                    return full ?? g;
+                }),
+            );
+        } catch {
+            setInvitedGroups([]);
+        }
+    }, [planId, canInvitePeople, currentUserId]);
+
+    useEffect(() => {
+        void loadInviteState();
+    }, [loadInviteState]);
+
+    const openInviteSheet = () => {
+        if (!planId || !canInvitePeople) return;
+        setShowInviteSheet(true);
+        // Refresco discreto por si cambió algo; la UI ya tiene datos precargados.
+        void loadInviteState();
     };
 
     const handleInviteAdd = useCallback(
@@ -860,6 +1222,30 @@ export default function PlanDetailScreen() {
             return { error };
         },
         [planId],
+    );
+
+    const handleInvitedGroupRemove = useCallback(
+        async (groupId: string) => {
+            if (!planId) return { error: 'no_plan' };
+            let removed: ChatGroupOption | undefined;
+            setInvitedGroups((prev) => {
+                removed = prev.find((g) => g.id === groupId);
+                return prev.filter((g) => g.id !== groupId);
+            });
+            const { error } = await cancelChatGroupInvite({
+                groupChatId: groupId,
+                targetPlanId: planId,
+            });
+            if (error && removed) {
+                setInvitedGroups((prev) =>
+                    prev.some((g) => g.id === removed!.id) ? prev : [...prev, removed!],
+                );
+            } else {
+                void loadInviteState();
+            }
+            return { error };
+        },
+        [planId, loadInviteState],
     );
 
     const inviteExcludeIds = useMemo(
@@ -979,95 +1365,10 @@ export default function PlanDetailScreen() {
         });
     };
 
-    const footballShareRef = useRef<View>(null);
-    const footballSharePendingRef = useRef(false);
-    const [footballSharePack, setFootballSharePack] = useState<{
-        config: FootballConfig | null;
-        slots: FootballOccupant[];
-        when: string;
-    } | null>(null);
-    const [planSharePayload, setPlanSharePayload] = useState<PlanSharePayload | null>(null);
-    const [footballShareBusy, setFootballShareBusy] = useState(false);
-
-    useEffect(() => {
-        if (!footballSharePack || !plan || !footballSharePendingRef.current) return;
-        footballSharePendingRef.current = false;
-        let cancelled = false;
-        void (async () => {
-            const formatLabel = footballSharePack.config
-                ? formatDisplayLabel(uiFormatFromConfig(footballSharePack.config))
-                : null;
-            const spotsLeft = Math.max(0, plan.maximo_participantes - joinedCount);
-            try {
-                await shareFootballCard({
-                    cardRef: footballShareRef,
-                    input: {
-                        planId: plan.id,
-                        title: plan.titulo,
-                        location: plan.nombre_ubicacion,
-                        when: footballSharePack.when || null,
-                        spotsLeft,
-                        maxPeople: plan.maximo_participantes,
-                        joinedCount,
-                        config: footballSharePack.config,
-                        slots: footballSharePack.slots,
-                        people: participants.map((p) => ({
-                            id: p.id,
-                            nombre: p.nombre,
-                            avatar_url: p.avatar_url,
-                        })),
-                        formatLabel,
-                        lang,
-                    },
-                });
-            } finally {
-                if (!cancelled) {
-                    setFootballShareBusy(false);
-                    setFootballSharePack(null);
-                }
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [footballSharePack, plan, joinedCount, participants, lang]);
-
     const handleShare = async () => {
-        if (!plan || footballShareBusy) return;
-        const when = eventDate ? `${dateString}${timeString ? ` · ${timeString}` : ''}` : '';
-        const isFootball = sportPlan?.tipo === 'futbol';
-
-        if (!isFootball) {
-            setPlanSharePayload(
-                buildPlanSharePayload({
-                    planId: plan.id,
-                    title: plan.titulo,
-                    coverUrl: planCoverList(plan)[0] ?? plan.imagen_url,
-                    when,
-                    location: plan.nombre_ubicacion,
-                    participants: participants.map((p) => ({
-                        id: p.id,
-                        nombre: p.nombre,
-                        avatar_url: p.avatar_url,
-                    })),
-                    maxPeople: plan.maximo_participantes,
-                }),
-            );
-            return;
-        }
-
-        setFootballShareBusy(true);
-        try {
-            const [config, slots] = await Promise.all([
-                fetchFootballConfig(plan.id),
-                fetchFootballSlots(plan.id),
-            ]);
-            footballSharePendingRef.current = true;
-            setFootballSharePack({ config, slots, when });
-        } catch {
-            setFootballShareBusy(false);
-            footballSharePendingRef.current = false;
-        }
+        if (!plan) return;
+        if (await tryShareTournamentPitch()) return;
+        await sharePlanLink(plan.id, plan.titulo);
     };
 
     const handleToggleSave = async () => {
@@ -1112,19 +1413,24 @@ export default function PlanDetailScreen() {
         }
     };
 
-    const handleJoin = async () => {
-        if (requireAccount({ type: 'join', planId: plan?.id ?? planId ?? '' })) return;
-        if (!currentUserId || !plan || actionBusy) return;
-        if (isPastPlan) return;
+    const handleJoin = async (): Promise<'joined' | 'requested' | 'waitlist' | 'error'> => {
+        if (requireAccount({ type: 'join', planId: plan?.id ?? planId ?? '' })) return 'error';
+        if (!currentUserId || !plan || actionBusy) return 'error';
+        if (isPastPlan) return 'error';
         if (currentUserIsOrganizer) {
             hapticError();
             Alert.alert(t('feed.error'), t('organizer.cannotJoin'));
-            return;
+            return 'error';
         }
         if (!canJoinPlanByGender(plan, currentUserGenero)) {
             hapticError();
             Alert.alert(t('feed.error'), t('card.soloChicasOnly'));
-            return;
+            return 'error';
+        }
+        if (await wasKickedFromPlan(plan.id, currentUserId)) {
+            hapticError();
+            Alert.alert(t('feed.error'), t('plan.kickedCannotJoin'));
+            return 'error';
         }
         hapticMedium();
         // UI al instante; el límite lo valida el servidor (y localmente el organizador).
@@ -1137,7 +1443,38 @@ export default function PlanDetailScreen() {
         const prevMembership = membership;
         const prevCount = joinedCount;
         setMembership(nextMembership);
-        if (estado === 'aceptado') setJoinedCount((c) => c + 1);
+        const prevParticipants = participants;
+        if (estado === 'aceptado') {
+            setJoinedCount((c) => c + 1);
+            if (currentUserId) {
+                // Tu propia foto ya suele estar en caché: la burbuja sale completa.
+                const mine = peekPublicProfileCards([currentUserId])[0];
+                setParticipants((prev) => {
+                    if (prev.some((p) => String(p.id) === String(currentUserId))) return prev;
+                    return [
+                        ...prev,
+                        {
+                            id: currentUserId,
+                            nombre: t('chats.you'),
+                            avatar_url: mine?.avatar_url ?? null,
+                            isCreator: false,
+                        },
+                    ];
+                });
+                if (!mine) {
+                    void getMyProfile().then(({ data: me }) => {
+                        if (!me) return;
+                        setParticipants((prev) =>
+                            prev.map((p) =>
+                                String(p.id) === String(currentUserId)
+                                    ? { ...p, avatar_url: me.avatar_url ?? null }
+                                    : p,
+                            ),
+                        );
+                    });
+                }
+            }
+        }
 
         const { queued, error, estado: applied } = await persistJoinWithWaitlistFallback(
             {
@@ -1154,6 +1491,7 @@ export default function PlanDetailScreen() {
         if (error) {
             setMembership(prevMembership);
             setJoinedCount(prevCount);
+            setParticipants(prevParticipants);
             hapticError();
             Alert.alert(
                 t('feed.error'),
@@ -1165,51 +1503,164 @@ export default function PlanDetailScreen() {
                         ? t('feed.planLimitReached', { max: MAX_ACTIVE_PLANS })
                         : t('feed.joinError'),
             );
-        } else {
-            if (applied === 'lista_espera' && estado === 'aceptado') {
-                setMembership('waitlist');
-                setJoinedCount(prevCount);
-                Alert.alert(t('feed.joinedWaitlist'));
-            }
-            hapticCelebrate();
-            const finalMembership: Membership =
-                applied === 'lista_espera'
-                    ? 'waitlist'
-                    : applied === 'pendiente'
-                      ? 'requested'
-                      : (nextMembership as Membership);
-            broadcastPlanMembership(plan.id, finalMembership, {
-                userId: currentUserId,
-                bumpJoined: finalMembership === 'joined' && prevMembership !== 'joined',
-                clearInvite: true,
-            });
-            setInviteHandled(true);
-            // Por si entró con inviteId pero usó Me apunto normal (o el join del feed).
-            void clearPendingPlanInvitesForMember(plan.id, currentUserId);
-            if (applied === 'aceptado') {
-                void import('../../lib/chatUnread').then(({ markPlanChatRead }) =>
-                    markPlanChatRead(currentUserId, plan.id),
-                );
-            }
-            if (!queued) {
-                void import('../../lib/push').then(({ notifyPlanJoin, schedulePlanLifecycleReminders }) => {
-                    notifyPlanJoin(plan.id, applied);
-                    if (applied === 'aceptado') {
-                        void schedulePlanLifecycleReminders({
-                            planId: plan.id,
-                            planTitle: plan.titulo,
-                            fechaEvento: plan.fecha_evento,
-                            categoria: plan.categoria,
-                        });
-                    }
-                });
-                // Soft refresh diferido: force inmediato congelaba tras unirse.
-                setTimeout(() => {
-                    void loadPlan({ force: true });
-                }, 600);
-            }
+            return 'error';
         }
+        if (applied === 'lista_espera' && estado === 'aceptado') {
+            setMembership('waitlist');
+            setJoinedCount(prevCount);
+            Alert.alert(t('feed.joinedWaitlist'));
+        }
+        hapticCelebrate();
+        const finalMembership: Membership =
+            applied === 'lista_espera'
+                ? 'waitlist'
+                : applied === 'pendiente'
+                  ? 'requested'
+                  : (nextMembership as Membership);
+        broadcastPlanMembership(plan.id, finalMembership, {
+            userId: currentUserId,
+            bumpJoined: finalMembership === 'joined' && prevMembership !== 'joined',
+            clearInvite: true,
+            addParticipant:
+                finalMembership === 'joined' && prevMembership !== 'joined'
+                    ? {
+                          id: currentUserId,
+                          nombre: t('chats.you'),
+                          avatar_url: null,
+                      }
+                    : null,
+        });
+        // Completar avatar en caché de detalle en cuanto llegue el perfil.
+        if (finalMembership === 'joined' && prevMembership !== 'joined') {
+            void getMyProfile().then(({ data: me }) => {
+                if (!me) return;
+                void import('../../lib/planDetailCache').then(({ patchPlanDetailMembership }) => {
+                    patchPlanDetailMembership(plan.id, 'joined', {
+                        addParticipant: {
+                            id: currentUserId,
+                            nombre: me.nombre || t('chats.you'),
+                            avatar_url: me.avatar_url ?? null,
+                        },
+                    });
+                });
+            });
+        }
+        setInviteHandled(true);
+        // Por si entró con inviteId pero usó Me apunto normal (o el join del feed).
+        void clearPendingPlanInvitesForMember(plan.id, currentUserId);
+        if (applied === 'aceptado') {
+            void import('../../lib/chatUnread').then(({ markPlanChatRead }) =>
+                markPlanChatRead(currentUserId, plan.id),
+            );
+        }
+        if (!queued) {
+            void import('../../lib/push').then(({ notifyPlanJoin, schedulePlanLifecycleReminders }) => {
+                notifyPlanJoin(plan.id, applied);
+                if (applied === 'aceptado') {
+                    void schedulePlanLifecycleReminders({
+                        planId: plan.id,
+                        planTitle: plan.titulo,
+                        fechaEvento: plan.fecha_evento,
+                        categoria: plan.categoria,
+                    });
+                }
+            });
+            // Soft refresh diferido: force inmediato congelaba tras unirse.
+            setTimeout(() => {
+                void loadPlan({ force: true });
+            }, 600);
+        }
+        if (applied === 'lista_espera') return 'waitlist';
+        if (applied === 'pendiente') return 'requested';
+        return 'joined';
     };
+
+    const ensureJoinedForTournament = async (): Promise<boolean> => {
+        if (isCreator || membership === 'joined') return true;
+        if (membership === 'requested') {
+            hapticError();
+            Alert.alert(t('feed.error'), t('torneo.joinPending'));
+            return false;
+        }
+        if (membership === 'waitlist') {
+            hapticError();
+            Alert.alert(t('feed.error'), t('torneo.joinWaitlist'));
+            return false;
+        }
+        const result = await handleJoin();
+        if (result === 'joined') return true;
+        if (result === 'requested') {
+            hapticError();
+            Alert.alert(t('feed.error'), t('torneo.joinPending'));
+        }
+        return false;
+    };
+
+    /** Join por planId aunque el detalle aún no haya pintado (picker del link). */
+    const ensureJoinedForEarlyPick = async (): Promise<boolean> => {
+        if (plan) return ensureJoinedForTournament();
+        const uid = sessionUserId;
+        if (!planId || !uid) return false;
+        if (membership === 'joined') return true;
+        if (membership === 'requested') {
+            hapticError();
+            Alert.alert(t('feed.error'), t('torneo.joinPending'));
+            return false;
+        }
+        if (membership === 'waitlist') {
+            hapticError();
+            Alert.alert(t('feed.error'), t('torneo.joinWaitlist'));
+            return false;
+        }
+        if (await wasKickedFromPlan(planId, uid)) {
+            hapticError();
+            Alert.alert(t('feed.error'), t('plan.kickedCannotJoin'));
+            return false;
+        }
+        const { error, estado } = await persistJoinWithWaitlistFallback(
+            { planId, userId: uid, estado: 'aceptado' },
+            true,
+        );
+        if (error) {
+            hapticError();
+            Alert.alert(t('feed.error'), t('feed.joinError'));
+            return false;
+        }
+        if (estado === 'pendiente') {
+            setMembership('requested');
+            hapticError();
+            Alert.alert(t('feed.error'), t('torneo.joinPending'));
+            return false;
+        }
+        if (estado === 'lista_espera') {
+            setMembership('waitlist');
+            hapticError();
+            Alert.alert(t('feed.error'), t('torneo.joinWaitlist'));
+            return false;
+        }
+        setMembership('joined');
+        return true;
+    };
+
+    const earlyPickNode =
+        planId && footballLineupMode !== 'partido' ? (
+            <TournamentEarlyPick
+                planId={planId}
+                currentUserId={sessionUserId ?? currentUserId}
+                preferredTeam={preferredTeam}
+                enabled={
+                    footballLineupMode !== 'partido' &&
+                    !currentUserIsOrganizer &&
+                    (!plan || !isPastPlan)
+                }
+                ensureJoined={ensureJoinedForEarlyPick}
+                requireAccount={() =>
+                    requireAccount({ type: 'join', planId: planId ?? '' })
+                }
+                onActiveChange={setEarlyPickActive}
+                onSettled={() => setEarlyPickSettled(true)}
+            />
+        ) : null;
 
     const handleLeave = () => {
         hapticWarning();
@@ -1665,19 +2116,80 @@ export default function PlanDetailScreen() {
     };
 
     if (loading && !plan) {
-        return <PlanDetailSkeleton />;
+        if (footballLineupMode === 'torneo' && planId) {
+            return (
+                <>
+                    <SafeAreaView
+                        style={{ flex: 1, backgroundColor: colors.background }}
+                        edges={['top']}
+                    >
+                        <ScrollView
+                            contentContainerStyle={{ paddingBottom: insets.bottom + 48 }}
+                        >
+                            <FootballTournamentSection
+                                planId={planId}
+                                isCreator={false}
+                                canClaim={false}
+                                canPickTeam={!currentUserIsOrganizer}
+                                ensureJoined={ensureJoinedForEarlyPick}
+                                currentUserId={currentUserId}
+                                participants={participants}
+                                onOpenProfile={openProfile}
+                                viewerIsOrganizer={currentUserIsOrganizer}
+                                preferredTeam={preferredTeam}
+                                requireAccount={() =>
+                                    requireAccount({ type: 'join', planId })
+                                }
+                                skipAutoPick
+                                viewerPerson={
+                                    currentUserId
+                                        ? {
+                                              id: currentUserId,
+                                              nombre:
+                                                  peekPublicProfileCards([currentUserId])[0]
+                                                      ?.nombre || t('chats.you'),
+                                              avatar_url:
+                                                  peekPublicProfileCards([currentUserId])[0]
+                                                      ?.avatar_url ?? null,
+                                          }
+                                        : null
+                                }
+                            />
+                        </ScrollView>
+                    </SafeAreaView>
+                    {earlyPickNode}
+                </>
+            );
+        }
+        if (!showDetailSkeleton) {
+            return (
+                <>
+                    <View style={{ flex: 1, backgroundColor: colors.background }} />
+                    {earlyPickNode}
+                </>
+            );
+        }
+        return (
+            <>
+                <PlanDetailSkeleton />
+                {earlyPickNode}
+            </>
+        );
     }
 
     if (!plan) {
         return (
-            <SafeAreaView style={styles.notFoundWrap}>
-                <NexoEmptyState
-                    icon="compass-outline"
-                    title={t('planDetail.notFound')}
-                    actionLabel={t('common.back')}
-                    onAction={() => router.back()}
-                />
-            </SafeAreaView>
+            <>
+                <SafeAreaView style={styles.notFoundWrap}>
+                    <NexoEmptyState
+                        icon="compass-outline"
+                        title={t('planDetail.notFound')}
+                        actionLabel={t('common.back')}
+                        onAction={() => router.back()}
+                    />
+                </SafeAreaView>
+                {earlyPickNode}
+            </>
         );
     }
 
@@ -1752,13 +2264,8 @@ export default function PlanDetailScreen() {
                                     minTouch={false}
                                     onPress={() => void handleShare()}
                                     accessibilityLabel={t('card.share')}
-                                    disabled={footballShareBusy}
                                 >
-                                    {footballShareBusy ? (
-                                        <ActivityIndicator size="small" color="#0F172A" />
-                                    ) : (
-                                        <Ionicons name="share-outline" size={17} color="#0F172A" />
-                                    )}
+                                    <Ionicons name="share-outline" size={17} color="#0F172A" />
                                 </PressScale>
                             ) : null}
                             {!isPastPlan && !isCreator ? (
@@ -1865,6 +2372,95 @@ export default function PlanDetailScreen() {
                         ) : null}
                     </View>
 
+                    {/* Alineación / torneo: sin placeholder vacío (el fetch ya va en paralelo). */}
+                    {sportPlan?.tipo === 'futbol' &&
+                    lineupReady &&
+                    footballLineupMode === 'torneo' ? (
+                        <FootballTournamentSection
+                            planId={plan.id}
+                            isCreator={isCreator}
+                            canClaim={
+                                !isPastPlan &&
+                                !currentUserIsOrganizer &&
+                                (membership === 'joined' || isCreator)
+                            }
+                            canPickTeam={
+                                !isPastPlan &&
+                                !currentUserIsOrganizer &&
+                                (membership === 'joined' ||
+                                    isCreator ||
+                                    membership === 'none')
+                            }
+                            ensureJoined={ensureJoinedForTournament}
+                            currentUserId={currentUserId}
+                            participants={participants}
+                            onOpenProfile={openProfile}
+                            viewerIsOrganizer={currentUserIsOrganizer}
+                            preferredTeam={preferredTeam}
+                            requireAccount={() =>
+                                requireAccount({ type: 'join', planId: planId ?? '' })
+                            }
+                            skipAutoPick={
+                                earlyPickActive ||
+                                earlyPickSettled ||
+                                footballLineupMode === 'torneo'
+                            }
+                            viewerPerson={
+                                currentUserId
+                                    ? (() => {
+                                          const fromList = participants.find(
+                                              (p) => String(p.id) === String(currentUserId),
+                                          );
+                                          if (fromList) {
+                                              return {
+                                                  id: fromList.id,
+                                                  nombre: fromList.nombre,
+                                                  avatar_url: fromList.avatar_url,
+                                              };
+                                          }
+                                          const card = peekPublicProfileCards([currentUserId])[0];
+                                          return {
+                                              id: currentUserId,
+                                              nombre: card?.nombre || t('chats.you'),
+                                              avatar_url: card?.avatar_url ?? null,
+                                          };
+                                      })()
+                                    : null
+                            }
+                        />
+                    ) : null}
+                    {sportPlan?.tipo === 'futbol' &&
+                    lineupReady &&
+                    footballLineupMode === 'partido' ? (
+                        <FootballLineupSection
+                            planId={plan.id}
+                            maxPeople={plan.maximo_participantes}
+                            isCreator={isCreator}
+                            canClaim={
+                                !isPastPlan &&
+                                !currentUserIsOrganizer &&
+                                (membership === 'joined' || isCreator)
+                            }
+                            currentUserId={currentUserId}
+                            participants={participants}
+                            onOpenProfile={openProfile}
+                            viewerIsOrganizer={currentUserIsOrganizer}
+                        />
+                    ) : null}
+
+                    {sportPlan?.tipo === 'padel' && lineupReady ? (
+                        <PadelLineupSection
+                            planId={plan.id}
+                            maxPeople={plan.maximo_participantes}
+                            isCreator={isCreator}
+                            canClaim={!isPastPlan && !currentUserIsOrganizer && (membership === 'joined' || isCreator)}
+                            currentUserId={currentUserId}
+                            participants={participants}
+                            onOpenProfile={openProfile}
+                            viewerIsOrganizer={currentUserIsOrganizer}
+                        />
+                    ) : null}
+
                     {planFitPct != null ? (
                         <FitMatchBanner
                             pct={planFitPct}
@@ -1873,7 +2469,7 @@ export default function PlanDetailScreen() {
                         />
                     ) : null}
 
-                    {creator && (
+                    {creator && footballLineupMode !== 'torneo' && (
                         <View style={[styles.section, planFitPct != null && styles.sectionAfterFit]}>
                             <Text style={styles.sectionTitle}>{creatorRoleLabel}</Text>
                             <View style={[styles.creatorCard, creatorIsFriend && styles.creatorCardFriend]}>
@@ -1990,7 +2586,7 @@ export default function PlanDetailScreen() {
                         <View style={styles.sectionHeaderRow}>
                             <Text style={styles.sectionTitle}>{t('planDetail.participants')}</Text>
                             <Text style={styles.participantCount}>
-                                {participants.length}/{plan.maximo_participantes}
+                                {Math.max(joinedCount, participants.length)}/{plan.maximo_participantes}
                             </Text>
                         </View>
                         {participants.length === 0 ? (
@@ -1999,15 +2595,12 @@ export default function PlanDetailScreen() {
                                 <Text style={styles.emptyParticipantsText}>{t('card.beFirst')}</Text>
                             </View>
                         ) : (
-                            <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                contentContainerStyle={styles.participantsScroll}
-                            >
+                            <View style={styles.participantsGrid}>
                                 {participants.map((p) => (
                                     <View key={p.id} style={styles.participantBubbleWrap}>
                                         <PersonBubble
                                             person={p}
+                                            size={Math.max(48, Math.floor((Dimensions.get('window').width - 40) / 5) - 10)}
                                             isFriend={!currentUserIsOrganizer && friendIds.has(p.id)}
                                             isAcquaintance={
                                                 !currentUserIsOrganizer &&
@@ -2028,47 +2621,21 @@ export default function PlanDetailScreen() {
                                         )}
                                     </View>
                                 ))}
-                            </ScrollView>
+                            </View>
                         )}
                         {canInvitePeople ? (
-                            <TouchableOpacity style={styles.inviteParticipantsBtn} onPress={openInviteSheet} activeOpacity={0.85}>
-                                <Ionicons name="person-add-outline" size={18} color={PRIMARY_DARK} />
+                            <TouchableOpacity style={styles.inviteParticipantsBtn} onPress={openInviteSheet} activeOpacity={0.88}>
+                                <Ionicons name="person-add" size={20} color="#FFF" />
                                 <Text style={styles.inviteParticipantsBtnText} numberOfLines={1}>
                                     {t('invite.openBtn')}
+                                    {/* Un grupo cuenta por sus integrantes: invitees ya trae una fila por persona. */}
                                     {invitees.length > 0
                                         ? ` ${t('invite.pendingCountParen', { n: invitees.length })}`
                                         : ''}
                                 </Text>
-                                <Ionicons name="chevron-forward" size={18} color={theme.colors.textSubtle} />
                             </TouchableOpacity>
                         ) : null}
                     </View>
-
-                    {sportPlan?.tipo === 'futbol' && lineupReady ? (
-                        <FootballLineupSection
-                            planId={plan.id}
-                            maxPeople={plan.maximo_participantes}
-                            isCreator={isCreator}
-                            canClaim={!isPastPlan && !currentUserIsOrganizer && (membership === 'joined' || isCreator)}
-                            currentUserId={currentUserId}
-                            participants={participants}
-                            onOpenProfile={openProfile}
-                            viewerIsOrganizer={currentUserIsOrganizer}
-                        />
-                    ) : null}
-
-                    {sportPlan?.tipo === 'padel' && lineupReady ? (
-                        <PadelLineupSection
-                            planId={plan.id}
-                            maxPeople={plan.maximo_participantes}
-                            isCreator={isCreator}
-                            canClaim={!isPastPlan && !currentUserIsOrganizer && (membership === 'joined' || isCreator)}
-                            currentUserId={currentUserId}
-                            participants={participants}
-                            onOpenProfile={openProfile}
-                            viewerIsOrganizer={currentUserIsOrganizer}
-                        />
-                    ) : null}
 
                     <View style={styles.section}>
                         <View style={styles.aboutCard}>
@@ -2086,13 +2653,15 @@ export default function PlanDetailScreen() {
                             <Ionicons name="location" size={18} color={PRIMARY_DARK} />
                             <Text style={styles.sectionTitle}>{t('planDetail.location')}</Text>
                         </View>
-                        <Text style={styles.locationName}>{plan.nombre_ubicacion || t('card.location')}</Text>
+                        <Text style={styles.locationName}>
+                            {plan.nombre_ubicacion?.trim() || t('createplan.tbd')}
+                        </Text>
                         <TouchableOpacity
                             style={styles.mapCard}
                             activeOpacity={0.92}
                             onPress={() => setMapExpanded(true)}
                         >
-                            {mapPreviewReady ? (
+                            {mapPreviewReady && !mapExpanded ? (
                                 <NexoMapView
                                     key={`preview-${plan.id}-${lat}-${lng}`}
                                     style={styles.map}
@@ -2150,9 +2719,22 @@ export default function PlanDetailScreen() {
                 {renderPrimaryAction()}
             </View>
 
-            <Modal visible={mapExpanded} animationType="slide" onRequestClose={() => setMapExpanded(false)}>
+            <Modal
+                visible={mapExpanded}
+                animationType="slide"
+                presentationStyle="fullScreen"
+                statusBarTranslucent
+                onShow={() => {
+                    // El MapView nativo a mitad del slide provoca el corte. Se monta al terminar.
+                    setFullMapMounted(true);
+                }}
+                onRequestClose={() => {
+                    setMapExpanded(false);
+                    setFullMapMounted(false);
+                }}
+            >
                 <View style={styles.fullMapRoot}>
-                    <StatusBar barStyle={colors.statusBar === 'light' ? 'light-content' : 'dark-content'} />
+                    {fullMapMounted ? (
                     <NexoMapView
                         key={`full-${plan.id}-${lat}-${lng}`}
                         style={styles.fullMap}
@@ -2160,7 +2742,7 @@ export default function PlanDetailScreen() {
                         zoomEnabled
                         pitchEnabled
                         rotateEnabled
-                        loadingEnabled
+                        loadingEnabled={false}
                         showsUserLocation
                         showsMyLocationButton={Platform.OS === 'android'}
                         onUserLocationChange={(e) => {
@@ -2191,8 +2773,18 @@ export default function PlanDetailScreen() {
                             onPress={() => void openDirectionsTo(lat, lng, plan.nombre_ubicacion)}
                         />
                     </NexoMapView>
+                    ) : (
+                        <View style={[styles.fullMap, { backgroundColor: colors.primarySoft }]} />
+                    )}
                     <View style={[styles.fullMapTopBar, { paddingTop: insets.top + 8 }]}>
-                        <TouchableOpacity style={styles.fullMapCloseBtn} onPress={() => setMapExpanded(false)} activeOpacity={0.85}>
+                        <TouchableOpacity
+                            style={styles.fullMapCloseBtn}
+                            onPress={() => {
+                                setMapExpanded(false);
+                                setFullMapMounted(false);
+                            }}
+                            activeOpacity={0.85}
+                        >
                             <Ionicons name="close" size={26} color={INK} />
                         </TouchableOpacity>
                     </View>
@@ -2229,40 +2821,29 @@ export default function PlanDetailScreen() {
                     onClose={() => setShowInviteSheet(false)}
                     currentUserId={currentUserId}
                     selected={invitees}
+                    selectedGroups={invitedGroups}
                     excludeIds={inviteExcludeIds}
+                    targetPlanId={planId}
                     onAdd={handleInviteAdd}
                     onRemove={handleInviteRemove}
+                    onRemoveGroup={handleInvitedGroupRemove}
+                    onGroupInvited={(group) => {
+                        setInvitedGroups((prev) =>
+                            prev.some((g) => g.id === group.id) ? prev : [...prev, group],
+                        );
+                        void loadInviteState();
+                    }}
+                    onShare={() => {
+                        setShowInviteSheet(false);
+                        requestAnimationFrame(() => {
+                            void handleShare();
+                        });
+                    }}
                 />
             ) : null}
 
-            <PlanShareModal payload={planSharePayload} onDone={() => setPlanSharePayload(null)} />
-
-            {footballSharePack && plan ? (
-                <View
-                    pointerEvents="none"
-                    style={{ position: 'absolute', left: 0, top: 0, opacity: 1, zIndex: -1 }}
-                    collapsable={false}
-                >
-                    <FootballShareCard
-                        ref={footballShareRef}
-                        title={plan.titulo}
-                        when={footballSharePack.when || null}
-                        location={plan.nombre_ubicacion}
-                        spotsLeft={Math.max(0, plan.maximo_participantes - joinedCount)}
-                        maxPeople={plan.maximo_participantes}
-                        joinedCount={joinedCount}
-                        config={footballSharePack.config}
-                        slots={footballSharePack.slots}
-                        people={participants.map((p) => ({
-                            id: p.id,
-                            nombre: p.nombre,
-                            avatar_url: p.avatar_url,
-                        }))}
-                        lang={lang}
-                    />
-                </View>
-            ) : null}
             <FeedHeartBurstHost />
+            {earlyPickNode}
         </View>
     );
 }

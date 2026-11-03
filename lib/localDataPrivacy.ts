@@ -33,6 +33,7 @@ const PERSONAL_PREFIXES = [
 /** Memoria de “ya atendido” en este dispositivo: sobrevive a logout de la misma cuenta. */
 const SESSION_MEMORY_PREFIXES = [
   '@nexo_chat_read:',
+  '@nexo_chat_read_index:',
   '@nexo_rating_done:',
   '@nexo_rating_skip:',
 ];

@@ -108,7 +108,12 @@ export async function signInWithGoogle(): Promise<User> {
     ensureGoogleConfigured();
     try {
         if (Platform.OS === 'android') {
-            await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+            try {
+                await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: false });
+            } catch {
+                /* En varios Android el check pide “actualizar Play” aunque ya esté
+                   al día; el sign-in nativo suele funcionar igual. */
+            }
         }
         const response = await GoogleSignin.signIn();
         if (response.type === 'cancelled') {
@@ -156,6 +161,9 @@ export async function signInWithGoogle(): Promise<User> {
         if (error instanceof SocialAuthCancelledError) throw error;
         if (isErrorWithCode(error) && error.code === statusCodes.SIGN_IN_CANCELLED) {
             throw new SocialAuthCancelledError();
+        }
+        if (isErrorWithCode(error) && error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+            throw new SocialAuthConfigError('play_services');
         }
         throw error;
     }

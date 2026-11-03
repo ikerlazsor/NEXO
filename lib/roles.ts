@@ -27,6 +27,17 @@ const UNVERIFIED_ACCESS: AccountAccess = {
     verified: false,
 };
 
+/** Último acceso verificado (para menús admin sin esperar al load del perfil). */
+let cachedAccess: AccountAccess | null = null;
+
+export function peekAccountAccess(): AccountAccess | null {
+    return cachedAccess;
+}
+
+export function peekIsOwner(): boolean {
+    return cachedAccess?.isOwner === true;
+}
+
 function mapAccess(row: {
     rol?: string | null;
     baneado?: boolean | null;
@@ -77,11 +88,13 @@ export async function fetchAccountAccess(
         console.warn('fetchAccountAccess: perfil no encontrado');
         return UNVERIFIED_ACCESS;
     }
-    return mapAccess(data as {
+    const access = mapAccess(data as {
         rol?: string | null;
         baneado?: boolean | null;
         baneado_motivo?: string | null;
     } | null);
+    cachedAccess = access;
+    return access;
 }
 
 export function isStaffRole(role: UserRole | null | undefined): boolean {

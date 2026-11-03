@@ -6,6 +6,7 @@ import {
     type FeedTaste,
     type RankContext,
 } from './feedAffinity';
+import { searchRelevanceScore } from './feedSearch';
 
 export type FeedHeaderKey =
     | 'feed.sectionYours'
@@ -111,6 +112,7 @@ export function buildFeedRows(input: {
     taste: FeedTaste;
     coords?: { latitude: number; longitude: number } | null;
     flatten?: boolean;
+    searchQuery?: string;
     deferMineIds?: Set<string>;
 }): FeedRow[] {
     const deferMineIds = input.deferMineIds ?? new Set<string>();
@@ -123,6 +125,16 @@ export function buildFeedRows(input: {
     };
 
     if (input.flatten) {
+        const q = (input.searchQuery || '').trim();
+        if (q) {
+            return asPlanRows(
+                [...input.plans].sort((a, b) => {
+                    const diff = searchRelevanceScore(b, q) - searchRelevanceScore(a, q);
+                    if (diff !== 0) return diff;
+                    return compareFeedRanked(a, b, ctx);
+                }),
+            );
+        }
         return asPlanRows(sortRanked(input.plans, ctx));
     }
 

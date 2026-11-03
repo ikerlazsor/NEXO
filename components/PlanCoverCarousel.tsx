@@ -22,13 +22,15 @@ type Props = {
     recyclingKey?: string;
     priority?: 'high' | 'normal' | 'low';
     onPress?: () => void;
-    /** Separación inferior de los dots (p. ej. más alto bajo el título del detalle). */
+    /** SeparaciÃ³n inferior de los dots (p. ej. mÃ¡s alto bajo el tÃ­tulo del detalle). */
     dotsBottom?: number;
     /**
-     * En el feed: montar solo la 1ª foto al inicio y el resto tras idle.
+     * En el feed: montar solo la 1Âª foto al inicio y el resto tras idle.
      * Evita congelar FlashList al crear planes con varias portadas.
      */
     deferExtraSlides?: boolean;
+    /** Por defecto el ancho del carrusel: sirve la foto al tamaÃ±o en que se ve. */
+    thumbWidth?: number;
 };
 
 const SCREEN_W = Dimensions.get('window').width;
@@ -43,12 +45,14 @@ export function PlanCoverCarousel({
     onPress,
     dotsBottom = 10,
     deferExtraSlides = false,
+    thumbWidth,
 }: Props) {
     const list = useMemo(
         () => (covers.length > 0 ? covers : fallback ? [fallback] : []),
         [covers, fallback],
     );
     const width = Math.max(1, Math.round(widthProp ?? SCREEN_W));
+    const coverThumbWidth = thumbWidth ?? width;
     const [index, setIndex] = useState(0);
     const [extrasReady, setExtrasReady] = useState(!deferExtraSlides || list.length <= 1);
     const scrollRef = useRef<ScrollView>(null);
@@ -91,6 +95,7 @@ export function PlanCoverCarousel({
                 style={{ width, height }}
                 recyclingKey={recyclingKey ?? 'cover'}
                 priority={priority}
+                thumbWidth={coverThumbWidth}
             />
         );
         if (!onPress) return <View style={{ width, height }}>{node}</View>;
@@ -131,6 +136,7 @@ export function PlanCoverCarousel({
                             style={{ width, height }}
                             recyclingKey={`${recyclingKey ?? 'cover'}-${i}`}
                             priority={i === 0 ? priority : 'low'}
+                            thumbWidth={coverThumbWidth}
                         />
                     ) : (
                         <View style={{ width, height, backgroundColor: '#E2E8F0' }} />

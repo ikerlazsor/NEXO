@@ -156,7 +156,7 @@ export default function SettingsScreen() {
                     setDeleting(true);
                     await unregisterPushToken(userId ?? undefined);
                     await cancelAllScheduledNexoNotifications();
-                    const { error } = await deleteAccount();
+                    const { error } = await deleteAccount({ confirm: true });
                     setDeleting(false);
                     if (error) {
                         Alert.alert(t('profile.error'), t('profile.deleteAccountError') + (error ? `\n${error}` : ''));

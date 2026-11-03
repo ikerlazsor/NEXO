@@ -32,6 +32,10 @@ export function createFeedStyles(c: ThemeColors) {
     letterSpacing: 0,
     textTransform: 'none',
   },
+  searchClear: {
+    marginLeft: 6,
+    padding: 2,
+  },
 
   quickFiltersRow: {
     flexDirection: "row",
@@ -514,23 +518,25 @@ export function createFeedStyles(c: ThemeColors) {
   },
   mapMiniOpenText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
   mapPinHit: {
-    width: 48,
-    height: 44,
+    // Ancho fijo: en Android el bitmap del marker usa este tamaño de layout.
+    width: 64,
+    height: 48,
     alignItems: "center",
     justifyContent: "flex-end",
+    overflow: "visible",
   },
   mapPinBubble: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    minWidth: 34,
-    paddingHorizontal: 8,
+    minWidth: 36,
+    paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: 14,
     borderWidth: 2,
     borderColor: c.mapPinBorder,
   },
-  mapPinCount: { color: c.onPrimary, fontSize: 12, fontWeight: "900" },
+  mapPinCount: { color: c.onPrimary, fontSize: 12, fontWeight: "900", includeFontPadding: false },
   mapPinTail: {
     width: 0,
     height: 0,

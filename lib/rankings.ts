@@ -205,7 +205,7 @@ async function fetchRatingRanking(
     const { data, error } = await query;
     if (error) throw error;
 
-    let mapped = ((data ?? []) as StatsRow[])
+    let mapped: RankedProfile[] = ((data ?? []) as StatsRow[])
         .map((row) => ({
             ...mapStatsRow(row, fallback, Number(row.valoracion_media ?? 0) || 0),
             reviews: Number(row.numero_valoraciones ?? 0) || 0,
@@ -265,7 +265,7 @@ async function fetchCommunitiesRanking(fallback: string): Promise<RankedProfile[
                         avatar_url: person.avatar_url,
                     };
                 })
-                .filter((row): row is { id: string; nombre: string; avatar_url: string | null } => !!row);
+                .filter((row): row is NonNullable<typeof row> => row != null);
             return {
                 id: profile.id,
                 nombre: profile.nombre || fallback,
@@ -275,7 +275,7 @@ async function fetchCommunitiesRanking(fallback: string): Promise<RankedProfile[
                 previews,
             } satisfies RankedProfile;
         })
-        .filter((row): row is RankedProfile => !!row)
+        .filter((row): row is NonNullable<typeof row> => row != null)
         .slice(0, 25);
 }
 

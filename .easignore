@@ -1,8 +1,58 @@
-# Keep EAS uploads small and avoid packaging local artifacts
-builds/
-.tmp-ios-bundle/
-.tmp-eas-log.txt
-.tmp-eas-log-plain.txt
+# When .easignore exists, EAS uses it INSTEAD of .gitignore.
+# Mirror .gitignore + extra junk so we don't upload a 600MB archive
+# or a local android/ with Windows local.properties (breaks Gradle on EAS).
+
+# dependencies
+node_modules/
+
+# Expo / web
+.expo/
 dist/
+web-build/
+expo-env.d.ts
+
+# Native (let EAS run `expo prebuild` on the server)
+/ios
+/android
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro / debug
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# OS / secrets
+.DS_Store
+*.pem
+.env
+.env*.local
+
+# typescript
+*.tsbuildinfo
+app-example
+
+# Generated / local build artifacts
 .expo-bundle/
 .test-dist/
+builds/
+.tmp-ios-bundle/
+.tmp-eas-*
+eas-build-*.json
+eas-fail*.json
+tsc-out.txt
+
+# Huge / unused for mobile builds
+lib/i18n/_extract/
+site/
+docs/
+supabase/
+agent-transcripts/
+*.md
+!README.md

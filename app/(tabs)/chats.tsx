@@ -33,17 +33,24 @@ import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
 import { ChatListRow, type ChatListItem } from '../../components/ChatListRow';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { ChatSkeletonList } from '../../components/SkeletonShimmer';
+import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { NexoEmptyState } from '../../components/ui/NexoState';
 import { useListScrollRestore } from '../../hooks/useListScrollRestore';
 import { getDirectConversations, hideDirectChat, ensureDirectConversation } from '../../lib/directChat';
-import { getChatSummaries } from '../../lib/chatSummaries';
+import { getChatSummaries, invalidateChatSummaries } from '../../lib/chatSummaries';
 import { deletePlanCompletely } from '../../lib/deletePlan';
 import { isGroupChatPlan } from '../../lib/feedPlans';
 import { getFriends, getAvatarUri, type FriendProfile } from '../../lib/friends';
 import { useT } from '../../lib/i18n';
 import { formatChatListPreview } from '../../lib/chatSystem';
+import { parsePlanInviteCard } from '../../lib/chatPlanInviteCard';
+import {
+    peekInviteCardStatus,
+    subscribeInviteCardStatus,
+    warmInviteCardsFromContents,
+} from '../../lib/planInviteCardStatus';
 import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
-import { ScreenKeys } from '../../lib/screenState';
+import { ScreenKeys, setScreenScrollOffset } from '../../lib/screenState';
 import { getAuthUser } from '../../lib/auth';
 import { useAuthSession } from '../../lib/authSession';
 import { GuestLockedPanel } from '../../components/GuestLockedPanel';
@@ -53,12 +60,12 @@ const PENGUIN_CHATS_EMPTY = require('../../assets/images/Pinguino vacio chats.pn
 void import('expo-asset').then(({ Asset }) => {
     void Asset.fromModule(PENGUIN_CHATS_EMPTY).downloadAsync().catch(() => {});
 });
-import { markDirectChatRead, markPlanChatRead, subscribeChatUnread } from '../../lib/chatUnread';
+import { markDirectChatRead, markPlanChatRead, refreshChatUnreadBadge, subscribeChatUnread } from '../../lib/chatUnread';
 import { isPlanChatAlive, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
 import { filterHiddenPlanChats, hidePlanChat } from '../../lib/planChatHide';
 import { diskSet } from '../../lib/diskCache';
 import { prefetchRemoteImages } from '../../lib/prefetchCovers';
-import { prefetchRecentChatThreads, seedChatThreadPeek } from '../../lib/prefetchChats';
+import { ingestInboxDirectMessage, prefetchChatRow, prefetchRecentChatThreads, seedChatThreadPeek } from '../../lib/prefetchChats';
 import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from '../../lib/screenCaches';
 import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
 import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
@@ -80,6 +87,7 @@ export default function MyChatsScreen() {
     const cachedHasRows = Array.isArray(cachedChats) && cachedChats.length > 0;
     const [chats, setChats] = useState<ChatRow[]>(() => (cachedHasRows ? cachedChats! : []));
     const [loading, setLoading] = useState(() => !cachedHasRows);
+    const showChatSkeleton = useDelayedVisible(loading && chats.length === 0);
     const [refreshing, setRefreshing] = useState(false);
     const [loadError, setLoadError] = useState(false);
     const [showCreateGroup, setShowCreateGroup] = useState(false);
@@ -89,6 +97,21 @@ export default function MyChatsScreen() {
     const [loadingFriends, setLoadingFriends] = useState(false);
     const [creatingGroup, setCreatingGroup] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string | null>(userId);
+    const warmedChatIds = useRef(new Set<string>());
+    const currentUserIdRef = useRef(currentUserId);
+    currentUserIdRef.current = currentUserId;
+    const onViewableChats = useRef(
+        ({ viewableItems }: { viewableItems: Array<{ item?: ChatRow | null }> }) => {
+            const uid = currentUserIdRef.current;
+            if (!uid) return;
+            for (const token of viewableItems) {
+                const item = token.item;
+                if (!item || warmedChatIds.current.has(`${item.kind}:${item.id}`)) continue;
+                warmedChatIds.current.add(`${item.kind}:${item.id}`);
+                prefetchChatRow(uid, item);
+            }
+        },
+    ).current;
     const hasDataRef = useRef(cachedHasRows);
     const fetchInFlightRef = useRef(false);
     const openSwipeRef = useRef<Swipeable | null>(null);
@@ -99,6 +122,13 @@ export default function MyChatsScreen() {
         ScreenKeys.CHATS,
         { restoreOnFocus: false },
     );
+    const topChatIdRef = useRef<string | null>(null);
+
+    /** Inbox: siempre ver el chat más reciente al entrar / si uno sube al #1. */
+    const pinChatsToTop = useCallback((animated = false) => {
+        setScreenScrollOffset(ScreenKeys.CHATS, 0);
+        listRef.current?.scrollToOffset({ offset: 0, animated });
+    }, [listRef]);
 
     const scheduleSilentRefresh = useCallback(() => {
         if (silentRefreshTimer.current) clearTimeout(silentRefreshTimer.current);
@@ -128,22 +158,68 @@ export default function MyChatsScreen() {
     }, [scheduleSilentRefresh]);
 
     useEffect(() => {
+        const unsub = subscribeInviteCardStatus(() => {
+            if (currentUserId) invalidateChatSummaries(currentUserId);
+            scheduleSilentRefresh();
+        });
+        return unsub;
+    }, [currentUserId, scheduleSilentRefresh]);
+
+    useEffect(() => {
+        if (!currentUserId) return;
+        // Solo DMs hacia mí y cambios de membresía propios: un INSERT
+        // global de mensajes reventaría Realtime y get_chat_summaries.
         const channel = supabase
-            .channel(`chats-unread-${Math.random().toString(36).slice(2, 9)}`)
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensajes' }, () => {
-                scheduleSilentRefresh();
-            })
+            .channel(`chats-inbox-${currentUserId}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: 'INSERT',
+                    schema: 'public',
+                    table: 'mensajes',
+                    filter: `receptor_id=eq.${currentUserId}`,
+                },
+                (payload) => {
+                    ingestInboxDirectMessage(currentUserId, payload.new as Record<string, unknown>);
+                    scheduleSilentRefresh();
+                },
+            )
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'participantes',
+                    filter: `usuario_id=eq.${currentUserId}`,
+                },
+                () => {
+                    invalidateChatSummaries(currentUserId);
+                    scheduleSilentRefresh();
+                },
+            )
             .subscribe();
         return () => {
             if (silentRefreshTimer.current) clearTimeout(silentRefreshTimer.current);
             supabase.removeChannel(channel);
         };
-    }, [scheduleSilentRefresh]);
+    }, [currentUserId, scheduleSilentRefresh]);
 
-    const formatPreview = (msg: { tipo: string; contenido: string; emisor_id: string }, names: Record<string, string>) =>
-        formatChatListPreview(msg, {
+    const formatPreview = (
+        msg: { tipo: string; contenido: string; emisor_id: string },
+        names: Record<string, string>,
+        viewerId?: string | null,
+    ) => {
+        const card = msg.tipo === 'texto' ? parsePlanInviteCard(msg.contenido) : null;
+        if (card) {
+            const snap = peekInviteCardStatus(card.planId, viewerId ?? currentUserId);
+            if (snap?.status === 'gone') return t('chats.noMessages');
+            if (snap?.status === 'accepted') return t('invite.groupCardJoined');
+            if (snap?.status === 'rejected') return t('invite.groupCardRejected');
+            if (snap?.status === 'self') return t('invite.groupCardSent');
+        }
+        return formatChatListPreview(msg, {
             names,
-            currentUserId,
+            currentUserId: viewerId ?? currentUserId,
             youLabel: t('chats.you'),
             userFallback: t('chats.user'),
             labels: {
@@ -151,12 +227,14 @@ export default function MyChatsScreen() {
                 joinedGroupSelf: t('chat.systemJoinedGroupSelf'),
                 joinedPlan: (name) => t('chat.systemJoinedPlan', { name }),
                 joinedGroup: (name) => t('chat.systemJoinedGroup', { name }),
+                planInviteCard: t('invite.groupCardPreview'),
+                messageDeleted: t('chat.messageDeleted'),
                 image: t('chats.previewImage'),
                 video: t('chats.previewVideo'),
                 voice: t('chats.previewVoice'),
             },
         });
-
+    };
 
     const fetchMyChats = async (opts?: { silent?: boolean; force?: boolean }) => {
         if (fetchInFlightRef.current && opts?.silent) return;
@@ -221,6 +299,7 @@ export default function MyChatsScreen() {
                                           ? t('chats.you')
                                           : row.last_sender_name || t('chats.user'),
                               },
+                              user.id,
                           )
                         : t('chats.noMessages');
 
@@ -257,6 +336,7 @@ export default function MyChatsScreen() {
                               [conversation.peerId]: conversation.nombre,
                               [user.id]: t('chats.you'),
                           },
+                          user.id,
                       )
                     : t('chats.noMessages'),
                 lastAt: conversation.lastMessage?.creado_en ?? conversation.openedAt ?? '',
@@ -267,11 +347,18 @@ export default function MyChatsScreen() {
                 (a, b) => new Date(b.lastAt || 0).getTime() - new Date(a.lastAt || 0).getTime()
             );
 
+            // Precarga estados de tarjetas de invitación (para preview + al abrir el chat).
+            warmInviteCardsFromContents(
+                summaries.map((s) => s.last_content),
+                user.id,
+            );
+
             setChats(rows);
             hasDataRef.current = true;
             setLoadError(false);
             cacheSet(cacheKey, rows, ScreenCacheTTL.chatsList);
             void diskSet(cacheKey, rows);
+            void refreshChatUnreadBadge(user.id);
             prefetchRemoteImages(rows.map((row) => row.image_url), 24);
             prefetchRecentChatThreads(user.id, rows);
         } catch (error) {
@@ -288,8 +375,25 @@ export default function MyChatsScreen() {
     useFocusEffect(
         useCallback(() => {
             void fetchMyChatsRef.current({ silent: hasDataRef.current, force: false });
-        }, []),
+            // El tab queda montado: si te fuiste a mitad de lista, un chat nuevo
+            // se pone el primero pero no se ve hasta deslizar. Anclar arriba.
+            pinChatsToTop(false);
+            const t1 = requestAnimationFrame(() => pinChatsToTop(false));
+            const t2 = setTimeout(() => pinChatsToTop(false), 120);
+            return () => {
+                cancelAnimationFrame(t1);
+                clearTimeout(t2);
+            };
+        }, [pinChatsToTop]),
     );
+
+    useEffect(() => {
+        const topId = chats[0]?.id != null ? String(chats[0].id) : null;
+        if (topId && topChatIdRef.current && topId !== topChatIdRef.current) {
+            pinChatsToTop(true);
+        }
+        topChatIdRef.current = topId;
+    }, [chats, pinChatsToTop]);
 
     useEffect(() => {
         const onAppState = (next: AppStateStatus) => {
@@ -565,6 +669,7 @@ export default function MyChatsScreen() {
                     image_url: row.image_url,
                     kind: 'direct',
                     peerId,
+                    lastAt: now,
                 });
                 router.push(`/direct-chat/${peerId}`);
             } catch (e: any) {
@@ -700,7 +805,7 @@ export default function MyChatsScreen() {
                     </TouchableOpacity>
                 </View>
 
-                {loading && !refreshing && chats.length === 0 ? (
+                {showChatSkeleton && !refreshing ? (
                     <ChatSkeletonList count={8} />
                 ) : (
                 <FlashList
@@ -719,6 +824,8 @@ export default function MyChatsScreen() {
                     }
                     renderItem={renderChatItem}
                     extraData={currentUserId}
+                    onViewableItemsChanged={onViewableChats}
+                    viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
                 />
                 )}
 

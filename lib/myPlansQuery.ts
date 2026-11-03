@@ -1,4 +1,5 @@
 import { isFeedPlan } from './feedPlans';
+import { isConvertedPlanChat } from './planLifecycle';
 import { getPlanJoinRequestCount } from './notifications';
 import { getHiddenPlanIdSet } from './myPlansHide';
 import { getDismissedPlanIdSet, fetchPendingRatingPlanMap, type PendingRatingPlan } from './ratings';
@@ -7,7 +8,7 @@ import { type Genero } from './profileFields';
 import { attachFeedPlanPeople } from './feedQuery';
 import { supabase } from './supabase';
 
-const PLAN_COLS = 'id, titulo, imagen_url, categoria, maximo_participantes, fecha_evento, creador_id, latitud, longitud';
+const PLAN_COLS = 'id, titulo, titulo_cierre, imagen_url, imagen_cierre, categoria, is_group_chat, maximo_participantes, fecha_evento, creador_id, latitud, longitud';
 
 export type MyPlanItem = {
     id: string;
@@ -109,7 +110,12 @@ export async function fetchMyPlansSnapshot(
     }
 
     const formatPlan = (p: Record<string, unknown> & { id: string }, role: 'creator' | 'member'): MyPlanItem | null => {
-        if (!isFeedPlan({ categoria: typeof p.categoria === 'string' ? p.categoria : null })) return null;
+        const categoria = typeof p.categoria === 'string' ? p.categoria : null;
+        const fecha = (p.fecha_evento as string | null) ?? null;
+        const converted = isConvertedPlanChat({ categoria, fecha_evento: fecha });
+        if (!isFeedPlan({ categoria }) && !converted) return null;
+        const closedTitle = typeof p.titulo_cierre === 'string' ? p.titulo_cierre.trim() : '';
+        const closedCover = typeof p.imagen_cierre === 'string' ? p.imagen_cierre : '';
         const attached = peopleById.get(String(p.id));
         const pendingReqs = role === 'creator'
             ? (pendingByPlan.get(String(p.id)) ?? []).map((id) => pendingProfiles.get(id) ?? { id })
@@ -117,8 +123,8 @@ export async function fetchMyPlansSnapshot(
         const eventMs = p.fecha_evento ? new Date(String(p.fecha_evento)).getTime() : 0;
         return {
             id: String(p.id),
-            titulo: String(p.titulo ?? ''),
-            imagen_url: (p.imagen_url as string | null) ?? null,
+            titulo: closedTitle || String(p.titulo ?? ''),
+            imagen_url: closedCover || ((p.imagen_url as string | null) ?? null),
             maximo_participantes: Number(p.maximo_participantes) || 0,
             fecha_evento: (p.fecha_evento as string | null) ?? null,
             creador_id: String(p.creador_id ?? ''),

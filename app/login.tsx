@@ -35,6 +35,7 @@ import {
     signInWithGoogle,
     type SocialProvider,
 } from '../lib/socialAuth';
+import { holdAppUpdateReload } from '../lib/appUpdates';
 import { supabase } from '../lib/supabase';
 import { type ThemeColors } from '../theme';
 
@@ -94,23 +95,30 @@ export default function LoginScreen() {
     }, [focused]);
 
     const socialErrorMessage = (error: unknown) => {
-        const msg = error instanceof Error ? error.message : String(error ?? '');
         if (error instanceof SocialAuthConfigError) {
             if (error.message === 'missing_google_web_client') return t('login.googleNotConfigured');
+            if (error.message === 'play_services') return t('login.googlePlayServices');
             if (error.message === 'apple_unavailable' || error.message === 'apple_ios_only') {
                 return t('login.appleUnavailable');
             }
         }
+        const msg = error instanceof Error ? error.message : String(error ?? '');
         if (/provider is not enabled|Unsupported provider|validation_failed/i.test(msg)) {
             return t('login.oauthHint');
         }
         if (msg === 'db_error') return t('login.dbSignupError');
-        return msg || t('login.oauthFailed');
+        if (/nonce/i.test(msg)) return t('login.googleNonce');
+        if (/DEVELOPER_ERROR|status.?code.?10|error.?code.?10/i.test(msg)) {
+            return t('login.googleSignInFailed');
+        }
+        if (/play services/i.test(msg)) return t('login.googlePlayServices');
+        return t('login.authErrorHint');
     };
 
     const handleSocialAuth = async (provider: SocialProvider) => {
         if (loading || socialLoading) return;
         setSocialLoading(provider);
+        const releaseUpdateHold = holdAppUpdateReload();
         try {
             if (provider === 'apple') {
                 await signInWithApple();
@@ -122,6 +130,7 @@ export default function LoginScreen() {
             if (error instanceof SocialAuthCancelledError) return;
             Alert.alert(t('login.authError'), socialErrorMessage(error));
         } finally {
+            releaseUpdateHold();
             setSocialLoading(null);
         }
     };
@@ -146,9 +155,14 @@ export default function LoginScreen() {
             await setPendingVerifyEmail(mail);
             setPhase('code');
             setCode('');
-        } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : t('login.authError');
-            Alert.alert(t('login.authError'), msg);
+        } catch (e: any) {
+            const msg = typeof e?.message === 'string' ? e.message : '';
+            Alert.alert(
+                t('login.authError'),
+                /rate limit|too many|security purposes/i.test(msg)
+                    ? t('verifyEmail.tooMany')
+                    : t('login.authErrorHint'),
+            );
         } finally {
             setLoading(false);
         }
@@ -161,23 +175,27 @@ export default function LoginScreen() {
         if (loading) return;
         setLoading(true);
         Keyboard.dismiss();
+        const releaseUpdateHold = holdAppUpdateReload();
         try {
-            const { data, error } = await supabase.auth.verifyOtp({
+            const first = await supabase.auth.verifyOtp({
                 email: mail,
                 token,
                 type: 'email',
             });
+            const { data, error } = first.error
+                ? await supabase.auth.verifyOtp({ email: mail, token, type: 'signup' })
+                : first;
             if (error) throw error;
             if (data.user) {
                 await ensureProfile(data.user).catch(() => {});
             }
             scheduleOnboardingPrefetch();
             // El root layout enruta a onboarding / feed según registro_completado.
-        } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : t('login.authError');
-            Alert.alert(t('login.authError'), msg);
+        } catch {
+            Alert.alert(t('login.authError'), t('login.authErrorHint'));
             setCode('');
         } finally {
+            releaseUpdateHold();
             setLoading(false);
         }
     };

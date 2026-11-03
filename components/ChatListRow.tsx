@@ -6,7 +6,7 @@ import { PlanImage } from './PlanImage';
 import { ProfileAvatar } from './ProfileAvatar';
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { hapticSelection } from '../lib/haptics';
-import { seedChatThreadPeek } from '../lib/prefetchChats';
+import { prefetchChatRow, seedChatThreadPeek } from '../lib/prefetchChats';
 import { stripPlanTitleSuffix } from '../lib/planDisplay';
 import { resolvePlanImageSource } from '../lib/sports';
 import { type ThemeColors } from '../theme';
@@ -66,6 +66,8 @@ function ChatListRowInner({
             peerId: item.peerId,
             creadorId: item.creadorId,
             fechaEvento: item.fechaEvento,
+            lastAt: item.lastAt,
+            unread: item.unread,
         });
         onOpen(item);
     }, [currentUserId, item, onMarkRead, onOpen]);
@@ -79,7 +81,10 @@ function ChatListRowInner({
             peerId: item.peerId,
             creadorId: item.creadorId,
             fechaEvento: item.fechaEvento,
+            lastAt: item.lastAt,
+            unread: item.unread,
         });
+        prefetchChatRow(currentUserId, item);
     }, [currentUserId, item]);
 
     return (
@@ -126,6 +131,7 @@ function ChatListRowInner({
                             source={resolvePlanImageSource(item.image_url)}
                             style={styles.chatImage}
                             recyclingKey={`group-${item.id}`}
+                            thumbWidth={160}
                         />
                     ) : item.kind === 'group' ? (
                         <View style={styles.groupIconWrap}>
@@ -136,6 +142,7 @@ function ChatListRowInner({
                             source={resolvePlanImageSource(item.image_url)}
                             style={styles.chatImage}
                             recyclingKey={String(item.id)}
+                            thumbWidth={160}
                         />
                     )}
                     <View style={styles.chatInfo}>

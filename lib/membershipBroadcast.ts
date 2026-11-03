@@ -19,6 +19,14 @@ export type BroadcastMembershipOpts = {
      * Por defecto false: se parchea membership para no perder el estado optimista.
      */
     wipeDetail?: boolean;
+    /** Burbuja a pintar al instante en el detalle. */
+    addParticipant?: {
+        id: string;
+        nombre: string;
+        avatar_url: string | null;
+        isCreator?: boolean;
+    } | null;
+    removeParticipantId?: string | null;
 };
 
 /**
@@ -38,10 +46,36 @@ export function broadcastPlanMembership(
         patchPlanDetailMembership(planId, membership, {
             bumpJoined: opts.bumpJoined,
             dropJoined: opts.dropJoined,
+            addParticipant: opts.addParticipant ?? null,
+            removeParticipantId: opts.removeParticipantId ?? null,
         });
     }
 
     noteFeedMembershipPatch(planId, membership);
+
+    // Contador de plazas en tarjetas de invitación del chat (sin tocar su UI).
+    if (opts.bumpJoined || opts.dropJoined || opts.addParticipant || opts.removeParticipantId) {
+        void import('./planInviteCardStatus').then(({ peekInviteCardStatus, setInviteCardStatus }) => {
+            const snap = peekInviteCardStatus(planId, opts.userId ?? null);
+            if (!snap || snap.status === 'gone') return;
+            const base = snap.joinedCount ?? 0;
+            const nextJoined = opts.bumpJoined
+                ? base + 1
+                : opts.dropJoined
+                  ? Math.max(0, base - 1)
+                  : base;
+            setInviteCardStatus(planId, opts.userId ?? null, {
+                status: snap.status,
+                invite: snap.invite,
+                coverUrl: snap.coverUrl,
+                joinedCount: nextJoined,
+                maxCount: snap.maxCount,
+            });
+        });
+        void import('./inviteCardPeopleBus').then(({ refreshInviteCardPeople }) => {
+            void refreshInviteCardPeople(planId);
+        });
+    }
 
     if (opts.clearInvite) {
         noteFeedInviteCleared(planId);

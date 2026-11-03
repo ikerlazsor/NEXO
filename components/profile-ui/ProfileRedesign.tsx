@@ -22,6 +22,8 @@ import { resolveProfileCoverSource } from '../../lib/profileCover';
 import { countryCodeToFlagEmoji } from '../../lib/countryFlags';
 import { getInterestAccent, getInterestIcon, INTEREST_VISIBLE_MAX } from '../../lib/profileInterests';
 import { stripPlanTitleSuffix } from '../../lib/planDisplay';
+import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../../lib/planDetailCache';
+import { prefetchRemoteImages } from '../../lib/prefetchCovers';
 import {
     formatCompactCount,
     formatProfilePlanWhen,
@@ -36,6 +38,7 @@ import {
     type OrganizerUpcomingPlan,
 } from '../../lib/organizer';
 import { TranslatedText } from '../TranslatedText';
+import type { Lang } from '../../lib/i18n';
 import { theme, type ThemeColors } from '../../theme';
 import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
 
@@ -72,6 +75,38 @@ export function FrostedIconButton({
         </TouchableOpacity>
     );
 }
+
+/** Back fijo encima del scroll (como detalle de plan). */
+export function ProfileStickyBack({
+    onBack,
+    backLabel,
+}: {
+    onBack: () => void;
+    backLabel: string;
+}) {
+    const insets = useSafeAreaInsets();
+    return (
+        <View
+            pointerEvents="box-none"
+            style={[
+                stickyBackStyles.bar,
+                { paddingTop: Math.max(insets.top, 12) + 4, paddingLeft: 14 },
+            ]}
+        >
+            <FrostedIconButton icon="chevron-back" onPress={onBack} accessibilityLabel={backLabel} />
+        </View>
+    );
+}
+
+const stickyBackStyles = StyleSheet.create({
+    bar: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        zIndex: 40,
+        elevation: 12,
+    },
+});
 
 export function GalleryThumb({
     item,
@@ -111,8 +146,9 @@ export function ProfileHero({
     avatarUrl,
     name,
     age,
-    genero,
     flagCode,
+    placeLabel,
+    instagram,
     verified,
     overlay,
     variant,
@@ -123,16 +159,20 @@ export function ProfileHero({
     topRight,
     backLabel,
     moreLabel,
+    /** Si true, el back va fuera del ScrollView (ProfileStickyBack). */
+    stickyBack = false,
 }: {
     coverUrl?: string | null;
     avatarUrl?: string | null;
     name: string;
     /** Edad visible (ya filtrada por privacidad). */
     age?: number | null;
-    /** Género visible (ya filtrado por privacidad). Solo ♀/♂ muestran icono. */
-    genero?: string | null;
-    /** Código ISO país (bandera); solo si privacidad lo permite. */
+    /** Código ISO nacionalidad (bandera). */
     flagCode?: string | null;
+    /** Ciudad, País aproximados. */
+    placeLabel?: string | null;
+    /** Handle de Instagram sin @. */
+    instagram?: string | null;
     verified?: boolean;
     overlay?: ReactNode;
     variant: 'person' | 'organizer';
@@ -143,6 +183,7 @@ export function ProfileHero({
     topRight?: ReactNode;
     backLabel: string;
     moreLabel?: string;
+    stickyBack?: boolean;
 }) {
     const styles = useThemedStyles(createProfileUiStyles);
     const insets = useSafeAreaInsets();
@@ -156,11 +197,10 @@ export function ProfileHero({
     });
 
     const showAge = typeof age === 'number' && age > 0;
-    const genderIcon =
-        genero === 'femenino' ? ('female' as const) : genero === 'masculino' ? ('male' as const) : null;
-    const genderColor = genero === 'femenino' ? '#F472B6' : genero === 'masculino' ? '#60A5FA' : undefined;
     const flagEmoji = countryCodeToFlagEmoji(flagCode);
-    const showMeta = showAge || genderIcon != null || !!flagEmoji;
+    const place = (placeLabel || '').trim();
+    const ig = (instagram || '').trim().replace(/^@+/, '');
+    const showMeta = !!place || !!flagEmoji || showAge || !!ig;
 
     return (
         <View style={[styles.heroShell, { width }]}>
@@ -196,7 +236,11 @@ export function ProfileHero({
                     style={StyleSheet.absoluteFill}
                 />
                 <View style={[styles.heroTopRow, { paddingTop: Math.max(insets.top, 12) + 4 }]}>
-                    <FrostedIconButton icon="chevron-back" onPress={onBack} accessibilityLabel={backLabel} />
+                    {stickyBack ? (
+                        <View style={styles.frostedBtnGhost} />
+                    ) : (
+                        <FrostedIconButton icon="chevron-back" onPress={onBack} accessibilityLabel={backLabel} />
+                    )}
                     {topRight ?? (
                         onMore ? (
                             <FrostedIconButton
@@ -226,11 +270,39 @@ export function ProfileHero({
                         </View>
                         {showMeta ? (
                             <View style={styles.heroMetaRow}>
-                                {genderIcon ? (
-                                    <Ionicons name={genderIcon} size={15} color={genderColor} />
+                                {place ? (
+                                    <View style={[styles.heroMetaChip, styles.heroMetaChipFlex]}>
+                                        <Ionicons name="location-sharp" size={14} color="#FFF" />
+                                        <Text style={styles.heroMetaText} numberOfLines={1}>
+                                            {place}
+                                        </Text>
+                                    </View>
                                 ) : null}
-                                {showAge ? <Text style={styles.heroMetaText}>{age}</Text> : null}
-                                {flagEmoji ? <Text style={styles.heroMetaFlag}>{flagEmoji}</Text> : null}
+                                {place && (flagEmoji || showAge || ig) ? (
+                                    <Text style={styles.heroMetaSep}>|</Text>
+                                ) : null}
+                                {flagEmoji ? (
+                                    <View style={styles.heroMetaChip}>
+                                        <Text style={styles.heroMetaFlag}>{flagEmoji}</Text>
+                                    </View>
+                                ) : null}
+                                {flagEmoji && (showAge || ig) ? (
+                                    <Text style={styles.heroMetaSep}>|</Text>
+                                ) : null}
+                                {showAge ? (
+                                    <View style={styles.heroMetaChip}>
+                                        <Text style={styles.heroMetaTextTight}>{age}</Text>
+                                    </View>
+                                ) : null}
+                                {showAge && ig ? <Text style={styles.heroMetaSep}>|</Text> : null}
+                                {ig ? (
+                                    <View style={[styles.heroMetaChip, styles.heroMetaChipFlex]}>
+                                        <Ionicons name="logo-instagram" size={14} color="#FFF" />
+                                        <Text style={styles.heroMetaText} numberOfLines={1}>
+                                            {ig}
+                                        </Text>
+                                    </View>
+                                ) : null}
                             </View>
                         ) : null}
                         {overlay}
@@ -574,7 +646,7 @@ export function AttendedPlansRow({
 }: {
     plans: PublicAttendedPlan[];
     emptyLabel: string;
-    lang: 'es' | 'en';
+    lang: Lang;
     onPressPlan: (id: string) => void;
     showWhen?: boolean;
 }) {
@@ -594,6 +666,11 @@ export function AttendedPlansRow({
                     <TouchableOpacity
                         key={plan.id}
                         style={styles.attendedCard}
+                        onPressIn={() => {
+                            seedPlanDetailFromFeed(plan as unknown as Record<string, unknown>);
+                            prefetchPlanDetail(plan.id);
+                            prefetchRemoteImages([plan.imagen_url], 1);
+                        }}
                         onPress={() => onPressPlan(plan.id)}
                         activeOpacity={0.9}
                     >
@@ -601,6 +678,7 @@ export function AttendedPlansRow({
                             source={resolvePlanImageSource(plan.imagen_url)}
                             style={styles.attendedImage}
                             recyclingKey={plan.id}
+                            thumbWidth={180}
                         />
                         <Text style={styles.attendedTitle} numberOfLines={1}>{stripPlanTitleSuffix(plan.titulo)}</Text>
                         {when ? (
@@ -621,7 +699,7 @@ export function OrganizerUpcomingGrid({
 }: {
     plans: OrganizerUpcomingPlan[];
     emptyLabel: string;
-    lang: 'es' | 'en';
+    lang: Lang;
     onPressPlan: (id: string) => void;
 }) {
     const styles = useThemedStyles(createProfileUiStyles);
@@ -643,6 +721,11 @@ export function OrganizerUpcomingGrid({
                     <TouchableOpacity
                         key={plan.id}
                         style={styles.gridCard}
+                        onPressIn={() => {
+                            seedPlanDetailFromFeed(plan as unknown as Record<string, unknown>);
+                            prefetchPlanDetail(plan.id);
+                            prefetchRemoteImages([plan.imagen_url], 1);
+                        }}
                         onPress={() => onPressPlan(plan.id)}
                         activeOpacity={0.9}
                     >
@@ -650,6 +733,7 @@ export function OrganizerUpcomingGrid({
                             source={resolvePlanImageSource(plan.imagen_url)}
                             style={styles.gridImage}
                             recyclingKey={plan.id}
+                            thumbWidth={200}
                         />
                         <View style={styles.gridBody}>
                             <Text style={styles.gridTitle} numberOfLines={1}>{stripPlanTitleSuffix(plan.titulo)}</Text>
@@ -827,10 +911,12 @@ export function EditProfileButton({
     label,
     onPress,
     tone = 'green',
+    showHintBadge = false,
 }: {
     label: string;
     onPress: () => void;
     tone?: 'green' | 'purple';
+    showHintBadge?: boolean;
 }) {
     const styles = useThemedStyles(createProfileUiStyles);
     const bg = tone === 'purple' ? ORG_PURPLE : PERSON_GREEN;
@@ -844,6 +930,7 @@ export function EditProfileButton({
         >
             <Ionicons name="create-outline" size={18} color="#FFF" />
             <Text style={styles.editProfileBtnText}>{label}</Text>
+            {showHintBadge ? <View style={styles.editProfileHintDot} /> : null}
         </TouchableOpacity>
     );
 }
@@ -912,21 +999,52 @@ function createProfileUiStyles(c: ThemeColors) {
         letterSpacing: -0.4,
     },
     heroMetaRow: {
-        marginTop: 6,
+        marginTop: 8,
         flexDirection: 'row',
         alignItems: 'center',
+        flexWrap: 'nowrap',
         gap: 6,
+        maxWidth: '100%',
+        paddingRight: 4,
+    },
+    heroMetaChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        flexShrink: 0,
+    },
+    heroMetaChipFlex: {
+        flexShrink: 1,
+        minWidth: 0,
+    },
+    heroMetaSep: {
+        color: 'rgba(255,255,255,0.9)',
+        fontSize: 14,
+        fontWeight: '800',
+        flexShrink: 0,
     },
     heroMetaText: {
-        color: 'rgba(255,255,255,0.9)',
+        color: '#FFF',
         fontSize: 15,
-        fontWeight: '600',
-        letterSpacing: 0.2,
+        fontWeight: '800',
+        letterSpacing: 0.1,
+        flexShrink: 1,
+        textShadowColor: 'rgba(0,0,0,0.45)',
+        textShadowOffset: { width: 0, height: 1 },
+        textShadowRadius: 3,
+    },
+    heroMetaTextTight: {
+        color: '#FFF',
+        fontSize: 15,
+        fontWeight: '800',
+        letterSpacing: 0.1,
+        textShadowColor: 'rgba(0,0,0,0.45)',
+        textShadowOffset: { width: 0, height: 1 },
+        textShadowRadius: 3,
     },
     heroMetaFlag: {
         fontSize: 16,
         lineHeight: 20,
-        marginLeft: 2,
     },
     heroUsername: {
         marginTop: 4,
@@ -1224,8 +1342,20 @@ function createProfileUiStyles(c: ThemeColors) {
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
+        position: 'relative',
     },
     editProfileBtnText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
+    editProfileHintDot: {
+        position: 'absolute',
+        top: 6,
+        right: 10,
+        width: 14,
+        height: 14,
+        borderRadius: 7,
+        backgroundColor: '#EF4444',
+        borderWidth: 2,
+        borderColor: '#FFF',
+    },
     galleryPlay: {
         ...StyleSheet.absoluteFillObject,
         alignItems: 'center',

@@ -10,7 +10,6 @@ import {
     View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Asset } from 'expo-asset';
 import { LinearGradient } from 'expo-linear-gradient';
 import { captureRef } from 'react-native-view-shot';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -18,11 +17,11 @@ import * as Sharing from 'expo-sharing';
 import { resolvePlanImageSource } from '../lib/categories';
 import { planShareUrl } from '../lib/shareLinks';
 import { sharePlanLink } from '../lib/sharePlan';
+import { withShareTouchGuard } from '../lib/shareTouchGuard';
 
 export const PLAN_SHARE_WIDTH = 360;
 const COVER_H = 222;
 const MAX_AVATARS = 5;
-const LOGO_MODULE = require('../assets/images/nexo-logo.png');
 
 export type PlanSharePerson = {
     id?: string;
@@ -99,58 +98,21 @@ function asFileUri(uri: string): string {
     return uri.startsWith('file://') ? uri : `file://${uri}`;
 }
 
-/** Logo local para el preview de la hoja de compartir (sin flash de portada). */
-async function getLogoFileUri(): Promise<string | null> {
-    try {
-        const asset = Asset.fromModule(LOGO_MODULE);
-        await asset.downloadAsync();
-        const uri = asset.localUri || asset.uri;
-        return uri ? asFileUri(uri) : null;
-    } catch {
-        return null;
-    }
-}
-
 /**
- * Hoja del sistema: preview = logo Nexo.
- * Contenido compartido: tarjeta del plan (portada + datos) + link.
- * Nunca importar react-native-share si no está en el binario (crash iOS).
+ * Hoja del sistema: imagen de la tarjeta + link.
+ * En iOS evitamos react-native-share / activityItemSources (crashes nativos frecuentes).
  */
 async function shareImageAndLink(imageUri: string, link: string) {
     const cardUri = asFileUri(imageUri);
-    const logoUri = await getLogoFileUri();
+
+    if (Platform.OS === 'ios') {
+        await withShareTouchGuard(() => Share.share({ url: cardUri, message: link }));
+        return;
+    }
 
     if (hasNativeRnShare()) {
         try {
             const RNShare = (await import('react-native-share')).default;
-            if (Platform.OS === 'ios' && logoUri) {
-                // placeholder/linkMetadata = logo en la hoja; item = tarjeta en el mensaje
-                await RNShare.open({
-                    failOnCancel: false,
-                    activityItemSources: [
-                        {
-                            placeholderItem: { type: 'url', content: logoUri },
-                            item: {
-                                default: { type: 'url', content: cardUri },
-                            },
-                            subject: { default: 'Nexo' },
-                            linkMetadata: {
-                                title: 'Nexo',
-                                icon: logoUri,
-                                image: logoUri,
-                            },
-                        },
-                        {
-                            placeholderItem: { type: 'text', content: link },
-                            item: {
-                                default: { type: 'text', content: link },
-                            },
-                        },
-                    ],
-                });
-                return;
-            }
-            // Android: una sola imagen (la tarjeta). El flash de portada se evita con opacity 0.
             await RNShare.open({
                 url: cardUri,
                 message: link,
@@ -161,13 +123,6 @@ async function shareImageAndLink(imageUri: string, link: string) {
         } catch {
             /* fallback abajo */
         }
-    }
-
-    if (Platform.OS === 'ios') {
-        // Preferir logo como preview del sheet; el mensaje lleva el link. Si hay tarjeta, iOS
-        // a veces solo acepta un `url`: priorizamos tarjeta en el share nativo básico.
-        await Share.share({ url: cardUri, message: link });
-        return;
     }
 
     try {
@@ -181,7 +136,7 @@ async function shareImageAndLink(imageUri: string, link: string) {
     } catch {
         /* ignore */
     }
-    await Share.share({ message: link, title: 'Nexo' });
+    await withShareTouchGuard(() => Share.share({ message: link, title: 'Nexo' }));
 }
 
 /**
@@ -217,8 +172,6 @@ export function PlanShareModal({ payload, onDone }: Props) {
         setAssetsReady(false);
         setCoverPainted(false);
         ranRef.current = false;
-        // Precalentar logo para el preview de la hoja
-        void getLogoFileUri();
 
         void (async () => {
             const resolved = resolveCoverSource(payload.coverUrl);
@@ -263,30 +216,44 @@ export function PlanShareModal({ payload, onDone }: Props) {
         if (!payload || ranRef.current) return;
         ranRef.current = true;
         const link = planShareUrl(payload.planId);
+        const title = payload.title;
+        let uri: string | null = null;
+
         try {
             // Un frame con la tarjeta ya pintada (invisible) antes de capturar
             await sleep(80);
-            if (!cardRef.current) {
-                await sharePlanLink(payload.planId, payload.title);
-                return;
+            if (cardRef.current) {
+                uri = await captureRef(cardRef, {
+                    format: 'jpg',
+                    quality: 0.92,
+                    result: 'tmpfile',
+                });
             }
-            const uri = await captureRef(cardRef, {
-                format: 'jpg',
-                quality: 0.92,
-                result: 'tmpfile',
-            });
-            await shareImageAndLink(uri, link);
+        } catch {
+            uri = null;
+        }
+
+        // Importante en iOS: cerrar el Modal ANTES de abrir la hoja del sistema.
+        // Presentar UIActivityViewController encima de un RN Modal suele matar la app.
+        // Espera corta para que el Modal termine de desmontarse sin “saltito” largo.
+        onDone();
+        await sleep(48);
+
+        try {
+            if (uri) {
+                await shareImageAndLink(uri, link);
+            } else {
+                await sharePlanLink(payload.planId, title);
+            }
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             if (!/User did not share|canceled|cancelled|dismiss/i.test(msg)) {
                 try {
-                    await sharePlanLink(payload.planId, payload.title);
+                    await sharePlanLink(payload.planId, title);
                 } catch {
                     /* ignore */
                 }
             }
-        } finally {
-            onDone();
         }
     }, [payload, onDone]);
 
@@ -393,8 +360,7 @@ export function PlanShareModal({ payload, onDone }: Props) {
                                 ) : null}
                             </View>
                             <Text style={styles.peopleText}>
-                                {joined}
-                                {maxPeople > 0 ? ` / ${maxPeople}` : ''}
+                                {joined > 0 ? `¡Ya somos ${joined}!` : ''}
                             </Text>
                         </View>
 

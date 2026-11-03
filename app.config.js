@@ -2,8 +2,8 @@
  * Config dinámica: inyecta Google Maps API key desde el entorno de EAS/local.
  * Sin key, el APK no crashea (NexoMapView usa fallback), pero el mapa no se ve.
  *
- * EAS (visibility sensitive o plaintext — no solo "secret" si quieres verla en app config):
- *   eas env:set preview --name GOOGLE_MAPS_API_KEY --value "AIza..." --type string --visibility sensitive
+ * EAS (visibility sensitive — no "secret": secret a veces no llega a app.config.js):
+ *   eas env:set production --name GOOGLE_MAPS_API_KEY --value "AIza..." --type string --visibility sensitive
  * Local: GOOGLE_MAPS_API_KEY=... en .env (no commitear).
  *
  * Importante: NO añadir "react-native-maps" a plugins (no es config plugin de Expo).

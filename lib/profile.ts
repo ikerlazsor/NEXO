@@ -8,7 +8,7 @@ export const USERNAME_MIN_LENGTH = 3;
 export const USERNAME_MAX_LENGTH = 20;
 
 /** Nombre visible en el perfil (puede repetirse). */
-export const DISPLAY_NAME_MIN_LENGTH = 2;
+export const DISPLAY_NAME_MIN_LENGTH = 3;
 export const DISPLAY_NAME_MAX_LENGTH = 18;
 
 export interface ProfileRow {
@@ -66,6 +66,7 @@ export function normalizeDisplayName(value: string): string {
 
 export function isValidDisplayName(value: string): boolean {
     const normalized = normalizeDisplayName(value);
+    if (normalized.length < DISPLAY_NAME_MIN_LENGTH) return false;
     if (normalized.length > DISPLAY_NAME_MAX_LENGTH) return false;
     const letters = normalized.match(/\p{L}/gu);
     return (letters?.length ?? 0) >= DISPLAY_NAME_MIN_LENGTH;
@@ -131,7 +132,30 @@ export async function isUsernameTaken(
     throw new UsernameCheckError();
 }
 
-export async function deleteAccount(): Promise<{ error: string | null }> {
+async function deleteAccountErrorCode(error: unknown, data: unknown): Promise<string> {
+    if (data && typeof data === 'object' && data !== null && 'error' in data) {
+        const code = (data as { error?: unknown }).error;
+        if (typeof code === 'string' && code.trim()) return code;
+    }
+    const ctx = error && typeof error === 'object' && error !== null && 'context' in error
+        ? (error as { context?: { json?: () => Promise<unknown> } }).context
+        : null;
+    if (ctx && typeof ctx.json === 'function') {
+        try {
+            const body = await ctx.json();
+            if (body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string') {
+                return (body as { error: string }).error;
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+    if (error instanceof Error && error.message) return error.message;
+    return 'delete_account_failed';
+}
+
+/** confirm: el usuario pidió borrar una cuenta ya terminada (Ajustes). Sin eso, solo se borra un registro a medias. */
+export async function deleteAccount(options?: { confirm?: boolean }): Promise<{ error: string | null }> {
     const session = await getAuthSession();
     if (!session?.user) {
         return { error: 'No hay sesión activa.' };
@@ -141,12 +165,14 @@ export async function deleteAccount(): Promise<{ error: string | null }> {
 
     try {
         const { data, error } = await runWithTimeout(
-            () => supabase.functions.invoke('delete-account', { body: {} }),
+            () => supabase.functions.invoke('delete-account', {
+                body: options?.confirm ? { confirmDelete: true } : {},
+            }),
             20000,
             'Tiempo de espera agotado',
         );
         const payload = data as { error?: string } | null;
-        if (error) functionError = error.message;
+        if (error) functionError = await deleteAccountErrorCode(error, data);
         else if (payload?.error) functionError = payload.error;
     } catch (e) {
         functionError = e instanceof Error ? e.message : 'No se pudo contactar con el servidor';

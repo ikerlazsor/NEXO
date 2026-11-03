@@ -1,24 +1,18 @@
-import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Platform } from 'react-native';
 import { PROVIDER_GOOGLE } from 'react-native-maps';
 
-/** Expo Go ya trae credenciales de mapas; Android standalone necesita API key de Google. */
+/**
+ * iOS: Apple Maps, siempre.
+ * Android: hay que montar MapView nativo. La key va en el manifiesto del AAB;
+ * extra.googleMapsConfigured se recalculaba en cada OTA y apagaba el mapa
+ * aunque el build ya tuviera la key.
+ */
 export function isNativeMapsAvailable(): boolean {
-    if (Constants.executionEnvironment === ExecutionEnvironment.StoreClient) {
-        return true;
-    }
-    if (Platform.OS === 'ios') return true;
-    if (Platform.OS !== 'android') return false;
-    return Boolean(
-        (Constants.expoConfig?.extra as { googleMapsConfigured?: boolean } | undefined)
-            ?.googleMapsConfigured,
-    );
+    return Platform.OS === 'ios' || Platform.OS === 'android';
 }
 
 /** En Android standalone hace falta Google; en iOS Apple Maps no necesita key de Google. */
 export function nexoMapProvider() {
-    if (Platform.OS === 'android' && isNativeMapsAvailable()) {
-        return PROVIDER_GOOGLE;
-    }
+    if (Platform.OS === 'android') return PROVIDER_GOOGLE;
     return undefined;
 }

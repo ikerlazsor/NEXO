@@ -1,7 +1,7 @@
 import { type RefObject } from 'react';
-import { Platform, Share, View } from 'react-native';
-import { captureRef } from 'react-native-view-shot';
+import { Share, View } from 'react-native';
 import { buildFootballShareMessage } from './shareLinks';
+import { withShareTouchGuard } from './shareTouchGuard';
 import type { FootballConfig, FootballOccupant } from './footballLineup';
 import type { FootballSharePerson } from '../components/FootballShareCard';
 
@@ -20,56 +20,27 @@ export type FootballShareInput = {
     lang?: string;
 };
 
-function sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export function footballShareCaption(input: Pick<FootballShareInput, 'planId'>): string {
     return buildFootballShareMessage({ planId: input.planId });
 }
 
 /**
- * Captura la tarjeta pachanga y abre el share sheet con copy corto.
- * `cardRef` debe apuntar al View de FootballShareCard ya montado y visible para layout.
+ * Comparte el plan de fútbol (solo link).
+ * La captura de cartel se desactivó: view-shot + share sheet tumbaban la app en iOS.
  */
 export async function shareFootballCard(opts: {
     cardRef: RefObject<View | null>;
     input: FootballShareInput;
 }): Promise<{ ok: boolean; error?: string }> {
-    const { cardRef, input } = opts;
-    const message = footballShareCaption(input);
-
+    const message = footballShareCaption(opts.input);
     try {
-        // Layout + descarga de avatares (Image nativo) antes de capturar.
-        await sleep(520);
-        if (!cardRef.current) {
-            await Share.share({ message });
-            return { ok: true };
-        }
-
-        const uri = await captureRef(cardRef, {
-            format: 'png',
-            quality: 1,
-            result: 'tmpfile',
-        });
-
-        if (Platform.OS === 'ios') {
-            await Share.share({ url: uri, message });
-        } else {
-            // El cartel ya lleva «Quedan X plazas»; el caption corto aporta el link.
-            await Share.share({ message, url: uri });
-        }
+        await withShareTouchGuard(() => Share.share({ message }));
         return { ok: true };
     } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (/User did not share|canceled|cancelled/i.test(msg)) {
+        if (/User did not share|canceled|cancelled|dismiss/i.test(msg)) {
             return { ok: true };
         }
-        try {
-            await Share.share({ message });
-            return { ok: true };
-        } catch {
-            return { ok: false, error: msg };
-        }
+        return { ok: false, error: msg };
     }
 }

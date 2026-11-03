@@ -34,13 +34,17 @@ export async function isUserBlocked(currentUserId: string, otherUserId: string):
     return !!data;
 }
 
-/** true si hay bloqueo en cualquier dirección. */
+/**
+ * true si hay bloqueo en cualquier dirección. RLS solo deja ver los bloqueos
+ * propios, así que el bloqueo ajeno se consulta con una función del servidor.
+ */
 export async function isBlockedEitherWay(userA: string, userB: string): Promise<boolean> {
-    const [aBlocksB, bBlocksA] = await Promise.all([
-        isUserBlocked(userA, userB),
-        isUserBlocked(userB, userA),
-    ]);
-    return aBlocksB || bBlocksA;
+    const { data, error } = await supabase.rpc('users_are_blocked', {
+        p_a: userA,
+        p_b: userB,
+    });
+    if (!error) return data === true;
+    return isUserBlocked(userA, userB);
 }
 
 async function clearRelationshipOnBlock(userA: string, userB: string): Promise<void> {

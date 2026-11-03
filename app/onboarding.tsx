@@ -35,6 +35,7 @@ import { useT } from '../lib/i18n';
 import { getUserCoords } from '../lib/location';
 import { Alert } from '../lib/nexoAlert';
 import { saveOnboardingPreferences } from '../lib/onboarding';
+import { getMyProfile } from '../lib/profileData';
 import { clearPendingSignup } from '../lib/pendingSignup';
 import { prepareCachesForNewUser, warmAppCaches } from '../lib/prefetchHome';
 import {
@@ -218,7 +219,17 @@ export default function OnboardingScreen() {
                             try {
                                 await clearPendingSignup();
                                 await clearPendingVerifyEmail();
+                                const { data: profile, error: profileError } = await getMyProfile();
+                                // Cuenta ya terminada, o no se pudo leer: no borrar.
+                                if (profileError || profile?.registro_completado) {
+                                    router.replace('/(tabs)');
+                                    return;
+                                }
                                 const { error } = await deleteAccount();
+                                if (error === 'account_already_registered') {
+                                    router.replace('/(tabs)');
+                                    return;
+                                }
                                 if (error) {
                                     await signOutAndClearLocalData({ scope: 'local' });
                                     Alert.alert(t('onboarding.notice'), t('onboarding.cancelRegisterFailed'));
@@ -268,48 +279,53 @@ export default function OnboardingScreen() {
         setSaving(true);
         setCompleting(true);
         try {
-            const authUser = await getAuthUser();
-            if (!authUser) {
-                router.replace('/login');
-                onboardingFinishLock = false;
+            let lastError: string | null = null;
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+                if (attempt > 0) await new Promise<void>((resolve) => setTimeout(resolve, 700));
+                const authUser = await getAuthUser();
+                if (!authUser) {
+                    router.replace('/login');
+                    onboardingFinishLock = false;
+                    return;
+                }
+                const userId = authUser.id;
+                const nombre = normalizeDisplayName(displayName);
+
+                const { url, error: uploadError } = await uploadAvatarFromUri(userId, avatarUri);
+                if (uploadError || !url) {
+                    lastError = uploadError ?? t('profile.uploadError');
+                    continue;
+                }
+
+                const { error } = await saveOnboardingPreferences(userId, {
+                    fecha_nacimiento: toIsoDate(birthDate),
+                    genero,
+                    avatar_url: url,
+                    ambientes_preferidos: personalities,
+                    descripcion: '',
+                    nombre,
+                });
+                if (error) {
+                    lastError = error;
+                    continue;
+                }
+
+                await Promise.all([clearPendingSignup(), clearPendingVerifyEmail(), markFirstRunPending()]);
+                // Ubicación al entrar a la app (como antes).
+                void getUserCoords({ requestPermission: true });
+
+                prepareCachesForNewUser(authUser.id);
+                void warmAppCaches(authUser);
+
+                hapticSuccess();
+                const nextRoute = await takePendingAuthRoute();
+                router.replace(nextRoute);
                 return;
             }
-            const userId = authUser.id;
-            const nombre = normalizeDisplayName(displayName);
 
-            const { url, error: uploadError } = await uploadAvatarFromUri(userId, avatarUri);
-            if (uploadError || !url) {
-                Alert.alert(t('onboarding.error'), uploadError ?? t('profile.uploadError'));
-                setCompleting(false);
-                onboardingFinishLock = false;
-                return;
-            }
-
-            const { error } = await saveOnboardingPreferences(userId, {
-                fecha_nacimiento: toIsoDate(birthDate),
-                genero,
-                avatar_url: url,
-                ambientes_preferidos: personalities,
-                descripcion: '',
-                nombre,
-            });
-            if (error) {
-                Alert.alert(t('onboarding.error'), error);
-                setCompleting(false);
-                onboardingFinishLock = false;
-                return;
-            }
-
-            await Promise.all([clearPendingSignup(), clearPendingVerifyEmail(), markFirstRunPending()]);
-            // Ubicación al entrar a la app (como antes).
-            void getUserCoords({ requestPermission: true });
-
-            prepareCachesForNewUser(authUser.id);
-            void warmAppCaches(authUser);
-
-            hapticSuccess();
-            const nextRoute = await takePendingAuthRoute();
-            router.replace(nextRoute);
+            Alert.alert(t('onboarding.error'), lastError ?? t('onboarding.error'));
+            setCompleting(false);
+            onboardingFinishLock = false;
         } catch (e) {
             const msg = e instanceof Error ? e.message : t('onboarding.error');
             Alert.alert(t('onboarding.error'), msg);
@@ -432,6 +448,10 @@ export default function OnboardingScreen() {
                                 </Pressable>
                                 <Text style={[styles.question, styles.interestsQuestion]}>
                                     {t('onboarding.personalitiesQuestion')}
+                                </Text>
+                                <Text style={styles.interestsHint}>
+                                    {t('onboarding.personalitiesHint', { max: PERSONALITY_MAX })}
+                                    {`  ·  ${personalities.length}/${PERSONALITY_MAX}`}
                                 </Text>
                                 <View style={styles.personalityGrid}>
                                     {ONBOARDING_AFICIONES_OPTIONS.map((tag) => {
@@ -728,7 +748,14 @@ function createOnboardingStyles(c: ThemeColors) {
         },
         interestsQuestion: {
             marginTop: 18,
-            marginBottom: 22,
+            marginBottom: 6,
+        },
+        interestsHint: {
+            fontSize: 13,
+            fontWeight: '700',
+            color: c.textMuted,
+            textAlign: 'center',
+            marginBottom: 18,
         },
         personalityGrid: {
             flexDirection: 'row',

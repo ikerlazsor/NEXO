@@ -154,7 +154,24 @@ serve(async (req) => {
   const title = (plan?.titulo || 'Nexo!').trim().slice(0, 120);
   const when = formatWhen(plan?.fecha_evento, lang);
   const location = (plan?.nombre_ubicacion || '').trim();
-  const image = resolveImageUrl(plan?.imagen_url, supabaseUrl) || BRAND_OG;
+  let going = 0;
+  if (plan && supabaseUrl && serviceKey) {
+    try {
+      const sb = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { count } = await sb
+        .from('participantes')
+        .select('usuario_id', { count: 'exact', head: true })
+        .eq('plan_id', planId)
+        .eq('estado', 'aceptado');
+      going = count ?? 0;
+    } catch {
+      going = 0;
+    }
+  }
+  const cardImage = `${supabaseUrl}/functions/v1/share-card/${planId}?v=8`;
+  const image = cardImage || resolveImageUrl(plan?.imagen_url, supabaseUrl) || BRAND_OG;
   const deepLink = `nexo://plan/${planId}`;
   const storeUrl = isIOS ? APP_STORE_URL : isAndroid ? PLAY_STORE_URL : APP_STORE_URL;
   const intent =
@@ -213,7 +230,8 @@ serve(async (req) => {
     desc: 'Open this plan in Nexo!',
   };
 
-  const description = [when, location].filter(Boolean).join(' · ') || shareUi.desc;
+  const goingLine = going > 0 ? `¡Ya somos ${going}!` : '';
+  const description = [goingLine, when, location].filter(Boolean).join(' · ') || shareUi.desc;
   const safeTitle = escapeHtml(title);
   const safeDesc = escapeHtml(description);
   const safeImage = escapeHtml(image);
@@ -236,6 +254,9 @@ serve(async (req) => {
 <meta property="og:url" content="${safePage}"/>
 <meta property="og:image" content="${safeImage}"/>
 <meta property="og:image:secure_url" content="${safeImage}"/>
+<meta property="og:image:type" content="image/jpeg"/>
+<meta property="og:image:width" content="1200"/>
+<meta property="og:image:height" content="630"/>
 <meta name="twitter:card" content="summary_large_image"/>
 </head><body><p>${safeTitle}</p></body></html>`);
   }
@@ -252,6 +273,17 @@ serve(async (req) => {
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <meta name="robots" content="noindex"/>
 <title>${safeTitle}</title>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="Nexo!"/>
+<meta property="og:title" content="${safeTitle}"/>
+<meta property="og:description" content="${safeDesc}"/>
+<meta property="og:url" content="${safePage}"/>
+<meta property="og:image" content="${safeImage}"/>
+<meta property="og:image:secure_url" content="${safeImage}"/>
+<meta property="og:image:type" content="image/jpeg"/>
+<meta property="og:image:width" content="1200"/>
+<meta property="og:image:height" content="630"/>
+<meta name="twitter:card" content="summary_large_image"/>
 <style>
 html,body{margin:0;height:100%;background:#0B1220;color:#fff;font-family:system-ui,-apple-system,sans-serif}
 main{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px;

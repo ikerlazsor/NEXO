@@ -15,7 +15,7 @@ import {
     registerInAppToastPresenter,
     type InAppToast,
 } from '../lib/inAppToast';
-import { resolvePushNavigation } from '../lib/push';
+import { fallbackPushHref, navigateAppHref, resolvePushNavigation } from '../lib/push';
 import { warmPushDestination } from '../lib/pushWarm';
 import { ProfileAvatar } from './ProfileAvatar';
 import { useThemedStyles } from '../lib/appTheme';
@@ -84,18 +84,7 @@ export function InAppToastHost({ children }: Props) {
         const data = current.data;
         const target = resolvePushNavigation(data);
         dismiss();
-        if (!target) return;
-        // Navegar al instante; calentar en paralelo.
-        let tries = 0;
-        const attempt = () => {
-            tries += 1;
-            try {
-                router.push(target.href as never);
-            } catch {
-                if (tries < 6) setTimeout(attempt, 120 * tries);
-            }
-        };
-        attempt();
+        navigateAppHref(router, target?.href ?? fallbackPushHref(data));
         void warmPushDestination(data);
     };
 
@@ -121,12 +110,14 @@ export function InAppToastHost({ children }: Props) {
                     {...pan.panHandlers}
                 >
                     <Pressable onPress={open} style={styles.card} accessibilityRole="button">
-                        <ProfileAvatar
-                            uri={current.avatarUrl}
-                            name={current.title || 'N'}
-                            size={44}
-                            recyclingKey={current.id}
-                        />
+                        {current.avatarUrl ? (
+                            <ProfileAvatar
+                                uri={current.avatarUrl}
+                                name={current.title || 'N'}
+                                size={44}
+                                recyclingKey={current.id}
+                            />
+                        ) : null}
                         <View style={styles.textCol}>
                             <Text style={styles.title} numberOfLines={1}>
                                 {current.title}

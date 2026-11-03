@@ -93,7 +93,7 @@ function PagerTabNavigator(props: Record<string, unknown>) {
                 initialPage={state.index}
                 scrollEnabled={scrollEnabled && !holdPager}
                 overdrag={false}
-                offscreenPageLimit={2}
+                offscreenPageLimit={1}
                 onPageSelected={(e) => {
                     const position = e.nativeEvent.position;
                     pageIndexRef.current = position;

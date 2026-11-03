@@ -34,6 +34,8 @@ export function parseReplyContent(contenido: string): { reply: ReplyQuote | null
 }
 
 export function previewForReply(contenido: string, tipo: string): string {
+    if ((contenido ?? '').trim() === '@@nexo_deleted@@') return 'Mensaje eliminado';
+    if ((contenido ?? '').startsWith('nexo_moments:v1:')) return '📷 Momentos';
     if (tipo === 'imagen') return '📷 Foto';
     if (tipo === 'video') return '🎬 Vídeo';
     if (tipo === 'audio') return '🎤 Audio';

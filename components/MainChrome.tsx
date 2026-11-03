@@ -3,7 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { usePathname, useRouter } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { InteractionManager, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PressScale } from './PressScale';
 import { ProfileAvatar } from './ProfileAvatar';
@@ -16,6 +16,11 @@ import {
     rememberChromeAvatar,
 } from '../lib/chromeAvatar';
 import { getUnreadChatCount, peekChatUnreadMap, subscribeChatUnread } from '../lib/chatUnread';
+import {
+    hydrateEditProfileHints,
+    shouldShowEditProfileHints,
+    subscribeEditProfileHints,
+} from '../lib/editProfileHints';
 import { hapticLight, hapticMedium, hapticSelection } from '../lib/haptics';
 import { useT } from '../lib/i18n';
 import {
@@ -23,6 +28,7 @@ import {
     peekProfileNotificationCount,
     subscribeProfileNotifications,
 } from '../lib/notifications';
+import { ensureAutoProfilePlace } from '../lib/profilePlace';
 import { ensureBackgroundPrefetchLifecycle, scheduleHomePrefetch } from '../lib/prefetchHome';
 import { emitFeedHomeRetap } from '../lib/feedReload';
 import { requestOpenFeedMap } from '../lib/feedMapIntent';
@@ -100,6 +106,17 @@ function createChromeStyles(c: ThemeColors) {
         borderWidth: 2,
         borderColor: c.surface,
     },
+    profileHintDot: {
+        position: 'absolute',
+        top: -3,
+        right: -3,
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        backgroundColor: '#EF4444',
+        borderWidth: 2.5,
+        borderColor: c.surface,
+    },
     profileNotifText: { color: c.onPrimary, fontSize: 10, fontWeight: '800' },
     body: { flex: 1 },
     floatingBar: {
@@ -109,9 +126,11 @@ function createChromeStyles(c: ThemeColors) {
         flexDirection: 'row',
         alignItems: 'center',
         borderRadius: 26,
-        paddingVertical: 2,
+        // Padding arriba para que el badge de chats no se recorte con overflow.
+        paddingTop: 6,
+        paddingBottom: 4,
         paddingHorizontal: 4,
-        overflow: 'hidden',
+        overflow: 'visible',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.78)',
         backgroundColor: 'rgba(255,255,255,0.88)',
@@ -133,7 +152,7 @@ function createChromeStyles(c: ThemeColors) {
         minWidth: 0,
         minHeight: 42,
         borderRadius: 18,
-        overflow: 'hidden',
+        overflow: 'visible',
         justifyContent: 'center',
         alignItems: 'center',
         paddingTop: 2,
@@ -148,6 +167,7 @@ function createChromeStyles(c: ThemeColors) {
         alignItems: 'center',
         justifyContent: 'center',
         position: 'relative',
+        overflow: 'visible',
     },
     floatingBtnActive: {
         backgroundColor: 'rgba(15,42,74,0.16)',
@@ -166,7 +186,7 @@ function createChromeStyles(c: ThemeColors) {
     },
     chatNotifBadge: {
         position: 'absolute',
-        top: -5,
+        top: -6,
         right: -8,
         minWidth: 16,
         height: 16,
@@ -177,7 +197,8 @@ function createChromeStyles(c: ThemeColors) {
         paddingHorizontal: 3,
         borderWidth: 2,
         borderColor: 'rgba(255,255,255,0.9)',
-        zIndex: 2,
+        zIndex: 4,
+        elevation: 4,
     },
     chatNotifText: { color: c.onPrimary, fontSize: 9, fontWeight: '800' },
     });
@@ -226,6 +247,8 @@ export function MainChrome({ active: activeProp, children }: Props) {
     const { t } = useT();
     const { colors } = useAppTheme();
     const styles = useThemedStyles(createChromeStyles);
+    const [mapWarm, setMapWarm] = useState(false);
+    const [mapSheet, setMapSheet] = useState(false);
     const { isGuest, requireAccount, session, userId: sessionUserId } = useAuthSession();
     const sessionAvatar =
         typeof session?.user?.user_metadata?.avatar_url === 'string'
@@ -243,6 +266,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
         );
     });
     const [notifCount, setNotifCount] = useState(0);
+    const [showEditHints, setShowEditHints] = useState(() => shouldShowEditProfileHints());
     const [chatUnreadCount, setChatUnreadCount] = useState(0);
     const [openRatingsCount, setOpenRatingsCount] = useState(0);
     const [rightClusterWidth, setRightClusterWidth] = useState(HEADER_ROW);
@@ -306,6 +330,12 @@ export function MainChrome({ active: activeProp, children }: Props) {
         setChatUnreadCount(unread);
     }, [hydrateChromeFromCache]);
 
+    // Rellena ciudad/país en el perfil si ya hay permiso de ubicación.
+    useEffect(() => {
+        if (!sessionUserId) return;
+        void ensureAutoProfilePlace(sessionUserId);
+    }, [sessionUserId]);
+
     // Cold start: disco + metadata de sesión antes de que llegue la red.
     useEffect(() => {
         if (!sessionUserId) {
@@ -325,6 +355,11 @@ export function MainChrome({ active: activeProp, children }: Props) {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al cambiar de sesión
     }, [sessionUserId, sessionAvatar, hydrateChromeFromCache]);
+
+    useEffect(() => {
+        void hydrateEditProfileHints().then(() => setShowEditHints(shouldShowEditProfileHints()));
+        return subscribeEditProfileHints((seen) => setShowEditHints(!seen));
+    }, []);
 
     useFocusEffect(
         useCallback(() => {
@@ -390,7 +425,27 @@ export function MainChrome({ active: activeProp, children }: Props) {
 
     const openMap = useCallback(() => {
         hapticLight();
-        requestOpenFeedMap();
+        setMapSheet(true);
+        requestAnimationFrame(() => requestOpenFeedMap());
+    }, []);
+
+    useEffect(() => {
+        if (!sessionUserId || isGuest) return;
+        void import('../lib/profileScreen').then(({ warmOwnProfile }) => warmOwnProfile(sessionUserId));
+    }, [sessionUserId, isGuest]);
+
+    useEffect(() => {
+        let warmTimer: ReturnType<typeof setTimeout> | undefined;
+        let sheetTimer: ReturnType<typeof setTimeout> | undefined;
+        const task = InteractionManager.runAfterInteractions(() => {
+            warmTimer = setTimeout(() => setMapWarm(true), 700);
+            sheetTimer = setTimeout(() => setMapSheet(true), 1600);
+        });
+        return () => {
+            task.cancel();
+            if (warmTimer) clearTimeout(warmTimer);
+            if (sheetTimer) clearTimeout(sheetTimer);
+        };
     }, []);
 
     const openCreate = useCallback(() => {
@@ -423,8 +478,8 @@ export function MainChrome({ active: activeProp, children }: Props) {
             <LinearGradient colors={[colors.gradientTop, colors.gradientBottom]} style={StyleSheet.absoluteFill} />
 
             <View style={styles.body}>{children}</View>
-            <NativeMapWarmHost />
-            <FeedMapHost />
+            {mapWarm ? <NativeMapWarmHost /> : null}
+            {mapSheet ? <FeedMapHost /> : null}
 
             <View
                 pointerEvents="box-none"
@@ -491,13 +546,15 @@ export function MainChrome({ active: activeProp, children }: Props) {
                         >
                             <View style={styles.profileAvatarWrap}>
                                 <ProfileAvatar uri={avatarUrl} name="U" size={44} recyclingKey={userId ?? undefined} />
-                                {notifCount > 0 && (
+                                {notifCount > 0 ? (
                                     <View style={styles.profileNotifBadge}>
                                         <Text style={styles.profileNotifText}>
                                             {notifCount > 9 ? '9+' : notifCount}
                                         </Text>
                                     </View>
-                                )}
+                                ) : showEditHints ? (
+                                    <View style={styles.profileHintDot} />
+                                ) : null}
                             </View>
                         </PressScale>
                         </>

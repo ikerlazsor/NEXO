@@ -8,13 +8,13 @@ import {
     isAcceptedParticipant,
 } from './participants';
 import { getPublicProfileCards } from './profileData';
+import { getAuthUser } from './auth';
 import { supabase } from './supabase';
 
 const GEO_KM = 80;
 const BASE_LIMIT = 100;
 const CATEGORY_LIMIT = 80;
 const FRIEND_LIMIT = 40;
-const RECENT_LIMIT = 40;
 const GLOBAL_LIMIT = 120;
 const MERGE_CAP = 160;
 const MORE_PAGE_SIZE = 40;
@@ -83,10 +83,11 @@ export async function fetchUpcomingFeedPlanRows(opts: {
     const friendIds = (opts.friendIds || []).filter(Boolean).slice(0, 60);
     const jobs: Array<Promise<FeedPlanRow[]>> = [];
 
+    let localRows: FeedPlanRow[] = [];
     if (includeBase) {
         if (opts.coords) {
             const box = boundingBox(opts.coords.latitude, opts.coords.longitude, GEO_KM);
-            jobs.push(runPlanSelect(
+            localRows = await runPlanSelect(
                 upcomingQuery(opts.nowIso)
                     .gte('latitud', box.minLat)
                     .lte('latitud', box.maxLat)
@@ -94,39 +95,16 @@ export async function fetchUpcomingFeedPlanRows(opts: {
                     .lte('longitud', box.maxLng)
                     .order('fecha_evento', { ascending: true })
                     .limit(BASE_LIMIT),
-            ));
+            );
+            // La lista mundial solo si alrededor no hay casi nada (GPS en otra ciudad).
+            if (localRows.length < 12) {
+                jobs.push(runPlanSelect(
+                    upcomingQuery(opts.nowIso)
+                        .order('fecha_evento', { ascending: true })
+                        .limit(GLOBAL_LIMIT),
+                ));
+            }
         } else {
-            jobs.push(runPlanSelect(
-                upcomingQuery(opts.nowIso)
-                    .order('fecha_evento', { ascending: true })
-                    .limit(GLOBAL_LIMIT),
-            ));
-        }
-
-        if (opts.coords) {
-            const recentBox = boundingBox(opts.coords.latitude, opts.coords.longitude, GEO_KM);
-            jobs.push(runPlanSelect(
-                upcomingQuery(opts.nowIso)
-                    .gte('creado_en', new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString())
-                    .gte('latitud', recentBox.minLat)
-                    .lte('latitud', recentBox.maxLat)
-                    .gte('longitud', recentBox.minLng)
-                    .lte('longitud', recentBox.maxLng)
-                    .order('creado_en', { ascending: false })
-                    .limit(RECENT_LIMIT),
-            ));
-        } else {
-            jobs.push(runPlanSelect(
-                upcomingQuery(opts.nowIso)
-                    .gte('creado_en', new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString())
-                    .order('creado_en', { ascending: false })
-                    .limit(RECENT_LIMIT),
-            ));
-        }
-
-        // Si el GPS no cae cerca de donde están los planes (p.ej. seed en Madrid
-        // y el móvil en otra ciudad), la caja geo deja el feed en solo “los míos”.
-        if (opts.coords) {
             jobs.push(runPlanSelect(
                 upcomingQuery(opts.nowIso)
                     .order('fecha_evento', { ascending: true })
@@ -173,9 +151,8 @@ export async function fetchUpcomingFeedPlanRows(opts: {
         ));
     }
 
-    if (jobs.length === 0) return [];
-    const groups = await Promise.all(jobs);
-    return mergePlanRows(groups);
+    const groups = jobs.length ? await Promise.all(jobs) : [];
+    return mergePlanRows([localRows, ...groups]);
 }
 
 /**
@@ -360,4 +337,46 @@ export async function attachFeedPlanPeople(
         console.warn('get_feed_plan_people:', e);
     }
     return attachFeedPlanPeopleFallback(safePlans);
+}
+
+function asJsonRows(data: unknown): FeedPlanRow[] {
+    const list = Array.isArray(data) ? data : [];
+    return list.filter((row): row is FeedPlanRow => !!row && typeof row === 'object' && !!(row as { id?: unknown }).id);
+}
+
+const searchCache = new Map<string, { at: number; rows: any[] }>();
+const SEARCH_CACHE_MS = 45_000;
+
+/** Planes que no están en el lote del feed (título, sitio, categoría, anfitrión). */
+export async function fetchSearchFeedPlans(query: string): Promise<any[]> {
+    const q = query.trim().slice(0, 80);
+    if (q.length < 2) return [];
+    const cached = searchCache.get(q);
+    if (cached && Date.now() - cached.at < SEARCH_CACHE_MS) return cached.rows;
+    const { data, error } = await supabase.rpc('search_feed_plans', { p_query: q });
+    if (error) throw error;
+    const raw = asJsonRows(data);
+    if (raw.length === 0) {
+        searchCache.set(q, { at: Date.now(), rows: [] });
+        return [];
+    }
+    const user = await getAuthUser();
+    if (user) {
+        try {
+            const withPeople = await attachFeedPlanPeople(raw);
+            searchCache.set(q, { at: Date.now(), rows: withPeople });
+            return withPeople;
+        } catch {
+            /* fallback al payload del RPC */
+        }
+    }
+    const plain = raw.map((row) => ({
+        ...row,
+        joinedCount: Number(row.joinedCount) || 0,
+        participantsList: Array.isArray(row.participantsList) ? row.participantsList : [],
+        host: row.host ?? null,
+        es_organizador: row.es_organizador === true,
+    }));
+    searchCache.set(q, { at: Date.now(), rows: plain });
+    return plain;
 }

@@ -66,9 +66,9 @@ function normalizeMadridEvents(payload, now = new Date()) {
     // Municipal date strings without an offset must NOT be interpreted as UTC.
     // Keep the calendar day, and don't invent an exact meeting hour/time zone.
     const rawDate = typeof startRaw === 'string' ? startRaw.trim() : '';
-    const dateMatch = /^(\\d{4}-\\d{2}-\\d{2})/.exec(rawDate);
+    const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(rawDate);
     const eventDate = dateMatch?.[1] || '';
-    const hasOffset = /(?:Z|[+-]\\d{2}:?\\d{2})$/i.test(rawDate);
+    const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawDate);
     const startDate = hasOffset ? new Date(rawDate) : null;
     const todayMadrid = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit',

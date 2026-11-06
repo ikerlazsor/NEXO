@@ -75,7 +75,7 @@ import { rememberFriendStatus, resolveKnownFriendStatus } from '../../lib/friend
 import { ensureViewerAffinityPerson } from '../../lib/viewerAffinityCache';
 import { peekChromeAvatar } from '../../lib/chromeAvatar';
 import { screenCacheKey } from '../../lib/screenCaches';
-import { getMyProfile, getPublicProfile } from '../../lib/profileData';
+import { getMyProfile, getPublicProfile, type PublicProfileRow } from '../../lib/profileData';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
 import { ScreenKeys } from '../../lib/screenState';
 import { bothFemaleGenero, calcAge, parseHabitos, parsePrivacy } from '../../lib/profileFields';
@@ -371,7 +371,7 @@ export default function UserProfileScreen() {
                 user ? fetchAccountAccess(user.id) : Promise.resolve(null),
             ]);
 
-            let profile = screen
+            let profile: PublicProfileRow | null = screen
                 ? {
                       id: screen.profile.id,
                       nombre: screen.profile.nombre,

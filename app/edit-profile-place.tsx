@@ -126,7 +126,7 @@ export default function EditProfilePlaceScreen() {
         router.back();
     };
 
-    const useMyLocation = async () => {
+    const handleMyLocation = async () => {
         if (locating) return;
         setLocating(true);
         try {
@@ -237,7 +237,7 @@ export default function EditProfilePlaceScreen() {
                 <View style={[styles.footer, { paddingBottom: Math.max(28, insets.bottom + 16) }]}>
                     <TouchableOpacity
                         style={styles.gpsBtn}
-                        onPress={() => void useMyLocation()}
+                        onPress={() => void handleMyLocation()}
                         disabled={locating}
                         activeOpacity={0.85}
                     >

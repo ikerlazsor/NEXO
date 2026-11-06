@@ -28,7 +28,15 @@ function httpsLink(value) {
   if (typeof value !== 'string') return null;
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' ? url.toString() : null;
+    if (url.protocol === 'https:') return url.toString();
+    // Madrid municipal exports sometimes use http links. Upgrade ONLY
+    // official madrid.es hosts rather than accepting arbitrary plain HTTP.
+    if (url.protocol === 'http:' && (url.hostname === 'madrid.es' ||
+        url.hostname.endsWith('.madrid.es'))) {
+      url.protocol = 'https:';
+      return url.toString();
+    }
+    return null;
   } catch {
     return null;
   }
@@ -54,9 +62,20 @@ function normalizeMadridEvents(payload, now = new Date()) {
     const rawId = field(row, ['id', '@id', 'ID-EVENTO', 'id-evento']);
     const id = rawId == null ? '' : String(rawId).trim();
     const startRaw = field(row, ['dtstart', 'DTSTART', 'fecha-inicio', 'fecha_inicio']);
-    const startDate = typeof startRaw === 'string' ? new Date(startRaw) : null;
     const sourceUrl = httpsLink(field(row, ['link', 'LINK', 'CONTENT-URL', 'content-url', 'url']));
-    if (!title || !id || !startDate || !Number.isFinite(startDate.getTime()) || startDate < now || !sourceUrl) continue;
+    // Municipal date strings without an offset must NOT be interpreted as UTC.
+    // Keep the calendar day, and don't invent an exact meeting hour/time zone.
+    const rawDate = typeof startRaw === 'string' ? startRaw.trim() : '';
+    const dateMatch = /^(\\d{4}-\\d{2}-\\d{2})/.exec(rawDate);
+    const eventDate = dateMatch?.[1] || '';
+    const hasOffset = /(?:Z|[+-]\\d{2}:?\\d{2})$/i.test(rawDate);
+    const startDate = hasOffset ? new Date(rawDate) : null;
+    const todayMadrid = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(now);
+    if (!title || !id || !eventDate || !sourceUrl ||
+        (startDate && !Number.isFinite(startDate.getTime())) ||
+        eventDate < todayMadrid || (startDate && startDate < now)) continue;
     if (seen.has(id)) continue;
     seen.add(id);
     const place = field(row, ['event-location', 'EVENT-LOCATION', 'location', 'LOCALIZACION']);
@@ -66,7 +85,9 @@ function normalizeMadridEvents(payload, now = new Date()) {
       sourceDataset: DATASET_URL,
       sourceId: id,
       title,
-      startsAt: startDate.toISOString(),
+      eventDate,
+      startsAt: startDate ? startDate.toISOString() : null,
+      timeUnverified: !hasOffset,
       venue: venue || null,
       description: text(field(row, ['description', 'DESCRIPTION', 'descripcion']), 800) || null,
       sourceUrl,
@@ -75,7 +96,10 @@ function normalizeMadridEvents(payload, now = new Date()) {
       organizerVerifiedByNexo: false,
     });
   }
-  return candidates.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  return candidates.sort((a, b) =>
+    a.eventDate.localeCompare(b.eventDate) ||
+    (a.startsAt || '').localeCompare(b.startsAt || '') ||
+    a.sourceId.localeCompare(b.sourceId));
 }
 
 if (require.main === module) {

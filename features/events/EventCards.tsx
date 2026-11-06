@@ -229,23 +229,6 @@ export function EventTabs({
     </View>
   );
 }
-export function AgendaIntro() {
-  const { t } = useT();
-  const { colors } = useAppTheme();
-  return (
-    <View style={s.intro}>
-      <Text style={[s.eyebrow, { color: colors.primary }]}>
-        {t("events.eyebrow")}
-      </Text>
-      <Text style={[s.headline, { color: colors.text }]}>
-        {t("events.headline")}
-      </Text>
-      <Text style={[s.subtitle, { color: colors.textMuted }]}>
-        {t("events.subtitle")}
-      </Text>
-    </View>
-  );
-}
 export const eventStyles = safeStyles();
 function safeStyles() {
   return StyleSheet.create({

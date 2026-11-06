@@ -8,7 +8,6 @@ import { useAppTheme } from "../../lib/appTheme";
 import {
   EventCard,
   EventTabs,
-  AgendaIntro,
 } from "../../features/events/EventCards";
 import { previewEvents } from "../../features/events/previewData";
 import type { EventSection } from "../../features/events/types";
@@ -50,7 +49,6 @@ function Design() {
           </Text>
         </View>
         <EventTabs value={section} onChange={setSection} />
-        {section === "agenda" && <AgendaIntro />}
         {section === "plans" && (
           <Text style={{ padding: 24, color: colors.textMuted }}>
             {t("events.viewPlans")} · {t("events.preview")}

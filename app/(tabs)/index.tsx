@@ -162,7 +162,7 @@ import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
 import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
-import { EventCard, EventTabs, AgendaIntro } from '../../features/events/EventCards';
+import { EventCard, EventTabs } from '../../features/events/EventCards';
 import { useEvents } from '../../features/events/useEvents';
 import { rankExternalEvents, interleaveSocialRows } from '../../features/events/ranking';
 import type { EventSection, ExternalEvent, EventFilters } from '../../features/events/types';
@@ -1918,7 +1918,6 @@ export default function HomeScreen() {
                     drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     ListHeaderComponent={
                         <View style={styles.feedChromeHeader}>
-                            {eventSection==='agenda'&&<AgendaIntro/>}
                             {eventSection!=='plans'&&external.error&&<Pressable onPress={()=>void external.refresh()} style={{padding:16}} accessibilityRole="button"><Text style={{color:colors.textMuted}}>{t('events.unavailable')} · {t('events.retry')}</Text></Pressable>}
                             <View style={styles.quickFiltersRow}>
                                 <PressScale

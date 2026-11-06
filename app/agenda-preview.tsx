@@ -5,7 +5,6 @@ import { useRouter } from "expo-router";
 import { useAppTheme } from "../lib/appTheme";
 import { useT } from "../lib/i18n";
 import {
-  AgendaIntro,
   EventCard,
   EventTabs,
 } from "../features/events/EventCards";
@@ -79,7 +78,6 @@ export default function AgendaPreview() {
           </Text>
         </View>
         <EventTabs value={section} onChange={setSection} />
-        {section === "agenda" && <AgendaIntro />}
         {section !== "agenda" && (
           <View pointerEvents="none">
             <PlanCard

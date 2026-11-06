@@ -27,7 +27,10 @@ Download the official JSON distribution manually, then:
 
 ```sh
 node scripts/madrid-events-preview.cjs ./ayuntamiento.json > ./candidates.json
-node --test tests/madridEvents.test.cjs
+node --test tests/madridEvents*.test.cjs
+
+# Or fetch the official JSON directly (internet access required):
+node scripts/madrid-events-fetch.cjs > ./candidates.json
 ```
 
 The script reads a local JSON file and prints a *candidate* list. It never writes to Supabase,
@@ -58,3 +61,16 @@ automated ingestion; the prototype currently accepts common JSON list and `@grap
 
 **Operational status:** No deployment, no production writes, no scheduled synchronization,
 and no in-app visibility in this PR.
+
+
+## Implementation checkpoint — 2026-11-06
+
+- Added a fetcher for the official Madrid JSON distribution. No database connection.
+- Local-date timestamps lacking an explicit UTC offset are marked `timeUnverified`.
+  They are NOT converted into invented hours.
+- The current branch also fixes chronological feed pagination ties by using
+  the (fecha_evento, id) ordering. Its implementation must be integration-tested
+  against PostgREST before deployment.
+- A connected execution environment could not retrieve the full municipal
+  distribution in this session. Real-feed shape and counts are not yet validated.
+- No CI result is currently asserted. No production deployment.

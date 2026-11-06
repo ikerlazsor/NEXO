@@ -108,6 +108,7 @@ La caché pública en memoria conserva hasta 12 combinaciones de filtros durante
 - TypeScript completo: mantiene **6 errores previos** en fichas de planes/perfiles; no añade errores de la nueva funcionalidad.
 - Compatibilidad Expo (tabla local): sigue detectando view-shot 5.1.1 frente a 4.0.3. La exclusión anterior de FlashList se conserva. La consulta online no está validada.
 - Auditoría: conserva el aviso crítico de shell-quote fijado en `develop` (la auditoría completa lo propaga también a react-devtools-core y react-native: 3 entradas críticas). Estas dos correcciones y las de calidad corresponden a la **PR #43**, que debe resolverse por separado antes de integrar/lanzar.
+- Integración aislada: se aplicó temporalmente el diff de #43 en un worktree separado de esta rama. Allí pasan TypeScript, ESLint (0 errores, 73 advertencias) y las pruebas unitarias. No se ha incorporado ese diff al historial de esta funcionalidad ni se considera validada su compatibilidad nativa por esta comprobación.
 - La batería SQL completa antigua no pasa: `get_guest_feed()` ya no tiene la firma esperada, hay permisos históricos más amplios que los tests esperan, y la prueba de ficha privada falla. No se han debilitado esas comprobaciones ni modificado funciones ajenas.
 - Entorno local: el CLI necesitó `--ignore-health-check` porque el proxy interfiere en healthchecks de auth/storage; la API HTTP funcional sí se probó. La imagen PostgreSQL 17.6.1.105 mostró un SIGSEGV al invocar funciones sin permiso EXECUTE. Los tests nuevos comprueban esos ACL mediante `has_function_privilege`, y prueban las denegaciones sociales dentro de las funciones autorizadas. Esta ruta de denegación del motor debe revisarse con una imagen soportada antes de desplegar; no se presenta como prueba de resistencia del servidor.
 - Pendientes: fuente y licencia reales, importación de un snapshot municipal revisado en staging, revisión operativa de denuncias, cron aprobado, pruebas de integración móvil y rendimiento en Android real (teclado/edge-to-edge, navegación rápida, redes lentas), regresión de compartir/iOS y validación de las correcciones independientes de #43.
@@ -131,3 +132,7 @@ Capturas del componente real:
 - [Para ti compacto](screenshots/agenda-compact.png)
 
 No se ha aplicado la migración a producción ni se ha habilitado ninguna importación programada.
+
+## Entrega en GitHub
+
+La rama se ha subido. La API de GitHub rechaza `gh pr create` con `Forbidden`; no se ha creado una PR automáticamente. Abrir [comparación hacia develop](https://github.com/ikerlazsor/NEXO/compare/develop...feature/madrid-social-agenda?expand=1) y usar la descripción preparada en `docs/madrid-events-pr.md`. No hay merge ni despliegue.

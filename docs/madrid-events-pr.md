@@ -2,7 +2,7 @@ Añade un feed con Para ti, Planes y Agenda, manteniendo las tarjetas y el ranki
 
 Reutiliza y amplía el prototipo de #41 y su paginación por fecha+ID. Añade migración versionada con RLS, importación atómica e idempotente, ciclo de vida y workflow diario desactivado. No incorpora #43 ni modifica producción/main.
 
-Validación: 22 casos unitarios, 48 tests SQL específicos y smoke HTTP local con cuentas sintéticas aprobados; vista previa visual Chromium y bundles Android/iOS. El lint/TypeScript global, la compatibilidad Expo y la auditoría mantienen los fallos previos tratados por #43. Las pruebas SQL históricas también tienen fallos documentados.
+Validación: 22 casos unitarios, 48 tests SQL específicos y smoke HTTP local con cuentas sintéticas aprobados; vista previa visual Chromium y bundles Android/iOS. El lint/TypeScript global, la compatibilidad Expo y la auditoría mantienen los fallos previos tratados por #43. Las pruebas SQL históricas también tienen fallos documentados. En un worktree temporal con el diff de #43 aplicado, pasan TypeScript, ESLint (0 errores) y pruebas; ese diff no se incorpora a esta rama.
 
 No activar el proveedor todavía: el acceso a datos.madrid.es está bloqueado y no se han verificado el JSON y las condiciones de reutilización vigentes. Faltan validación municipal en staging, revisión de la cola de denuncias, cron aprobado y pruebas Android/iOS reales. La imagen PostgreSQL local mostró un fallo en la ruta de funciones sin privilegios, documentado en el informe.
 

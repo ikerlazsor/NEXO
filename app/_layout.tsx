@@ -78,6 +78,8 @@ scheduleCoverPrefetch();
 const BACK_GESTURE_END = 20;
 
 const GUEST_ROOTS = new Set([
+  'event',
+  'agenda-preview',
   '(tabs)',
   'plan',
   'settings',

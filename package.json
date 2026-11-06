@@ -17,7 +17,10 @@
     "bundle:check": "expo export --platform android --output-dir /tmp/nexo-android-bundle --clear && expo export --platform ios --output-dir /tmp/nexo-ios-bundle --clear",
     "db:test": "supabase test db",
     "update:preview": "eas update --channel preview --platform ios && eas update --channel preview --platform android",
-    "update:production": "eas update --channel production --environment production --platform ios && eas update --channel production --environment production --platform android"
+    "update:production": "eas update --channel production --environment production --platform ios && eas update --channel production --environment production --platform android",
+    "events:dry-run": "node scripts/madrid-events-sync.cjs",
+    "events:local-smoke": "node scripts/events/local-smoke.cjs",
+    "events:preview": "node scripts/events/design-preview.cjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

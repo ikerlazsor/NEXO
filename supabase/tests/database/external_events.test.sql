@@ -1,0 +1,98 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+set local search_path=public,extensions;
+select no_plan();
+
+insert into auth.users(id,aud,role,email,encrypted_password,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at) values
+('90000000-0000-0000-0000-000000000001','authenticated','authenticated','event-a@nexo.test','unused',now(),'{"provider":"email","providers":["email"]}','{"nombre":"Synthetic A"}',now(),now()),
+('90000000-0000-0000-0000-000000000002','authenticated','authenticated','event-b@nexo.test','unused',now(),'{"provider":"email","providers":["email"]}','{"nombre":"Synthetic B"}',now(),now()),
+('90000000-0000-0000-0000-000000000003','authenticated','authenticated','event-c@nexo.test','unused',now(),'{"provider":"email","providers":["email"]}','{"nombre":"Synthetic C"}',now(),now());
+update public.perfiles set baneado=false where id::text like '90000000-%';
+create function pg_temp.event_snapshot(p_id text,p_title text default 'Synthetic event') returns jsonb language sql as $$
+ select jsonb_build_array(jsonb_build_object('source_id',p_id,'source_url','https://www.madrid.es/synthetic','title',p_title,'category','DESCUBRIR','start_date',current_date+1,'end_date',current_date+2,'status','active'));
+$$;
+select throws_ok($$select public.sync_external_events('madrid',pg_temp.event_snapshot('a'),1)$$,'P0001','provider_not_verified','provider must be reviewed before importing');
+update public.event_providers set enabled=true,license_url='https://creativecommons.org/licenses/by/4.0/',license_verified_at=now(),format_verified_at=now() where id='madrid';
+select is(public.sync_external_events('madrid',pg_temp.event_snapshot('a'),1),1,'first complete import');
+select is(public.sync_external_events('madrid',pg_temp.event_snapshot('a','New title'),1),1,'upsert is idempotent');
+select is((select count(*)::int from public.external_events),1,'no duplicate events');
+select is((select title from public.external_events where source_id='a'),'New title','source amendments are applied');
+select throws_ok($$select public.sync_external_events('madrid','[]',0)$$,'P0001','suspicious_snapshot','empty run cannot hide existing events');
+select is(public.sync_external_events('madrid',pg_temp.event_snapshot('b'),1),1,'next successful snapshot');
+select is((select status from public.external_events where source_id='a'),'active','one absence does not cancel');
+select public.sync_external_events('madrid',pg_temp.event_snapshot('b'),1);
+select is((select status from public.external_events where source_id='a'),'stale','two complete absences mark stale');
+select public.sync_external_events('madrid',pg_temp.event_snapshot('a')||pg_temp.event_snapshot('b'),2);
+select is((select status from public.external_events where source_id='a'),'active','reappearing record restores same group');
+select throws_ok($$select public.sync_external_events('madrid',pg_temp.event_snapshot('a')||pg_temp.event_snapshot('a'),2)$$,'P0001','duplicate_source_ids','duplicates reject entire run');
+select is((select missing_runs from public.external_events where source_id='a'),0,'failed import changes no lifecycle counters');
+select public.sync_external_events('madrid',jsonb_set(jsonb_set(pg_temp.event_snapshot('a'),'{0,venue}','"Changed venue"'),'{0,start_date}',to_jsonb(current_date+2))||pg_temp.event_snapshot('b'),2);
+select is((select venue from public.external_events where source_id='a'),'Changed venue','venue amendments are applied');
+select is((select start_date from public.external_events where source_id='a'),current_date+2,'date amendments are applied');
+select throws_ok($$select public.sync_external_events('madrid',jsonb_set(pg_temp.event_snapshot('a'),'{0,category}','"INVALID"'),1)$$,'23514',null,'invalid category rolls back entire import');
+select is((select venue from public.external_events where source_id='a'),'Changed venue','failed replacement preserves previous valid fields');
+create function pg_temp.eid() returns uuid language plpgsql as $$begin return (select id from public.external_events where source_id='a'); end;$$;
+
+set local role anon;
+select set_config('request.jwt.claim.sub','',true);
+select is((select count(*)::int from public.get_external_events_page()),2,'guest can browse public agenda');
+select throws_ok($$select * from public.external_event_participants$$,'42501',null,'guest cannot enumerate social participants');
+select ok(not has_function_privilege('anon','public.set_event_membership(uuid,boolean)','execute'),'guest has no join RPC privilege');
+select ok(not has_function_privilege('anon','public.sync_external_events(text,jsonb,integer)','execute'),'guest has no import RPC privilege');
+reset role;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','90000000-0000-0000-0000-000000000001',true);
+select throws_ok($$insert into public.external_event_participants(event_id,user_id) values(pg_temp.eid(),'90000000-0000-0000-0000-000000000002')$$,'42501',null,'cannot forge another participant');
+select throws_ok($$select public.send_event_message(pg_temp.eid(),'91000000-0000-0000-0000-000000000001','Hello')$$,'42501','membership_required','non-member cannot send');
+select lives_ok($$select public.set_event_membership(pg_temp.eid(),true)$$,'join social group');
+select lives_ok($$select public.set_event_membership(pg_temp.eid(),true)$$,'duplicate join is harmless');
+select is((select count(*)::int from public.external_event_participants where event_id=pg_temp.eid()),1,'single membership');
+select lives_ok($$select public.send_event_message(pg_temp.eid(),'91000000-0000-0000-0000-000000000001','Hello')$$,'member can send');
+select lives_ok($$select public.send_event_message(pg_temp.eid(),'91000000-0000-0000-0000-000000000001','Hello')$$,'retry is idempotent');
+select is((select count(*)::int from public.external_event_messages),1,'retry does not duplicate a message');
+select throws_ok($$update public.external_event_messages set body='Tampered'$$,'42501',null,'messages cannot be rewritten');
+select lives_ok($$select public.track_event_interaction(pg_temp.eid(),'view')$$,'own analytics recorded');
+select set_config('request.jwt.claim.sub','90000000-0000-0000-0000-000000000002',true);
+select is((select count(*)::int from public.external_event_messages),0,'outsider cannot read chat');
+select is((select count(*)::int from public.external_event_interactions),0,'analytics are private');
+select public.set_event_membership(pg_temp.eid(),true);
+select is((select count(*)::int from public.external_event_messages),1,'new member can read shared group');
+select lives_ok($$insert into public.external_event_reports(message_id,reporter_id,reason) select id,auth.uid(),'Synthetic report' from public.external_event_messages limit 1$$,'members can report');
+reset role;
+insert into public.bloqueos(bloqueador_id,bloqueado_id) values('90000000-0000-0000-0000-000000000001','90000000-0000-0000-0000-000000000002');
+set local role authenticated;
+select set_config('request.jwt.claim.sub','90000000-0000-0000-0000-000000000002',true);
+select is((select count(*)::int from public.external_event_messages),0,'block by another user hides their messages');
+select is((select count(*)::int from public.external_event_participants where user_id='90000000-0000-0000-0000-000000000001'),0,'block hides participant identity');
+select public.set_event_membership(pg_temp.eid(),false);
+select is((select count(*)::int from public.external_event_messages),0,'leaving revokes reading');
+select throws_ok($$select public.send_event_message(pg_temp.eid(),'91000000-0000-0000-0000-000000000002','Not allowed')$$,'42501','membership_required','leaving revokes sending');
+reset role;
+select set_config('request.jwt.claim.sub','',true);
+update public.perfiles set baneado=true where id='90000000-0000-0000-0000-000000000003';
+set local role authenticated;
+select set_config('request.jwt.claim.sub','90000000-0000-0000-0000-000000000003',true);
+select throws_ok($$select public.set_event_membership(pg_temp.eid(),true)$$,'42501','account_required','banned user cannot join');
+reset role;
+update public.external_events set status='cancelled' where source_id='a';
+set local role authenticated;
+select set_config('request.jwt.claim.sub','90000000-0000-0000-0000-000000000002',true);
+select throws_ok($$select public.set_event_membership(pg_temp.eid(),true)$$,'P0001','event_unavailable','cancelled event cannot be joined');
+reset role;
+insert into public.external_events(provider_id,source_id,source_url,title,category,start_date,end_date)
+select 'madrid','page-'||n,'https://www.madrid.es/synthetic','Paging '||n,'SHOWTIME',current_date+5,current_date+5 from generate_series(1,31)n;
+set local role anon;
+select is((select count(*)::int from public.get_external_events_page(p_categories=>array['SHOWTIME'])),30,'server bounds a page to thirty');
+select is((with first_page as(select * from public.get_external_events_page(p_categories=>array['SHOWTIME'])),last_row as(select * from first_page order by start_date desc,id desc limit 1)
+ select count(*)::int from last_row l cross join lateral public.get_external_events_page(l.start_date,l.id,array['SHOWTIME']) p),1,'keyset includes tied dates without duplicates or skips');
+select is((select count(*)::int from public.get_external_events_page(p_query=>'No such event')),0,'search filters before pagination');
+select is((select count(*)::int from public.get_external_events_page(p_lat=>40.4,p_lon=>-3.7,p_radius=>10)),0,'unknown geography does not become nearby');
+reset role;
+select public.sync_external_events('madrid',jsonb_set(pg_temp.event_snapshot('a'),'{0,status}','"cancelled"')||pg_temp.event_snapshot('b'),2);
+select is((select status from public.external_events where source_id='a'),'cancelled','explicit source cancellation updates status');
+select is((select count(*)::int from public.external_event_participants where event_id=pg_temp.eid()),1,'cancellation preserves social group history');
+select public.sync_external_events('madrid',jsonb_set(jsonb_set(pg_temp.event_snapshot('b'),'{0,start_date}',to_jsonb(current_date-2)),'{0,end_date}',to_jsonb(current_date-1))||pg_temp.event_snapshot('a'),2);
+select is((select status from public.external_events where source_id='b'),'expired','expired records are marked on successful daily sync');
+select ok(not has_function_privilege('authenticated','public.sync_external_events(text,jsonb,integer)','execute'),'ordinary users cannot import');
+select * from finish();
+rollback;

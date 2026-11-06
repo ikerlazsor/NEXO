@@ -86,7 +86,6 @@ import {
     type FeedSnapshot,
 } from '../../lib/feedCache';
 import { emptyGuestFeedSnapshot, fetchSignedInFeedSnapshot } from '../../lib/feedLoad';
-import { requestOpenFeedMap } from '../../lib/feedMapIntent';
 import { attachFeedPlanPeople, fetchMoreFeedPlanRows, fetchSearchFeedPlans, type FeedMoreCursor } from '../../lib/feedQuery';
 import {
     applyStickyInviteClears,
@@ -105,7 +104,7 @@ import {
     takeOptimisticFeedPlan,
 } from '../../lib/feedReload';
 import { expandSearchQuery, planMatchesSearch } from '../../lib/feedSearch';
-import { buildFeedRows, type FeedRow } from '../../lib/feedSections';
+import { buildFeedRows, type FeedRow as SocialFeedRow } from '../../lib/feedSections';
 import { consumeFirstRunPending } from '../../lib/firstRun';
 import { rememberFriendsSet } from '../../lib/friendStatusPeek';
 import { distanceKm, formatDistanceKm, parsePlanCoords } from '../../lib/geo';
@@ -163,6 +162,11 @@ import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
 import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
+import { EventCard, EventTabs, AgendaIntro } from '../../features/events/EventCards';
+import { useEvents } from '../../features/events/useEvents';
+import { rankExternalEvents, interleaveSocialRows } from '../../features/events/ranking';
+import type { EventSection, ExternalEvent, EventFilters } from '../../features/events/types';
+type FeedRow = SocialFeedRow | {kind:'event';id:string;event:ExternalEvent};
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
 
@@ -185,6 +189,7 @@ export default function HomeScreen() {
 
     const cachedFeed = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY);
 
+    const [eventSection, setEventSection] = useState<EventSection>('forYou');
     const [search, setSearch] = useState(savedFilters.search ?? '');
     const [selectedCategories, setSelectedCategories] = useState<string[]>(() => {
         if (Array.isArray(savedFilters.selectedCategories)) {
@@ -342,6 +347,73 @@ export default function HomeScreen() {
     const [hasMoreFeed, setHasMoreFeed] = useState(true);
     const feedCursorRef = useRef<FeedMoreCursor | null>(null);
     const loadingMoreRef = useRef(false);
+    const eventFilters = useMemo<EventFilters>(() => {
+        const now = new Date();
+        const madridDay = (d: Date) =>
+            new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Europe/Madrid',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+            }).format(d);
+        return {
+            categories: selectedCategories,
+            query: search,
+            latitude: userCoords?.latitude,
+            longitude: userCoords?.longitude,
+            radius: userCoords ? (nearbyKm ?? undefined) : undefined,
+            from: dateFilter === 'all' ? undefined : madridDay(now),
+            until:
+                dateFilter === 'today'
+                    ? madridDay(now)
+                    : dateFilter === 'week'
+                      ? madridDay(new Date(now.getTime() + 7 * 86400000))
+                      : undefined,
+        };
+    }, [selectedCategories, search, userCoords, nearbyKm, dateFilter]);
+    const external = useEvents(
+        eventFilters,
+        sessionUserId,
+        eventSection !== 'plans',
+    );
+    const rankedEvents = useMemo(
+        () =>
+            rankExternalEvents(
+                external.events.slice(0, 90),
+                feedTaste,
+                external.history,
+                userCoords,
+            ),
+        [external.events, feedTaste, external.history, userCoords],
+    );
+    const openExternal = useCallback(
+        (id: string) => router.push({ pathname: '/event/[id]', params: { id } }),
+        [router],
+    );
+    const joinExternal = useCallback(
+        (id: string) => {
+            if (requireAccount({ type: 'event', eventId: id })) return;
+            if (external.joined.has(id)) {
+                openExternal(id);
+                return;
+            }
+            Alert.alert(t('events.join'), t('events.socialNotice'), [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('events.join'),
+                    onPress: () => {
+                        void external
+                            .toggleJoin(id)
+                            .catch(() =>
+                                Alert.alert(t('feed.error'), t('events.error')),
+                            );
+                    },
+                },
+            ]);
+        },
+        [requireAccount, external, openExternal, t],
+    );
+
     const endReachedLockRef = useRef(false);
     const [searchExpanded, setSearchExpanded] = useState<string[]>([]);
     const [searchHits, setSearchHits] = useState<any[]>([]);
@@ -1294,7 +1366,7 @@ export default function HomeScreen() {
         || selectedCategories.length > 0
         || selectedSubcategories.length > 0;
 
-    const feedRows = useMemo<FeedRow[]>(() => buildFeedRows({
+    const feedRows = useMemo<SocialFeedRow[]>(() => buildFeedRows({
         plans: filteredPlans,
         currentUserId,
         membershipMap,
@@ -1321,7 +1393,7 @@ export default function HomeScreen() {
     const savedPlanIds = useMemo(() => new Set(savedPlans), [savedPlans]);
 
     const feedRowsUi = useMemo<FeedRow[]>(() => {
-        return feedRows.map((row) => {
+        const socialUi = feedRows.map((row) => {
             if (row.kind !== 'plan') return row;
             const pid = String(row.plan.id);
             return {
@@ -1332,7 +1404,51 @@ export default function HomeScreen() {
                 distanceLabel: planDistanceLabel(row.plan),
             };
         });
-    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel]);
+        if (eventSection === 'plans') return socialUi;
+        if (eventSection === 'agenda')
+            return external.events.map((event) => ({
+                kind: 'event' as const,
+                id: `event:${event.id}`,
+                event,
+            }));
+        if (
+            rankedEvents.length &&
+            socialUi.some(
+                (row) =>
+                    row.kind === 'header' && row.titleKey === 'feed.sectionYours',
+            ) &&
+            !socialUi.some(
+                (row) =>
+                    row.kind === 'header' && row.titleKey === 'feed.sectionForYou',
+            )
+        ) {
+            socialUi.push({
+                kind: 'header',
+                id: 'header:external-for-you',
+                titleKey: 'feed.sectionForYou',
+            });
+        }
+        return interleaveSocialRows(
+            socialUi,
+            rankedEvents,
+            (row) => row.kind === 'plan',
+            (row) =>
+                row.kind === 'header'
+                    ? row.titleKey === 'feed.sectionYours'
+                        ? 'protected'
+                        : 'open'
+                    : null,
+        );
+    }, [
+        feedRows,
+        membershipMap,
+        savedPlanIds,
+        joiningPlanId,
+        planDistanceLabel,
+        eventSection,
+        external.events,
+        rankedEvents,
+    ]);
 
     const feedRowsRef = useRef(feedRowsUi);
     feedRowsRef.current = feedRowsUi;
@@ -1463,6 +1579,9 @@ export default function HomeScreen() {
 
     const renderPlanItem = useCallback(
         ({ item, index }: { item: FeedRow; index: number }) => {
+            if (item.kind === 'event') {
+                return <EventCard event={item.event} variant={eventSection==='agenda'?'editorial':'compact'} joined={external.joined.has(item.event.id)} busy={external.busy===item.event.id} onOpen={()=>openExternal(item.event.id)} onJoin={()=>joinExternal(item.event.id)}/>;
+            }
             if (item.kind === 'header') {
                 return <Text style={styles.feedSectionTitle}>{t(item.titleKey)}</Text>;
             }
@@ -1496,7 +1615,7 @@ export default function HomeScreen() {
         },
         [
             t,
-            styles.feedSectionTitle,
+            styles.feedSectionTitle, eventSection, external.joined, external.busy, openExternal, joinExternal,
             currentUserId,
             currentUserGenero,
             friendIds,
@@ -1779,6 +1898,7 @@ export default function HomeScreen() {
                 </View>
             ) : null}
 
+            <EventTabs value={eventSection} onChange={(section)=>{hapticSelection();setEventSection(section);listRef.current?.scrollToOffset({offset:0,animated:false});}}/>
             <View style={styles.listWrap}>
                 <FlashList
                     ref={listRef}
@@ -1798,19 +1918,9 @@ export default function HomeScreen() {
                     drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     ListHeaderComponent={
                         <View style={styles.feedChromeHeader}>
+                            {eventSection==='agenda'&&<AgendaIntro/>}
+                            {eventSection!=='plans'&&external.error&&<Pressable onPress={()=>void external.refresh()} style={{padding:16}} accessibilityRole="button"><Text style={{color:colors.textMuted}}>{t('events.unavailable')} · {t('events.retry')}</Text></Pressable>}
                             <View style={styles.quickFiltersRow}>
-                                <PressScale
-                                    style={[styles.quickFilterPill, styles.quickFilterBox]}
-                                    onPress={() => requestOpenFeedMap()}
-                                    pressedScale={0.96}
-                                    haptic={false}
-                                >
-                                    <Ionicons name="map" size={15} color={PRIMARY_DARK} />
-                                    <Text style={styles.quickFilterText} numberOfLines={1}>
-                                        {t('feed.map')}
-                                    </Text>
-                                </PressScale>
-
                                 <PressScale
                                     style={[
                                         styles.quickFilterPill,
@@ -1840,7 +1950,7 @@ export default function HomeScreen() {
                         </View>
                     }
                     ListEmptyComponent={
-                        !loading ? (
+                        eventSection==='agenda' ? <View style={{padding:28,alignItems:'center'}}><Ionicons name="calendar-outline" size={40} color={colors.primary}/><Text style={{fontSize:20,fontWeight:'700',color:colors.text,marginTop:16}}>{t(external.loading?'events.loading':'events.empty')}</Text><Text style={{fontSize:14,lineHeight:22,color:colors.textMuted,marginTop:10,textAlign:'center'}}>{t('events.emptyBody')}</Text></View> : !loading ? (
                             <EmptySearch
                                 loadError={loadError}
                                 nearbyKm={nearbyKm}
@@ -1864,8 +1974,8 @@ export default function HomeScreen() {
                     }
                     refreshControl={
                         <RefreshControl
-                            refreshing={refreshing}
-                            onRefresh={onFeedRefresh}
+                            refreshing={eventSection==='agenda'?external.loading:refreshing}
+                            onRefresh={()=>{if(eventSection!=='agenda')onFeedRefresh();void external.refresh();}}
                             tintColor={theme.colors.textMuted}
                             colors={[theme.colors.primary]}
                             progressBackgroundColor={theme.colors.surface}
@@ -1877,7 +1987,7 @@ export default function HomeScreen() {
                     onEndReached={() => {
                         if (endReachedLockRef.current) return;
                         endReachedLockRef.current = true;
-                        void loadMoreFeed().finally(() => {
+                        void Promise.all([eventSection!=='agenda'?loadMoreFeed():Promise.resolve(),eventSection!=='plans'?external.loadMore():Promise.resolve()]).finally(() => {
                             setTimeout(() => {
                                 endReachedLockRef.current = false;
                             }, 650);
@@ -1885,7 +1995,7 @@ export default function HomeScreen() {
                     }}
                     onEndReachedThreshold={0.35}
                     ListFooterComponent={
-                        loadingMore ? (
+                        (loadingMore||external.loading) ? (
                             <View style={styles.loadMoreFooter}>
                                 <View style={styles.loadMoreDot} />
                                 <View style={[styles.loadMoreDot, styles.loadMoreDotMid]} />
@@ -1896,7 +2006,7 @@ export default function HomeScreen() {
                         )
                     }
                 />
-                {showFeedSkeleton && !refreshing ? (
+                {showFeedSkeleton && !refreshing && eventSection!=='agenda' ? (
                     <View style={styles.listLoadingOverlay} pointerEvents="none">
                         <FeedSkeletonList count={3} />
                     </View>

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Component, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Linking, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Linking, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
     Easing,
@@ -259,9 +259,9 @@ function DeletedChatMessageRow({ item, currentUserId, onOpenProfile }: Props) {
                         ]}
                     >
                         {t('chat.messageDeleted')}
-                        <Text style={styles.timeGhost}>{` ${timeLabel}`}</Text>
+                        {Platform.OS !== 'android' ? <Text style={styles.timeGhost}>{` ${timeLabel}`}</Text> : null}
                     </Text>
-                    <View style={[isMe ? styles.timeAbsoluteMe : styles.timeAbsolute]}>
+                    <View style={[Platform.OS === 'android' ? styles.timeRow : isMe ? styles.timeAbsoluteMe : styles.timeAbsolute]}>
                         <Text style={[styles.timeText, isMe ? styles.myTime : styles.otherTime]}>
                             {timeLabel}
                         </Text>
@@ -503,9 +503,11 @@ function NormalChatMessageRow({
                         ),
                     )}
                     {/* Fantasma: solo la última línea deja hueco; el resto llega hasta la hora. */}
-                    <Text style={styles.timeGhost}>
-                        {item.pending ? `  ··· ${timeLabel}` : ` ${timeLabel}`}
-                    </Text>
+                    {Platform.OS !== 'android' ? (
+                        <Text style={styles.timeGhost}>
+                            {item.pending ? `  ··· ${timeLabel}` : ` ${timeLabel}`}
+                        </Text>
+                    ) : null}
                 </Text>
             </>
         );
@@ -517,7 +519,7 @@ function NormalChatMessageRow({
     const timeNode = (
         <View
             style={[
-                isPlainText
+                isPlainText && Platform.OS !== 'android'
                     ? isMe
                         ? styles.timeAbsoluteMe
                         : styles.timeAbsolute

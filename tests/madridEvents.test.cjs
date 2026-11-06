@@ -39,3 +39,22 @@ test('rejects outdated, incomplete, insecure and duplicate records', () => {
 test('rejects unknown feed structures instead of silently publishing zero entries', () => {
   assert.throws(() => readRows({ unexpected: [] }), /Formato desconocido/);
 });
+
+test('preserves time-unknown Madrid local dates without fabricating UTC times', () => {
+  const events = normalizeMadridEvents({ '@graph': [future({
+    id: 222,
+    dtstart: '2026-11-12 00:00:00.0',
+    link: 'http://www.madrid.es/actividad',
+  })] }, NOW);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].eventDate, '2026-11-12');
+  assert.equal(events[0].startsAt, null);
+  assert.equal(events[0].timeUnverified, true);
+  assert.equal(events[0].sourceUrl, 'https://www.madrid.es/actividad');
+});
+
+test('rejects cleartext HTTP links from non-municipal hosts', () => {
+  assert.equal(normalizeMadridEvents({ '@graph': [future({
+    id: 333, link: 'http://example.org/unsafe',
+  })] }, NOW).length, 0);
+});

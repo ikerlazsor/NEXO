@@ -10,6 +10,11 @@ export const GENERO_OPTIONS: Genero[] = [
     'prefiero_no_decir',
 ];
 
+/** Valida valores de perfil o caché antes de usarlos en la UI. */
+export function parseGenero(value: unknown): Genero | null {
+    return GENERO_OPTIONS.find((option) => option === value) ?? null;
+}
+
 /** Opciones reducidas solo para el registro inicial */
 export const ONBOARDING_GENERO_OPTIONS: Genero[] = ['masculino', 'femenino', 'otro'];
 

@@ -274,6 +274,13 @@ export function PlanShareModal({ payload, onDone }: Props) {
         return () => clearTimeout(t);
     }, [payload, ready, onDone]);
 
+    // Si onLoad no dispara (asset en caché), no bloquear el share
+    useEffect(() => {
+        if (!coverSource || coverPainted) return;
+        const t = setTimeout(() => setCoverPainted(true), 500);
+        return () => clearTimeout(t);
+    }, [coverSource, coverPainted]);
+
     if (!payload) return null;
 
     const title = payload.title.trim() || 'Plan';
@@ -282,13 +289,6 @@ export function PlanShareModal({ payload, onDone }: Props) {
 
     const onCoverLoad = () => setCoverPainted(true);
     const onCoverError = () => setCoverPainted(true);
-
-    // Si onLoad no dispara (asset en caché), no bloquear el share
-    useEffect(() => {
-        if (!coverSource || coverPainted) return;
-        const t = setTimeout(() => setCoverPainted(true), 500);
-        return () => clearTimeout(t);
-    }, [coverSource, coverPainted]);
 
     return (
         <Modal

@@ -1,21 +1,29 @@
 import { registerRootComponent } from "expo";
 import { useMemo, useState } from "react";
-import { ScrollView, View, Text } from "react-native";
+import { ScrollView, View, Text, Pressable } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useT } from "../../lib/i18n";
 import { useAppTheme } from "../../lib/appTheme";
+import { EventCard, EventTabs } from "../../features/events/EventCards";
 import {
-  EventCard,
-  EventTabs,
-} from "../../features/events/EventCards";
-import { previewEvents } from "../../features/events/previewData";
+  previewEvents,
+  previewCoverCatalog,
+} from "../../features/events/previewData";
 import type { EventSection } from "../../features/events/types";
 function Design() {
   const [section, setSection] = useState<EventSection>("agenda");
-  const events = useMemo(previewEvents, []);
+  const [catalog, setCatalog] = useState(false);
+  const examples = useMemo(previewEvents, []);
+  const allCovers = useMemo(previewCoverCatalog, []);
   const { t } = useT();
   const { colors } = useAppTheme();
+  const events = catalog
+    ? allCovers.map((event) => ({
+        ...event,
+        title: `${t(`cat.main.${event.category}`)} · ${t(`cat.sub.${event.subcategory}`)}`,
+      }))
+    : examples;
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <ScrollView
@@ -48,6 +56,17 @@ function Design() {
             {t("events.previewBody")}
           </Text>
         </View>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setCatalog((value) => !value)}
+          style={{ marginHorizontal: 18, paddingVertical: 12 }}
+        >
+          <Text style={{ color: colors.primary, fontWeight: "700" }}>
+            {t(catalog ? "events.previewExamples" : "events.previewAllCovers", {
+              count: allCovers.length,
+            })}
+          </Text>
+        </Pressable>
         <EventTabs value={section} onChange={setSection} />
         {section === "plans" && (
           <Text style={{ padding: 24, color: colors.textMuted }}>

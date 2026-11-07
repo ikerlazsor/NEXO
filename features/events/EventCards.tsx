@@ -13,6 +13,10 @@ import { useAppTheme } from "../../lib/appTheme";
 import { eventClassification, eventCoverSource } from "./covers";
 import type { ExternalEvent, EventSection } from "./types";
 import { PressScale } from "../../components/PressScale";
+import {
+  planCardActionStyles,
+  JOINED_PLAN_COLORS,
+} from "../../components/planCardActions";
 export function eventDateLabel(
   event: Pick<ExternalEvent, "start_date">,
   lang: string,
@@ -41,7 +45,7 @@ export function EventArtwork({
       contentFit="cover"
       cachePolicy="memory-disk"
       recyclingKey={`${event.provider_id}:${event.source_id}:${category}:${subcategory}`}
-      transition={120}
+      transition={0}
       accessibilityLabel={`${t("events.illustrativeCover")} · ${t(`cat.sub.${subcategory}`)}`}
     />
   );
@@ -54,6 +58,7 @@ export const EventCard = memo(function EventCard({
   onOpen,
   onJoin,
   preview = false,
+  horizontalInset = 16,
 }: {
   event: ExternalEvent;
   variant: "compact" | "editorial";
@@ -62,9 +67,11 @@ export const EventCard = memo(function EventCard({
   onOpen: () => void;
   onJoin: () => void;
   preview?: boolean;
+  horizontalInset?: number;
 }) {
   const { t, lang } = useT();
-  const { colors } = useAppTheme();
+  const { colors, scheme } = useAppTheme();
+  const actionStyles = planCardActionStyles(scheme === "dark");
   const compact = variant === "compact";
   const date = eventDateLabel(event, lang);
   const classification = eventClassification(event);
@@ -72,7 +79,13 @@ export const EventCard = memo(function EventCard({
     <View
       style={[
         s.card,
-        { backgroundColor: colors.surface, borderColor: colors.border },
+        { marginHorizontal: horizontalInset },
+        {
+          backgroundColor: colors.surface,
+          borderColor:
+            scheme === "dark" ? colors.borderStrong : "rgba(37,99,235,0.22)",
+          shadowColor: scheme === "dark" ? "#000" : "#1E3A8A",
+        },
         compact && s.compact,
       ]}
     >
@@ -85,12 +98,25 @@ export const EventCard = memo(function EventCard({
         <View>
           <EventArtwork event={event} compact={compact} />
         </View>
-        <View style={[s.body, compact && s.compactBody]}>
-          <Text style={[s.category, { color: colors.primary }]}>
-            {t(`cat.main.${classification.category}`)} ·{" "}
-            {t(`cat.sub.${classification.subcategory}`)} ·{" "}
-            {compact ? "MADRID" : t("events.source")}
-          </Text>
+        <View
+          style={[
+            s.body,
+            { backgroundColor: colors.surface },
+            compact && s.compactBody,
+          ]}
+        >
+          <View style={s.categoryRow}>
+            <View
+              style={[s.categoryTag, { backgroundColor: colors.primarySoft }]}
+            >
+              <Text style={[s.category, { color: colors.primary }]}>
+                {t(`cat.main.${classification.category}`)}
+              </Text>
+            </View>
+            <Text style={[s.subcategory, { color: colors.textMuted }]}>
+              {t(`cat.sub.${classification.subcategory}`)}
+            </Text>
+          </View>
           <Text
             numberOfLines={compact ? 2 : 3}
             style={[s.title, { color: colors.text }, compact && s.compactTitle]}
@@ -126,36 +152,51 @@ export const EventCard = memo(function EventCard({
         </View>
       </Pressable>
       <View style={[s.actions, compact && s.compactActions]}>
-        {!compact && (
-          <Text style={[s.socialHint, { color: colors.textMuted }]}>
-            {t("events.subtitle")}
+        <Pressable
+          onPress={onOpen}
+          accessibilityRole="button"
+          accessibilityLabel={t("events.open")}
+          style={s.sourceRow}
+        >
+          <View style={[s.sourceIcon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons
+              name="calendar-outline"
+              size={17}
+              color={colors.primary}
+            />
+          </View>
+          <Text
+            style={[s.sourceText, { color: colors.textMuted }]}
+            numberOfLines={2}
+          >
+            {t("events.source")}
           </Text>
-        )}
+        </Pressable>
         <PressScale
           onPress={onJoin}
           disabled={busy || preview}
           accessibilityRole="button"
           accessibilityLabel={joined ? t("events.joined") : t("events.join")}
           style={[
+            joined ? actionStyles.joined : actionStyles.button,
             s.join,
-            { backgroundColor: joined ? colors.primarySoft : colors.primary },
-            preview && s.disabled,
+            busy && s.disabled,
           ]}
         >
           {busy ? (
-            <ActivityIndicator size="small" color={colors.onPrimary} />
+            <ActivityIndicator
+              size="small"
+              color={joined ? JOINED_PLAN_COLORS.text : "#FFF"}
+            />
           ) : (
             <Ionicons
-              name={joined ? "checkmark" : "add"}
-              size={17}
-              color={joined ? colors.primary : colors.onPrimary}
+              name={joined ? "checkmark-circle" : "add"}
+              size={18}
+              color={joined ? JOINED_PLAN_COLORS.text : "#FFF"}
             />
           )}
           <Text
-            style={[
-              s.joinText,
-              { color: joined ? colors.primary : colors.onPrimary },
-            ]}
+            style={[joined ? actionStyles.joinedLabel : actionStyles.label]}
           >
             {joined ? t("events.joined") : t("events.join")}
           </Text>
@@ -240,29 +281,47 @@ function safeStyles() {
 }
 const s = StyleSheet.create({
   card: {
-    marginHorizontal: 16,
-    marginBottom: 18,
+    marginBottom: 22,
     borderRadius: 24,
     overflow: "hidden",
-    borderWidth: 1,
+    borderWidth: 2,
+    elevation: 5,
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
   },
-  compact: { borderRadius: 21 },
+  compact: { borderRadius: 24 },
   compactOpen: { flexDirection: "row", padding: 12, gap: 14 },
   art: { overflow: "hidden", justifyContent: "center", alignItems: "center" },
   artCompact: { width: 98, height: 112, borderRadius: 15 },
-  artLarge: { height: 212, width: "100%" },
-  body: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 8 },
-  compactBody: { padding: 0, paddingTop: 4, flex: 1 },
+  artLarge: { height: 222, width: "100%" },
+  body: {
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 8,
+    marginTop: -16,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+  },
+  compactBody: { padding: 0, paddingTop: 2, flex: 1, marginTop: 0 },
+  categoryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: 10,
+  },
+  categoryTag: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 10 },
   category: {
     fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 0.8,
+    fontWeight: "900",
+    letterSpacing: 0.4,
     textTransform: "uppercase",
-    marginBottom: 7,
   },
+  subcategory: { fontSize: 11, fontWeight: "700" },
   title: {
-    fontSize: 23,
-    lineHeight: 29,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: "800",
     letterSpacing: -0.5,
     marginBottom: 12,
@@ -274,27 +333,39 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   meta: { flexDirection: "row", gap: 5, alignItems: "center" },
-  metaText: { fontSize: 12, flex: 1 },
+  metaText: { fontSize: 14, fontWeight: "600", flex: 1 },
   dateMeta: { marginBottom: 8 },
   actions: {
     flexDirection: "row",
     gap: 12,
     alignItems: "center",
-    padding: 18,
-    paddingTop: 6,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 16,
   },
-  compactActions: { justifyContent: "flex-end", padding: 12, paddingTop: 0 },
-  socialHint: { fontSize: 12, lineHeight: 17, flex: 1 },
-  join: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 30,
+  compactActions: { paddingHorizontal: 12, paddingTop: 0, paddingBottom: 14 },
+  sourceRow: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: "row",
-    gap: 5,
     alignItems: "center",
-    minHeight: 42,
+    gap: 8,
   },
-  joinText: { fontSize: 13, fontWeight: "700" },
+  sourceIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sourceText: {
+    fontSize: 12,
+    lineHeight: 17,
+    flex: 1,
+    minWidth: 0,
+    fontWeight: "600",
+  },
+  join: { flexShrink: 0, minHeight: 44 },
   disabled: { opacity: 0.5 },
   tabs: {
     flexDirection: "row",

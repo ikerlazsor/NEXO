@@ -1580,7 +1580,7 @@ export default function HomeScreen() {
     const renderPlanItem = useCallback(
         ({ item, index }: { item: FeedRow; index: number }) => {
             if (item.kind === 'event') {
-                return <EventCard event={item.event} variant={eventSection==='agenda'?'editorial':'compact'} joined={external.joined.has(item.event.id)} busy={external.busy===item.event.id} onOpen={()=>openExternal(item.event.id)} onJoin={()=>joinExternal(item.event.id)}/>;
+                return <EventCard horizontalInset={0} event={item.event} variant={eventSection==='agenda'?'editorial':'compact'} joined={external.joined.has(item.event.id)} busy={external.busy===item.event.id} onOpen={()=>openExternal(item.event.id)} onJoin={()=>joinExternal(item.event.id)}/>;
             }
             if (item.kind === 'header') {
                 return <Text style={styles.feedSectionTitle}>{t(item.titleKey)}</Text>;

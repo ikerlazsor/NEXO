@@ -1,12 +1,14 @@
-Prepara la agenda social de Madrid y corrige fallos de privacidad, sincronización y navegación. Mantiene las tres secciones del feed, elimina las estrellas de Para ti y sitúa la fecha de los eventos bajo el título. El perfil abre desde abajo sin esperar a red y descarta respuestas antiguas tras editar o cambiar de cuenta.
+Prepara la agenda social de Madrid con las secciones Para ti, Planes y Agenda. Los eventos tienen ficha, participantes y chat propios, botones compartidos con las tarjetas de planes y portadas ilustrativas de las 6 categorías y 30 subcategorías existentes. La fecha queda bajo el título; no hay frase introductoria ni estrellas en Para ti. El perfil abre desde abajo con sus datos en memoria y descarta respuestas anteriores a una edición o cambio de cuenta.
 
-Reutiliza las correcciones existentes de #43. Corrige pérdidas de acciones offline y duplicados de chat con UUID, aísla participantes/mensajes por cuenta/evento y endurece el importador. Añade una migración correctiva de permisos, redacción de datos de perfiles y acceso al chat cuando se deshabilita el proveedor. Se adaptan invitaciones, sugerencias y valoraciones a las lecturas públicas revisadas.
+Reutiliza las correcciones Android/dependencias de #43, endurece la importación y corrige pérdidas de acciones offline, duplicados de chat y cruces de estado entre cuentas. Las migraciones ajustan permisos, redacción de perfiles, clasificación y acceso a eventos cuando se desactiva su proveedor. La fuente oficial y su licencia CC BY 4.0 ya se han consultado: de 1.443 registros, 1.385 futuros/en curso se importaron correctamente en una transacción local revertida.
 
-Validación: TypeScript pasa; ESLint 0 errores y 72 advertencias previas; 67 casos unitarios; 87 pruebas SQL específicas; smoke HTTP local con cuentas ficticias; Chromium para diseño; bundles Hermes Android/iOS y compatibilidad Expo local. Auditoría: 0 críticos y 18 altos restantes. La suite SQL completa conserva 2 diferencias de diseño documentadas (enlaces privados por UUID y mantenimiento global desde cliente).
+Validación:
 
-No se ha activado el proveedor ni escrito en producción ni publicado versiones/OTA. El JSON y la licencia municipales actuales siguen pendientes de acceso de red; el borrador del entorno contiene los dominios necesarios. Faltan decisiones de privacidad/mantenimiento, validación staging con catálogo real y pruebas nativas.
+- TypeScript, suite unitaria (12 archivos) y 92 comprobaciones SQL específicas aprobados; smoke HTTP local con cuentas sintéticas.
+- ESLint: 0 errores, 72 advertencias anteriores. Auditoría de dependencias: 0 críticos, 18 altos pendientes.
+- Chromium: tarjetas editorial/compacta, 30 subcategorías, ancho móvil y ausencia de errores JavaScript. Bundles Hermes Android/iOS exportados; compatibilidad Expo comprobada.
+- La suite SQL completa conserva dos diferencias de diseño documentadas: enlaces privados por UUID y mantenimiento global desde cliente. No se ha verificado comportamiento nativo en dispositivos.
 
-Informes: docs/app-audit-2026-11-06.md, docs/database-audit-2026-11-06.md, docs/madrid-events-launch.md. Capturas: docs/screenshots/.
+El proveedor y el workflow diario siguen desactivados. No se modifica `main`, no se hace merge, no se escribe en producción y no se publica OTA ni versión en tiendas. Faltan revisión de calendarios en staging, decisiones de privacidad/mantenimiento, despliegue de backend y pruebas nativas antes de una publicación autorizada.
 
-
-Actualización de portadas: clasificador compartido de categorías/subcategorías, reutilización estable del catálogo local de fotos de Nexo en tarjetas y ficha, y migración de subcategorías con constraint. Cuatro regresiones unitarias nuevas y cinco SQL; pasan las 92 comprobaciones SQL específicas, TypeScript, lint sin errores y bundles Android/iOS. Capturas actualizadas. Fuente/licencia municipal y activación pública siguen pendientes de acceso y revisión.
+Informes: [activación pública](docs/madrid-events-launch.md), [fuente oficial](docs/madrid-source-validation.md), [diseño y portadas](docs/event-card-design.md), [auditoría de app](docs/app-audit-2026-11-06.md) y [base de datos](docs/database-audit-2026-11-06.md). Capturas: `docs/screenshots/`.

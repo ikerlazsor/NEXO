@@ -2,15 +2,19 @@
 
 Los cambios de interfaz, participantes/chat, importación y seguridad están en la rama de revisión. **La agenda no se ha publicado al público y el proveedor sigue desactivado.** No se ha modificado Supabase de producción ni enviado una OTA/versiones a tiendas.
 
-## Lo que falta para activar eventos reales
+## Ya comprobado
 
-1. Revisar y guardar el borrador del entorno con acceso a `datos.madrid.es`, `www.madrid.es` y `api.github.com`, y publicar el entorno si la interfaz lo requiere para aplicar la red. Esto es configuración de desarrollo, no publicar Nexo. El borrador ya está guardado; el runtime sigue con la política anterior.
-2. Con esa red aplicada, ejecutar `npm run events:dry-run -- --report=/tmp/madrid-review.json`. El informe tendrá SHA-256, URL, bytes, campos ausentes, categorías y muestras. Revisar el JSON vigente y los términos de reutilización en la página del dataset, y las imágenes por separado. Hasta entonces el proveedor no se considera validado.
-3. Aplicar en una base local/staging las tres migraciones de eventos, seguridad y subcategorías; usar solo cuentas sintéticas. Revisar el informe municipal y marcar las verificaciones del proveedor únicamente en esa base después de comprobarlas. Probar cambios/cancelaciones, altas/bajas, bloqueos, chat y denuncias con el catálogo real.
-4. Verificar los resultados de la auditoría y resolver las dos decisiones pendientes de privacidad/mantenimiento descritas en `app-audit-2026-11-06.md`, además de las pruebas Android/iOS. La operación de denuncias y alertas de fallos de importación debe tener responsables antes del acceso público.
-5. Preparar la migración y el trabajo programado de producción como una entrega revisable, con destino y credenciales en un entorno protegido. El script actual conserva la protección contra escrituras al proyecto de producción: no hay un atajo que omita la revisión de fuente/licencia.
-6. Revisar la programación diaria. GitHub solo programa cron desde la rama predeterminada; una PR a develop no activa cron por sí misma. Elegir explícitamente el lugar de ejecución aprobado sin modificar main automáticamente. El workflow preparado sigue condicionado y desactivado.
-7. Generar y probar una compilación nativa de desarrollo/staging. La alineación de view-shot cambia el módulo nativo: revisar runtime OTA y compatibilidad de los binarios existentes. Solo después preparar la publicación real para revisión final.
+El entorno publicado ya permite acceder al Ayuntamiento y a GitHub; no hace falta volver a publicarlo para estos accesos. Se ha descargado el JSON oficial, observado la licencia CC BY 4.0 y probado una importación de 1.385 actividades en Supabase local dentro de una transacción revertida. Las migraciones de eventos, seguridad y subcategorías están aplicadas en esa base local. Ver [comprobación de la fuente](madrid-source-validation.md).
+
+TypeScript, la suite unitaria y los bundles JavaScript/Hermes de Android/iOS pasan. ESLint no tiene errores y conserva 72 advertencias. Pasaron 92 comprobaciones SQL específicas y el smoke HTTP con cuentas sintéticas. Estos resultados no equivalen a probar la app en dispositivos.
+
+## Pasos pendientes para el público
+
+1. Probar en una app de staging una muestra del catálogo real: rangos de varios días, programas permanentes, días excluidos, horarios, cambios/cancelaciones y lugares ausentes. Comprobar también altas/bajas, bloqueos, chat y denuncias. La importación local valida el formato, no cada calendario.
+2. Resolver las dos decisiones de privacidad/mantenimiento descritas en `app-audit-2026-11-06.md`: acceso por enlace UUID a planes privados y mantenimiento global invocado desde el cliente. Son las dos expectativas que siguen fallando en la suite SQL completa. Asignar responsables para denuncias y alertas del importador.
+3. Preparar el despliegue revisable de las migraciones y la primera sincronización en el Supabase de producción autorizado. El importador conserva la protección contra escrituras al proyecto de producción del piloto; no debe omitirse para adelantar la activación.
+4. Configurar y revisar la ejecución diaria en un entorno protegido. GitHub solo programa cron desde la rama predeterminada; una PR a `develop` no activa cron por sí misma. Elegir el lugar de ejecución sin modificar `main` automáticamente. El workflow preparado sigue condicionado y desactivado.
+5. Generar y probar una compilación nativa de staging en Android/iOS. La alineación de `react-native-view-shot` cambia el módulo nativo: revisar el runtime OTA y la compatibilidad de los binarios existentes. Después preparar la versión pública para su revisión y publicación autorizada.
 
 No hacen falta APIs de eventos de pago. Las ejecuciones futuras deben permanecer dentro de las cuotas gratuitas ya disponibles; no se ha contratado ni activado ningún servicio.
 
@@ -21,4 +25,4 @@ Las capturas actualizadas están en `docs/screenshots/agenda-editorial.png` y `a
 
 ## Portadas y clasificación ya implementadas
 
-Los eventos reutilizan las fotos de categorías/subcategorías de Nexo: hiking → AIRE_LIBRE/senderismo, concierto → SHOWTIME/concierto, etc. La migración de subcategorías debe desplegarse antes de la siguiente importación revisada. Ver `event-covers.md`. Las portadas son ilustrativas; no son fotografías verificadas del evento municipal.
+Los eventos reutilizan todas las fotos del catálogo de las seis categorías y 30 subcategorías de Nexo: hiking → AIRE_LIBRE/senderismo, concierto → SHOWTIME/concierto, etc. Cada evento recibe una portada de su clasificación; no se mezclan temáticas para forzar variedad. La migración de subcategorías debe desplegarse antes de la siguiente importación revisada. Ver `event-covers.md`. Las portadas son ilustrativas; no son fotografías verificadas del evento municipal.

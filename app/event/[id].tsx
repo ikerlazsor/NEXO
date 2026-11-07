@@ -368,6 +368,61 @@ export default function EventDetail() {
               {t("events.source")} · {t("events.updated")}{" "}
               {new Date(event.last_seen_at).toLocaleDateString(lang)}
             </Text>
+            <View
+              style={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                gap: 16,
+                marginTop: 8,
+              }}
+            >
+              <Pressable
+                accessibilityRole="link"
+                onPress={() => {
+                  void Linking.openURL(
+                    "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100",
+                  ).catch(() => Alert.alert(t("events.error")));
+                }}
+              >
+                <Text
+                  style={{
+                    color: colors.primary,
+                    fontSize: 12,
+                    fontWeight: "600",
+                  }}
+                >
+                  {t("events.license")}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="link"
+                onPress={() => {
+                  void Linking.openURL(
+                    "https://creativecommons.org/licenses/by/4.0/",
+                  ).catch(() => Alert.alert(t("events.error")));
+                }}
+              >
+                <Text
+                  style={{
+                    color: colors.primary,
+                    fontSize: 12,
+                    fontWeight: "600",
+                  }}
+                >
+                  CC BY 4.0
+                </Text>
+              </Pressable>
+            </View>
+            <Text
+              style={{
+                color: colors.textMuted,
+                fontSize: 11,
+                lineHeight: 16,
+                marginTop: 8,
+              }}
+            >
+              {t("events.dataAdapted")}
+            </Text>
           </>
         )}
       </ScrollView>

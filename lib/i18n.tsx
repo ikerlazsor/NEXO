@@ -28,6 +28,10 @@ export const LANG_OPTIONS: { code: Lang; label: string; flag: string; name: stri
 type Dict = Record<string, string>;
 
 const es: Dict = {
+    "events.previewExamples": "Ver ejemplos",
+    "events.previewAllCovers": "Ver todas las subcategorías ({count})",
+    "events.dataAdapted": "Datos normalizados por Nexo. Portadas ilustrativas del catálogo de Nexo.",
+    "events.license": "Fuente y licencia",
     "events.illustrativeCover": "Portada ilustrativa",
     "events.forYou": "Para ti",
     "events.plans": "Planes",
@@ -64,7 +68,7 @@ const es: Dict = {
     "events.open": "Ver actividad",
     "events.from": "Desde",
     "events.until": "Hasta",
-    "events.updated": "Actualizado",
+    "events.updated": "Fuente consultada",
     "events.priceUnknown": "Consulta precio y disponibilidad en la fuente",
     "events.peopleEmpty": "Sé la primera persona en sumarte.",
     "events.reportReason": "Contenido inapropiado",
@@ -2055,6 +2059,10 @@ const es: Dict = {
 };
 
 const en: Dict = {
+    "events.previewExamples": "Show examples",
+    "events.previewAllCovers": "Show all subcategories ({count})",
+    "events.dataAdapted": "Data normalized by Nexo. Illustrative covers from the Nexo catalog.",
+    "events.license": "Source and license",
     "events.illustrativeCover": "Illustrative cover",
     "events.forYou": "For you",
     "events.plans": "Plans",
@@ -2091,7 +2099,7 @@ const en: Dict = {
     "events.open": "View activity",
     "events.from": "From",
     "events.until": "Until",
-    "events.updated": "Updated",
+    "events.updated": "Source checked",
     "events.priceUnknown": "Check price and availability with the source",
     "events.peopleEmpty": "Be the first to join.",
     "events.reportReason": "Inappropriate content",

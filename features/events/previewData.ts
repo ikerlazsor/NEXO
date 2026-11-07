@@ -1,4 +1,5 @@
 import type { ExternalEvent } from "./types";
+import { MAIN_CATEGORY_IDS, SUBCATEGORIES } from "../../lib/categories";
 // Synthetic design fixtures, never loaded by the live feed or the importer.
 export function previewEvents(): ExternalEvent[] {
   const date = (days: number) =>
@@ -46,4 +47,20 @@ export function previewEvents(): ExternalEvent[] {
     status: "active",
     last_seen_at: new Date().toISOString(),
   }));
+}
+
+/** Development-only, synthetic fixture for every existing catalog pair. */
+export function previewCoverCatalog(): ExternalEvent[] {
+  const template = previewEvents()[0];
+  return MAIN_CATEGORY_IDS.flatMap((category) =>
+    SUBCATEGORIES[category].map((subcategory) => ({
+      ...template,
+      id: `catalog-${category}-${subcategory}`,
+      source_id: `catalog-${category}-${subcategory}`,
+      title: "",
+      venue: "Madrid",
+      category,
+      subcategory,
+    })),
+  );
 }

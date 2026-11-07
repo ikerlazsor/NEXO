@@ -135,3 +135,34 @@ test("every classified event uses one of its existing local subcategory covers",
     assert.notEqual(cover, taxonomy.PLACEHOLDER_COVER_URI);
   }
 });
+
+test("all six categories and all thirty subcategories can use every bundled photo", () => {
+  let pairs = 0;
+  assert.equal(taxonomy.MAIN_CATEGORY_IDS.length, 6);
+  for (const category of taxonomy.MAIN_CATEGORY_IDS) {
+    for (const subcategory of taxonomy.SUBCATEGORIES[category]) {
+      pairs++;
+      const catalog = taxonomy.getCoverImages(category, subcategory);
+      const selected = new Set();
+      for (let index = 0; index < 128; index++) {
+        const source = eventCoverSource({
+          provider_id: "madrid",
+          source_id: `catalog-${index}`,
+          title: "Actividad de prueba",
+          description: null,
+          category,
+          subcategory,
+        });
+        assert.ok(catalog.includes(source), `${category}/${subcategory}`);
+        assert.notEqual(source, taxonomy.PLACEHOLDER_COVER_URI);
+        selected.add(source);
+      }
+      assert.equal(
+        selected.size,
+        new Set(catalog).size,
+        `${category}/${subcategory}: unused cover`,
+      );
+    }
+  }
+  assert.equal(pairs, 30);
+});

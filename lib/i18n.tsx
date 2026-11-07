@@ -28,6 +28,7 @@ export const LANG_OPTIONS: { code: Lang; label: string; flag: string; name: stri
 type Dict = Record<string, string>;
 
 const es: Dict = {
+    "events.illustrativeCover": "Portada ilustrativa",
     "events.forYou": "Para ti",
     "events.plans": "Planes",
     "events.agenda": "Agenda",
@@ -2054,6 +2055,7 @@ const es: Dict = {
 };
 
 const en: Dict = {
+    "events.illustrativeCover": "Illustrative cover",
     "events.forYou": "For you",
     "events.plans": "Plans",
     "events.agenda": "Agenda",

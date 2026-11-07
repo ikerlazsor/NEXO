@@ -7,21 +7,25 @@ export function previewEvents(): ExternalEvent[] {
     {
       title: "Una tarde entre arte y nuevas miradas",
       category: "DESCUBRIR",
+      subcategory: "museo",
       venue: "Centro cultural · Madrid",
     },
     {
       title: "Música al atardecer, buena compañía",
       category: "SHOWTIME",
+      subcategory: "concierto",
       venue: "Auditorio municipal · Madrid",
     },
     {
       title: "Un paseo para descubrir otro Madrid",
       category: "AIRE_LIBRE",
+      subcategory: "otro",
       venue: "Parque de Madrid",
     },
     {
       title: "Muévete a tu ritmo: encuentro deportivo",
       category: "DEPORTES",
+      subcategory: "otro",
       venue: "Instalación municipal · Madrid",
     },
   ].map((e, i) => ({

@@ -8,6 +8,8 @@ export type ExternalEvent = {
   title: string;
   description: string | null;
   category: MainCategoryId;
+  /** Optional while older servers are rolled forward to the subcategory migration. */
+  subcategory?: string | null;
   start_date: string;
   end_date: string;
   starts_at: string | null;

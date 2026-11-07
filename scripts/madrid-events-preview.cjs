@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 const fs = require("node:fs");
+const {
+  classifyExternalEvent,
+} = require("../lib/externalEventClassification.cjs");
 const DATASET_URL =
   "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100";
 function text(value, max = 300) {
@@ -79,20 +82,8 @@ function madridCalendarDate(value) {
       }).format(date)
     : null;
 }
-function classifyMadridEvent(title, type) {
-  const value = `${type || ""} ${title}`
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-  if (/deport|running|yoga|futbol|baloncesto|padel/.test(value))
-    return "DEPORTES";
-  if (/senderismo|paseo|ruta|naturaleza|jardin/.test(value))
-    return "AIRE_LIBRE";
-  if (/gastronom|cocina|degustacion/.test(value)) return "FOODIES";
-  if (/cine|teatro|concierto|musica|danza|espectaculo/.test(value))
-    return "SHOWTIME";
-  if (/juegos|baile|fiesta/.test(value)) return "VIBES";
-  return "DESCUBRIR";
+function classifyMadridEvent(title, type, description) {
+  return classifyExternalEvent(title, type, description).category;
 }
 function normalizeMadridSnapshot(payload, now = new Date()) {
   const rows = readRows(payload);
@@ -183,9 +174,10 @@ function normalizeMadridSnapshot(payload, now = new Date()) {
       description:
         text(field(row, ["description", "DESCRIPTION", "descripcion"]), 4000) ||
         null,
-      category: classifyMadridEvent(
+      ...classifyExternalEvent(
         title,
         field(row, ["@type", "type", "categoria"]),
+        text(field(row, ["description", "DESCRIPTION", "descripcion"]), 4000),
       ),
       start_date: start,
       end_date: end,

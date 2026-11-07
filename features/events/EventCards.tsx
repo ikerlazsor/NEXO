@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
+import { Image } from "expo-image";
 import {
   Pressable,
   StyleSheet,
@@ -10,17 +10,9 @@ import {
 } from "react-native";
 import { useT } from "../../lib/i18n";
 import { useAppTheme } from "../../lib/appTheme";
-import { MAIN_CATEGORY_ICONS } from "../../lib/categories";
+import { eventClassification, eventCoverSource } from "./covers";
 import type { ExternalEvent, EventSection } from "./types";
 import { PressScale } from "../../components/PressScale";
-const PALETTES = {
-  SHOWTIME: ["#252C75", "#666BCA"],
-  DESCUBRIR: ["#1D5581", "#4F9BB4"],
-  AIRE_LIBRE: ["#1F6655", "#75A77B"],
-  DEPORTES: ["#254FA0", "#6399DA"],
-  FOODIES: ["#9E4C3D", "#DA9E79"],
-  VIBES: ["#68448D", "#B189BA"],
-} as const;
 export function eventDateLabel(
   event: Pick<ExternalEvent, "start_date">,
   lang: string,
@@ -32,7 +24,7 @@ export function eventDateLabel(
     timeZone: "Europe/Madrid",
   });
 }
-// Original category artwork: no unverified photographs or third-party imagery.
+// These are illustrative covers from the existing Nexo catalog, not photos of the event.
 export function EventArtwork({
   event,
   compact = false,
@@ -40,29 +32,18 @@ export function EventArtwork({
   event: ExternalEvent;
   compact?: boolean;
 }) {
-  const palette = PALETTES[event.category] ?? PALETTES.DESCUBRIR;
+  const { t } = useT();
+  const { category, subcategory } = eventClassification(event);
   return (
-    <LinearGradient
-      colors={[palette[0], palette[1]]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
+    <Image
+      source={eventCoverSource(event)}
       style={[s.art, compact ? s.artCompact : s.artLarge]}
-    >
-      <View style={[s.orbit, compact && s.smallOrbit]} />
-      <View style={s.orbitInner} />
-      <View style={s.artIcon}>
-        <Ionicons
-          name={
-            MAIN_CATEGORY_ICONS[
-              event.category
-            ] as keyof typeof Ionicons.glyphMap
-          }
-          size={compact ? 34 : 68}
-          color="#FFFFFF"
-        />
-      </View>
-      {!compact && <Text style={s.artWord}>MADRID</Text>}
-    </LinearGradient>
+      contentFit="cover"
+      cachePolicy="memory-disk"
+      recyclingKey={`${event.provider_id}:${event.source_id}:${category}:${subcategory}`}
+      transition={120}
+      accessibilityLabel={`${t("events.illustrativeCover")} · ${t(`cat.sub.${subcategory}`)}`}
+    />
   );
 }
 export const EventCard = memo(function EventCard({
@@ -86,6 +67,7 @@ export const EventCard = memo(function EventCard({
   const { colors } = useAppTheme();
   const compact = variant === "compact";
   const date = eventDateLabel(event, lang);
+  const classification = eventClassification(event);
   return (
     <View
       style={[
@@ -105,7 +87,8 @@ export const EventCard = memo(function EventCard({
         </View>
         <View style={[s.body, compact && s.compactBody]}>
           <Text style={[s.category, { color: colors.primary }]}>
-            {t(`cat.main.${event.category}`)} ·{" "}
+            {t(`cat.main.${classification.category}`)} ·{" "}
+            {t(`cat.sub.${classification.subcategory}`)} ·{" "}
             {compact ? "MADRID" : t("events.source")}
           </Text>
           <Text
@@ -268,43 +251,6 @@ const s = StyleSheet.create({
   art: { overflow: "hidden", justifyContent: "center", alignItems: "center" },
   artCompact: { width: 98, height: 112, borderRadius: 15 },
   artLarge: { height: 212, width: "100%" },
-  orbit: {
-    position: "absolute",
-    width: 270,
-    height: 270,
-    borderRadius: 150,
-    borderWidth: 38,
-    borderColor: "rgba(255,255,255,0.10)",
-    right: -45,
-    top: -90,
-    transform: [{ rotate: "-30deg" }],
-  },
-  smallOrbit: {
-    width: 150,
-    height: 150,
-    borderWidth: 22,
-    right: -65,
-    top: -30,
-  },
-  orbitInner: {
-    position: "absolute",
-    left: -30,
-    bottom: -65,
-    width: 180,
-    height: 180,
-    borderRadius: 100,
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  artIcon: { transform: [{ rotate: "-9deg" }] },
-  artWord: {
-    position: "absolute",
-    bottom: 20,
-    right: 20,
-    color: "rgba(255,255,255,0.65)",
-    fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 4,
-  },
   body: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 8 },
   compactBody: { padding: 0, paddingTop: 4, flex: 1 },
   category: {

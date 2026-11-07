@@ -3,7 +3,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomBytes } = require("node:crypto");
-const { spawnSync } = require("node:child_process");
 const { buildSyncFunction } = require("./build-sync-function.cjs");
 const { fetchMadridDocument } = require("../madrid-events-fetch.cjs");
 const { normalizeMadridSnapshot } = require("../madrid-events-preview.cjs");
@@ -50,7 +49,7 @@ function migrationQuery(name, sql) {
   const version = name.split("_")[0];
   return sql.trim().replace(
     /commit;$/i,
-    `insert into supabase_migrations.schema_migrations(version,name,statements)
+    () => `insert into supabase_migrations.schema_migrations(version,name,statements)
     values (${literal(version)},${literal(name.slice(15, -4))},array[${literal(sql)}]);\ncommit;`,
   );
 }
@@ -59,7 +58,6 @@ async function deployProduction({
   args = process.argv.slice(2),
   env = process.env,
   fetchImpl = fetch,
-  exec = spawnSync,
   log = console.log,
 } = {}) {
   const apply = args.includes("--apply");
@@ -80,15 +78,37 @@ async function deployProduction({
         signal: AbortSignal.timeout(120000),
         headers: {
           authorization: `Bearer ${env.SUPABASE_ACCESS_TOKEN}`,
-          "content-type": "application/json",
+          ...(body instanceof FormData
+            ? {}
+            : { "content-type": "application/json" }),
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(body === undefined
+          ? {}
+          : { body: body instanceof FormData ? body : JSON.stringify(body) }),
       },
     );
     // Error responses can include SQL/credentials: deliberately never print them.
-    if (!response.ok)
-      throw new Error(`Supabase ${route} failed: HTTP ${response.status}`);
-    return response.status === 204 ? null : response.json();
+    if (!response.ok) {
+      // This fixed scheduler migration contains no secret values. Its error
+      // can identify extension/cron restrictions without logging activation SQL.
+      let detail = "";
+      if (
+        body?.query?.includes(
+          "create or replace function public.request_madrid_event_sync()",
+        )
+      ) {
+        const failure = await response.json().catch(() => null);
+        detail =
+          typeof failure?.message === "string"
+            ? `: ${failure.message.split("\n")[0]}`
+            : "";
+      }
+      throw new Error(
+        `Supabase ${route} failed: HTTP ${response.status}${detail}`,
+      );
+    }
+    const text = await response.text();
+    return text ? JSON.parse(text) : null;
   };
   const query = (sql) => api("/database/query", { query: sql });
   const history = await query(
@@ -143,27 +163,51 @@ async function deployProduction({
   );
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, buildSyncFunction());
-  const deployment = exec(
-    "npx",
-    [
-      "--yes",
-      "supabase@2.113.0",
-      "functions",
-      "deploy",
-      "sync-madrid-events",
-      "--project-ref",
-      PROJECT,
-      "--no-verify-jwt",
-      "--use-api",
-    ],
-    { cwd: root, env, encoding: "utf8", timeout: 180000 },
+  const form = new FormData();
+  form.append(
+    "metadata",
+    JSON.stringify({
+      name: "sync-madrid-events",
+      entrypoint_path: "index.ts",
+      verify_jwt: true,
+    }),
   );
-  if (deployment.status !== 0)
+  form.append(
+    "file",
+    new Blob([fs.readFileSync(destination)], {
+      type: "application/typescript",
+    }),
+    "index.ts",
+  );
+  const deployment = await api(
+    "/functions/deploy?slug=sync-madrid-events",
+    form,
+  );
+  if (deployment?.status !== "ACTIVE" || deployment.verify_jwt !== true)
     throw new Error(
       "Edge function deployment failed; provider was not enabled",
     );
   // Reuse a scheduler secret on redeploy so a later failure cannot break the
   // already configured daily job by rotating just one side of its credentials.
+  const keys = await api("/api-keys");
+  const anonKey = keys.find((key) => {
+    try {
+      const payload = JSON.parse(
+        Buffer.from(key.api_key.split(".")[1], "base64url").toString(),
+      );
+      return (
+        payload.role === "anon" &&
+        payload.ref === PROJECT &&
+        payload.exp * 1000 > Date.now()
+      );
+    } catch {
+      return false;
+    }
+  })?.api_key;
+  if (!anonKey)
+    throw new Error(
+      "A valid public anon JWT is required for gateway verification",
+    );
   const previous = await query(
     "select decrypted_secret from vault.decrypted_secrets where name='nexo_madrid_sync_secret' limit 1",
   );
@@ -193,6 +237,7 @@ async function deployProduction({
   await query(`begin;
     ${vault("nexo_madrid_sync_url", functionUrl)}
     ${vault("nexo_madrid_sync_secret", secret)}
+    ${vault("nexo_madrid_anon_key", anonKey)}
     update public.event_providers set enabled=true,
       license_url='https://creativecommons.org/licenses/by/4.0/',
       license_verified_at=now(), format_verified_at=now() where id='madrid';
@@ -214,7 +259,11 @@ async function deployProduction({
   const smoke = await fetchImpl(functionUrl, {
     method: "POST",
     redirect: "error",
-    headers: { "x-nexo-madrid-secret": secret },
+    headers: {
+      "x-nexo-madrid-secret": secret,
+      authorization: `Bearer ${anonKey}`,
+      apikey: anonKey,
+    },
     signal: AbortSignal.timeout(90000),
   });
   const result = smoke.ok ? await smoke.json() : null;

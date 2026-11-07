@@ -195,6 +195,14 @@ test("migration history is recorded inside the migration transaction and incompl
     () => migrationQuery("x.sql", "select 1;"),
     /outer transaction/,
   );
+  const dollarSql =
+    "begin;\ncreate function sample() returns text language sql as $$ select 'eyJ%$'; $$;\ncommit;";
+  assert.ok(
+    migrationQuery("20261107160000_example.sql", dollarSql).includes(
+      "array['" + dollarSql.replace(/'/g, "''") + "']",
+    ),
+    "dollar quotes and regex anchors must survive history serialization exactly",
+  );
   await assert.rejects(
     deployProduction({
       args: [`--project-ref=${PROJECT}`, "--apply"],
@@ -218,17 +226,29 @@ test("production apply deploys only the reviewed feature migrations before atomi
     args: [`--project-ref=${PROJECT}`, "--apply"],
     env: { SUPABASE_ACCESS_TOKEN: "synthetic" },
     log: (value) => output.push(value),
-    exec: () => {
-      functionDeployed = true;
-      return { status: 0 };
-    },
     fetchImpl: async (url, options) => {
       if (url === DATA_URL) return Response.json(source);
+      if (url.includes("/functions/deploy?")) {
+        assert.ok(options.body instanceof FormData);
+        assert.equal(JSON.parse(options.body.get("metadata")).verify_jwt, true);
+        assert.match(
+          await options.body.get("file").text(),
+          /createMadridSyncHandler/,
+        );
+        functionDeployed = true;
+        return Response.json({ status: "ACTIVE", verify_jwt: true });
+      }
       if (url.endsWith("/secrets")) {
         assert.ok(functionDeployed);
         secretsSet = true;
-        return new Response(null, { status: 204 });
+        return new Response(null, { status: 201 });
       }
+      if (url.endsWith("/api-keys"))
+        return Response.json([
+          {
+            api_key: `eyJ.${Buffer.from(JSON.stringify({ role: "anon", ref: PROJECT, exp: 4102444800 })).toString("base64url")}.synthetic`,
+          },
+        ]);
       if (url.includes("/functions/v1/")) {
         assert.ok(secretsSet);
         return Response.json({ ok: true, imported: 1, raw: 1 });
@@ -276,9 +296,10 @@ test("a failed Edge deployment cannot activate or migrate the database", async (
       args: [`--project-ref=${PROJECT}`, "--apply"],
       env: { SUPABASE_ACCESS_TOKEN: "synthetic" },
       log: () => {},
-      exec: () => ({ status: 1 }),
       fetchImpl: async (url, options) => {
         if (url === DATA_URL) return Response.json(source);
+        if (url.includes("/functions/deploy?"))
+          return Response.json({ status: "ACTIVE", verify_jwt: false });
         const query = JSON.parse(options.body).query;
         assert.match(
           query,

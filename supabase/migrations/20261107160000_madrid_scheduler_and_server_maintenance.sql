@@ -13,6 +13,7 @@ as $$
 declare
   v_url text;
   v_secret text;
+  v_anon_key text;
 begin
   if not exists(select 1 from public.event_providers where id = 'madrid'
     and enabled and license_verified_at is not null and format_verified_at is not null) then
@@ -22,13 +23,17 @@ begin
     where name = 'nexo_madrid_sync_url' limit 1;
   select decrypted_secret into v_secret from vault.decrypted_secrets
     where name = 'nexo_madrid_sync_secret' limit 1;
+  select decrypted_secret into v_anon_key from vault.decrypted_secrets
+    where name = 'nexo_madrid_anon_key' limit 1;
   if v_url is null or v_url !~ '^https://[a-z0-9]+\.supabase\.co/functions/v1/sync-madrid-events$'
-    or nullif(v_secret, '') is null then
+    or nullif(v_secret, '') is null or v_anon_key not like 'eyJ%' or v_anon_key is null then
     raise exception 'Madrid scheduler configuration is missing';
   end if;
   return net.http_post(
     url := v_url,
-    headers := jsonb_build_object('Content-Type', 'application/json', 'x-nexo-madrid-secret', v_secret),
+    headers := jsonb_build_object('Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || v_anon_key, 'apikey', v_anon_key,
+      'x-nexo-madrid-secret', v_secret),
     body := '{}'::jsonb,
     timeout_milliseconds := 60000
   );

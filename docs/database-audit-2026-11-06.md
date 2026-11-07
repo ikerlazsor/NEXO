@@ -1,6 +1,6 @@
 # Auditoría de seguridad SQL · 6 de noviembre de 2026
 
-La revisión se realizó sobre las migraciones del repositorio y el stack **Supabase local**, con cuentas y eventos sintéticos. No se leyó ni modificó la base remota/producción. La migración correctiva es `20261106190000_restore_reviewed_api_boundaries.sql`; debe revisarse antes de desplegarse.
+La revisión inicial se realizó sobre las migraciones del repositorio y el stack **Supabase local**, con cuentas y eventos sintéticos. La migración correctiva es `20261106190000_restore_reviewed_api_boundaries.sql`. Actualización del 7 de noviembre: después de la autorización del usuario se desplegó en producción, junto con eventos, subcategorías y programación; ver [estado actual](madrid-events-launch.md). Las 166 comprobaciones SQL locales actuales pasan. Los resultados históricos y las decisiones detectadas se detallan a continuación.
 
 ## Hallazgos corregidos
 

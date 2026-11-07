@@ -71,4 +71,4 @@ verify_jwt = false
 
 [functions.sync-madrid-events]
 # Independent scheduler secret is checked before any download or database call.
-verify_jwt = false
+verify_jwt = true

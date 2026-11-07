@@ -22,4 +22,4 @@ Se ejecutó la RPC de sincronización en **Supabase local** con este catálogo, 
 
 ## Qué queda para el público
 
-El acceso de red ya no es el bloqueo. Faltan la revisión de calendarios/exclusiones y calidad de una muestra de eventos en una app de pruebas, preparar las migraciones y la tarea diaria en el destino de producción autorizado, y probar/publicar una compilación compatible de Nexo. El workflow y el proveedor siguen desactivados; el importador conserva la protección contra escrituras al proyecto de producción del piloto. No se ha publicado OTA ni versiones en tiendas.
+Actualización posterior a la autorización del usuario: se conservaron los días excluidos, se activó el proveedor en producción y se comprobó la tarea diaria real con 1.385 actividades. El informe anterior corresponde a la primera comprobación local y su rollback. La versión móvil sigue pendiente de distribución: ver [estado actualizado](madrid-events-launch.md). No se ha publicado OTA ni una versión en tiendas.

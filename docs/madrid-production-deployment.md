@@ -2,6 +2,8 @@
 
 La autorización para activar Supabase y distribuir la app se recibió el 7 de noviembre de 2026. Se omiten las pruebas manuales en dispositivos a petición del usuario. El resultado real de cada despliegue debe registrarse por separado: preparar estos comandos no acredita que se hayan ejecutado.
 
+Estado comprobado: backend desplegado, proveedor habilitado, 1.385 actividades y tarea diaria probada con HTTP 200. La distribución móvil sigue pendiente porque el permiso de red para subir a `storage.googleapis.com` está guardado en el borrador pero no aplicado. Ver [estado actual](madrid-events-launch.md).
+
 ## Acceso
 
 - `SUPABASE_ACCESS_TOKEN`: token personal de [Supabase](https://supabase.com/dashboard/account/tokens), configurado en los secretos seguros del entorno y limitado al destino `api.supabase.com`.
@@ -21,7 +23,9 @@ NODE_USE_ENV_PROXY=1 npm run events:production -- --apply
 
 El proyecto remoto contiene migraciones manuales con fechas distintas a las del repositorio. El despliegue comprueba las 304 columnas y nueve firmas RPC del contrato base revisado, además de PostgreSQL 17; no vuelve a aplicar migraciones históricas ni inventa sus registros. Cada migración nueva se registra en la misma transacción que la aplica.
 
-La función `sync-madrid-events` se genera desde los mismos módulos de clasificación, normalización e importación que se prueban en Node. Se despliega antes de habilitar el proveedor. Su secreto interno se guarda en Edge Secrets y en Vault; el programador no almacena una clave `service_role`. Un redeploy reutiliza el secreto existente. Activación, configuración de Vault y primera importación comparten una transacción.
+La función `sync-madrid-events` se genera desde los mismos módulos de clasificación, normalización e importación que se prueban en Node. Se despliega antes de habilitar el proveedor y conserva la validación JWT de la pasarela. Su secreto interno se guarda en Edge Secrets y en Vault; el programador usa un JWT público `anon` para la pasarela y no almacena una clave `service_role`. Un redeploy reutiliza el secreto existente. Activación, configuración de Vault y primera importación comparten una transacción.
+
+El despliegue utiliza el multipart oficial de Management API (`/functions/deploy`), con `verify_jwt: true` explícito y comprobado en la respuesta. Esto permite usar el token a través del proxy seguro sin extraer su valor para satisfacer la validación local del CLI. No se desactiva la autenticación de la pasarela.
 
 `pg_cron` invoca la función diariamente a las 05:20 UTC. No depende del cron de GitHub ni de modificar `main`. El proveedor deshabilitado o no revisado no genera solicitudes. Las peticiones a Edge sin el secreto interno se rechazan antes de acceder a la fuente. El despliegue comprueba el estado final y vuelve a importar mediante la función ya desplegada.
 

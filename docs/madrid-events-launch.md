@@ -1,28 +1,34 @@
-# Activación pública de la agenda: estado y pasos concretos
+# Agenda de Madrid: estado público · 7 de noviembre de 2026
 
-Los cambios de interfaz, participantes/chat, importación y seguridad están en la rama de revisión. **La agenda no se ha publicado al público y el proveedor sigue desactivado.** No se ha modificado Supabase de producción ni enviado una OTA/versiones a tiendas.
+**Backend de producción activado y comprobado. La nueva app móvil todavía no está distribuida.** La autorización para desplegar Supabase y publicar la funcionalidad se recibió el 7 de noviembre. No se ha modificado `main` ni hecho merge de la PR #44.
 
-## Ya comprobado
+## Completado en producción
 
-El entorno publicado ya permite acceder al Ayuntamiento y a GitHub; no hace falta volver a publicarlo para estos accesos. Se ha descargado el JSON oficial, observado la licencia CC BY 4.0 y probado una importación de 1.385 actividades en Supabase local dentro de una transacción revertida. Las migraciones de eventos, seguridad y subcategorías están aplicadas en esa base local. Ver [comprobación de la fuente](madrid-source-validation.md).
+- Aplicadas y registradas las cuatro migraciones de eventos, límites de API, subcategorías y programación/mantenimiento. El texto del historial coincide con los archivos de origen. Las migraciones históricas aplicadas manualmente con otras fechas se conservaron.
+- Fuente municipal y licencia CC BY 4.0 revisadas. Importadas 1.385 actividades futuras/en curso de 1.443 registros; no equivalen a 1.385 sesiones reservables individuales.
+- Proveedor Madrid habilitado y lectura anónima comprobada: página de 30, filtro Deportes y ficha. Acceso directo a participantes denegado a invitados.
+- Función `sync-madrid-events` activa con `verify_jwt=true` y secreto interno independiente. Rechaza peticiones sin JWT o sin el secreto del programador.
+- `pg_cron` configurado a las 05:20 UTC. Probado el recorrido real cron → Edge → importación: HTTP 200, 1.385 importados. No depende de cambiar `main` ni de un workflow de GitHub.
+- Archivado global de planes cada cinco minutos en el servidor. Retirado el permiso del cliente.
 
-TypeScript, la suite unitaria y los bundles JavaScript/Hermes de Android/iOS pasan. ESLint no tiene errores y conserva 72 advertencias. Pasaron 92 comprobaciones SQL específicas y el smoke HTTP con cuentas sintéticas. Estos resultados no equivalen a probar la app en dispositivos.
+Evidencia: [informe de despliegue](data/madrid-production-deployment-2026-11-07.json) y [procedimiento reproducible](madrid-production-deployment.md).
 
-## Pasos pendientes para el público
+## Pendiente para que las tarjetas lleguen a los usuarios
 
-1. Probar en una app de staging una muestra del catálogo real: rangos de varios días, programas permanentes, días excluidos, horarios, cambios/cancelaciones y lugares ausentes. Comprobar también altas/bajas, bloqueos, chat y denuncias. La importación local valida el formato, no cada calendario.
-2. Resolver las dos decisiones de privacidad/mantenimiento descritas en `app-audit-2026-11-06.md`: acceso por enlace UUID a planes privados y mantenimiento global invocado desde el cliente. Son las dos expectativas que siguen fallando en la suite SQL completa. Asignar responsables para denuncias y alertas del importador.
-3. Preparar el despliegue revisable de las migraciones y la primera sincronización en el Supabase de producción autorizado. El importador conserva la protección contra escrituras al proyecto de producción del piloto; no debe omitirse para adelantar la activación.
-4. Configurar y revisar la ejecución diaria en un entorno protegido. GitHub solo programa cron desde la rama predeterminada; una PR a `develop` no activa cron por sí misma. Elegir el lugar de ejecución sin modificar `main` automáticamente. El workflow preparado sigue condicionado y desactivado.
-5. Generar y probar una compilación nativa de staging en Android/iOS. La alineación de `react-native-view-shot` cambia el módulo nativo: revisar el runtime OTA y la compatibilidad de los binarios existentes. Después preparar la versión pública para su revisión y publicación autorizada.
+La versión preparada es 1.0.11 y requiere un binario nuevo por la dependencia nativa `react-native-view-shot`. Se ha separado su runtime para no enviar una OTA incompatible a los binarios actuales.
 
-No hacen falta APIs de eventos de pago. Las ejecuciones futuras deben permanecer dentro de las cuotas gratuitas ya disponibles; no se ha contratado ni activado ningún servicio.
+Se intentó la compilación EAS con las credenciales Android existentes. La subida del archivo del proyecto falló con HTTP 403: el entorno todavía no permite `storage.googleapis.com`, destino confirmado mediante la API oficial de Expo. No se llegó a iniciar una compilación nueva ni a enviar una versión a las tiendas.
 
-## Revisión sin publicar
+El borrador del entorno ya conserva los dominios y secretos existentes y añade ese hostname. Hay que revisar/guardar el cambio de red y publicar el entorno para aplicarlo. Después:
 
-Las capturas actualizadas están en `docs/screenshots/agenda-editorial.png` y `agenda-compact.png`. El comando `npm run events:preview` muestra una prueba de diseño con los componentes reales y actividades ficticias. La ruta móvil `/agenda-preview` mantiene las tarjetas existentes de planes. Las cuentas, fichas y catálogos ficticios no se presentan como eventos reales.
+1. Reanudar las compilaciones `production` de Android/iOS con el código de esta rama.
+2. Enviar los artefactos concretos a sus tiendas; resolver cualquier credencial de tienda que falte.
+3. Completar la revisión y distribución pública de Apple/Google. Una carga a TestFlight no equivale a publicar en App Store.
 
+Las pruebas manuales en dispositivos se omiten por instrucción del usuario. Pasan TypeScript, suite unitaria, 166 comprobaciones SQL locales, lint sin errores (72 advertencias previas), Chromium y exportaciones Hermes Android/iOS. No se presentan estas exportaciones como APK/IPA compilados.
 
-## Portadas y clasificación ya implementadas
+## Diseño y calidad
 
-Los eventos reutilizan todas las fotos del catálogo de las seis categorías y 30 subcategorías de Nexo: hiking → AIRE_LIBRE/senderismo, concierto → SHOWTIME/concierto, etc. Cada evento recibe una portada de su clasificación; no se mezclan temáticas para forzar variedad. La migración de subcategorías debe desplegarse antes de la siguiente importación revisada. Ver `event-covers.md`. Las portadas son ilustrativas; no son fotografías verificadas del evento municipal.
+Botón «Me apunto» sin «+», estilos compartidos con las tarjetas de planes y todas las fotos de las seis categorías y 30 subcategorías disponibles, según la temática de cada evento. Portadas ilustrativas, fuente/licencia visibles en la ficha, fecha bajo el título y sin frase introductoria ni estrellas en Para ti. Los días excluidos se conservan en el horario; los rangos remiten al calendario oficial.
+
+Se conserva el contrato existente de enlaces UUID para leer meetups privados/solo amigos, que permanecen ocultos del feed; chats y cancelados siguen inaccesibles. Las pruebas se ajustan explícitamente a ese contrato, añadiendo los casos negativos. La suite SQL completa pasa.

@@ -1,5 +1,7 @@
 # Agenda social de Madrid · implementación para revisión
 
+> Estado actualizado: las correcciones de #43 ya se reutilizan en esta rama. Para los resultados actuales de seguridad/calidad, consultar [la auditoría aplicada](app-audit-2026-11-06.md) y [los pasos de activación pública](madrid-events-launch.md). La validación original que sigue abajo es histórica.
+
 Rama: `feature/madrid-social-agenda`, basada en `develop` (`4cf1dec`). No se han mezclado las correcciones de la PR #43, modificado `main`, aplicado SQL remoto, publicado OTA ni versiones en tiendas.
 
 ## Funcionalidad

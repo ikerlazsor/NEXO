@@ -1,3 +1,4 @@
+import { randomUUID } from 'expo-crypto';
 import {
     Ionicons } from '@expo/vector-icons';
 import { Audio,
@@ -769,8 +770,10 @@ export default function DirectChatScreen() {
                   : '';
 
         const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const serverMessageId = randomUUID();
         const optimistic: Message = {
             id: tempId,
+            serverMessageId,
             contenido: contenidoPayload,
             emisor_id: currentUserId,
             creado_en: new Date().toISOString(),
@@ -799,6 +802,7 @@ export default function DirectChatScreen() {
             }
             await enqueueChatOutbox({
                 tempId,
+                serverMessageId,
                 kind: 'direct',
                 receptorId: otherUserId,
                 emisorId: currentUserId,
@@ -813,6 +817,7 @@ export default function DirectChatScreen() {
         const { data, error } = await supabase
             .from('mensajes')
             .insert({
+                id: serverMessageId,
                 emisor_id: currentUserId,
                 receptor_id: otherUserId,
                 plan_id: null,
@@ -827,6 +832,7 @@ export default function DirectChatScreen() {
             if (tipo === 'texto') {
                 await enqueueChatOutbox({
                     tempId,
+                    serverMessageId,
                     kind: 'direct',
                     receptorId: otherUserId,
                     emisorId: currentUserId,

@@ -32,6 +32,7 @@ select is((select start_date from public.external_events where source_id='a'),cu
 select throws_ok($$select public.sync_external_events('madrid',jsonb_set(pg_temp.event_snapshot('a'),'{0,category}','"INVALID"'),1)$$,'23514',null,'invalid category rolls back entire import');
 select is((select venue from public.external_events where source_id='a'),'Changed venue','failed replacement preserves previous valid fields');
 create function pg_temp.eid() returns uuid language plpgsql as $$begin return (select id from public.external_events where source_id='a'); end;$$;
+grant execute on function pg_temp.eid() to anon,authenticated;
 
 set local role anon;
 select set_config('request.jwt.claim.sub','',true);

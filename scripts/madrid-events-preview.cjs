@@ -50,6 +50,15 @@ function dateOnly(value) {
   if (typeof value !== "string") return null;
   const match = /^(\d{4}-\d{2}-\d{2})(?:$|[T ])/u.exec(value.trim());
   if (!match) return null;
+  // A malformed clock must not silently turn into a plausible all-day event.
+  const suffix = value.trim().slice(10);
+  if (
+    suffix &&
+    !/^[T ](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?$/i.test(
+      suffix,
+    )
+  )
+    return null;
   const date = new Date(`${match[1]}T12:00:00Z`);
   return Number.isFinite(date.getTime()) &&
     date.toISOString().slice(0, 10) === match[1]
@@ -94,7 +103,9 @@ function normalizeMadridSnapshot(payload, now = new Date()) {
     day: "2-digit",
   }).format(now);
   const events = new Map();
-  let rejected = 0;
+  let rejected = 0,
+    expired = 0,
+    duplicates = 0;
   for (const row of rows) {
     if (!row || typeof row !== "object" || Array.isArray(row)) {
       rejected++;
@@ -109,10 +120,16 @@ function normalizeMadridSnapshot(payload, now = new Date()) {
     const start = madridCalendarDate(startRaw);
     const endRaw = field(row, ["dtend", "DTEND", "fecha-fin", "fecha_fin"]);
     const end = endRaw == null ? start : madridCalendarDate(endRaw);
-    if (end && end < today) continue;
-    const id = String(
-      field(row, ["id", "@id", "ID-EVENTO", "id-evento"]) ?? "",
-    ).trim();
+    if (end && end < today) {
+      expired++;
+      continue;
+    }
+    const rawId = field(row, ["id", "@id", "ID-EVENTO", "id-evento"]);
+    const id =
+      typeof rawId === "string" ||
+      (typeof rawId === "number" && Number.isFinite(rawId))
+        ? String(rawId).trim()
+        : "";
     const title = text(field(row, ["title", "TITLE", "titulo", "TITULO"]), 300);
     const sourceUrl = httpsLink(
       field(row, ["link", "LINK", "CONTENT-URL", "content-url", "url"]),
@@ -147,15 +164,18 @@ function normalizeMadridSnapshot(payload, now = new Date()) {
         : text(loc?.["location-name"] || loc?.name, 300);
     const geo = row.location || row.geo || {};
     const coordinate = (v, max) =>
-      v != null &&
-      String(v).trim() !== "" &&
+      (typeof v === "number" ||
+        (typeof v === "string" &&
+          /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(v.trim()))) &&
       Number.isFinite(Number(v)) &&
       Math.abs(Number(v)) <= max
         ? Number(v)
         : null;
     const statusValue = String(
       field(row, ["status", "estado", "event-status"]) || "",
-    ).toLowerCase();
+    )
+      .trim()
+      .toLowerCase();
     const event = {
       source_id: id,
       source_url: sourceUrl,
@@ -187,11 +207,14 @@ function normalizeMadridSnapshot(payload, now = new Date()) {
       JSON.stringify(events.get(id)) !== JSON.stringify(event)
     )
       throw new Error(`Conflicting duplicate source ID: ${id}`);
+    if (events.has(id)) duplicates++;
     events.set(id, event);
   }
   return {
     rawCount: rows.length,
     rejected,
+    expired,
+    duplicates,
     events: [...events.values()].sort(
       (a, b) =>
         a.start_date.localeCompare(b.start_date) ||

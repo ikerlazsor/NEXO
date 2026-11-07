@@ -1,9 +1,6 @@
-import { useCallback, useRef, useState } from "react";
-import { useFocusEffect } from "@react-navigation/native";
+import { useRef } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import * as Crypto from "expo-crypto";
 import {
-  AppState,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -17,119 +14,27 @@ import { useAppTheme } from "../../lib/appTheme";
 import { useT } from "../../lib/i18n";
 import { useAuthSession } from "../../lib/authSession";
 import { Alert } from "../../lib/nexoAlert";
-import { getPublicProfiles } from "../../lib/profileData";
-import { supabase } from "../../lib/supabase";
-import {
-  fetchEventMessages,
-  reportEventMessage,
-  sendEventMessage,
-} from "../../features/events/api";
+import { reportEventMessage } from "../../features/events/api";
+import { useEventChat } from "../../features/events/useEventChat";
 import type { EventMessage } from "../../features/events/types";
 import { eventStyles as s } from "../../features/events/EventCards";
 export default function EventChat() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string }>();
+  const id = typeof params.id === "string" ? params.id : "";
   const router = useRouter();
   const { colors } = useAppTheme();
   const { t, lang } = useT();
   const { userId } = useAuthSession();
-  const [messages, setMessages] = useState<EventMessage[]>([]),
-    [names, setNames] = useState<Record<string, string>>({}),
-    [text, setText] = useState(""),
-    [member, setMember] = useState(false),
-    [failed, setFailed] = useState(false),
-    [sending, setSending] = useState(false),
-    [more, setMore] = useState(false);
-  const active = useRef(false),
-    fetching = useRef(false),
-    pending = useRef<{ id: string; body: string } | null>(null),
-    generation = useRef(0),
-    browsingOlder = useRef(false);
-  const refresh = useCallback(
-    async (older?: EventMessage) => {
-      if (!userId || fetching.current) return;
-      fetching.current = true;
-      const epoch = generation.current;
-      try {
-        const own = await supabase
-          .from("external_event_participants")
-          .select("event_id")
-          .eq("event_id", id)
-          .eq("user_id", userId)
-          .maybeSingle();
-        if (own.error) throw own.error;
-        if (!active.current || epoch !== generation.current) return;
-        setMember(!!own.data);
-        if (!own.data) {
-          setMessages([]);
-          return;
-        }
-        const page = await fetchEventMessages(id, older);
-        if (older) browsingOlder.current = true;
-        if (!active.current || epoch !== generation.current) return;
-        const profiles = await getPublicProfiles([
-          ...new Set(page.map((m) => m.sender_id)),
-        ]);
-        if (!active.current || epoch !== generation.current) return;
-        setNames((previous) => ({
-          ...previous,
-          ...Object.fromEntries(
-            profiles.map((p) => [p.id, p.nombre || "Nexo"]),
-          ),
-        }));
-        setMessages((previous) =>
-          older
-            ? [
-                ...previous,
-                ...page.filter((m) => !previous.some((x) => x.id === m.id)),
-              ]
-            : page,
-        );
-        setMore(page.length === 40);
-        setFailed(false);
-      } catch {
-        if (active.current && epoch === generation.current) setFailed(true);
-      } finally {
-        fetching.current = false;
-      }
-    },
-    [id, userId],
-  );
-  useFocusEffect(
-    useCallback(() => {
-      active.current = true;
-      generation.current++;
-      setMessages([]);
-      setMember(false);
-      setNames({});
-      browsingOlder.current = false;
-      void refresh();
-      const timer = setInterval(() => {
-        if (AppState.currentState === "active" && !browsingOlder.current)
-          void refresh();
-      }, 10000);
-      return () => {
-        active.current = false;
-        generation.current++;
-        clearInterval(timer);
-      };
-    }, [refresh]),
-  );
-  const send = async () => {
-    if (!text.trim() || !userId || sending) return;
-    setSending(true);
-    const body = text.trim();
-    if (pending.current?.body !== body)
-      pending.current = { id: Crypto.randomUUID(), body };
+  const { messages, names, text, member, failed, sending, more, setText, refresh, send } = useEventChat(id, userId);
+  const scope = JSON.stringify([id, userId]);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const sendMessage = async () => {
     try {
-      await sendEventMessage(id, pending.current.id, body);
-      pending.current = null;
-      browsingOlder.current = false;
-      setText("");
-      await refresh();
+      await send();
     } catch {
-      Alert.alert(t("feed.error"), t("events.sentFailed"));
-    } finally {
-      setSending(false);
+      if (currentScope.current === scope)
+        Alert.alert(t("feed.error"), t("events.sentFailed"));
     }
   };
   const report = (message: EventMessage) => {
@@ -139,9 +44,10 @@ export default function EventChat() {
       {
         text: t("events.report"),
         onPress: () => {
+          if (currentScope.current !== scope) return;
           void reportEventMessage(message.id, userId, t("events.reportReason"))
-            .then(() => Alert.alert(t("events.reportSent")))
-            .catch(() => Alert.alert(t("events.error")));
+            .then(() => { if (currentScope.current === scope) Alert.alert(t("events.reportSent")); })
+            .catch(() => { if (currentScope.current === scope) Alert.alert(t("events.error")); });
         },
       },
     ]);
@@ -285,7 +191,7 @@ export default function EventChat() {
             />
             <Pressable
               disabled={sending || !text.trim()}
-              onPress={() => void send()}
+              onPress={() => void sendMessage()}
               accessibilityRole="button"
             >
               <Text

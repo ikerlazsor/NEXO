@@ -56,7 +56,6 @@ import {
 import { useT } from '../lib/i18n';
 import { hapticLight } from '../lib/haptics';
 import { getProfileNotificationCount, subscribeProfileNotifications } from '../lib/notifications';
-import { getAuthUser } from '../lib/auth';
 import { useAuthSession } from '../lib/authSession';
 import { formatCountdown, resolveRatingUiPhase } from '../lib/planLifecycle';
 import { warmFriendsAndSavedPlans } from '../lib/prefetchHome';
@@ -71,7 +70,8 @@ import {
     getPublicAttendedPlans,
     type PublicAttendedPlan,
 } from '../lib/profileSocial';
-import { shouldPreferProfileCache } from '../lib/profileOptimistic';
+import { getProfileEditRevision, shouldPreferProfileCache } from '../lib/profileOptimistic';
+import { createProfileLoadGuard } from '../lib/profileLoadGuard';
 import {
     loadProfileRow,
     resolveDisplayName,
@@ -110,6 +110,12 @@ import { ScreenKeys } from '../lib/screenState';
 const INK = theme.colors.text;
 
 export default function ProfileScreen() {
+    const { userId } = useAuthSession();
+    // A session change must never expose the previous account's local state.
+    return <OwnProfileScreen key={userId ?? 'guest'} />;
+}
+
+function OwnProfileScreen() {
     const router = useRouter();
     const { t, lang } = useT();
     const { colors } = useAppTheme();
@@ -155,6 +161,15 @@ export default function ProfileScreen() {
     const hasHydratedRef = useRef(!!cachedProfile);
     const sessionUserRef = useRef(session?.user ?? null);
     sessionUserRef.current = session?.user ?? null;
+    const profileCountersRef = useRef({ friendsNotifCount, planNotifCount, pendingRatings });
+    profileCountersRef.current = { friendsNotifCount, planNotifCount, pendingRatings };
+    const profileLoads = useRef<ReturnType<typeof createProfileLoadGuard> | null>(null);
+    if (!profileLoads.current) {
+        profileLoads.current = createProfileLoadGuard(
+            () => sessionUserRef.current?.id ?? null,
+            getProfileEditRevision,
+        );
+    }
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(ScreenKeys.PROFILE, {
         restore: false,
     });
@@ -179,7 +194,7 @@ export default function ProfileScreen() {
         setFollowersCount(snap.followersCount ?? 0);
         setPendingRatings(snap.pendingRatings);
         setBadgeStats(snap.badgeStats ?? EMPTY_BADGE_STATS);
-        if (snap.attendedPlans?.length) setAttendedPlans(snap.attendedPlans);
+        if (snap.attendedPlans) setAttendedPlans(snap.attendedPlans);
         hasHydratedRef.current = true;
     }, []);
 
@@ -229,24 +244,30 @@ export default function ProfileScreen() {
     // Badges de amigos / solicitudes de plan: si se atienden en Amigos o en el detalle del plan, bajan aquí también.
     useEffect(() => {
         if (!userId) return;
-        return subscribeProfileNotifications(() => {
+        let alive = true;
+        const unsubscribe = subscribeProfileNotifications(() => {
             void getProfileNotificationCount(userId, { force: true }).then((notifs) => {
+                if (!alive || sessionUserRef.current?.id !== userId) return;
                 setFriendsNotifCount(notifs.friendRequests + notifs.planInvites + notifs.planRequests);
                 setPlanNotifCount(notifs.planRequests);
-            });
+            }).catch(() => { /* Conservar las cifras disponibles si falla la red. */ });
         });
+        return () => { alive = false; unsubscribe(); };
     }, [userId]);
 
     const fetchUserData = useCallback(async () => {
         perfStart('profile.total');
-        const authUser = sessionUserRef.current ?? (await getAuthUser());
+        const authUser = sessionUserRef.current;
         if (!authUser) return;
+        const isCurrent = profileLoads.current!.begin(authUser.id);
 
         setUser(authUser);
 
         let stale = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
         if (!stale) {
-            stale = await diskGet<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id), 3 * 24 * 60 * 60 * 1000);
+            const disk = await diskGet<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id), 3 * 24 * 60 * 60 * 1000);
+            if (!isCurrent()) return;
+            stale = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id)) ?? disk;
             if (stale?.userId === authUser.id) {
                 cacheSet(screenCacheKey.profileUI(authUser.id), stale, ScreenCacheTTL.profileUI);
             } else {
@@ -279,6 +300,7 @@ export default function ProfileScreen() {
             descripcion: string;
             etiquetas: string[];
             fecha_nacimiento: string | null;
+            edad?: number | null;
             genero: string | null;
             habitos_consumo: Record<string, unknown>;
             ambientes_preferidos: string[];
@@ -288,7 +310,7 @@ export default function ProfileScreen() {
             setAboutMe(profile.descripcion);
             setAvatarUrl(profile.avatar_url);
             setCoverUrl(profile.cover_url ?? null);
-            setAge(calcAge(profile.fecha_nacimiento));
+            setAge(profile.edad ?? calcAge(profile.fecha_nacimiento));
             setGenero((profile.genero as Genero) || null);
             const habitos = parseHabitos(profile.habitos_consumo);
             setHabitoBebida(habitos.bebida);
@@ -299,6 +321,7 @@ export default function ProfileScreen() {
         };
 
         const screen = await loadProfileScreen(authUser.id);
+        if (!isCurrent()) return;
         if (screen && !shouldPreferProfileCache()) {
             applyProfileFields({
                 nombre: screen.profile.nombre ?? '',
@@ -308,6 +331,7 @@ export default function ProfileScreen() {
                 descripcion: screen.profile.descripcion ?? '',
                 etiquetas: screen.profile.etiquetas,
                 fecha_nacimiento: screen.profile.fecha_nacimiento,
+                edad: screen.profile.edad,
                 genero: screen.profile.genero,
                 habitos_consumo: screen.profile.habitos_consumo,
                 ambientes_preferidos: screen.profile.ambientes_preferidos,
@@ -321,8 +345,9 @@ export default function ProfileScreen() {
             setAttendedPlans(attended);
             setStats(screen.stats);
             setBadgeStats(screen.badges);
-            setFriendsCount(Math.max(screen.stats.numeroAmistades || 0, friendsCount));
+            setFriendsCount(screen.stats.numeroAmistades || 0);
             hasHydratedRef.current = true;
+            let organizerFollowers = 0;
             if (organizer) {
                 const [followStats, upcoming, organized, orgPlanCount, orgMembers] = await Promise.all([
                     getOrganizerFollowStats(authUser.id),
@@ -331,7 +356,9 @@ export default function ProfileScreen() {
                     getOrganizerPlansCount(authUser.id),
                     getOrganizerMembers(authUser.id),
                 ]);
-                setFollowersCount(followStats.followers ?? 0);
+                if (!isCurrent()) return;
+                organizerFollowers = followStats.followers ?? 0;
+                setFollowersCount(organizerFollowers);
                 setUpcomingPlans(upcoming);
                 setOrganizedPlans(organized);
                 setOrganizerPlansCount(orgPlanCount);
@@ -348,7 +375,7 @@ export default function ProfileScreen() {
                 aboutMe: screen.profile.descripcion ?? '',
                 avatarUrl: screen.profile.avatar_url,
                 coverUrl: screen.profile.cover_url,
-                age: calcAge(screen.profile.fecha_nacimiento),
+                age: screen.profile.edad ?? calcAge(screen.profile.fecha_nacimiento),
                 genero: (screen.profile.genero as Genero) || null,
                 habitoBebida: parseHabitos(screen.profile.habitos_consumo).bebida,
                 habitoTabaco: parseHabitos(screen.profile.habitos_consumo).tabaco,
@@ -359,14 +386,14 @@ export default function ProfileScreen() {
                 privacy: parsePrivacy(screen.profile.perfil_gustos),
                 stats: screen.stats,
                 friendsCount: screen.stats.numeroAmistades || 0,
-                friendsNotifCount,
-                planRequests: planNotifCount,
-                pendingRatings,
+                friendsNotifCount: profileCountersRef.current.friendsNotifCount,
+                planRequests: profileCountersRef.current.planNotifCount,
+                pendingRatings: profileCountersRef.current.pendingRatings,
                 badges: getUserBadges(screen.badges),
                 badgeStats: screen.badges,
                 isOrganizer: organizer,
                 organizer: orgMeta,
-                followersCount,
+                followersCount: organizerFollowers,
                 attendedPlans: attended,
             };
             cacheSet(screenCacheKey.profileUI(authUser.id), snap, ScreenCacheTTL.profileUI);
@@ -378,18 +405,27 @@ export default function ProfileScreen() {
                     getProfileNotificationCount(authUser.id).catch(() => null),
                     getPendingRatingPlans(authUser.id).catch(() => [] as PendingRatingPlan[]),
                 ]);
+                if (!isCurrent() || shouldPreferProfileCache()) return;
                 setFriendsCount(exactFriends);
                 setPendingRatings(nextRatings);
                 if (notifs) {
-                    setFriendsNotifCount(notifs.friendRequests + notifs.planInvites + notifs.planRequests);
+                    const nextNotif = notifs.friendRequests + notifs.planInvites + notifs.planRequests;
+                    setFriendsNotifCount(nextNotif);
                     setPlanNotifCount(notifs.planRequests);
+                    snap.friendsNotifCount = nextNotif;
+                    snap.planRequests = notifs.planRequests;
                 }
+                snap.friendsCount = exactFriends;
+                snap.pendingRatings = nextRatings;
+                cacheSet(screenCacheKey.profileUI(authUser.id), snap, ScreenCacheTTL.profileUI);
+                void diskSet(screenCacheKey.profileUI(authUser.id), snap);
             })();
             perfEnd('profile.total');
             return;
         }
 
         const row = await perfTimed('profile.loadRow', () => loadProfileRow(authUser.id));
+        if (!isCurrent()) return;
         // Edit optimista terminado mientras cargábamos: preferir caché si existe.
         if (shouldPreferProfileCache()) {
             const fresh = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
@@ -409,6 +445,7 @@ export default function ProfileScreen() {
             descripcion: string;
             etiquetas: string[];
             fecha_nacimiento: string | null;
+            edad?: number | null;
             genero: string | null;
             habitos_consumo: Record<string, unknown>;
             ambientes_preferidos: string[];
@@ -435,23 +472,24 @@ export default function ProfileScreen() {
             };
         } else {
             profileFields = await perfTimed('profile.syncProfile', () => syncProfileFromAuth(authUser));
+            if (!isCurrent()) return;
         }
         applyProfileFields(profileFields);
         const organizer = row.data?.es_organizador === true;
         // Auto-ubicación en background: no pisa una ciudad ya mostrada / elegida.
         if (!organizer) {
             void ensureAutoProfilePlace(authUser.id).then((autoPlace) => {
-                if (!autoPlace || shouldPreferProfileCache()) return;
+                if (!isCurrent() || !autoPlace || shouldPreferProfileCache()) return;
                 setPerfilGustos((prev) => {
                     if (isManualProfilePlace(prev) || parseProfilePlace(prev)?.ciudad) return prev;
                     return mergePerfilGustosPlace(prev, autoPlace);
                 });
-            });
+            }).catch(() => { /* La ubicación automática no bloquea la ficha. */ });
         }
         if (organizer) {
             void syncOrganizerAvatarFromRequest(authUser.id).then((syncedAvatar) => {
-                if (syncedAvatar) setAvatarUrl(syncedAvatar);
-            });
+                if (isCurrent() && syncedAvatar) setAvatarUrl(syncedAvatar);
+            }).catch(() => { /* Conservar el avatar disponible. */ });
         }
         const orgMeta = parseOrganizerMeta(row.data?.organizador);
         setIsOrganizer(organizer);
@@ -469,6 +507,7 @@ export default function ProfileScreen() {
             organizer ? Promise.resolve(null) : getBadgeStats(authUser.id, { userCreatedAt: authUser.created_at }),
             organizer ? getOrganizerMembers(authUser.id) : Promise.resolve([]),
         ]);
+        if (!isCurrent()) return;
         if (shouldPreferProfileCache()) {
             const fresh = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(authUser.id));
             if (fresh && fresh.userId === authUser.id) {
@@ -491,9 +530,9 @@ export default function ProfileScreen() {
         setOrganizedPlans(organized);
         setOrganizerPlansCount(orgPlanCount);
 
-        const friendsCountVal = Math.max(userStats.numeroAmistades || 0, friendsCount);
-        const friendsNotif = friendsNotifCount;
-        const ratings = pendingRatings;
+        const friendsCountVal = userStats.numeroAmistades || 0;
+        const friendsNotif = profileCountersRef.current.friendsNotifCount;
+        const ratings = profileCountersRef.current.pendingRatings;
 
         setStats(userStats);
         if (badgeStats) setBadgeStats(badgeStats);
@@ -528,7 +567,7 @@ export default function ProfileScreen() {
             stats: userStats,
             friendsCount: friendsCountVal,
             friendsNotifCount: friendsNotif,
-            planRequests: planNotifCount,
+            planRequests: profileCountersRef.current.planNotifCount,
             pendingRatings: ratings,
             badges: badgeStats ? getUserBadges(badgeStats) : [],
             badgeStats: badgeStats ?? undefined,
@@ -546,7 +585,7 @@ export default function ProfileScreen() {
                 getProfileNotificationCount(authUser.id).catch(() => null),
                 getPendingRatingPlans(authUser.id).catch(() => [] as PendingRatingPlan[]),
             ]);
-            if (shouldPreferProfileCache()) return;
+            if (!isCurrent() || shouldPreferProfileCache()) return;
             setFriendsCount(exactFriends);
             if (notifs) {
                 const nextNotif = notifs.friendRequests + notifs.planInvites + notifs.planRequests;
@@ -569,10 +608,11 @@ export default function ProfileScreen() {
         if (!userId || cachedProfile) return;
         let alive = true;
         void diskGet<ProfileUiSnapshot>(screenCacheKey.profileUI(userId), 3 * 24 * 60 * 60 * 1000).then((snap) => {
-            if (!alive || !snap || snap.userId !== userId) return;
+            const latest = cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(userId)) ?? snap;
+            if (!alive || !latest || latest.userId !== userId) return;
             if (hasHydratedRef.current) return;
-            cacheSet(screenCacheKey.profileUI(userId), snap, ScreenCacheTTL.profileUI);
-            applyProfileSnapshot(snap);
+            cacheSet(screenCacheKey.profileUI(userId), latest, ScreenCacheTTL.profileUI);
+            applyProfileSnapshot(latest);
         });
         return () => {
             alive = false;
@@ -581,9 +621,10 @@ export default function ProfileScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            void fetchUserData();
+            void fetchUserData().catch(() => { /* Mantener visible la caché si falla la red. */ });
             // Precargar Amigos / Guardados mientras estás en perfil (antes de entrar).
             warmFriendsAndSavedPlans();
+            return () => profileLoads.current?.invalidate();
         }, [fetchUserData])
     );
 

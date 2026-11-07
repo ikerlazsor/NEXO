@@ -13,11 +13,19 @@ function sleep(ms: number) {
 
 function isRetryableError(err: unknown): boolean {
     if (err == null) return false;
+    const status = (err as { status?: number })?.status;
+    if (typeof status === 'number') {
+        if (status === 408 || status === 429 || status >= 500) return true;
+        if (status >= 400 && status < 500) return false;
+    }
+    const code = String((err as { code?: string })?.code || '').toUpperCase();
+    // Bad input, integrity rules, authorization and business-rule exceptions
+    // cannot succeed by repeating the same request after a delay.
+    if (/^(22|23|28|42)[0-9A-Z]{3}$/.test(code) || code === 'P0001' ||
+        ['PGRST116', 'PGRST301', 'PGRST302'].includes(code)) return false;
     const msg = String((err as { message?: string })?.message ?? err).toLowerCase();
     if (msg.includes('network') || msg.includes('timeout') || msg.includes('fetch')) return true;
     if (msg.includes('failed to fetch') || msg.includes('network request failed')) return true;
-    const status = (err as { status?: number })?.status;
-    if (typeof status === 'number' && (status === 408 || status === 429 || status >= 500)) return true;
     return true;
 }
 

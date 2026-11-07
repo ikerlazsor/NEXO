@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getPublicProfiles } from './profileData';
 import { canJoinMorePlans } from './planLimits';
 import { invalidateProfileNotificationCount } from './profileNotificationBus';
 import { isUserOrganizer } from './organizer';
@@ -65,11 +66,7 @@ export async function isGenderBlockedForPlan(planId: string, userId: string): Pr
         .maybeSingle();
     if (!plan || !isSoloChicasPlan(plan)) return false;
 
-    const { data: profile } = await supabase
-        .from('perfiles')
-        .select('genero')
-        .eq('id', userId)
-        .maybeSingle();
+    const [profile] = await getPublicProfiles([userId], { force: true });
     return !canJoinPlanByGender(plan, (profile?.genero as Genero | null) ?? null);
 }
 

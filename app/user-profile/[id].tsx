@@ -380,7 +380,7 @@ export default function UserProfileScreen() {
                       cover_url: screen.profile.cover_url,
                       descripcion: screen.profile.descripcion,
                       etiquetas: screen.profile.etiquetas,
-                      edad: calcAge(screen.profile.fecha_nacimiento),
+                      edad: screen.profile.edad ?? calcAge(screen.profile.fecha_nacimiento),
                       genero: screen.profile.genero,
                       habitos_consumo: screen.profile.habitos_consumo,
                       ambientes_preferidos: screen.profile.ambientes_preferidos,

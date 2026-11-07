@@ -80,7 +80,7 @@ reset role;
 
 select ok(
   (
-    has_function_privilege('anon', 'public.get_guest_feed()', 'execute')
+    has_function_privilege('anon', 'public.get_guest_feed(double precision, double precision, integer)', 'execute')
     or has_function_privilege('anon', 'public.get_guest_feed(double precision, double precision, integer)', 'execute')
   )
   and has_function_privilege('anon', 'public.get_guest_plan(uuid)', 'execute')

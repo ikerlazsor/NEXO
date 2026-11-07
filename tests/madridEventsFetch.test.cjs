@@ -10,7 +10,12 @@ function mockResponse(payload) {
   const bytes = Buffer.from(JSON.stringify(payload), "utf8");
   return {
     ok: true,
-    headers: { get: () => String(bytes.byteLength) },
+    headers: {
+      get: (name) =>
+        name === "content-length"
+          ? String(bytes.byteLength)
+          : "application/json",
+    },
     body: new ReadableStream({
       start(controller) {
         controller.enqueue(bytes);
@@ -52,7 +57,12 @@ test("fetcher fails on HTTP errors and oversized municipal response", async () =
       fetchMadridCandidates(
         async () => ({
           ok: true,
-          headers: { get: () => String(10_000_000) },
+          headers: {
+            get: (name) =>
+              name === "content-length"
+                ? String(10_000_000)
+                : "application/json",
+          },
         }),
         now,
       ),

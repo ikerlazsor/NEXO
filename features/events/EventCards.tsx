@@ -21,7 +21,10 @@ const PALETTES = {
   FOODIES: ["#9E4C3D", "#DA9E79"],
   VIBES: ["#68448D", "#B189BA"],
 } as const;
-export function eventDateLabel(event: ExternalEvent, lang: string) {
+export function eventDateLabel(
+  event: Pick<ExternalEvent, "start_date">,
+  lang: string,
+) {
   const date = new Date(`${event.start_date}T12:00:00Z`);
   return date.toLocaleDateString(lang, {
     day: "numeric",
@@ -99,11 +102,6 @@ export const EventCard = memo(function EventCard({
       >
         <View>
           <EventArtwork event={event} compact={compact} />
-          {!compact && (
-            <View style={s.dateBadge}>
-              <Text style={s.dateBadgeText}>{date}</Text>
-            </View>
-          )}
         </View>
         <View style={[s.body, compact && s.compactBody]}>
           <Text style={[s.category, { color: colors.primary }]}>
@@ -116,6 +114,19 @@ export const EventCard = memo(function EventCard({
           >
             {event.title}
           </Text>
+          <View style={[s.meta, s.dateMeta]}>
+            <Ionicons
+              name="calendar-outline"
+              size={15}
+              color={colors.primary}
+            />
+            <Text style={[s.metaText, { color: colors.primary }]}>
+              {date}
+              {event.end_date !== event.start_date
+                ? ` — ${eventDateLabel({ start_date: event.end_date }, lang)}`
+                : ""}
+            </Text>
+          </View>
           <View style={s.meta}>
             <Ionicons
               name="location-outline"
@@ -129,14 +140,6 @@ export const EventCard = memo(function EventCard({
               {event.venue || t("events.venueUnknown")}
             </Text>
           </View>
-          {compact && (
-            <Text style={[s.date, { color: colors.textMuted }]}>{date}</Text>
-          )}
-          {!compact && event.end_date !== event.start_date && (
-            <Text style={[s.date, { color: colors.textMuted }]}>
-              {t("events.until")} {event.end_date}
-            </Text>
-          )}
         </View>
       </Pressable>
       <View style={[s.actions, compact && s.compactActions]}>
@@ -209,13 +212,6 @@ export function EventTabs({
             },
           ]}
         >
-          {section === "forYou" && (
-            <Ionicons
-              name="sparkles"
-              size={14}
-              color={value === section ? colors.primary : colors.textMuted}
-            />
-          )}
           <Text
             style={[
               s.tabText,
@@ -333,17 +329,7 @@ const s = StyleSheet.create({
   },
   meta: { flexDirection: "row", gap: 5, alignItems: "center" },
   metaText: { fontSize: 12, flex: 1 },
-  date: { fontSize: 12, marginTop: 5 },
-  dateBadge: {
-    position: "absolute",
-    top: 16,
-    left: 16,
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 13,
-    paddingVertical: 10,
-    borderRadius: 14,
-  },
-  dateBadgeText: { fontSize: 15, color: "#0F2A4A", fontWeight: "800" },
+  dateMeta: { marginBottom: 8 },
   actions: {
     flexDirection: "row",
     gap: 12,

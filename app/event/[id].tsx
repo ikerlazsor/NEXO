@@ -15,7 +15,6 @@ import { useAppTheme } from "../../lib/appTheme";
 import { useT } from "../../lib/i18n";
 import { useAuthSession } from "../../lib/authSession";
 import { Alert } from "../../lib/nexoAlert";
-import { supabase } from "../../lib/supabase";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import {
   EventArtwork,
@@ -24,6 +23,7 @@ import {
 } from "../../features/events/EventCards";
 import {
   fetchEvent,
+  fetchEventMembership,
   fetchEventPeople,
   setEventMembership,
   trackEvent,
@@ -37,54 +37,78 @@ export default function EventDetail() {
   const { colors } = useAppTheme();
   const { t, lang } = useT();
   const { userId, requireAccount } = useAuthSession();
-  const [event, setEvent] = useState<ExternalEvent | null>(null),
+  const scope = JSON.stringify([id, userId]);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const [storedEvent, setEvent] = useState<ExternalEvent | null>(null),
     [error, setError] = useState(false),
     [loading, setLoading] = useState(true);
-  const [people, setPeople] = useState<EventPerson[]>([]),
-    [morePeople, setMorePeople] = useState(false),
-    [joined, setJoined] = useState(false),
-    [busy, setBusy] = useState(false);
-  const personLoading = useRef(false),
+  const [storedPeople, setPeople] = useState<EventPerson[]>([]),
+    [storedMorePeople, setMorePeople] = useState(false),
+    [storedJoined, setJoined] = useState(false),
+    [privateScope, setPrivateScope] = useState(scope),
+    [busyScope, setBusyScope] = useState<string | null>(null);
+  const event = storedEvent?.id === id ? storedEvent : null;
+  const people = privateScope === scope ? storedPeople : [];
+  const morePeople = privateScope === scope && storedMorePeople;
+  const joined = privateScope === scope && storedJoined;
+  const busy = busyScope === scope;
+  const personLoading = useRef<object | null>(null),
+    mutation = useRef<object | null>(null),
+    request = useRef<AbortController | null>(null),
     epoch = useRef(0);
   const load = useCallback(async () => {
+    if (currentScope.current !== scope) return;
     const version = ++epoch.current;
+    request.current?.abort();
+    const abort = new AbortController();
+    request.current = abort;
+    const timeout = setTimeout(() => abort.abort(), 12000);
+    const current = () => version === epoch.current && currentScope.current === scope && !abort.signal.aborted;
     setError(false);
     setLoading(true);
+    setPrivateScope(scope);
     setPeople([]);
+    setMorePeople(false);
     setJoined(false);
+    personLoading.current = null;
     try {
       if (!UUID.test(id)) throw new Error("invalid_id");
-      const item = await fetchEvent(id);
-      if (version !== epoch.current) return;
+      const item = await fetchEvent(id, abort.signal);
+      if (abort.signal.aborted) throw new Error("request_aborted");
+      if (!current()) return;
       setEvent(item);
       if (userId) {
-        const [members, own] = await Promise.all([
-          fetchEventPeople(id),
-          supabase
-            .from("external_event_participants")
-            .select("event_id")
-            .eq("event_id", id)
-            .eq("user_id", userId)
-            .maybeSingle(),
+        const [members, own] = await Promise.allSettled([
+          fetchEventPeople(id, undefined, abort.signal),
+          fetchEventMembership(id, userId, abort.signal),
         ]);
-        if (version !== epoch.current) return;
-        if (own.error) throw own.error;
-        setPeople(members);
-        setMorePeople(members.length === 30);
-        setJoined(!!own.data);
+        if (abort.signal.aborted) throw new Error("request_aborted");
+        if (!current()) return;
+        if (own.status === "fulfilled") setJoined(own.value);
+        if (members.status === "fulfilled") {
+          setPeople(members.value);
+          setMorePeople(members.value.length === 30);
+        }
+        if (own.status === "rejected" || members.status === "rejected") setError(true);
         void trackEvent(id, "view");
       }
     } catch {
-      if (version === epoch.current) setError(true);
+      if (version === epoch.current && currentScope.current === scope) setError(true);
     } finally {
-      if (version === epoch.current) setLoading(false);
+      clearTimeout(timeout);
+      if (version === epoch.current && currentScope.current === scope) setLoading(false);
     }
-  }, [id, userId]);
+  }, [id, userId, scope]);
   useFocusEffect(
     useCallback(() => {
+      setBusyScope(null);
       void load();
       return () => {
         epoch.current++;
+        request.current?.abort();
+        personLoading.current = null;
+        mutation.current = null;
       };
     }, [load]),
   );
@@ -99,19 +123,26 @@ export default function EventDetail() {
           day: "2-digit",
         }).format(new Date()));
   const changeMembership = async () => {
+    if (currentScope.current !== scope) return;
     if (!userId) {
       requireAccount({ type: "event", eventId: id });
       return;
     }
-    if (busy) return;
-    setBusy(true);
+    if (mutation.current) return;
+    const operation = {};
+    mutation.current = operation;
+    setBusyScope(scope);
     try {
       await setEventMembership(id, !joined);
-      await load();
+      if (currentScope.current === scope && mutation.current === operation) await load();
     } catch {
-      Alert.alert(t("feed.error"), t("events.error"));
+      if (currentScope.current === scope && mutation.current === operation)
+        Alert.alert(t("feed.error"), t("events.error"));
     } finally {
-      setBusy(false);
+      if (mutation.current === operation) {
+        mutation.current = null;
+        setBusyScope(null);
+      }
     }
   };
   const askJoin = () => {
@@ -132,31 +163,34 @@ export default function EventDetail() {
     );
   };
   const openOfficial = async () => {
+    if (!event || currentScope.current !== scope) return;
     try {
-      const url = new URL(event!.source_url);
+      const url = new URL(event.source_url);
       if (url.protocol !== "https:") throw new Error("url");
       await Linking.openURL(url.toString());
-      if (userId) void trackEvent(id, "official");
+      if (userId && currentScope.current === scope) void trackEvent(event.id, "official");
     } catch {
       Alert.alert(t("feed.error"), t("events.error"));
     }
   };
   const loadPeople = async () => {
-    if (personLoading.current || !morePeople) return;
-    personLoading.current = true;
+    if (personLoading.current || !morePeople || !userId || currentScope.current !== scope) return;
+    const operation = {};
+    personLoading.current = operation;
     const version = epoch.current;
     try {
       const page = await fetchEventPeople(id, people[people.length - 1]);
-      if (version !== epoch.current) return;
+      if (version !== epoch.current || currentScope.current !== scope) return;
       setPeople((prev) => [
         ...prev,
         ...page.filter((p) => !prev.some((x) => x.user_id === p.user_id)),
       ]);
       setMorePeople(page.length === 30);
     } catch {
-      Alert.alert(t("feed.error"), t("events.error"));
+      if (version === epoch.current && currentScope.current === scope)
+        Alert.alert(t("feed.error"), t("events.error"));
     } finally {
-      personLoading.current = false;
+      if (personLoading.current === operation) personLoading.current = null;
     }
   };
   return (

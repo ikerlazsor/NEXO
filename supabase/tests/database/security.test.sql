@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(36);
+select plan(37);
 
 select is(
   (
@@ -44,8 +44,8 @@ select is(
       and p.prosecdef
       and has_function_privilege('anon', p.oid, 'execute')
   ),
-    3::bigint,
-  'anon can execute only the reviewed signed-out username and guest feed RPCs'
+    6::bigint,
+  'anon can execute only the reviewed registration, plan feed/search/share and external event RPCs'
 );
 
 select ok(
@@ -58,8 +58,7 @@ select ok(
 );
 
 select ok(
-  has_function_privilege('anon', 'public.get_guest_feed()', 'execute')
-  or has_function_privilege('anon', 'public.get_guest_feed(double precision, double precision, integer)', 'execute'),
+  has_function_privilege('anon', 'public.get_guest_feed(double precision, double precision, integer)', 'execute'),
   'signed-out clients can load the public guest feed'
 );
 

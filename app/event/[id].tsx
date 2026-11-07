@@ -251,6 +251,11 @@ export default function EventDetail() {
                     })
                   : t("events.dateUnknown"))}
             </Text>
+            {event.end_date !== event.start_date && (
+              <Text style={[s.paragraph, { color: colors.textMuted }]}>
+                {t("events.calendarNotice")}
+              </Text>
+            )}
             <View style={s.row}>
               <Ionicons
                 name="location-outline"

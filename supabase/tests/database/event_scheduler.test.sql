@@ -1,0 +1,16 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(9);
+select ok(not has_function_privilege('anon','public.request_madrid_event_sync()','execute'), 'anonymous users cannot trigger imports');
+select ok(not has_function_privilege('authenticated','public.request_madrid_event_sync()','execute'), 'mobile users cannot trigger imports');
+select ok(has_function_privilege('service_role','public.request_madrid_event_sync()','execute'), 'service retains scheduler access');
+select is((select count(*)::int from cron.job where jobname='nexo-madrid-events-daily' and schedule='20 5 * * *'), 1, 'daily Madrid job is unique');
+select is((select count(*)::int from cron.job where jobname='nexo-archive-ended-plans' and schedule='*/5 * * * *'), 1, 'server maintenance replaces client calls');
+select ok(not has_function_privilege('authenticated','public.archive_all_ended_plans()','execute'), 'global maintenance is no longer a mobile API');
+update public.event_providers set enabled=false where id='madrid';
+select is(public.request_madrid_event_sync(), null::bigint, 'disabled provider never queues requests');
+update public.event_providers set enabled=true, format_verified_at=null where id='madrid';
+select is(public.request_madrid_event_sync(), null::bigint, 'unreviewed provider never queues requests');
+select ok(has_function_privilege('service_role','public.archive_all_ended_plans()','execute'), 'service maintenance remains available');
+select * from finish();
+rollback;

@@ -57,3 +57,4 @@ builds/
 
 # Supabase local branch metadata
 supabase/.branches/
+supabase/functions/sync-madrid-events/index.ts

@@ -188,13 +188,13 @@ export const EventCard = memo(function EventCard({
               size="small"
               color={joined ? JOINED_PLAN_COLORS.text : "#FFF"}
             />
-          ) : (
+          ) : joined ? (
             <Ionicons
-              name={joined ? "checkmark-circle" : "add"}
+              name="checkmark-circle"
               size={18}
-              color={joined ? JOINED_PLAN_COLORS.text : "#FFF"}
+              color={JOINED_PLAN_COLORS.text}
             />
-          )}
+          ) : null}
           <Text
             style={[joined ? actionStyles.joinedLabel : actionStyles.label]}
           >

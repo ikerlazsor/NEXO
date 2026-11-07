@@ -154,7 +154,6 @@ export async function runPlanLifecycleMaintenance(): Promise<void> {
         maintenanceTimer = null;
         lastPurgeAt = Date.now();
         void Promise.all([
-            supabase.rpc('archive_all_ended_plans'),
             supabase.rpc('purge_ended_plan_invites'),
             supabase.rpc('purge_expired_plan_chats'),
             supabase.rpc('purge_past_saved_plans'),

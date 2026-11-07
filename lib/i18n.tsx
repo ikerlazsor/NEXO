@@ -28,6 +28,7 @@ export const LANG_OPTIONS: { code: Lang; label: string; flag: string; name: stri
 type Dict = Record<string, string>;
 
 const es: Dict = {
+    "events.calendarNotice": "Actividad con un rango de fechas. Consulta las sesiones, horarios y días de apertura en la web oficial.",
     "events.previewExamples": "Ver ejemplos",
     "events.previewAllCovers": "Ver todas las subcategorías ({count})",
     "events.dataAdapted": "Datos normalizados por Nexo. Portadas ilustrativas del catálogo de Nexo.",
@@ -2059,6 +2060,7 @@ const es: Dict = {
 };
 
 const en: Dict = {
+    "events.calendarNotice": "Activity with a date range. Check sessions, times and opening days on the official website.",
     "events.previewExamples": "Show examples",
     "events.previewAllCovers": "Show all subcategories ({count})",
     "events.dataAdapted": "Data normalized by Nexo. Illustrative covers from the Nexo catalog.",

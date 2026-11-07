@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 "use strict";
-const fs = require("node:fs");
 const {
   classifyExternalEvent,
 } = require("../lib/externalEventClassification.cjs");
@@ -182,7 +181,15 @@ function normalizeMadridSnapshot(payload, now = new Date()) {
       start_date: start,
       end_date: end,
       starts_at: exact?.toISOString() || null,
-      schedule: text(field(row, ["time", "TIME", "horario"]), 500) || null,
+      schedule:
+        [
+          text(field(row, ["time", "TIME", "horario"]), 1000),
+          text(field(row, ["excluded-days", "dias-excluidos"]), 4000)
+            ? `Días excluidos: ${text(field(row, ["excluded-days", "dias-excluidos"]), 4000)}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · ") || null,
       venue: venue || null,
       latitude: coordinate(geo.latitude ?? row.latitude, 90),
       longitude: coordinate(geo.longitude ?? row.longitude, 180),
@@ -232,6 +239,7 @@ function normalizeMadridEvents(payload, now = new Date()) {
 }
 if (require.main === module) {
   try {
+    const fs = require("node:fs");
     const payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
     const result = normalizeMadridSnapshot(payload);
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");

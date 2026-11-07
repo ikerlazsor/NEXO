@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 "use strict";
-const fs = require("node:fs");
 const { createHash } = require("node:crypto");
 const { fetchMadridDocument, MAX_BYTES } = require("./madrid-events-fetch.cjs");
 const { normalizeMadridSnapshot } = require("./madrid-events-preview.cjs");
@@ -50,6 +49,7 @@ async function main({
 } = {}) {
   const file = args.find((arg) => arg.startsWith("--file="))?.slice(7);
   const reportFile = args.find((arg) => arg.startsWith("--report="))?.slice(9);
+  const fs = file || reportFile ? require("node:fs") : null;
   let document;
   if (file) {
     if (fs.statSync(file).size > MAX_BYTES)
@@ -93,7 +93,11 @@ async function main({
   if (env.MADRID_EVENTS_IMPORT_ENABLED !== "true")
     throw new Error("Import disabled pending provider review");
   const endpoint = new URL(env.NEXO_EVENTS_SUPABASE_URL || "");
-  if (endpoint.hostname === "nixeproyzxvqzyrvsxcx.supabase.co")
+  if (
+    endpoint.hostname === "nixeproyzxvqzyrvsxcx.supabase.co" &&
+    (env.MADRID_EVENTS_PRODUCTION_ENABLED !== "true" ||
+      env.NEXO_EVENTS_TARGET_PROJECT_REF !== "nixeproyzxvqzyrvsxcx")
+  )
     throw new Error("Production writes are forbidden by this pilot");
   if (
     endpoint.protocol !== "https:" &&
@@ -133,9 +137,13 @@ async function main({
   );
   if (!response.ok)
     throw new Error(
-      `Atomic import failed: HTTP ${response.status}. Check local/staging server logs.`,
+      `Atomic import failed: HTTP ${response.status}. Check server logs.`,
     );
-  log(`Imported ${await response.json()} events atomically`);
+  const imported = await response.json();
+  if (!Number.isInteger(imported) || imported !== snapshot.events.length)
+    throw new Error("Import response count does not match the snapshot");
+  log(`Imported ${imported} events atomically`);
+  return { imported, raw: snapshot.rawCount };
 }
 if (require.main === module)
   main().catch((e) => {

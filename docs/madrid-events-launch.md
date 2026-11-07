@@ -1,6 +1,6 @@
 # Agenda de Madrid: estado público · 7 de noviembre de 2026
 
-**Backend de producción activado y comprobado. La nueva app móvil todavía no está distribuida.** La autorización para desplegar Supabase y publicar la funcionalidad se recibió el 7 de noviembre. No se ha modificado `main` ni hecho merge de la PR #44.
+**Backend de producción activado y comprobado. Distribución móvil iniciada; disponibilidad pública aún no verificada.** La autorización para desplegar Supabase y publicar la funcionalidad se recibió el 7 de noviembre. No se ha modificado `main` ni hecho merge de la PR #44.
 
 ## Completado en producción
 
@@ -17,15 +17,18 @@ Evidencia: [informe de despliegue](data/madrid-production-deployment-2026-11-07.
 
 La versión preparada es 1.0.11 y requiere un binario nuevo por la dependencia nativa `react-native-view-shot`. Se ha separado su runtime para no enviar una OTA incompatible a los binarios actuales.
 
-Se intentó la compilación EAS con las credenciales Android existentes. La subida del archivo del proyecto falló con HTTP 403: el entorno todavía no permite `storage.googleapis.com`, destino confirmado mediante la API oficial de Expo. No se llegó a iniciar una compilación nueva ni a enviar una versión a las tiendas.
+El bloqueo de subida a `storage.googleapis.com` está resuelto y comprobado en el nuevo entorno publicado. Se iniciaron los dos builds de producción sobre `edfb3f0`, con las credenciales existentes y sin repetir migraciones ni importaciones.
 
-El borrador del entorno ya conserva los dominios y secretos existentes y añade ese hostname. Hay que revisar/guardar el cambio de red y publicar el entorno para aplicarlo. Después:
+Builds y envíos:
 
-1. Reanudar las compilaciones `production` de Android/iOS con el código de esta rama.
-2. Enviar los artefactos concretos a sus tiendas; resolver cualquier credencial de tienda que falte.
-3. Completar la revisión y distribución pública de Apple/Google. Una carga a TestFlight no equivale a publicar en App Store.
+- Android 1.0.11/versionCode 21 compilado: [build](https://expo.dev/accounts/ikerlazsor/projects/nexo/builds/2b3b2ddf-8fd8-4ddb-85ca-b6b1c618e0b7), [envío a Google Play producción](https://expo.dev/accounts/ikerlazsor/projects/nexo/submissions/c687a00a-460b-4e7d-836d-d312f143d9ed). El build terminó correctamente. Google rechazó el envío con HTTP 403: «Release in track targeting no countries». Antes de reintentar, entrar en NEXO → Producción → Países/regiones en Play Console y habilitar España o los mercados donde se quiera distribuir. Se conserva el destino `production`/`completed`; no se cambia a pruebas internas para evitar ese requisito.
+- iOS 1.0.11/build 1.0.21: [build](https://expo.dev/accounts/ikerlazsor/projects/nexo/builds/fa35602d-1362-4c6d-ab83-58614c5ed584) y [envío a App Store Connect](https://expo.dev/accounts/ikerlazsor/projects/nexo/submissions/88660cc7-c6b9-41d9-8222-e173352679e6) completados. No equivale a aprobación ni distribución pública.
 
-Las pruebas manuales en dispositivos se omiten por instrucción del usuario. Pasan TypeScript, suite unitaria, 166 comprobaciones SQL locales, lint sin errores (72 advertencias previas), Chromium y exportaciones Hermes Android/iOS. No se presentan estas exportaciones como APK/IPA compilados.
+Para iOS queda crear/abrir la versión 1.0.11 en [App Store Connect](https://appstoreconnect.apple.com/apps/6804630497/distribution), seleccionar el build 1.0.21 cuando termine su procesamiento, añadir las [novedades preparadas](release-notes-1.0.11.md) y enviar a revisión. La configuración automática de grupos TestFlight se omitió por un 403 de acceso a Apple desde este entorno; el envío remoto mediante EAS sí finalizó.
+
+El estado observado de cada job se conserva en el [informe de despliegue](data/madrid-production-deployment-2026-11-07.json). No se deben relanzar los builds ni duplicar sus envíos al reanudar una tarea.
+
+Las pruebas manuales en dispositivos se omiten por instrucción del usuario. Pasan TypeScript, suite unitaria, 166 comprobaciones SQL locales, lint sin errores (72 advertencias previas), Chromium y exportaciones Hermes Android/iOS. Además, los builds nativos EAS de Android e iOS han finalizado correctamente; esto no equivale a pruebas en dispositivos.
 
 ## Diseño y calidad
 

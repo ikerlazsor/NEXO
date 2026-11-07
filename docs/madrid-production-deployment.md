@@ -2,7 +2,7 @@
 
 La autorización para activar Supabase y distribuir la app se recibió el 7 de noviembre de 2026. Se omiten las pruebas manuales en dispositivos a petición del usuario. El resultado real de cada despliegue debe registrarse por separado: preparar estos comandos no acredita que se hayan ejecutado.
 
-Estado comprobado: backend desplegado, proveedor habilitado, 1.385 actividades y tarea diaria probada con HTTP 200. La distribución móvil sigue pendiente porque el permiso de red para subir a `storage.googleapis.com` está guardado en el borrador pero no aplicado. Ver [estado actual](madrid-events-launch.md).
+Estado comprobado: backend desplegado, proveedor habilitado, 1.385 actividades y tarea diaria probada con HTTP 200. El bloqueo de red de subida está resuelto. Ambos builds nativos finalizaron; iOS ya está enviado a App Store Connect. Google rechazó Android porque producción no tiene países habilitados: hay que configurarlos en Play Console antes de reintentar el mismo build. La aprobación/publicación de las tiendas sigue pendiente. Consultar los IDs y el estado observado en [estado actual](madrid-events-launch.md) antes de reejecutar comandos.
 
 ## Acceso
 

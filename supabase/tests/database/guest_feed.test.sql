@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(5);
+select plan(10);
 
 insert into auth.users (
   id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -51,6 +51,13 @@ insert into public.planes (
     true, false, 'abierto'
   );
 
+insert into public.planes(id,creador_id,titulo,categoria,fecha_evento,maximo_participantes,solo_amigos,estado)
+values
+  ('53000000-0000-0000-0000-000000000035','50000000-0000-0000-0000-000000000005','Solo amigos','DEPORTES',now()+interval '2 days',8,true,'abierto'),
+  ('54000000-0000-0000-0000-000000000045','50000000-0000-0000-0000-000000000005','Chat directo','Chat',now()+interval '2 days',8,false,'abierto'),
+  ('55000000-0000-0000-0000-000000000055','50000000-0000-0000-0000-000000000005','Chat de grupo','Grupo',now()+interval '2 days',8,false,'abierto'),
+  ('56000000-0000-0000-0000-000000000065','50000000-0000-0000-0000-000000000005','Cancelado','DEPORTES',now()+interval '2 days',8,false,'cancelado');
+
 set local role anon;
 select set_config('request.jwt.claim.sub', '', true);
 
@@ -70,17 +77,25 @@ select isnt(
   'guest can load a public plan detail'
 );
 
-select is(
+-- Contract established by 20261007150000: a UUID link grants read access to a
+-- meetup, including private/friends-only plans. It never grants chat access.
+select isnt(
   public.get_guest_plan('52000000-0000-0000-0000-000000000025'),
   null,
-  'guest cannot load a private plan detail'
+  'private meetup shared by UUID remains readable through its link'
 );
+
+select ok(not (public.get_guest_feed() @> jsonb_build_array(jsonb_build_object('id','53000000-0000-0000-0000-000000000035'))), 'friends-only meetup stays out of the guest feed');
+select isnt(public.get_guest_plan('53000000-0000-0000-0000-000000000035'),null,'friends-only meetup shared by UUID remains readable');
+select is(public.get_guest_plan('54000000-0000-0000-0000-000000000045'),null,'direct chat is never exposed by a shared UUID');
+select is(public.get_guest_plan('55000000-0000-0000-0000-000000000055'),null,'group chat is never exposed by a shared UUID');
+select is(public.get_guest_plan('56000000-0000-0000-0000-000000000065'),null,'cancelled meetup is not exposed by a shared UUID');
 
 reset role;
 
 select ok(
   (
-    has_function_privilege('anon', 'public.get_guest_feed()', 'execute')
+    has_function_privilege('anon', 'public.get_guest_feed(double precision, double precision, integer)', 'execute')
     or has_function_privilege('anon', 'public.get_guest_feed(double precision, double precision, integer)', 'execute')
   )
   and has_function_privilege('anon', 'public.get_guest_plan(uuid)', 'execute')

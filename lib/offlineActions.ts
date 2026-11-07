@@ -1,4 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createPersistentQueue } from './persistentQueue';
+import { getAuthUser } from './auth';
 import { getIsOnline, subscribeNetwork } from './network';
 import { withRetry } from './retry';
 import { supabase } from './supabase';
@@ -36,6 +37,8 @@ export type OfflineAction =
 
 let flushInflight: Promise<void> | null = null;
 let networkHooked = false;
+let outboxGeneration = 0;
+const queue = createPersistentQueue<OfflineAction>(OUTBOX_KEY);
 
 function isUniqueViolation(error: { code?: string; message?: string } | null | undefined): boolean {
     const code = String(error?.code || '');
@@ -43,42 +46,30 @@ function isUniqueViolation(error: { code?: string; message?: string } | null | u
     return code === '23505' || msg.includes('duplicate') || msg.includes('unique');
 }
 
-async function readQueue(): Promise<OfflineAction[]> {
-    try {
-        const raw = await AsyncStorage.getItem(OUTBOX_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw) as OfflineAction[];
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-}
-
-async function writeQueue(items: OfflineAction[]): Promise<void> {
-    await AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
+export async function discardOfflineActions(): Promise<void> {
+    outboxGeneration += 1;
+    await queue.clear();
 }
 
 function ensureNetworkHook() {
     if (networkHooked) return;
     networkHooked = true;
     subscribeNetwork((online) => {
-        if (online) void flushOfflineActions();
+        if (online) void flushOfflineActions().catch(() => {});
     });
 }
 
 async function enqueue(action: OfflineAction): Promise<void> {
     ensureNetworkHook();
-    const q = await readQueue();
-    const dup = q.some((item) => {
-        if (item.kind !== action.kind || item.planId !== action.planId || item.userId !== action.userId) {
-            return false;
-        }
-        if (action.kind === 'join' && item.kind === 'join') return item.estado === action.estado;
-        return true;
+    await queue.update((q) => {
+        // Only a repeated latest intent is redundant. save → unsave → save must
+        // preserve the final save, as must join → leave → join.
+        const family = (item: OfflineAction) => item.kind === 'save' || item.kind === 'unsave' ? 'save' : 'membership';
+        const previous = [...q].reverse().find((item) => item.planId === action.planId && item.userId === action.userId && family(item) === family(action));
+        const duplicate = previous?.kind === action.kind &&
+            (previous.kind !== 'join' || action.kind !== 'join' || previous.estado === action.estado);
+        return duplicate ? q : [...q, action];
     });
-    if (dup) return;
-    q.push(action);
-    await writeQueue(q);
 }
 
 function newId(): string {
@@ -291,11 +282,29 @@ export async function flushOfflineActions(): Promise<void> {
     if (flushInflight) return flushInflight;
 
     flushInflight = (async () => {
-        let q = await readQueue();
+        const generation = outboxGeneration;
+        const q = await queue.read();
         if (!q.length) return;
         const remaining: OfflineAction[] = [];
 
-        for (const item of q) {
+        for (const [index, item] of q.entries()) {
+            if (generation !== outboxGeneration) return;
+            if (!getIsOnline()) {
+                remaining.push(...q.slice(index));
+                break;
+            }
+            let user;
+            try {
+                user = await getAuthUser();
+            } catch {
+                remaining.push(...q.slice(index));
+                break;
+            }
+            if (generation !== outboxGeneration) return;
+            if (!user || user.id !== item.userId) {
+                remaining.push(item);
+                continue;
+            }
             try {
                 if (item.kind === 'join') {
                     const { error } = await withRetry(async () => {
@@ -311,14 +320,17 @@ export async function flushOfflineActions(): Promise<void> {
                         remaining.push(item);
                         continue;
                     }
+                    if (generation !== outboxGeneration) return;
                     try {
                         const { clearPendingPlanInvitesForMember } = await import('./planInvites');
+                        if (generation !== outboxGeneration) return;
                         void clearPendingPlanInvitesForMember(item.planId, item.userId);
                     } catch {
                         /* ignore */
                     }
                     try {
                         const { notifyPlanJoin, schedulePlanLifecycleReminders } = await import('./push');
+                        if (generation !== outboxGeneration) return;
                         notifyPlanJoin(item.planId, item.estado);
                         if (item.estado === 'aceptado') {
                             void schedulePlanLifecycleReminders({
@@ -345,8 +357,10 @@ export async function flushOfflineActions(): Promise<void> {
                         remaining.push(item);
                         continue;
                     }
+                    if (generation !== outboxGeneration) return;
                     if (item.wasJoined) {
                         const { promoteWaitlist } = await import('./participants');
+                        if (generation !== outboxGeneration) return;
                         await promoteWaitlist(item.planId);
                     }
                     continue;
@@ -367,8 +381,11 @@ export async function flushOfflineActions(): Promise<void> {
                 remaining.push(item);
             }
         }
-        await writeQueue(remaining);
-    })().finally(() => {
+        const completed = new Set(q.filter((item) => !remaining.includes(item)).map((item) => item.id));
+        await queue.update((latest) => generation === outboxGeneration ? latest.filter((item) => !completed.has(item.id)) : latest);
+    })().catch(() => {
+        // Leave the persisted queue intact when local storage/session lookup fails.
+    }).finally(() => {
         flushInflight = null;
     });
 

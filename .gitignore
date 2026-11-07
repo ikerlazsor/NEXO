@@ -54,3 +54,7 @@ tsc-out.txt
 builds/
 .tmp-ios-bundle/
 .tmp-eas-log*.txt
+
+# Supabase local branch metadata
+supabase/.branches/
+supabase/functions/sync-madrid-events/index.ts

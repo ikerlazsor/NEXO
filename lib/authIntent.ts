@@ -11,6 +11,7 @@ export type AuthIntent =
     | { type: 'chats' }
     | { type: 'my-plans' }
     | { type: 'search' }
+    | { type: 'event'; eventId: string }
     | { type: 'generic' };
 
 export async function setPendingAuthIntent(intent: AuthIntent): Promise<void> {
@@ -46,6 +47,7 @@ export function hrefForAuthIntent(intent: AuthIntent | null): Href {
     if (intent.type === 'join' || intent.type === 'save-plan') {
         return { pathname: '/plan/[id]', params: { id: intent.planId } };
     }
+    if (intent.type === 'event') return { pathname: '/event/[id]', params: { id: intent.eventId } };
     if (intent.type === 'view-profile') {
         return { pathname: '/user-profile/[id]', params: { id: intent.userId } };
     }

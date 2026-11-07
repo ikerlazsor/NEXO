@@ -125,7 +125,7 @@ import {
     profileCardsFromRows,
     type PublicProfileCard,
 } from '../../lib/profileData';
-import { type Genero } from '../../lib/profileFields';
+import { parseGenero, type Genero } from '../../lib/profileFields';
 import { type AffinityPerson } from '../../lib/profileAffinity';
 import {
     peekOrComputePairAffinity,
@@ -699,7 +699,7 @@ export default function PlanDetailScreen() {
                     : nextMembership;
             const nextFriends = friendsData.map((f) => f.id);
             const nextCoincided = [...coincidedSet];
-            const nextGenero = (myProfileRes.data?.genero as Genero) ?? null;
+            const nextGenero = parseGenero(myProfileRes.data?.genero);
             const nextSaved = !!savedRes.data;
             setCurrentUserIsOrganizer(myProfileRes.data?.es_organizador === true);
             rememberViewerIsOrganizer(myProfileRes.data?.es_organizador === true);
@@ -1649,7 +1649,6 @@ export default function PlanDetailScreen() {
                 currentUserId={sessionUserId ?? currentUserId}
                 preferredTeam={preferredTeam}
                 enabled={
-                    footballLineupMode !== 'partido' &&
                     !currentUserIsOrganizer &&
                     (!plan || !isPastPlan)
                 }

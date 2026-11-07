@@ -58,13 +58,12 @@ import { planIsOrganizer } from '../lib/organizer';
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { type ThemeColors } from '../theme';
 
+import { planCardActionStyles, JOINED_PLAN_COLORS } from './planCardActions';
 const PRIMARY = '#4DA6FF';
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const SUCCESS = '#22C55E';
-const JOINED_VIVID = '#10B981';
-const JOINED_VIVID_BG = '#D1FAE5';
-const JOINED_VIVID_BORDER = '#34D399';
+const JOINED_VIVID = JOINED_PLAN_COLORS.text;
 const DANGER = '#EF4444';
 const DANGER_DARK = '#DC2626';
 const DANGER_BG = '#FEF2F2';
@@ -1124,6 +1123,7 @@ function createPlanCardStyles(c: ThemeColors) {
     const DANGER_DARK = c.dangerDark;
     const DANGER_BG = c.dangerSoft;
     const isDark = c.statusBar === 'light';
+    const actionStyles = planCardActionStyles(isDark);
     return StyleSheet.create({
     card: { borderRadius: 26, marginBottom: 22, overflow: 'hidden', elevation: 10, shadowColor: isDark ? '#000' : '#1E3A8A', shadowOpacity: isDark ? 0.45 : 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, backgroundColor: c.surface },
     cardFull: { padding: 3, overflow: 'visible', elevation: 10, shadowColor: DANGER_DARK, shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderRadius: 28 },
@@ -1370,38 +1370,11 @@ function createPlanCardStyles(c: ThemeColors) {
         backgroundColor: DANGER,
     },
     ownerDeleteBtnText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
-    joinButton: {
-        backgroundColor: '#1D4ED8',
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        paddingVertical: 12,
-        paddingHorizontal: 18,
-        borderRadius: 14,
-        minWidth: 118,
-        shadowColor: '#1E3A8A',
-        shadowOpacity: isDark ? 0.35 : 0.28,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 3 },
-        elevation: 4,
-    },
-    joinButtonText: { color: '#FFF', fontWeight: '800', fontSize: 15 },
+    joinButton: actionStyles.button,
+    joinButtonText: actionStyles.label,
     requestHint: { fontSize: 12, fontWeight: '600', color: c.textMuted, textAlign: 'center', lineHeight: 16 },
-    joinedButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        paddingVertical: 12,
-        paddingHorizontal: 18,
-        borderRadius: 14,
-        minWidth: 118,
-        backgroundColor: JOINED_VIVID_BG,
-        borderWidth: 2,
-        borderColor: JOINED_VIVID_BORDER,
-    },
-    joinedButtonText: { color: JOINED_VIVID, fontWeight: '800', fontSize: 15 },
+    joinedButton: actionStyles.joined,
+    joinedButtonText: actionStyles.joinedLabel,
     requestedButton: {
         flexDirection: 'row',
         alignItems: 'center',

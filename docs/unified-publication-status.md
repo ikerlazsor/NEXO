@@ -1,56 +1,38 @@
-# Publicación del feed único — 8 de noviembre de 2026
+# Feed único publicado — 8 de noviembre de 2026
 
-Autorización recibida: publicar ahora con Madrid, dejando Ticketmaster para más adelante. No se ha modificado `main` ni hecho merge.
+**Backend y actualizaciones móviles publicados en producción y verificados.** Se mantiene Madrid activo y Ticketmaster desactivado. No se ha modificado `main` ni hecho merge.
 
-## Backend publicado y verificado
+## Actualizaciones móviles
 
-- Aplicadas y registradas `20261108120000_confirmed_social_feed.sql` y `20261108180000_consolidate_legacy_event_groups.sql` en `nixeproyzxvqzyrvsxcx`.
+Se publicaron los bundles ya preparados, sin recompilar ni repetir migraciones. Las horas siguientes corresponden a Madrid.
+
+| Apps destinatarias | Runtime | Hora de publicación | Grupo de Expo | Plataformas |
+| --- | --- | --- | --- | --- |
+| Apps públicas 1.0.10 | 1.0.0 | 19:28 | `ccfda7cb-a70a-4118-a7af-266470f9c20e` | Android e iOS |
+| Binarios 1.0.11 | 1.0.11 | 19:29 | `721e2cc4-28a2-479f-b2e5-33af8fdb8e83` | Android e iOS |
+
+Los cuatro manifiestos públicos de `u.expo.dev` se consultaron con el canal `production` y cada combinación de plataforma/runtime. Todos devolvieron el UUID de la publicación esperada y el SHA-256 exacto del bundle exportado. La comprobación terminó a las 19:30, hora de Madrid.
+
+La variante 1.0.10 conserva el mismo código de funcionalidad y las versiones JS originales de sus módulos nativos: view-shot 5.1.1 y expo-asset 12.0.13. Se verificaron los binarios existentes Android versionCode 19 e iOS build 1.0.19, SDK 54 y React Native 0.81.5. Su checkout y dependencias son independientes (`release/unified-feed-runtime-1.0.0`, commit `eaf8c1c`). La variante 1.0.11 conserva view-shot 4.0.3 y expo-asset 12.0.14 (`feature/unified-social-feed`, commit de publicación `b0640b3`, código cliente de `fbe22f8`). Expo selecciona la variante por runtime.
+
+## Backend
+
+- Las migraciones `20261108120000_confirmed_social_feed.sql` y `20261108180000_consolidate_legacy_event_groups.sql` ya estaban aplicadas y registradas en `nixeproyzxvqzyrvsxcx`; no se repitieron en esta reanudación.
 - Importador Edge actualizado, con JWT de pasarela y secreto interno conservados. Primera sincronización real: HTTP 200, 359 registros aceptados de 1.385 registros de origen. La tarea diaria sigue activa.
 - Se consolidaron tres duplicados heredados. Las seis filas afectadas no tenían integrantes ni mensajes en producción. La migración también se probó con integrantes, chat, denuncias e historial sintéticos para verificar que los conserva.
-- Lectura pública comprobada a las 17:12 UTC: 353 eventos publicables, cero pares duplicados; todos los de la página tienen hora y ubicación confirmadas. Ficha con coordenadas, filtros de subcategoría y resúmenes sin identidades para invitados verificados por HTTP. El recuento baja conforme comienzan las actividades.
-- Madrid habilitado; Ticketmaster deshabilitado. No se ha solicitado ni utilizado una clave de Ticketmaster.
+- La comprobación HTTP anterior de las 18:12, hora de Madrid, mostró 353 eventos publicables, cero pares duplicados, horas/coordenadas completas, filtros correctos y resúmenes sin identidades para invitados. El recuento disminuye conforme comienzan las actividades.
+- Se volvió a comprobar por lectura durante esta publicación: Madrid habilitado y Ticketmaster deshabilitado. No se ha solicitado ni utilizado una clave de Ticketmaster.
 
-Evidencia: [verificación pública](data/unified-live-verification-2026-11-08.json) e [informe de publicación](data/unified-production-deployment-2026-11-08.json).
+## Bloqueo de red resuelto
 
-## Actualización móvil preparada, todavía sin publicar
+La subida anterior fue rechazada con HTTP 403, `Domain forbidden`, para `update-assets-upload-production.storage.googleapis.com`. El propietario guardó y publicó el entorno. Se comprobó la política aplicada en el nuevo entorno y una conexión nueva antes de reintentar. Ambas subidas firmadas terminaron correctamente; el bloqueo queda resuelto.
 
-Los dos juegos de bundles se exportaron correctamente y se cargaron los mapas de recursos, pero la subida de los bundles fue rechazada antes de crear un grupo nuevo. Diagnóstico de red limitado a dominio/estado: HTTP 403, `Domain forbidden`, al hacer POST a `update-assets-upload-production.storage.googleapis.com`. No es un rechazo de Apple/Google ni un problema con las claves de Madrid o Ticketmaster.
+Los bundles permanecen bajo `/workspace/NEXO/builds/ota/unified-feed-2026-11-08/`, ignorados por Git. No volver a ejecutar los comandos de publicación para esta entrega: ambos grupos ya existen.
 
-El dominio exacto se guardó en el borrador de configuración; la herramienta confirmó `status=saved` y `requires_publish=true`. Guardar el borrador no aplica la política de red al entorno actual. El propietario debe revisar/guardar el cambio y publicar el entorno. No se debe repetir la subida hasta comprobar el dominio permitido en un estado vigente y con política aplicada.
+## Validación y uso
 
-| Binarios destinatarios | Runtime OTA | Código | Dependencias nativas de la exportación |
-| --- | --- | --- | --- |
-| Apps públicas 1.0.10 | 1.0.0 | `eaf8c1c`, rama `release/unified-feed-runtime-1.0.0` | Conserva las del binario existente: view-shot 5.1.1 y expo-asset 12.0.13 |
-| Binarios nuevos 1.0.11 | 1.0.11 | Feed `fbe22f8`, rama `feature/unified-social-feed` | view-shot 4.0.3 y expo-asset 12.0.14 |
+Suite de aplicación aprobada (16 archivos), 222 comprobaciones SQL en diez archivos, TypeScript de ambas variantes, exportaciones Hermes Android/iOS y verificación de los cuatro manifiestos/hashes en producción. No se han realizado pruebas en dispositivos reales. Esta publicación OTA no crea nuevas versiones en las tiendas ni cambia los envíos nativos anteriores.
 
-La variante antigua conserva el mismo código de funcionalidad y usa las versiones JS originales de sus módulos nativos. Se verificaron los binarios de Expo Android versionCode 19 e iOS build 1.0.19, SDK 54 y React Native 0.81.5. La variante se exporta desde un checkout y dependencias independientes. No se envía el wrapper de view-shot 4 a los binarios anteriores. Las actualizaciones se seleccionan por runtime, aunque comparten el canal `production`.
+Para ver la actualización, cerrar NEXO completamente y volver a abrirla con conexión a Internet. Si en la primera apertura aún aparece la versión anterior mientras se descarga, dejar unos segundos y volver a abrirla. La app dispone además de descarga y recarga automática en un momento seguro.
 
-## Retomar cuando se aplique el acceso de red
-
-Los bundles están guardados bajo `/workspace/NEXO/builds/ota/unified-feed-2026-11-08/`, ignorados por Git. El informe contiene sus SHA-256. No volver a aplicar las migraciones ni recompilar: ya están listas ambas variantes.
-
-Desde `/workspace/NEXO-legacy-ota`, publicar primero la variante de las apps ya instaladas:
-
-```sh
-npm exec --yes --package=eas-cli@27.5.0 -- eas update \
-  --channel production --environment production --platform all \
-  --message "Feed único: eventos confirmados de Madrid para apps actuales" \
-  --input-dir /workspace/NEXO/builds/ota/unified-feed-2026-11-08/runtime-1.0.0 \
-  --skip-bundler --non-interactive --json
-```
-
-Desde `/workspace/NEXO`, publicar la variante de los binarios nuevos:
-
-```sh
-npm exec --yes --package=eas-cli@27.5.0 -- eas update \
-  --channel production --environment production --platform all \
-  --message "Feed único: eventos confirmados de Madrid, integrantes y mapas" \
-  --input-dir /workspace/NEXO/builds/ota/unified-feed-2026-11-08/runtime-1.0.11 \
-  --skip-bundler --non-interactive --json
-```
-
-Usar el checkout indicado en cada comando: `--skip-bundler` también lee su configuración para asignar el runtime. Verificar después los grupos reales, sus dos plataformas y el manifiesto servido por `u.expo.dev` para cada runtime. Solo entonces marcar la actualización móvil como publicada y dar instrucciones para reabrir la app.
-
-## Validación
-
-Suite de aplicación aprobada (16 archivos), 222 comprobaciones SQL en diez archivos, TypeScript de ambas variantes y exportaciones Hermes Android/iOS de ambas variantes. Las pruebas manuales en dispositivos se omiten por petición del usuario. Las nuevas compilaciones y envíos a tiendas de 1.0.11 siguen siendo operaciones separadas; los intentos OTA descritos aquí no han creado versiones en tiendas.
+Evidencia completa, UUID de cada plataforma y hashes: [informe de publicación](data/unified-production-deployment-2026-11-08.json). Comprobación anterior del backend: [verificación pública](data/unified-live-verification-2026-11-08.json).

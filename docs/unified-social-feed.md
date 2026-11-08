@@ -1,6 +1,6 @@
 # Feed social único y eventos confirmados — 8 de noviembre de 2026
 
-Cambios en `feature/unified-social-feed`, sobre la base de #44. El backend se publicó el 8 de noviembre por instrucción del usuario, manteniendo Ticketmaster desactivado. Las dos variantes OTA están exportadas, pero su subida está pendiente de un dominio de red del entorno. Ver [estado de publicación y reanudación](unified-publication-status.md). Los registros de tiendas de 1.0.11 describen la versión anterior.
+Cambios publicados en producción el 8 de noviembre: backend y actualizaciones OTA para Android/iOS, tanto para las apps 1.0.10 existentes como para los binarios 1.0.11. Madrid permanece activo y Ticketmaster desactivado. Se verificaron los cuatro manifiestos servidos por Expo y sus hashes. Ver [registro de publicación](unified-publication-status.md). No se ha modificado `main` ni hecho merge.
 
 ## Comportamiento
 

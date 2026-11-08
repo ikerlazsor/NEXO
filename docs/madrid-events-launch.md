@@ -1,6 +1,6 @@
 # Agenda de Madrid: estado público · 7 de noviembre de 2026
 
-> Actualización del 8 de noviembre: el backend del feed único y la selección de eventos confirmados ya están publicados. La subida OTA de ambas variantes está pendiente de aplicar un dominio de red. Ver [estado actual de publicación](unified-publication-status.md). Este informe describe la versión anterior.
+> Actualización del 8 de noviembre: el feed único y los eventos confirmados ya están publicados en el backend y por OTA para Android/iOS, con variantes para 1.0.10 y 1.0.11. Ticketmaster sigue desactivado. Ver [registro actual de publicación](unified-publication-status.md). Este informe conserva el historial de la versión anterior.
 
 **Backend de producción activado y comprobado. Distribución móvil iniciada; disponibilidad pública aún no verificada.** La autorización para desplegar Supabase y publicar la funcionalidad se recibió el 7 de noviembre. No se ha modificado `main` ni hecho merge de la PR #44.
 

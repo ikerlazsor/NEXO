@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-11-08T17:16:57.988Z",
+  "checkedAt": "2026-11-08T18:31:55.158603+00:00",
   "backend": {
     "published": true,
     "project": "nixeproyzxvqzyrvsxcx",
@@ -28,7 +28,7 @@
     }
   },
   "mobile": {
-    "published": false,
+    "published": true,
     "channel": "production",
     "artifacts": {
       "1.0.0": {
@@ -77,14 +77,95 @@
       "runtime": "1.0.11",
       "sourceCommit": "fbe22f8"
     },
-    "blocker": {
+    "ticketmasterEnabled": false,
+    "publishedAt": "2026-11-08T18:29:37.733Z",
+    "groups": {
+      "1.0.0": {
+        "id": "ccfda7cb-a70a-4118-a7af-266470f9c20e",
+        "publishedAt": "2026-11-08T18:28:33.754Z",
+        "publicationGitCommitHash": "eaf8c1c0dafdb72d9c02254be0f939e5c6199bce",
+        "platforms": [
+          {
+            "platform": "android",
+            "updateId": "01a1bc6b-575a-720e-97c5-adbb9129711e"
+          },
+          {
+            "platform": "ios",
+            "updateId": "01a1bc6b-575a-7f81-812c-acdc4ea6cf3c"
+          }
+        ]
+      },
+      "1.0.11": {
+        "id": "721e2cc4-28a2-479f-b2e5-33af8fdb8e83",
+        "publishedAt": "2026-11-08T18:29:37.733Z",
+        "publicationGitCommitHash": "b0640b3293ec8048700dae558143827c039f64e2",
+        "platforms": [
+          {
+            "platform": "android",
+            "updateId": "01a1bc6c-5145-7c0c-9899-c42d92501553"
+          },
+          {
+            "platform": "ios",
+            "updateId": "01a1bc6c-5145-7ac9-82f3-e6301624b02b"
+          }
+        ]
+      }
+    },
+    "liveManifestVerifications": [
+      {
+        "checkedAt": "2026-11-08T18:30:16.264Z",
+        "channel": "production",
+        "checks": [
+          {
+            "platform": "android",
+            "runtime": "1.0.0",
+            "updateId": "01a1bc6b-575a-720e-97c5-adbb9129711e",
+            "group": "ccfda7cb-a70a-4118-a7af-266470f9c20e",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1bc6b-575a-720e-97c5-adbb9129711e"
+          },
+          {
+            "platform": "ios",
+            "runtime": "1.0.0",
+            "updateId": "01a1bc6b-575a-7f81-812c-acdc4ea6cf3c",
+            "group": "ccfda7cb-a70a-4118-a7af-266470f9c20e",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1bc6b-575a-7f81-812c-acdc4ea6cf3c"
+          }
+        ]
+      },
+      {
+        "checkedAt": "2026-11-08T18:30:27.495Z",
+        "channel": "production",
+        "checks": [
+          {
+            "platform": "android",
+            "runtime": "1.0.11",
+            "updateId": "01a1bc6c-5145-7c0c-9899-c42d92501553",
+            "group": "721e2cc4-28a2-479f-b2e5-33af8fdb8e83",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1bc6c-5145-7c0c-9899-c42d92501553"
+          },
+          {
+            "platform": "ios",
+            "runtime": "1.0.11",
+            "updateId": "01a1bc6c-5145-7ac9-82f3-e6301624b02b",
+            "group": "721e2cc4-28a2-479f-b2e5-33af8fdb8e83",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1bc6c-5145-7ac9-82f3-e6301624b02b"
+          }
+        ]
+      }
+    ],
+    "resolvedBlocker": {
       "status": 403,
       "message": "Domain forbidden",
       "hostname": "update-assets-upload-production.storage.googleapis.com",
       "configurationDraftSaved": true,
-      "requiresUserReviewAndPublish": true
-    },
-    "ticketmasterEnabled": false
+      "requiresUserReviewAndPublish": false,
+      "resolved": true,
+      "configurationApplied": true
+    }
   },
   "validation": {
     "applicationTestFiles": 16,

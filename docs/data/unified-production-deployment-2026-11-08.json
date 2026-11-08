@@ -1,0 +1,94 @@
+{
+  "checkedAt": "2026-11-08T17:16:57.988Z",
+  "backend": {
+    "published": true,
+    "project": "nixeproyzxvqzyrvsxcx",
+    "migrations": [
+      "20261108120000_confirmed_social_feed.sql",
+      "20261108180000_consolidate_legacy_event_groups.sql"
+    ],
+    "edgeFunction": "sync-madrid-events",
+    "verifyJwt": true,
+    "dailySync": {
+      "ok": true,
+      "imported": 359,
+      "raw": 1385
+    },
+    "legacyDuplicatesMerged": 3,
+    "verification": {
+      "checkedAt": "2026-11-08T17:12:17.362Z",
+      "publishable": 353,
+      "ticketmaster_enabled": false,
+      "duplicate_pairs": 0,
+      "publicPage": 30,
+      "allPageEventsConfirmed": true,
+      "detailMapCoordinates": true,
+      "guestIdentitiesHidden": true,
+      "subcategoryFilter": true
+    }
+  },
+  "mobile": {
+    "published": false,
+    "channel": "production",
+    "artifacts": {
+      "1.0.0": {
+        "directory": "/workspace/NEXO/builds/ota/unified-feed-2026-11-08/runtime-1.0.0",
+        "bundles": [
+          {
+            "path": "_expo/static/js/android/entry-b673ff342e103d2542c852071ad1ea9e.hbc",
+            "bytes": 17497672,
+            "sha256": "47c801039e658099a66711d6d3016a79eaf3a96f550a6a76a1c5dfa2af2f23d3"
+          },
+          {
+            "path": "_expo/static/js/ios/entry-2f84217248de09f578c7267b4af32197.hbc",
+            "bytes": 17498684,
+            "sha256": "46c5e50d1853e5be8e2c64f0c22b1125af4f44468e4a8ecd1fbdca3f8b6bd81e"
+          }
+        ]
+      },
+      "1.0.11": {
+        "directory": "/workspace/NEXO/builds/ota/unified-feed-2026-11-08/runtime-1.0.11",
+        "bundles": [
+          {
+            "path": "_expo/static/js/android/entry-3d12139363e844a14d0373b8bd7dd27a.hbc",
+            "bytes": 17497516,
+            "sha256": "21a18d37564fc54ce197afbd03d9d7b80ea757f3a845c79384cc64e6bf87dec8"
+          },
+          {
+            "path": "_expo/static/js/ios/entry-df3e8525ff5e844305b22def4306d275.hbc",
+            "bytes": 17498348,
+            "sha256": "a3066f9e1f5a1e1caffad75629db0b59ca0dc5cf607e19e3743e073df15ee81c"
+          }
+        ]
+      }
+    },
+    "legacy": {
+      "nativeAppVersion": "1.0.10",
+      "runtime": "1.0.0",
+      "sourceCommit": "eaf8c1c",
+      "originalNativePackages": {
+        "viewShot": "5.1.1",
+        "expoAsset": "12.0.13"
+      },
+      "typecheck": true
+    },
+    "current": {
+      "nativeAppVersion": "1.0.11",
+      "runtime": "1.0.11",
+      "sourceCommit": "fbe22f8"
+    },
+    "blocker": {
+      "status": 403,
+      "message": "Domain forbidden",
+      "hostname": "update-assets-upload-production.storage.googleapis.com",
+      "configurationDraftSaved": true,
+      "requiresUserReviewAndPublish": true
+    },
+    "ticketmasterEnabled": false
+  },
+  "validation": {
+    "applicationTestFiles": 16,
+    "sqlChecks": 222,
+    "nativeDevicesTested": false
+  }
+}

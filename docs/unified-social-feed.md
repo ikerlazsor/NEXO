@@ -1,6 +1,6 @@
 # Feed social único y eventos confirmados — 8 de noviembre de 2026
 
-Cambios preparados en `feature/unified-social-feed`, sobre la base de #44. No se han aplicado a Supabase de producción ni publicado por OTA o en tiendas. Los registros de publicación de 1.0.11 describen la versión anterior.
+Cambios en `feature/unified-social-feed`, sobre la base de #44. El backend se publicó el 8 de noviembre por instrucción del usuario, manteniendo Ticketmaster desactivado. Las dos variantes OTA están exportadas, pero su subida está pendiente de un dominio de red del entorno. Ver [estado de publicación y reanudación](unified-publication-status.md). Los registros de tiendas de 1.0.11 describen la versión anterior.
 
 ## Comportamiento
 

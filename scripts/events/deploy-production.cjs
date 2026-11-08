@@ -17,6 +17,7 @@ const migrationNames = [
   "20261107120000_event_subcategories.sql",
   "20261107160000_madrid_scheduler_and_server_maintenance.sql",
   "20261108120000_confirmed_social_feed.sql",
+  "20261108180000_consolidate_legacy_event_groups.sql",
 ];
 const literal = (value) => "'" + String(value).replace(/'/g, "''") + "'";
 

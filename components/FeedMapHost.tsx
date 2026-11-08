@@ -48,6 +48,9 @@ import { theme } from '../theme';
 import { cacheGetStale } from '../lib/ttlCache';
 import { lockTabPager, unlockTabPager } from '../lib/tabPagerScroll';
 
+import { useEvents } from '../features/events/useEvents';
+import { eventCoverSource } from '../features/events/covers';
+import type { ExternalEvent } from '../features/events/types';
 const INK = theme.colors.text;
 const SCREEN_W = Dimensions.get('window').width;
 const SCREEN_H = Dimensions.get('window').height;
@@ -71,6 +74,7 @@ const MAP_FOCUS_MS = 280;
 
 type MapPlan = Record<string, unknown> & {
     id: string | number;
+    externalEvent?: ExternalEvent;
     latitud?: number | null;
     longitud?: number | null;
     titulo?: string | null;
@@ -205,6 +209,7 @@ export function FeedMapHost() {
     const [tick, setTick] = useState(0);
     const [remotePlans, setRemotePlans] = useState<MapPlan[] | null>(null);
     const [loadingPlans, setLoadingPlans] = useState(false);
+    const external = useEvents({}, userId, visible);
     const mapRef = useRef<any>(null);
     const carouselRef = useRef<FlatList>(null);
     const pendingPlanIdRef = useRef<string | null>(null);
@@ -324,7 +329,38 @@ export function FeedMapHost() {
     const mapSidePad = Math.max(16, (SCREEN_W - mapCardWidth) / 2);
 
     const cachedPlans = useMemo(() => readMapPlans(userCoords), [userCoords, tick, visible]);
-    const plans = remotePlans ?? cachedPlans;
+    // Keep both kinds represented even when the cached Nexo list fills the cap.
+    const plans = useMemo(() => {
+        const local = sortMapPlans(remotePlans ?? cachedPlans, userCoords);
+        const events: MapPlan[] = external.events.map(event => ({
+            id: `event:${event.id}`,
+            externalEvent: event,
+            latitud: event.latitude,
+            longitud: event.longitude,
+            titulo: event.title,
+            fecha_evento: event.starts_at,
+            categoria: event.category,
+            tipo_deporte: event.subcategory,
+            nombre_ubicacion: event.venue,
+            joinedCount: external.social[event.id]?.count ?? 0,
+            participantsList: external.social[event.id]?.people.map(person => ({
+                id: person.user_id,
+                nombre: person.nombre,
+                avatar_url: person.avatar_url,
+            })) ?? [],
+        }));
+        const nearbyEvents = sortMapPlans(events, userCoords);
+        return sortMapPlans([
+            ...local.slice(0, Math.max(40, 80 - nearbyEvents.length)),
+            ...nearbyEvents.slice(0, Math.max(40, 80 - local.length)),
+        ], userCoords);
+    }, [remotePlans, cachedPlans, external.events, external.social, userCoords]);
+    const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
+    useEffect(() => {
+        if (visible && !eventsLoading && !eventsError && moreEvents && external.events.length < 90) {
+            void loadMoreEvents();
+        }
+    }, [visible, eventsLoading, eventsError, moreEvents, external.events.length, loadMoreEvents]);
 
     const loopedPlans = useMemo(() => {
         if (plans.length === 0) return [] as MapPlan[];
@@ -485,7 +521,8 @@ export function FeedMapHost() {
             const planId = pendingPlanIdRef.current;
             pendingPlanIdRef.current = null;
             if (!planId) return;
-            router.push({ pathname: '/plan/[id]', params: { id: planId } });
+            if (planId.startsWith('event:')) router.push({ pathname: '/event/[id]', params: { id: planId.slice(6) } });
+            else router.push({ pathname: '/plan/[id]', params: { id: planId } });
         }, Platform.OS === 'ios' ? 360 : 280);
         return () => clearTimeout(t);
     }, [visible, router]);
@@ -600,10 +637,10 @@ export function FeedMapHost() {
         const planId = String(plan.id);
         const snap = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY);
         try {
-            seedPlanDetailFromFeed(plan, {
+            if (!plan.externalEvent) { seedPlanDetailFromFeed(plan, {
                 membership: snap?.membershipMap?.[planId] || 'none',
             });
-            prefetchPlanDetail(planId);
+            prefetchPlanDetail(planId); }
         } catch {
             /* ignore */
         }
@@ -818,7 +855,7 @@ export function FeedMapHost() {
                                     >
                                         <View>
                                             <PlanImage
-                                                source={resolvePlanImageSource(item.imagen_url)}
+                                                source={item.externalEvent ? eventCoverSource(item.externalEvent) : resolvePlanImageSource(item.imagen_url)}
                                                 style={styles.mapMiniImage}
                                                 recyclingKey={String(item.id)}
                                                 thumbWidth={280}

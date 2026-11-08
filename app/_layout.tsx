@@ -661,18 +661,18 @@ function RootStack() {
                   options={{
                     presentation: 'modal',
                     animation: 'slide_from_bottom',
-                    animationDuration: 360,
+                    animationDuration: 280,
                     gestureEnabled: true,
                     gestureDirection: 'vertical',
                     fullScreenGestureEnabled: false,
                     animationMatchesGesture: true,
-                    freezeOnBlur: false,
+                    freezeOnBlur: true,
                     contentStyle: { backgroundColor: colors.surface },
                   }}
                 />
                 <Stack.Screen
                   name="edit-profile"
-                  options={{ animation: 'slide_from_right', freezeOnBlur: false }}
+                  options={{ animation: 'slide_from_right', animationDuration: 260, freezeOnBlur: true }}
                 />
                 <Stack.Screen
                   name="edit-profile-place"

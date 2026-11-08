@@ -11,7 +11,8 @@ import {
 import { useT } from "../../lib/i18n";
 import { useAppTheme } from "../../lib/appTheme";
 import { eventClassification, eventCoverSource } from "./covers";
-import type { ExternalEvent, EventSection } from "./types";
+import type { ExternalEvent, EventSection, EventSocialSummary } from "./types";
+import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { PressScale } from "../../components/PressScale";
 import {
   planCardActionStyles,
@@ -59,6 +60,7 @@ export const EventCard = memo(function EventCard({
   onJoin,
   preview = false,
   horizontalInset = 16,
+  social,
 }: {
   event: ExternalEvent;
   variant: "compact" | "editorial";
@@ -68,6 +70,7 @@ export const EventCard = memo(function EventCard({
   onJoin: () => void;
   preview?: boolean;
   horizontalInset?: number;
+  social?: EventSocialSummary;
 }) {
   const { t, lang } = useT();
   const { colors, scheme } = useAppTheme();
@@ -131,6 +134,9 @@ export const EventCard = memo(function EventCard({
             />
             <Text style={[s.metaText, { color: colors.primary }]}>
               {date}
+              {event.starts_at
+                ? ` · ${new Date(event.starts_at).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" })}`
+                : ""}
               {event.end_date !== event.start_date
                 ? ` — ${eventDateLabel({ start_date: event.end_date }, lang)}`
                 : ""}
@@ -155,21 +161,40 @@ export const EventCard = memo(function EventCard({
         <Pressable
           onPress={onOpen}
           accessibilityRole="button"
-          accessibilityLabel={t("events.open")}
+          accessibilityLabel={t("events.going", { n: social?.count ?? 0 })}
           style={s.sourceRow}
         >
-          <View style={[s.sourceIcon, { backgroundColor: colors.primarySoft }]}>
-            <Ionicons
-              name="calendar-outline"
-              size={17}
-              color={colors.primary}
-            />
+          <View style={{ flexDirection: "row", paddingRight: 4 }}>
+            {(social?.people || []).slice(0, 3).map((person, index) => (
+              <View
+                key={person.user_id}
+                style={{
+                  marginLeft: index ? -9 : 0,
+                  borderRadius: 18,
+                  borderWidth: 2,
+                  borderColor: colors.surface,
+                }}
+              >
+                <ProfileAvatar
+                  uri={person.avatar_url}
+                  name={person.nombre}
+                  size={28}
+                />
+              </View>
+            ))}
+            {!social?.people.length && (
+              <Ionicons
+                name="people-outline"
+                size={20}
+                color={colors.primary}
+              />
+            )}
           </View>
           <Text
             style={[s.sourceText, { color: colors.textMuted }]}
             numberOfLines={2}
           >
-            {t("events.source")}
+            {t("events.going", { n: social?.count ?? 0 })}
           </Text>
         </Pressable>
         <PressScale

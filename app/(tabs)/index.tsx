@@ -151,7 +151,6 @@ import {
     getScreenScrollOffset,
     ScreenKeys,
     setScreenFilters,
-    setScreenScrollOffset,
 } from '../../lib/screenState';
 import { canJoinPlanByGender, isSoloChicasPlan } from '../../lib/soloChicas';
 import { wasKickedFromPlan } from '../../lib/planKicks';
@@ -162,10 +161,12 @@ import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
 import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
-import { EventCard, EventTabs } from '../../features/events/EventCards';
+import { EventCard } from '../../features/events/EventCards';
 import { useEvents } from '../../features/events/useEvents';
-import { rankExternalEvents, interleaveSocialRows } from '../../features/events/ranking';
-import type { EventSection, ExternalEvent, EventFilters } from '../../features/events/types';
+import { rankUnifiedFeed, retainFeedOrder } from '../../features/events/ranking';
+import type { ExternalEvent, EventFilters } from '../../features/events/types';
+import { eventJoinErrorKey } from '../../features/events/api';
+import { horizon } from '../../lib/externalEventPolicy.cjs';
 type FeedRow = SocialFeedRow | {kind:'event';id:string;event:ExternalEvent};
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
@@ -189,7 +190,6 @@ export default function HomeScreen() {
 
     const cachedFeed = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY);
 
-    const [eventSection, setEventSection] = useState<EventSection>('forYou');
     const [search, setSearch] = useState(savedFilters.search ?? '');
     const [selectedCategories, setSelectedCategories] = useState<string[]>(() => {
         if (Array.isArray(savedFilters.selectedCategories)) {
@@ -347,6 +347,7 @@ export default function HomeScreen() {
     const [hasMoreFeed, setHasMoreFeed] = useState(true);
     const feedCursorRef = useRef<FeedMoreCursor | null>(null);
     const loadingMoreRef = useRef(false);
+    const unifiedOrderRef = useRef<{ key: string; ids: string[] }>({ key: "", ids: [] });
     const eventFilters = useMemo<EventFilters>(() => {
         const now = new Date();
         const madridDay = (d: Date) =>
@@ -358,33 +359,24 @@ export default function HomeScreen() {
             }).format(d);
         return {
             categories: selectedCategories,
+            subcategories: selectedSubcategories,
             query: search,
             latitude: userCoords?.latitude,
             longitude: userCoords?.longitude,
             radius: userCoords ? (nearbyKm ?? undefined) : undefined,
-            from: dateFilter === 'all' ? undefined : madridDay(now),
+            from: /^\d{4}-\d{2}-\d{2}$/.test(dateFilter) ? dateFilter : dateFilter === 'all' ? undefined : madridDay(now),
             until:
                 dateFilter === 'today'
                     ? madridDay(now)
                     : dateFilter === 'week'
                       ? madridDay(new Date(now.getTime() + 7 * 86400000))
-                      : undefined,
+                      : /^\d{4}-\d{2}-\d{2}$/.test(dateFilter) ? dateFilter : madridDay(horizon(now)),
         };
-    }, [selectedCategories, search, userCoords, nearbyKm, dateFilter]);
+    }, [selectedCategories, selectedSubcategories, search, userCoords, nearbyKm, dateFilter]);
     const external = useEvents(
         eventFilters,
         sessionUserId,
-        eventSection !== 'plans',
-    );
-    const rankedEvents = useMemo(
-        () =>
-            rankExternalEvents(
-                external.events.slice(0, 90),
-                feedTaste,
-                external.history,
-                userCoords,
-            ),
-        [external.events, feedTaste, external.history, userCoords],
+        true,
     );
     const openExternal = useCallback(
         (id: string) => router.push({ pathname: '/event/[id]', params: { id } }),
@@ -397,19 +389,10 @@ export default function HomeScreen() {
                 openExternal(id);
                 return;
             }
-            Alert.alert(t('events.join'), t('events.socialNotice'), [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: t('events.join'),
-                    onPress: () => {
-                        void external
-                            .toggleJoin(id)
-                            .catch(() =>
-                                Alert.alert(t('feed.error'), t('events.error')),
-                            );
-                    },
-                },
-            ]);
+            void external.toggleJoin(id).then((changed) => { if (changed) hapticSuccess(); }).catch((error) => {
+                hapticError();
+                Alert.alert(t('feed.error'), t(eventJoinErrorKey(error)));
+            });
         },
         [requireAccount, external, openExternal, t],
     );
@@ -422,12 +405,13 @@ export default function HomeScreen() {
     const friendIdsRef = useRef<Set<string>>(new Set());
     const coincidedIdsRef = useRef<Set<string>>(new Set());
     const requestFeedLoadRef = useRef<(opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => void>(() => {});
-    const { listRef, onScroll, onListLayout, restoreScroll, scrollEventThrottle } = useListScrollRestore<FeedRow>(
+    const { listRef, onScroll, onListLayout, onContentSizeChange, onScrollBeginDrag, restoreScroll, setScrollOffset, scrollEventThrottle } = useListScrollRestore<FeedRow>(
         ScreenKeys.FEED,
-        { restoreOnFocus: false },
+        { restoreOnFocus: true, waitForContent: true },
     );
 
     const onFeedRefresh = useCallback(() => {
+        unifiedOrderRef.current = { key: "", ids: [] };
         hapticSelection();
         requestFeedLoadRef.current({ refresh: true });
     }, []);
@@ -599,13 +583,13 @@ export default function HomeScreen() {
                 setMineSortEpoch((n) => n + 1);
             }
             if (isRefresh && !opts?.skipScrollJump) {
-                setScreenScrollOffset(ScreenKeys.FEED, 0);
+                setScrollOffset(0);
                 requestAnimationFrame(() => {
                     listRef.current?.scrollToOffset({ offset: 0, animated: false });
                 });
             }
         }
-    }, [listRef, sessionUserId]);
+    }, [listRef, sessionUserId, setScrollOffset]);
 
     const fetchDataRef = useRef(fetchData);
     fetchDataRef.current = fetchData;
@@ -1362,10 +1346,6 @@ export default function HomeScreen() {
         userCoords,
     ]);
 
-    const feedFlatten = search.trim().length > 0
-        || selectedCategories.length > 0
-        || selectedSubcategories.length > 0;
-
     const feedRows = useMemo<SocialFeedRow[]>(() => buildFeedRows({
         plans: filteredPlans,
         currentUserId,
@@ -1374,7 +1354,7 @@ export default function HomeScreen() {
         coincidedIds,
         taste: feedTaste,
         coords: userCoords,
-        flatten: feedFlatten,
+        flatten: true,
         searchQuery: search,
         deferMineIds: mineSortEpoch >= 0 ? deferMineSortIdsRef.current : undefined,
     }), [
@@ -1385,7 +1365,6 @@ export default function HomeScreen() {
         coincidedIds,
         feedTaste,
         userCoords,
-        feedFlatten,
         search,
         mineSortEpoch,
     ]);
@@ -1404,51 +1383,21 @@ export default function HomeScreen() {
                 distanceLabel: planDistanceLabel(row.plan),
             };
         });
-        if (eventSection === 'plans') return socialUi;
-        if (eventSection === 'agenda')
-            return external.events.map((event) => ({
-                kind: 'event' as const,
-                id: `event:${event.id}`,
-                event,
-            }));
-        if (
-            rankedEvents.length &&
-            socialUi.some(
-                (row) =>
-                    row.kind === 'header' && row.titleKey === 'feed.sectionYours',
-            ) &&
-            !socialUi.some(
-                (row) =>
-                    row.kind === 'header' && row.titleKey === 'feed.sectionForYou',
-            )
-        ) {
-            socialUi.push({
-                kind: 'header',
-                id: 'header:external-for-you',
-                titleKey: 'feed.sectionForYou',
-            });
-        }
-        return interleaveSocialRows(
-            socialUi,
-            rankedEvents,
-            (row) => row.kind === 'plan',
-            (row) =>
-                row.kind === 'header'
-                    ? row.titleKey === 'feed.sectionYours'
-                        ? 'protected'
-                        : 'open'
-                    : null,
-        );
-    }, [
-        feedRows,
-        membershipMap,
-        savedPlanIds,
-        joiningPlanId,
-        planDistanceLabel,
-        eventSection,
-        external.events,
-        rankedEvents,
-    ]);
+        const ranked = rankUnifiedFeed(socialUi, external.events, {
+            taste: feedTaste,
+            friendIds,
+            coincidedIds,
+            coords: userCoords,
+            currentUserId,
+            eventHistory: external.history,
+        });
+        // Keep the reading order across background taste/membership updates.
+        // Pull-to-refresh resets it explicitly; filters start a new list.
+        const key = JSON.stringify([eventFilters, currentUserId, !loading, external.events.length > 0]);
+        const ordered = retainFeedOrder(unifiedOrderRef.current.key === key ? unifiedOrderRef.current.ids : [], ranked);
+        unifiedOrderRef.current = { key, ids: ordered.map(row => row.id) };
+        return ordered;
+    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel, external.events, external.history, feedTaste, friendIds, coincidedIds, userCoords, currentUserId, eventFilters, loading]);
 
     const feedRowsRef = useRef(feedRowsUi);
     feedRowsRef.current = feedRowsUi;
@@ -1580,7 +1529,16 @@ export default function HomeScreen() {
     const renderPlanItem = useCallback(
         ({ item, index }: { item: FeedRow; index: number }) => {
             if (item.kind === 'event') {
-                return <EventCard horizontalInset={0} event={item.event} variant={eventSection==='agenda'?'editorial':'compact'} joined={external.joined.has(item.event.id)} busy={external.busy===item.event.id} onOpen={()=>openExternal(item.event.id)} onJoin={()=>joinExternal(item.event.id)}/>;
+                return <EventCard
+                    horizontalInset={0}
+                    event={item.event}
+                    variant="editorial"
+                    social={external.social[item.event.id]}
+                    joined={external.joined.has(item.event.id)}
+                    busy={external.busy === item.event.id}
+                    onOpen={() => openExternal(item.event.id)}
+                    onJoin={() => joinExternal(item.event.id)}
+                />;
             }
             if (item.kind === 'header') {
                 return <Text style={styles.feedSectionTitle}>{t(item.titleKey)}</Text>;
@@ -1615,7 +1573,7 @@ export default function HomeScreen() {
         },
         [
             t,
-            styles.feedSectionTitle, eventSection, external.joined, external.busy, openExternal, joinExternal,
+            styles.feedSectionTitle, external.social, external.joined, external.busy, openExternal, joinExternal,
             currentUserId,
             currentUserGenero,
             friendIds,
@@ -1898,7 +1856,6 @@ export default function HomeScreen() {
                 </View>
             ) : null}
 
-            <EventTabs value={eventSection} onChange={(section)=>{hapticSelection();setEventSection(section);listRef.current?.scrollToOffset({offset:0,animated:false});}}/>
             <View style={styles.listWrap}>
                 <FlashList
                     ref={listRef}
@@ -1913,12 +1870,15 @@ export default function HomeScreen() {
                     keyboardDismissMode="on-drag"
                     keyboardShouldPersistTaps="handled"
                     onLayout={onListLayout}
+                    onContentSizeChange={onContentSizeChange}
+                    onLoad={restoreScroll}
                     onScroll={onScroll}
+                    onScrollBeginDrag={onScrollBeginDrag}
                     scrollEventThrottle={scrollEventThrottle}
                     drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     ListHeaderComponent={
                         <View style={styles.feedChromeHeader}>
-                            {eventSection!=='plans'&&external.error&&<Pressable onPress={()=>void external.refresh()} style={{padding:16}} accessibilityRole="button"><Text style={{color:colors.textMuted}}>{t('events.unavailable')} · {t('events.retry')}</Text></Pressable>}
+                            {external.error&&<Pressable onPress={()=>void external.refresh()} style={{padding:16}} accessibilityRole="button"><Text style={{color:colors.textMuted}}>{t('events.unavailable')} · {t('events.retry')}</Text></Pressable>}
                             <View style={styles.quickFiltersRow}>
                                 <PressScale
                                     style={[
@@ -1949,7 +1909,7 @@ export default function HomeScreen() {
                         </View>
                     }
                     ListEmptyComponent={
-                        eventSection==='agenda' ? <View style={{padding:28,alignItems:'center'}}><Ionicons name="calendar-outline" size={40} color={colors.primary}/><Text style={{fontSize:20,fontWeight:'700',color:colors.text,marginTop:16}}>{t(external.loading?'events.loading':'events.empty')}</Text><Text style={{fontSize:14,lineHeight:22,color:colors.textMuted,marginTop:10,textAlign:'center'}}>{t('events.emptyBody')}</Text></View> : !loading ? (
+                        !loading && !external.loading ? (
                             <EmptySearch
                                 loadError={loadError}
                                 nearbyKm={nearbyKm}
@@ -1973,8 +1933,8 @@ export default function HomeScreen() {
                     }
                     refreshControl={
                         <RefreshControl
-                            refreshing={eventSection==='agenda'?external.loading:refreshing}
-                            onRefresh={()=>{if(eventSection!=='agenda')onFeedRefresh();void external.refresh();}}
+                            refreshing={refreshing}
+                            onRefresh={()=>{onFeedRefresh();void external.refresh();}}
                             tintColor={theme.colors.textMuted}
                             colors={[theme.colors.primary]}
                             progressBackgroundColor={theme.colors.surface}
@@ -1986,7 +1946,7 @@ export default function HomeScreen() {
                     onEndReached={() => {
                         if (endReachedLockRef.current) return;
                         endReachedLockRef.current = true;
-                        void Promise.all([eventSection!=='agenda'?loadMoreFeed():Promise.resolve(),eventSection!=='plans'?external.loadMore():Promise.resolve()]).finally(() => {
+                        void Promise.all([loadMoreFeed(),external.loadMore()]).finally(() => {
                             setTimeout(() => {
                                 endReachedLockRef.current = false;
                             }, 650);
@@ -2005,7 +1965,7 @@ export default function HomeScreen() {
                         )
                     }
                 />
-                {showFeedSkeleton && !refreshing && eventSection!=='agenda' ? (
+                {showFeedSkeleton && !refreshing && !external.events.length ? (
                     <View style={styles.listLoadingOverlay} pointerEvents="none">
                         <FeedSkeletonList count={3} />
                     </View>

@@ -1,5 +1,7 @@
 # Agenda de Madrid: estado público · 7 de noviembre de 2026
 
+> Actualización del 8 de noviembre: el feed único y la selección de eventos confirmados están preparados en otra rama y aún no se han desplegado. Ver [estado del nuevo borrador](unified-social-feed.md). Este informe describe la versión anterior.
+
 **Backend de producción activado y comprobado. Distribución móvil iniciada; disponibilidad pública aún no verificada.** La autorización para desplegar Supabase y publicar la funcionalidad se recibió el 7 de noviembre. No se ha modificado `main` ni hecho merge de la PR #44.
 
 ## Completado en producción

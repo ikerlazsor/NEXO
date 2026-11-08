@@ -43,10 +43,11 @@ const source = {
     {
       id: 1,
       title: "Taller de lectura",
-      dtstart: "2099-11-07",
-      dtend: "2099-11-09",
+      dtstart: new Date(Date.now() + 86400000).toISOString().slice(0,10),
+      dtend: new Date(Date.now() + 86400000).toISOString().slice(0,10),
       time: "18:00",
-      "excluded-days": "8/11/2099;",
+      "event-location": "Sala de lectura Madrid",
+      location: { latitude: 40.42, longitude: -3.7 },
       link: "https://www.madrid.es/evento",
     },
   ],
@@ -94,27 +95,25 @@ test("generated Edge bundle imports the exact shared classifier, normalizer and 
   fs.rmSync(dir, { recursive: true, force: true });
   const calls = [];
   const fetchImpl = async (url, options) => {
-    calls.push(url);
+    calls.push(String(url));
     if (url === DATA_URL) return Response.json(source);
-    assert.equal(
-      String(url),
-      `${env.SUPABASE_URL}/rest/v1/rpc/sync_external_events`,
-    );
     assert.equal(options.headers.apikey, env.SUPABASE_SERVICE_ROLE_KEY);
+    if (String(url).endsWith('/claim_event_import')) return Response.json('synthetic-lease');
+    if (String(url).endsWith('/get_event_geocodes')) return Response.json({});
+    if (String(url).endsWith('/release_event_import')) return new Response(null, {status:204});
+    assert.equal(String(url), `${env.SUPABASE_URL}/rest/v1/rpc/sync_external_events`);
     const body = JSON.parse(options.body);
     assert.equal(body.p_items[0].subcategory, "estudio");
-    assert.equal(body.p_items[0].starts_at, null);
-    assert.equal(
-      body.p_items[0].schedule,
-      "18:00 · Días excluidos: 8/11/2099;",
-    );
+    assert.ok(body.p_items[0].starts_at);
+    assert.equal(body.p_items[0].location_verified, true);
+    assert.equal(body.p_items[0].schedule, "18:00");
     return Response.json(1);
   };
   const handler = bundled.createMadridSyncHandler({ env, fetchImpl });
   const response = await handler(request());
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { ok: true, imported: 1, raw: 1 });
-  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(url => url.split('/').pop()), ['claim_event_import', DATA_URL.split('/').pop(), 'get_event_geocodes', 'sync_external_events', 'release_event_import']);
   const guarded = bundled.createMadridSyncHandler({
     env: { ...env, MADRID_EVENTS_PRODUCTION_ENABLED: "false" },
     fetchImpl,
@@ -122,7 +121,7 @@ test("generated Edge bundle imports the exact shared classifier, normalizer and 
   assert.equal((await guarded(request())).status, 502);
   assert.equal(
     calls.length,
-    3,
+    5,
     "no production RPC without the explicit production target/opt-in",
   );
 });
@@ -137,6 +136,21 @@ test("upstream import errors never leak credentials or raw upstream error bodies
   assert.deepEqual(await (await handler(request())).json(), {
     error: "madrid_sync_failed",
   });
+});
+
+test("scheduler accepts only fixed reviewed provider selectors and never caller URLs", async () => {
+  let calls=0;
+  const handler=createMadridSyncHandler({ env, run:async options => {
+    calls++;
+    assert.deepEqual(options.args,['--apply','--provider=ticketmaster']);
+    assert.equal(options.env.NEXO_EVENTS_SUPABASE_URL,env.SUPABASE_URL);
+    return { imported:0,raw:0 };
+  } });
+  const providerRequest=provider=>new Request('https://example.test',{method:'POST',headers:{'x-nexo-madrid-secret':env.NEXO_MADRID_SYNC_SECRET,'content-type':'application/json'},body:JSON.stringify({provider,url:'https://attacker.example',target:'https://attacker.example'})});
+  for(const provider of ['meetup','ical','https://attacker.example']) assert.equal((await handler(providerRequest(provider))).status,400);
+  assert.equal(calls,0);
+  assert.equal((await handler(providerRequest('ticketmaster'))).status,200);
+  assert.equal(calls,1);
 });
 
 test("deployment requires the exact project and credentials before contacting a server", async () => {
@@ -180,7 +194,7 @@ test("production plan reads history and source but never deploys, activates or c
     },
   });
   assert.equal(result.applied, false);
-  assert.equal(result.pending.length, 4);
+  assert.equal(result.pending.length, 5);
   assert.equal(calls.length, 3);
 });
 
@@ -278,13 +292,13 @@ test("production apply deploys only the reviewed feature migrations before atomi
   assert.equal(result.applied, true);
   assert.equal(
     sql.length,
-    5,
-    "four feature migrations and one activation transaction",
+    6,
+    "five feature migrations and one activation transaction",
   );
-  assert.match(sql[4], /^begin;/);
-  assert.match(sql[4], /sync_external_events/);
-  assert.match(sql[4], /existing-synthetic-scheduler/);
-  assert.match(sql[4], /commit;$/);
+  assert.match(sql[5], /^begin;/);
+  assert.match(sql[5], /sync_external_events/);
+  assert.match(sql[5], /existing-synthetic-scheduler/);
+  assert.match(sql[5], /commit;$/);
   assert.ok(
     output.every((value) => !value.includes("existing-synthetic-scheduler")),
   );

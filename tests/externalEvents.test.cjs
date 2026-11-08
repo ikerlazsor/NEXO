@@ -101,6 +101,7 @@ function load(file) {
               : null,
         };
       if (id.endsWith("soloChicas")) return { isSoloChicasPlan: () => false };
+      if (id.endsWith(".cjs")) return require(path.resolve(path.dirname(filename), id));
       if (id.startsWith("."))
         return load(path.resolve(path.dirname(filename), id + ".ts"));
       return require(id);

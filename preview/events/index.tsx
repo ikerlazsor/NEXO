@@ -5,14 +5,12 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useT } from "../../lib/i18n";
 import { useAppTheme } from "../../lib/appTheme";
-import { EventCard, EventTabs } from "../../features/events/EventCards";
+import { EventCard } from "../../features/events/EventCards";
 import {
   previewEvents,
   previewCoverCatalog,
 } from "../../features/events/previewData";
-import type { EventSection } from "../../features/events/types";
 function Design() {
-  const [section, setSection] = useState<EventSection>("agenda");
   const [catalog, setCatalog] = useState(false);
   const examples = useMemo(previewEvents, []);
   const allCovers = useMemo(previewCoverCatalog, []);
@@ -67,23 +65,34 @@ function Design() {
             })}
           </Text>
         </Pressable>
-        <EventTabs value={section} onChange={setSection} />
-        {section === "plans" && (
-          <Text style={{ padding: 24, color: colors.textMuted }}>
-            {t("events.viewPlans")} · {t("events.preview")}
-          </Text>
-        )}
-        {section !== "plans" &&
-          events.map((event) => (
-            <EventCard
-              key={event.id}
-              event={event}
-              variant={section === "agenda" ? "editorial" : "compact"}
-              preview
-              onOpen={() => {}}
-              onJoin={() => {}}
-            />
-          ))}
+        {events.map((event, index) => (
+          <EventCard
+            key={event.id}
+            event={event}
+            variant="editorial"
+            social={{
+              count: index + 2,
+              joined: false,
+              people: [
+                {
+                  user_id: "synthetic-ana",
+                  nombre: "Ana",
+                  avatar_url: null,
+                  joined_at: event.last_seen_at,
+                },
+                {
+                  user_id: "synthetic-leo",
+                  nombre: "Leo",
+                  avatar_url: null,
+                  joined_at: event.last_seen_at,
+                },
+              ],
+            }}
+            preview
+            onOpen={() => {}}
+            onJoin={() => {}}
+          />
+        ))}
       </ScrollView>
     </View>
   );

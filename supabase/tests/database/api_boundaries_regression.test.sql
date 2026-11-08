@@ -7,7 +7,7 @@ select is((select count(*)::integer from pg_class c join pg_namespace n on n.oid
  where n.nspname='public' and c.relkind in ('r','v','m','f') and has_table_privilege('anon',c.oid,'select,insert,update,delete')),0,'no signed-out direct table grants');
 select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid=p.pronamespace
  where n.nspname='public' and has_function_privilege('anon',p.oid,'execute') and p.proname not in
- ('is_username_taken_public','get_guest_feed','get_guest_plan','search_feed_plans','get_external_events_page','get_external_event')),0,'anonymous callable functions match reviewed public APIs only');
+ ('is_username_taken_public','get_guest_feed','get_guest_plan','search_feed_plans','get_external_events_page','get_external_events_page_filtered','get_external_event','get_event_social_summaries')),0,'anonymous callable functions match reviewed public APIs only');
 select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid=p.pronamespace
  where n.nspname='public' and p.prorettype in ('trigger'::regtype,'event_trigger'::regtype) and has_function_privilege('authenticated',p.oid,'execute')),0,'triggers are not callable as authenticated RPCs');
 select ok(not has_function_privilege('authenticated','public.service_delete_account(uuid,uuid,boolean)','execute'),'clients cannot spoof deletion actor');
@@ -60,6 +60,7 @@ update public.event_providers set enabled=true,license_verified_at=now(),format_
 insert into public.external_events(id,provider_id,source_id,source_url,title,category,start_date,end_date) values
  ('95000000-0000-0000-0000-000000000001','madrid','boundary-event-1','https://www.madrid.es/synthetic','Synthetic event','DESCUBRIR',current_date+1,current_date+2),
  ('95000000-0000-0000-0000-000000000002','madrid','boundary-event-2','https://www.madrid.es/synthetic','Synthetic event two','DESCUBRIR',current_date+1,current_date+2);
+update public.external_events set starts_at=now()+interval '1 day',venue='Synthetic venue',latitude=40.42,longitude=-3.7,social_eligible=true,location_verified=true where source_id like 'boundary-event-%';
 set local role authenticated;
 select set_config('request.jwt.claim.sub','94000000-0000-0000-0000-000000000001',true);
 select public.set_event_membership('95000000-0000-0000-0000-000000000001',true);

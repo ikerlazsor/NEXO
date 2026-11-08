@@ -5,6 +5,7 @@ const {
 } = require("../lib/externalEventClassification.cjs");
 const DATASET_URL =
   "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100";
+const { confirmedStart } = require("../lib/externalEventPolicy.cjs");
 function text(value, max = 300) {
   if (typeof value !== "string") return "";
   return value
@@ -180,7 +181,7 @@ function normalizeMadridSnapshot(payload, now = new Date()) {
       ),
       start_date: start,
       end_date: end,
-      starts_at: exact?.toISOString() || null,
+      starts_at: exact?.toISOString() || confirmedStart(String(startRaw), end, field(row, ["time", "TIME", "horario"])),
       schedule:
         [
           text(field(row, ["time", "TIME", "horario"]), 1000),
@@ -191,6 +192,7 @@ function normalizeMadridSnapshot(payload, now = new Date()) {
           .filter(Boolean)
           .join(" · ") || null,
       venue: venue || null,
+      address: text(row.address?.["street-address"] || row.address?.streetAddress || "", 500) || null,
       latitude: coordinate(geo.latitude ?? row.latitude, 90),
       longitude: coordinate(geo.longitude ?? row.longitude, 180),
       price_text: text(field(row, ["price", "PRICE", "precio"]), 500) || null,

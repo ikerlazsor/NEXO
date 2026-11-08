@@ -27,8 +27,12 @@ import {
   fetchEventPeople,
   setEventMembership,
   trackEvent,
+  eventJoinErrorKey,
 } from "../../features/events/api";
 import type { ExternalEvent, EventPerson } from "../../features/events/types";
+import { EventLocationMap } from "../../features/events/EventLocationMap";
+import { publishEventMembership } from "../../features/events/membershipBus";
+import { hapticError, hapticSuccess } from "../../lib/haptics";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export default function EventDetail() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -57,49 +61,60 @@ export default function EventDetail() {
     mutation = useRef<object | null>(null),
     request = useRef<AbortController | null>(null),
     epoch = useRef(0);
-  const load = useCallback(async () => {
-    if (currentScope.current !== scope) return;
-    const version = ++epoch.current;
-    request.current?.abort();
-    const abort = new AbortController();
-    request.current = abort;
-    const timeout = setTimeout(() => abort.abort(), 12000);
-    const current = () => version === epoch.current && currentScope.current === scope && !abort.signal.aborted;
-    setError(false);
-    setLoading(true);
-    setPrivateScope(scope);
-    setPeople([]);
-    setMorePeople(false);
-    setJoined(false);
-    personLoading.current = null;
-    try {
-      if (!UUID.test(id)) throw new Error("invalid_id");
-      const item = await fetchEvent(id, abort.signal);
-      if (abort.signal.aborted) throw new Error("request_aborted");
-      if (!current()) return;
-      setEvent(item);
-      if (userId) {
-        const [members, own] = await Promise.allSettled([
-          fetchEventPeople(id, undefined, abort.signal),
-          fetchEventMembership(id, userId, abort.signal),
-        ]);
+  const load = useCallback(
+    async (quiet = false) => {
+      if (currentScope.current !== scope) return;
+      const version = ++epoch.current;
+      request.current?.abort();
+      const abort = new AbortController();
+      request.current = abort;
+      const timeout = setTimeout(() => abort.abort(), 12000);
+      const current = () =>
+        version === epoch.current &&
+        currentScope.current === scope &&
+        !abort.signal.aborted;
+      setError(false);
+      if (!quiet) setLoading(true);
+      setPrivateScope(scope);
+      if (!quiet) {
+        setPeople([]);
+        setMorePeople(false);
+        setJoined(false);
+      }
+      personLoading.current = null;
+      try {
+        if (!UUID.test(id)) throw new Error("invalid_id");
+        const item = await fetchEvent(id, abort.signal);
         if (abort.signal.aborted) throw new Error("request_aborted");
         if (!current()) return;
-        if (own.status === "fulfilled") setJoined(own.value);
-        if (members.status === "fulfilled") {
-          setPeople(members.value);
-          setMorePeople(members.value.length === 30);
+        setEvent(item);
+        if (userId) {
+          const [members, own] = await Promise.allSettled([
+            fetchEventPeople(id, undefined, abort.signal),
+            fetchEventMembership(id, userId, abort.signal),
+          ]);
+          if (abort.signal.aborted) throw new Error("request_aborted");
+          if (!current()) return;
+          if (own.status === "fulfilled") setJoined(own.value);
+          if (members.status === "fulfilled") {
+            setPeople(members.value);
+            setMorePeople(members.value.length === 30);
+          }
+          if (own.status === "rejected" || members.status === "rejected")
+            setError(true);
+          void trackEvent(id, "view");
         }
-        if (own.status === "rejected" || members.status === "rejected") setError(true);
-        void trackEvent(id, "view");
+      } catch {
+        if (version === epoch.current && currentScope.current === scope)
+          setError(true);
+      } finally {
+        clearTimeout(timeout);
+        if (version === epoch.current && currentScope.current === scope)
+          setLoading(false);
       }
-    } catch {
-      if (version === epoch.current && currentScope.current === scope) setError(true);
-    } finally {
-      clearTimeout(timeout);
-      if (version === epoch.current && currentScope.current === scope) setLoading(false);
-    }
-  }, [id, userId, scope]);
+    },
+    [id, userId, scope],
+  );
   useFocusEffect(
     useCallback(() => {
       setBusyScope(null);
@@ -114,6 +129,7 @@ export default function EventDetail() {
   );
   const unavailable =
     event?.status !== "active" ||
+    (!!event?.starts_at && Date.parse(event.starts_at) <= Date.now()) ||
     (!!event &&
       event.end_date <
         new Intl.DateTimeFormat("en-CA", {
@@ -134,10 +150,18 @@ export default function EventDetail() {
     setBusyScope(scope);
     try {
       await setEventMembership(id, !joined);
-      if (currentScope.current === scope && mutation.current === operation) await load();
-    } catch {
+      if (currentScope.current === scope) {
+        setJoined(!joined);
+        publishEventMembership({ userId, eventId: id, joined: !joined });
+        hapticSuccess();
+      }
       if (currentScope.current === scope && mutation.current === operation)
-        Alert.alert(t("feed.error"), t("events.error"));
+        await load(true);
+    } catch (error) {
+      if (currentScope.current === scope && mutation.current === operation) {
+        hapticError();
+        Alert.alert(t("feed.error"), t(eventJoinErrorKey(error)));
+      }
     } finally {
       if (mutation.current === operation) {
         mutation.current = null;
@@ -148,6 +172,10 @@ export default function EventDetail() {
   const askJoin = () => {
     if (!userId) {
       requireAccount({ type: "event", eventId: id });
+      return;
+    }
+    if (!joined) {
+      void changeMembership();
       return;
     }
     Alert.alert(
@@ -168,13 +196,20 @@ export default function EventDetail() {
       const url = new URL(event.source_url);
       if (url.protocol !== "https:") throw new Error("url");
       await Linking.openURL(url.toString());
-      if (userId && currentScope.current === scope) void trackEvent(event.id, "official");
+      if (userId && currentScope.current === scope)
+        void trackEvent(event.id, "official");
     } catch {
       Alert.alert(t("feed.error"), t("events.error"));
     }
   };
   const loadPeople = async () => {
-    if (personLoading.current || !morePeople || !userId || currentScope.current !== scope) return;
+    if (
+      personLoading.current ||
+      !morePeople ||
+      !userId ||
+      currentScope.current !== scope
+    )
+      return;
     const operation = {};
     personLoading.current = operation;
     const version = epoch.current;
@@ -223,7 +258,7 @@ export default function EventDetail() {
               <EventArtwork event={event} />
             </View>
             <Text style={[s.link, { color: colors.primary }]}>
-              {t(`cat.main.${event.category}`)} · {t("events.source")}
+              {t(`cat.main.${event.category}`)}
             </Text>
             <Text style={[s.heading, { color: colors.text }]}>
               {event.title}
@@ -231,7 +266,11 @@ export default function EventDetail() {
             {unavailable && (
               <View style={[s.notice, { backgroundColor: colors.warningSoft }]}>
                 <Text style={{ color: colors.text }}>
-                  {t("events.cancelled")}
+                  {t(
+                    event.status === "cancelled"
+                      ? "events.cancelled"
+                      : "events.unavailable",
+                  )}
                 </Text>
               </View>
             )}
@@ -367,10 +406,11 @@ export default function EventDetail() {
                 )}
               </>
             )}
+            <EventLocationMap event={event} />
             <Text
               style={{ color: colors.textMuted, fontSize: 11, marginTop: 24 }}
             >
-              {t("events.source")} · {t("events.updated")}{" "}
+              {t("events.updated")}{" "}
               {new Date(event.last_seen_at).toLocaleDateString(lang)}
             </Text>
             <View
@@ -385,7 +425,9 @@ export default function EventDetail() {
                 accessibilityRole="link"
                 onPress={() => {
                   void Linking.openURL(
-                    "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100",
+                    event.provider_id === "madrid"
+                      ? "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100"
+                      : event.source_url,
                   ).catch(() => Alert.alert(t("events.error")));
                 }}
               >
@@ -399,24 +441,26 @@ export default function EventDetail() {
                   {t("events.license")}
                 </Text>
               </Pressable>
-              <Pressable
-                accessibilityRole="link"
-                onPress={() => {
-                  void Linking.openURL(
-                    "https://creativecommons.org/licenses/by/4.0/",
-                  ).catch(() => Alert.alert(t("events.error")));
-                }}
-              >
-                <Text
-                  style={{
-                    color: colors.primary,
-                    fontSize: 12,
-                    fontWeight: "600",
+              {event.provider_id === "madrid" && (
+                <Pressable
+                  accessibilityRole="link"
+                  onPress={() => {
+                    void Linking.openURL(
+                      "https://creativecommons.org/licenses/by/4.0/",
+                    ).catch(() => Alert.alert(t("events.error")));
                   }}
                 >
-                  CC BY 4.0
-                </Text>
-              </Pressable>
+                  <Text
+                    style={{
+                      color: colors.primary,
+                      fontSize: 12,
+                      fontWeight: "600",
+                    }}
+                  >
+                    CC BY 4.0
+                  </Text>
+                </Pressable>
+              )}
             </View>
             <Text
               style={{

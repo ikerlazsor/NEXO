@@ -44,7 +44,7 @@ select is(
       and p.prosecdef
       and has_function_privilege('anon', p.oid, 'execute')
   ),
-    6::bigint,
+    8::bigint,
   'anon can execute only the reviewed registration, plan feed/search/share and external event RPCs'
 );
 

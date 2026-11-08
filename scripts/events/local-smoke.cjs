@@ -52,6 +52,12 @@ const { randomUUID } = require("node:crypto");
           source_url: "https://www.madrid.es/synthetic",
           title: "SYNTHETIC local API test",
           category: "DESCUBRIR",
+          starts_at: new Date(Date.now() + 86400000).toISOString(),
+          venue: "Synthetic venue",
+          latitude: 40.42,
+          longitude: -3.7,
+          social_eligible: true,
+          location_verified: true,
           start_date: new Date(Date.now() + 86400000)
             .toISOString()
             .slice(0, 10),
@@ -62,6 +68,13 @@ const { randomUUID } = require("node:crypto");
         .select("id")
         .single(),
     ).id;
+    assert.ok(
+      check(
+        await anonymous.rpc("get_external_events_page_filtered", {
+          p_subcategories: ["otro"],
+        }),
+      ).some((row) => row.id === eventId),
+    );
     const clients = [];
     for (let i = 0; i < 2; i++) {
       const email = `event-smoke-${run}-${i}@nexo.test`,
@@ -120,6 +133,29 @@ const { randomUUID } = require("node:crypto");
     check(
       await b.rpc("set_event_membership", { p_event: eventId, p_join: true }),
     );
+    const social = check(
+      await a.rpc("get_event_social_summaries", { p_events: [eventId] }),
+    )[eventId];
+    assert.equal(social.count, 2);
+    assert.equal(social.joined, true);
+    assert.equal(social.people.length, 2);
+    const upcomingMemberships = check(
+      await a
+        .from("external_event_participants")
+        .select("event_id,external_events!inner(starts_at,status)")
+        .eq("user_id", users[0])
+        .eq("external_events.status", "active")
+        .gt("external_events.starts_at", new Date().toISOString())
+        .limit(100),
+    );
+    assert.ok(upcomingMemberships.some((row) => row.event_id === eventId));
+    const guestSocial = check(
+      await anonymous.rpc("get_event_social_summaries", {
+        p_events: [eventId],
+      }),
+    )[eventId];
+    assert.equal(guestSocial.count, 2);
+    assert.equal(guestSocial.people.length, 0);
     assert.equal(
       check(
         await b
@@ -131,6 +167,12 @@ const { randomUUID } = require("node:crypto");
     );
     check(
       await b.rpc("set_event_membership", { p_event: eventId, p_join: false }),
+    );
+    assert.equal(
+      check(await a.rpc("get_event_social_summaries", { p_events: [eventId] }))[
+        eventId
+      ].count,
+      1,
     );
     assert.equal(
       check(
@@ -151,7 +193,7 @@ const { randomUUID } = require("node:crypto");
       ).error,
     );
     console.log(
-      "PASS: local HTTP API, synthetic auth, guest detail/privacy, join, shared chat, retry deduplication and leave/revocation.",
+      "PASS: local HTTP API, synthetic auth, guest privacy, join, public avatar summaries, shared chat, retry deduplication and leave/revocation.",
     );
   } finally {
     for (const id of users) check(await admin.auth.admin.deleteUser(id));

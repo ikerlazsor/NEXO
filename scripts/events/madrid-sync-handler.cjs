@@ -26,8 +26,12 @@ function createMadridSyncHandler({ env, fetchImpl = fetch, run = main }) {
     if (env.MADRID_EVENTS_IMPORT_ENABLED !== "true")
       return json({ error: "import_disabled" }, 503);
     try {
+      const payload = await request.json().catch(() => ({}));
+      const provider = payload.provider || "madrid";
+      if (!["madrid", "ticketmaster"].includes(provider))
+        return json({ error: "invalid_provider" }, 400);
       const result = await run({
-        args: ["--apply"],
+        args: ["--apply", `--provider=${provider}`],
         fetchImpl,
         env: {
           MADRID_EVENTS_IMPORT_ENABLED: "true",
@@ -36,6 +40,7 @@ function createMadridSyncHandler({ env, fetchImpl = fetch, run = main }) {
           NEXO_EVENTS_TARGET_PROJECT_REF: env.NEXO_EVENTS_TARGET_PROJECT_REF,
           NEXO_EVENTS_SUPABASE_URL: env.SUPABASE_URL,
           NEXO_EVENTS_SERVICE_ROLE_KEY: env.SUPABASE_SERVICE_ROLE_KEY,
+          TICKETMASTER_API_KEY: env.TICKETMASTER_API_KEY,
         },
         log: () => {},
       });

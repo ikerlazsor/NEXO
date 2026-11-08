@@ -6,6 +6,7 @@ const { randomBytes } = require("node:crypto");
 const { buildSyncFunction } = require("./build-sync-function.cjs");
 const { fetchMadridDocument } = require("../madrid-events-fetch.cjs");
 const { normalizeMadridSnapshot } = require("../madrid-events-preview.cjs");
+const { prepareSocialSnapshot } = require("./social-snapshot.cjs");
 const coreSchema = require("./production-core-schema.json");
 
 const PROJECT = "nixeproyzxvqzyrvsxcx";
@@ -15,6 +16,7 @@ const migrationNames = [
   "20261106190000_restore_reviewed_api_boundaries.sql",
   "20261107120000_event_subcategories.sql",
   "20261107160000_madrid_scheduler_and_server_maintenance.sql",
+  "20261108120000_confirmed_social_feed.sql",
 ];
 const literal = (value) => "'" + String(value).replace(/'/g, "''") + "'";
 
@@ -139,9 +141,11 @@ async function deployProduction({
     (name) => !applied.has(name.split("_")[0]),
   );
   const document = await fetchMadridDocument(fetchImpl);
-  const snapshot = normalizeMadridSnapshot(document.payload);
-  if (snapshot.rejected || !snapshot.events.length)
+  const rawSnapshot = normalizeMadridSnapshot(document.payload);
+  if (rawSnapshot.rejected || !rawSnapshot.events.length)
     throw new Error("Official snapshot failed validation; no deployment");
+  const snapshot = await prepareSocialSnapshot(rawSnapshot);
+  if (!snapshot.events.length) throw new Error("No confirmed social occurrences; no deployment");
   log(
     JSON.stringify({
       target: PROJECT,

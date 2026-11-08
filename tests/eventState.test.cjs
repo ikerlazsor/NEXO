@@ -20,6 +20,7 @@ const message = (id, date, room = roomA) => ({
 // Rendering before commit lets the tests observe the account-change privacy boundary.
 function mount(file, exportName, args, api = {}, profiles = async () => []) {
   const slots = [], effects = [], timers = new Map();
+  const membershipListeners = new Set();
   let index = 0, timerId = 0, uuid = 0, dirty = false, result;
   const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const effect = (fn, deps, focus = false) => {
@@ -50,9 +51,15 @@ function mount(file, exportName, args, api = {}, profiles = async () => []) {
     'react-native': { AppState: { currentState: 'active' } },
     'expo-crypto': { randomUUID: () => `client-${++uuid}` },
     '../../lib/profileData': { getPublicProfiles: profiles },
+    '../../lib/externalEventPolicy.cjs': require('../lib/externalEventPolicy.cjs'),
+    './membershipBus': {
+      publishEventMembership: change => membershipListeners.forEach(listener => listener(change)),
+      subscribeEventMembership: listener => { membershipListeners.add(listener); return () => membershipListeners.delete(listener); },
+    },
     './api': {
       fetchEventPage: async () => [],
       fetchEventPersonalization: async () => ({ joined: new Set(), history: { categories: {}, seen: new Set() } }),
+      fetchEventSocialSummaries: async () => ({}),
       setEventMembership: async () => {},
       fetchEventMembership: async () => true,
       fetchEventMessages: async () => [],
@@ -128,11 +135,13 @@ test('a pending personalization snapshot cannot undo a join, and rapid taps make
 test('changing feed filters discards late results and pagination deduplicates the boundary', async () => {
   const first = deferred(), second = deferred();
   const calls = [];
-  const page = Array.from({ length: 30 }, (_, n) => ({ id: `event-${n}`, start_date: '2026-11-07' }));
+  const instant = new Date(Date.now() + 86400000).toISOString();
+  const fixture = { title: 'Concierto social', status: 'active', start_date: instant.slice(0,10), starts_at: instant, venue: 'Sala Madrid', latitude: 40.42, longitude: -3.7 };
+  const page = Array.from({ length: 30 }, (_, n) => ({ ...fixture, id: `event-${n}` }));
   const hook = mount('features/events/useEvents.ts', 'useEvents', [{ query: 'old' }, null], {
     fetchEventPage: (filters, cursor, signal) => {
       calls.push({ filters, cursor, signal });
-      return calls.length === 1 ? first.promise : calls.length === 2 ? second.promise : Promise.resolve([page[29], { id: 'last', start_date: '2026-11-08' }]);
+      return calls.length === 1 ? first.promise : calls.length === 2 ? second.promise : Promise.resolve([page[29], { ...fixture, id: 'last' }]);
     },
   });
   hook.tick(200);
@@ -149,6 +158,28 @@ test('changing feed filters discards late results and pagination deduplicates th
   assert.equal(calls[2].filters.query, 'new');
   assert.equal(hook.value.hasMore, false);
   assert.equal(hook.render([{ query: 'another' }, null], false).events.length, 0);
+  hook.unmount();
+});
+
+test('a stale social summary cannot undo a confirmed join or expose another account state', async () => {
+  const requests = [];
+  const instant = new Date(Date.now() + 86400000).toISOString();
+  const hook = mount('features/events/useEvents.ts','useEvents',[{},'viewer-a'], {
+    fetchEventPage: async () => [{ id:roomA,title:'Concierto social',status:'active',start_date:instant.slice(0,10),starts_at:instant,venue:'Sala Madrid',latitude:40.42,longitude:-3.7 }],
+    fetchEventSocialSummaries: (ids,signal) => { const pending = deferred(); requests.push({ ids,signal,pending }); return pending.promise; },
+  });
+  hook.tick(200); await hook.flush();
+  assert.equal(requests.length,1);
+  await hook.value.toggleJoin(roomA); await hook.flush();
+  assert.equal(requests.length,2);
+  assert.equal(requests[0].signal.aborted,true);
+  requests[1].pending.resolve({ [roomA]:{ count:1,joined:true,people:[] } }); await hook.flush();
+  requests[0].pending.resolve({ [roomA]:{ count:0,joined:false,people:[] } }); await hook.flush();
+  assert.equal(hook.value.social[roomA].count,1);
+  assert.equal(hook.value.joined.has(roomA),true);
+  const masked = hook.render([{},'viewer-b'],false);
+  assert.equal(Object.keys(masked.social).length,0);
+  assert.equal(masked.joined.size,0);
   hook.unmount();
 });
 

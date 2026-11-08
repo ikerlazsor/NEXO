@@ -11,6 +11,7 @@ import { useCallback,
     useState } from 'react';
 import {
     ScrollView,
+    InteractionManager,
     Text,
     TouchableOpacity,
     View,
@@ -621,11 +622,16 @@ function OwnProfileScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            void fetchUserData().catch(() => { /* Mantener visible la caché si falla la red. */ });
-            // Precargar Amigos / Guardados mientras estás en perfil (antes de entrar).
-            warmFriendsAndSavedPlans();
-            return () => profileLoads.current?.invalidate();
-        }, [fetchUserData])
+            // Show edits from memory in this frame; defer background hydration
+            // and prefetching until the native entrance transition has finished.
+            const latest = userId ? cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(userId)) : null;
+            if (latest?.userId === userId) applyProfileSnapshot(latest);
+            const task = InteractionManager.runAfterInteractions(() => {
+                void fetchUserData().catch(() => {});
+                warmFriendsAndSavedPlans();
+            });
+            return () => { task.cancel(); profileLoads.current?.invalidate(); };
+        }, [fetchUserData, applyProfileSnapshot, userId])
     );
 
     const quickActions: QuickAction[] = isOrganizer

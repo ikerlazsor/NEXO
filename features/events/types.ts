@@ -15,6 +15,10 @@ export type ExternalEvent = {
   starts_at: string | null;
   schedule: string | null;
   venue: string | null;
+  address?: string | null;
+  social_eligible?: boolean;
+  location_verified?: boolean;
+  location_source?: string | null;
   latitude: number | null;
   longitude: number | null;
   price_text: string | null;
@@ -23,12 +27,18 @@ export type ExternalEvent = {
 };
 export type EventFilters = {
   categories?: string[];
+  subcategories?: string[];
   query?: string;
   latitude?: number;
   longitude?: number;
   radius?: number;
   from?: string;
   until?: string;
+};
+export type EventSocialSummary = {
+  count: number;
+  joined: boolean;
+  people: EventPerson[];
 };
 export type EventCursor = { date: string; id: string };
 export type EventInteractionTaste = {

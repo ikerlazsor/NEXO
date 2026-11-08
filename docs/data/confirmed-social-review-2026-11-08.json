@@ -1,0 +1,47 @@
+{
+  "generatedAt": "2026-11-08T15:28:14.403Z",
+  "input": {
+    "kind": "official-download",
+    "url": "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100/resource/206974-0-agenda-eventos-culturales-100-json/download/206974-0-agenda-eventos-culturales-100.json",
+    "fetchedAt": "2026-11-08T15:28:14.403Z",
+    "bytes": 2831442,
+    "sha256": "ad1306da254713ec6ef1519072a735cdaa972c826bedb805f9efd2ca3189b65f"
+  },
+  "counts": {
+    "raw": 1385,
+    "accepted": 360,
+    "rejected": 0,
+    "expired": 73,
+    "duplicates": 0,
+    "unknownTime": 0,
+    "unknownVenue": 0,
+    "unknownCoordinates": 0
+  },
+  "excluded": {
+    "dateOrTime": 153,
+    "social": 780,
+    "location": 19
+  },
+  "categories": {
+    "SHOWTIME": 287,
+    "VIBES": 7,
+    "DESCUBRIR": 51,
+    "AIRE_LIBRE": 11,
+    "DEPORTES": 3,
+    "FOODIES": 1
+  },
+  "statuses": {
+    "active": 360
+  },
+  "scope": "Read-only source validation. No production writes or live geocoding.",
+  "localImport": {
+    "acceptedSourceRecords": 360,
+    "canonicalPublishableEvents": 357,
+    "incompletePublishableEvents": 0,
+    "transactionRolledBack": true
+  },
+  "additionalProviders": {
+    "ticketmaster": "Connector tested with synthetic API responses; no API key or network access active in this environment. Provider disabled.",
+    "organizerCalendars": "iCalendar parser prepared for individual reviewed publisher feeds; none activated."
+  }
+}

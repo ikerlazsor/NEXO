@@ -5,6 +5,7 @@ import { useFocusEffect, useNavigation, useRouter, type Href } from 'expo-router
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
+    InteractionManager,
     KeyboardAvoidingView,
     Modal,
     Platform,
@@ -374,8 +375,12 @@ export default function EditProfileScreen() {
     useFocusEffect(
         useCallback(() => {
             void hydrateEditProfileHints().then(() => setShowHints(shouldShowEditProfileHints()));
-            void load();
+            // First entry hydrates cached fields immediately; returning from a
+            // child screen defers remote work so it cannot stall the back swipe.
+            const task = readyRef.current ? InteractionManager.runAfterInteractions(() => void load()) : null;
+            if (!task) void load();
             return () => {
+                task?.cancel();
                 void markEditProfileHintsSeen();
             };
         }, [load]),

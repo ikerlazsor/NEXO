@@ -28,6 +28,13 @@ export const LANG_OPTIONS: { code: Lang; label: string; flag: string; name: stri
 type Dict = Record<string, string>;
 
 const es: Dict = {
+    "events.going": "Ya vamos {n}",
+    "events.location": "Ubicación",
+    "events.openMap": "Ver ubicación en el mapa",
+    "events.signInAgain": "Vuelve a iniciar sesión para apuntarte.",
+    "events.unavailableJoin": "Esta actividad ya no admite inscripciones. Actualiza el feed para ver las próximas.",
+    "events.joinLimit": "Has alcanzado el límite de actividades activas. Sal de alguna para apuntarte a otra.",
+    "events.joinNetwork": "No hemos podido confirmar la inscripción. Comprueba la conexión y vuelve a intentarlo.",
     "events.calendarNotice": "Actividad con un rango de fechas. Consulta las sesiones, horarios y días de apertura en la web oficial.",
     "events.previewExamples": "Ver ejemplos",
     "events.previewAllCovers": "Ver todas las subcategorías ({count})",
@@ -48,7 +55,7 @@ const es: Dict = {
     "events.source": "Ayuntamiento de Madrid",
     "events.dateUnknown": "Consulta el horario oficial",
     "events.venueUnknown": "Ubicación por confirmar en la fuente",
-    "events.people": "Personas de Nexo",
+    "events.people": "Integrantes Nexo",
     "events.chat": "Chat del evento",
     "events.loading": "Cargando agenda…",
     "events.empty": "Madrid prepara su próxima propuesta",
@@ -2060,6 +2067,13 @@ const es: Dict = {
 };
 
 const en: Dict = {
+    "events.going": "{n} going",
+    "events.location": "Location",
+    "events.openMap": "View location on map",
+    "events.signInAgain": "Sign in again to join.",
+    "events.unavailableJoin": "This activity is no longer accepting members. Refresh the feed for upcoming activities.",
+    "events.joinLimit": "You have reached the active activity limit. Leave one to join another.",
+    "events.joinNetwork": "We could not confirm your membership. Check your connection and try again.",
     "events.calendarNotice": "Activity with a date range. Check sessions, times and opening days on the official website.",
     "events.previewExamples": "Show examples",
     "events.previewAllCovers": "Show all subcategories ({count})",
@@ -2080,7 +2094,7 @@ const en: Dict = {
     "events.source": "Madrid City Council",
     "events.dateUnknown": "Check the official schedule",
     "events.venueUnknown": "Check the official venue",
-    "events.people": "People on Nexo",
+    "events.people": "Nexo members",
     "events.chat": "Event chat",
     "events.loading": "Loading agenda…",
     "events.empty": "More things to do are on their way",

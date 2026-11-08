@@ -12,13 +12,19 @@ async function run(fn: () => Promise<void>): Promise<void> {
 }
 
 const lastByKind = new Map<string, number>();
+let lastPulseAt = 0;
 
 /** Evita spam (p. ej. toggles rápidos o re-renders). */
 function throttle(kind: string, minMs: number): boolean {
     const now = Date.now();
+    const outcome = kind === 'success' || kind === 'error' || kind === 'warning';
+    // PressScale + the action handler often fire in the same gesture. A single
+    // shared gate avoids double buzzes while retaining later success/errors.
+    if (now - lastPulseAt < (outcome ? 55 : 85)) return false;
     const prev = lastByKind.get(kind) ?? 0;
     if (now - prev < minMs) return false;
     lastByKind.set(kind, now);
+    lastPulseAt = now;
     return true;
 }
 

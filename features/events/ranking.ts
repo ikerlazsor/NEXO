@@ -1,8 +1,81 @@
 import {
   personalityPreferredCategories,
+  scoreFeedPlanRanked,
+  type AffinityPlan,
+  type RankContext,
   type FeedTaste,
 } from "../../lib/feedAffinity";
 import type { ExternalEvent, EventInteractionTaste } from "./types";
+import { isPublishableEvent } from "../../lib/externalEventPolicy.cjs";
+
+export function rankUnifiedFeed<
+  T extends { id: string; kind: string; plan?: AffinityPlan },
+>(
+  social: T[],
+  events: ExternalEvent[],
+  context: RankContext & { eventHistory?: EventInteractionTaste },
+) {
+  const rows: (T | { kind: "event"; id: string; event: ExternalEvent })[] = [
+    ...social.filter((row) => row.kind === "plan"),
+    ...events
+      .filter((event) => isPublishableEvent(event, context.now ?? Date.now()))
+      .map((event) => ({
+        kind: "event" as const,
+        id: `event:${event.id}`,
+        event,
+      })),
+  ];
+  const score = (row: (typeof rows)[number]) => {
+    const category =
+      row.kind === "event" && "event" in row
+        ? row.event.category
+        : (row as T).plan?.categoria;
+    const history = context.eventHistory?.categories || {};
+    const interactionBoost =
+      (16 * (history[category as keyof typeof history] || 0)) /
+      Math.max(1, ...Object.values(history));
+    if (row.kind === "event" && "event" in row) {
+      const e = row.event;
+      return (
+        interactionBoost +
+        scoreFeedPlanRanked(
+          {
+            id: row.id,
+            categoria: e.category,
+            tipo_deporte: e.subcategory,
+            fecha_evento: e.starts_at,
+            latitud: e.latitude,
+            longitud: e.longitude,
+          },
+          context,
+        )
+      );
+    }
+    return (
+      scoreFeedPlanRanked((row as T).plan || {}, context) +
+      24 +
+      interactionBoost
+    );
+  };
+  const scores = new Map(rows.map((row) => [row.id, score(row)]));
+  return rows.sort(
+    (a, b) => scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id),
+  );
+}
+
+/** Membership updates/pagination cannot shuffle cards the reader has already seen. */
+export function retainFeedOrder<T extends { id: string }>(
+  previous: string[],
+  ranked: T[],
+): T[] {
+  const byId = new Map(ranked.map((row) => [row.id, row]));
+  const result = previous.flatMap((id) => {
+    const row = byId.get(id);
+    byId.delete(id);
+    return row ? [row] : [];
+  });
+  return [...result, ...ranked.filter((row) => byId.has(row.id))];
+}
 const clamp = (n: number) => Math.max(0, Math.min(1, n));
 export function eventDistanceKm(
   a: { latitude: number; longitude: number },

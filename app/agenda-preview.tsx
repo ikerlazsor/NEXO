@@ -1,22 +1,17 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { ScrollView, Text, View, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useAppTheme } from "../lib/appTheme";
 import { useT } from "../lib/i18n";
-import {
-  EventCard,
-  EventTabs,
-} from "../features/events/EventCards";
+import { EventCard } from "../features/events/EventCards";
 import { previewEvents } from "../features/events/previewData";
-import type { EventSection } from "../features/events/types";
 import { PlanCard } from "../components/PlanCard";
 const noop = () => {};
 export default function AgendaPreview() {
   const { colors } = useAppTheme();
   const { t } = useT();
   const router = useRouter();
-  const [section, setSection] = useState<EventSection>("agenda");
   const events = useMemo(previewEvents, []);
   const plan = useMemo(
     () => ({
@@ -77,8 +72,7 @@ export default function AgendaPreview() {
             {t("events.previewBody")}
           </Text>
         </View>
-        <EventTabs value={section} onChange={setSection} />
-        {section !== "agenda" && (
+        {
           <View pointerEvents="none">
             <PlanCard
               item={plan}
@@ -95,18 +89,17 @@ export default function AgendaPreview() {
               router={{ push: noop }}
             />
           </View>
-        )}
-        {section !== "plans" &&
-          events.map((event) => (
-            <EventCard
-              key={event.id}
-              event={event}
-              variant={section === "agenda" ? "editorial" : "compact"}
-              onOpen={noop}
-              onJoin={noop}
-              preview
-            />
-          ))}
+        }
+        {events.map((event) => (
+          <EventCard
+            key={event.id}
+            event={event}
+            variant="editorial"
+            onOpen={noop}
+            onJoin={noop}
+            preview
+          />
+        ))}
       </ScrollView>
     </SafeAreaView>
   );

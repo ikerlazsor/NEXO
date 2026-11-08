@@ -4,6 +4,10 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "../..");
 const sources = [
   "lib/externalEventClassification.cjs",
+  "lib/externalEventPolicy.cjs",
+  "scripts/events/social-snapshot.cjs",
+  "scripts/events/providers.cjs",
+  "scripts/events/geocode.cjs",
   "scripts/madrid-events-preview.cjs",
   "scripts/madrid-events-fetch.cjs",
   "scripts/madrid-events-sync.cjs",

@@ -23,7 +23,7 @@ const AVATAR_SAMPLE = 8;
 
 export type FeedPlanRow = Record<string, unknown> & { id: string };
 
-/** Cursor keyset para cargar más planes (por fecha de evento). */
+/** Cursor keyset para cargar más planes (fecha + id, para evitar saltos en empates). */
 export type FeedMoreCursor = {
     eventAt: string;
     id: string;
@@ -171,13 +171,26 @@ export async function fetchMoreFeedPlanRows(opts: {
     const found: FeedPlanRow[] = [];
 
     for (let attempt = 0; attempt < 6 && found.length < pageSize; attempt++) {
+        // El paginador solo puede ordenar planes con fecha; los planes sin fecha
+        // continúan mostrándose en la carga inicial, no en esta cola cronológica.
         let query = upcomingQuery(opts.nowIso)
+            .not('fecha_evento', 'is', null)
             .order('fecha_evento', { ascending: true })
             .order('id', { ascending: true })
             .limit(pageSize);
 
         if (cursor?.eventAt) {
-            query = query.gt('fecha_evento', cursor.eventAt);
+            // Un filtro gt(fecha) saltaba planes con la misma fecha y hora.
+            // Utilizamos un cursor lexicográfico (fecha, UUID).
+            const eventAt = new Date(cursor.eventAt);
+            if (!Number.isFinite(eventAt.getTime()) ||
+                !/^[0-9a-f-]{36}$/i.test(cursor.id)) {
+                throw new Error('Invalid feed pagination cursor');
+            }
+            const iso = eventAt.toISOString();
+            query = query.or(
+                `fecha_evento.gt."${iso}",and(fecha_evento.eq."${iso}",id.gt.${cursor.id})`,
+            );
         }
 
         const batch = await runPlanSelect(query);
@@ -186,13 +199,9 @@ export async function fetchMoreFeedPlanRows(opts: {
         }
 
         for (const row of batch) {
-            const eventAt =
-                typeof row.fecha_evento === 'string' && row.fecha_evento
-                    ? row.fecha_evento
-                    : cursor?.eventAt;
-            if (eventAt) {
-                cursor = { eventAt, id: String(row.id) };
-            }
+            const eventAt = typeof row.fecha_evento === 'string'
+                ? row.fecha_evento : null;
+            if (eventAt) cursor = { eventAt, id: String(row.id) };
             if (!exclude.has(String(row.id))) {
                 found.push(row);
                 exclude.add(String(row.id));

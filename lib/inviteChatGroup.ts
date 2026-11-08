@@ -3,6 +3,7 @@ import { planCoverList } from './planCovers';
 import { sendPlanInvite, type PlanInviteType } from './planInvites';
 import { isSoloChicasPlan } from './soloChicas';
 import { supabase } from './supabase';
+import { getPublicProfiles, type PublicProfileRow } from './profileData';
 
 /** Miembros que pueden entrar en el plan: en modo solo chicas filtra por género. */
 async function filterMembersByGender(
@@ -12,10 +13,10 @@ async function filterMembersByGender(
     if (memberIds.length === 0 || !isSoloChicasPlan(plan)) {
         return { eligible: memberIds, blocked: 0 };
     }
-    const { data } = await supabase
-        .from('perfiles')
-        .select('id, genero')
-        .in('id', memberIds);
+    const data: PublicProfileRow[] = [];
+    for (let offset = 0; offset < memberIds.length; offset += 200) {
+        data.push(...await getPublicProfiles(memberIds.slice(offset, offset + 200), { force: true }));
+    }
     const female = new Set(
         (data ?? []).filter((p) => p.genero === 'femenino').map((p) => p.id as string),
     );

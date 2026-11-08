@@ -1,4 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createPersistentQueue } from './persistentQueue';
+import { getAuthUser } from './auth';
+import { randomUUID } from 'expo-crypto';
 import { getIsOnline, subscribeNetwork } from './network';
 import { withRetry } from './retry';
 import { supabase } from './supabase';
@@ -11,6 +13,8 @@ export type OutboxKind = 'plan' | 'direct';
 
 export type OutboxItem = {
     tempId: string;
+    /** Stable server identity, persisted before the first network attempt. */
+    serverMessageId?: string;
     kind: OutboxKind;
     planId?: string | null;
     receptorId?: string | null;
@@ -35,20 +39,7 @@ let outboxGeneration = 0;
 const listeners = new Set<FlushListener>();
 let networkHooked = false;
 
-async function readQueue(): Promise<OutboxItem[]> {
-    try {
-        const raw = await AsyncStorage.getItem(OUTBOX_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw) as OutboxItem[];
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-}
-
-async function writeQueue(items: OutboxItem[]): Promise<void> {
-    await AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
-}
+const queue = createPersistentQueue<OutboxItem>(OUTBOX_KEY);
 
 export function subscribeOutboxFlush(listener: FlushListener): () => void {
     listeners.add(listener);
@@ -59,36 +50,43 @@ function ensureNetworkHook() {
     if (networkHooked) return;
     networkHooked = true;
     subscribeNetwork((online) => {
-        if (online) void flushChatOutbox();
+        if (online) void flushChatOutbox().catch(() => {});
     });
 }
 
 export async function enqueueChatOutbox(item: OutboxItem): Promise<void> {
     ensureNetworkHook();
-    const q = await readQueue();
-    if (q.some((x) => x.tempId === item.tempId)) return;
-    q.push(item);
-    await writeQueue(q);
+    await queue.update((items) => items.some((x) => x.tempId === item.tempId) ? items : [...items, {
+        ...item,
+        serverMessageId: item.serverMessageId ?? randomUUID(),
+    }]);
 }
 
 export async function removeFromChatOutbox(tempId: string): Promise<void> {
-    const q = await readQueue();
-    await writeQueue(q.filter((x) => x.tempId !== tempId));
+    await queue.update((items) => items.filter((x) => x.tempId !== tempId));
 }
 
 export async function getChatOutbox(): Promise<OutboxItem[]> {
-    return readQueue();
+    return queue.read();
 }
 
 export async function discardChatOutbox(): Promise<void> {
     outboxGeneration += 1;
-    await AsyncStorage.removeItem(OUTBOX_KEY);
+    await queue.clear();
 }
 
 /** Busca el mensaje que un intento anterior pudo dejar ya enviado. */
 async function findSentMessage(
     item: OutboxItem,
 ): Promise<{ id: string; creado_en: string } | null> {
+    if (item.serverMessageId) {
+        const { data, error } = await supabase.from('mensajes').select('id, creado_en')
+            .eq('id', item.serverMessageId).eq('emisor_id', item.emisorId).maybeSingle();
+        if (error) throw error;
+        return data?.id ? { id: data.id as string, creado_en: data.creado_en as string } : null;
+    }
+    // Legacy entries from before UUID-based sends retain their compatibility
+    // lookup once. Every newly queued send uses its own UUID instead of content.
     const since = new Date(new Date(item.createdAt).getTime() - 60_000).toISOString();
     let query = supabase
         .from('mensajes')
@@ -103,7 +101,8 @@ async function findSentMessage(
         ? query.eq('plan_id', item.planId ?? '')
         : query.is('plan_id', null).eq('receptor_id', item.receptorId ?? '');
 
-    const { data } = await query.maybeSingle();
+    const { data, error } = await query.maybeSingle();
+    if (error) throw error;
     return data?.id ? { id: data.id as string, creado_en: data.creado_en as string } : null;
 }
 
@@ -114,12 +113,28 @@ export async function flushChatOutbox(): Promise<void> {
 
     flushInflight = (async () => {
         const generation = outboxGeneration;
-        let q = await readQueue();
+        const q = await queue.read();
         if (!q.length) return;
 
         const remaining: OutboxItem[] = [];
-        for (const item of q) {
+        for (const [index, item] of q.entries()) {
             if (generation !== outboxGeneration) return;
+            if (!getIsOnline()) {
+                remaining.push(...q.slice(index));
+                break;
+            }
+            let user;
+            try {
+                user = await getAuthUser();
+            } catch {
+                remaining.push(...q.slice(index));
+                break;
+            }
+            if (generation !== outboxGeneration) return;
+            if (!user || user.id !== item.emisorId) {
+                remaining.push(item);
+                continue;
+            }
             // Media sin archivo no se puede enviar offline
             if (item.tipo !== 'texto' && !item.archivoUrl) {
                 remaining.push(item);
@@ -129,6 +144,7 @@ export async function flushChatOutbox(): Promise<void> {
                 const row =
                     item.kind === 'plan'
                         ? {
+                              ...(item.serverMessageId ? { id: item.serverMessageId } : {}),
                               plan_id: item.planId,
                               contenido: item.contenido,
                               emisor_id: item.emisorId,
@@ -136,6 +152,7 @@ export async function flushChatOutbox(): Promise<void> {
                               archivo_url: item.archivoUrl,
                           }
                         : {
+                              ...(item.serverMessageId ? { id: item.serverMessageId } : {}),
                               plan_id: null,
                               receptor_id: item.receptorId,
                               contenido: item.contenido,
@@ -166,6 +183,7 @@ export async function flushChatOutbox(): Promise<void> {
                     continue;
                 }
 
+                if (generation !== outboxGeneration) return;
                 if (item.kind === 'direct' && item.emisorId && item.receptorId) {
                     void unhideDirectChat(item.emisorId, item.receptorId);
                 } else if (item.kind === 'plan' && item.emisorId && item.planId) {
@@ -189,6 +207,7 @@ export async function flushChatOutbox(): Promise<void> {
 
                 try {
                     const { notifyPlanMessage, notifyDirectMessage } = await import('./push');
+                    if (generation !== outboxGeneration) return;
                     const messageId = String(data.id);
                     if (item.kind === 'plan' && item.planId) {
                         notifyPlanMessage(item.planId, messageId);
@@ -202,8 +221,11 @@ export async function flushChatOutbox(): Promise<void> {
                 remaining.push(item);
             }
         }
-        if (generation === outboxGeneration) await writeQueue(remaining);
-    })().finally(() => {
+        const completed = new Set(q.filter((item) => !remaining.includes(item)).map((item) => item.tempId));
+        await queue.update((latest) => generation === outboxGeneration ? latest.filter((item) => !completed.has(item.tempId)) : latest);
+    })().catch(() => {
+        // Preserve the queue for the next online/focus attempt.
+    }).finally(() => {
         flushInflight = null;
     });
 

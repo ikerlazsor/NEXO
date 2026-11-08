@@ -86,7 +86,6 @@ import {
     type FeedSnapshot,
 } from '../../lib/feedCache';
 import { emptyGuestFeedSnapshot, fetchSignedInFeedSnapshot } from '../../lib/feedLoad';
-import { requestOpenFeedMap } from '../../lib/feedMapIntent';
 import { attachFeedPlanPeople, fetchMoreFeedPlanRows, fetchSearchFeedPlans, type FeedMoreCursor } from '../../lib/feedQuery';
 import {
     applyStickyInviteClears,
@@ -105,7 +104,7 @@ import {
     takeOptimisticFeedPlan,
 } from '../../lib/feedReload';
 import { expandSearchQuery, planMatchesSearch } from '../../lib/feedSearch';
-import { buildFeedRows, type FeedRow } from '../../lib/feedSections';
+import { buildFeedRows, type FeedRow as SocialFeedRow } from '../../lib/feedSections';
 import { consumeFirstRunPending } from '../../lib/firstRun';
 import { rememberFriendsSet } from '../../lib/friendStatusPeek';
 import { distanceKm, formatDistanceKm, parsePlanCoords } from '../../lib/geo';
@@ -152,7 +151,6 @@ import {
     getScreenScrollOffset,
     ScreenKeys,
     setScreenFilters,
-    setScreenScrollOffset,
 } from '../../lib/screenState';
 import { canJoinPlanByGender, isSoloChicasPlan } from '../../lib/soloChicas';
 import { wasKickedFromPlan } from '../../lib/planKicks';
@@ -163,6 +161,13 @@ import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
 import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
+import { EventCard } from '../../features/events/EventCards';
+import { useEvents } from '../../features/events/useEvents';
+import { rankUnifiedFeed, retainFeedOrder } from '../../features/events/ranking';
+import type { ExternalEvent, EventFilters } from '../../features/events/types';
+import { eventJoinErrorKey } from '../../features/events/api';
+import { horizon } from '../../lib/externalEventPolicy.cjs';
+type FeedRow = SocialFeedRow | {kind:'event';id:string;event:ExternalEvent};
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
 
@@ -342,6 +347,56 @@ export default function HomeScreen() {
     const [hasMoreFeed, setHasMoreFeed] = useState(true);
     const feedCursorRef = useRef<FeedMoreCursor | null>(null);
     const loadingMoreRef = useRef(false);
+    const unifiedOrderRef = useRef<{ key: string; ids: string[] }>({ key: "", ids: [] });
+    const eventFilters = useMemo<EventFilters>(() => {
+        const now = new Date();
+        const madridDay = (d: Date) =>
+            new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Europe/Madrid',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+            }).format(d);
+        return {
+            categories: selectedCategories,
+            subcategories: selectedSubcategories,
+            query: search,
+            latitude: userCoords?.latitude,
+            longitude: userCoords?.longitude,
+            radius: userCoords ? (nearbyKm ?? undefined) : undefined,
+            from: /^\d{4}-\d{2}-\d{2}$/.test(dateFilter) ? dateFilter : dateFilter === 'all' ? undefined : madridDay(now),
+            until:
+                dateFilter === 'today'
+                    ? madridDay(now)
+                    : dateFilter === 'week'
+                      ? madridDay(new Date(now.getTime() + 7 * 86400000))
+                      : /^\d{4}-\d{2}-\d{2}$/.test(dateFilter) ? dateFilter : madridDay(horizon(now)),
+        };
+    }, [selectedCategories, selectedSubcategories, search, userCoords, nearbyKm, dateFilter]);
+    const external = useEvents(
+        eventFilters,
+        sessionUserId,
+        true,
+    );
+    const openExternal = useCallback(
+        (id: string) => router.push({ pathname: '/event/[id]', params: { id } }),
+        [router],
+    );
+    const joinExternal = useCallback(
+        (id: string) => {
+            if (requireAccount({ type: 'event', eventId: id })) return;
+            if (external.joined.has(id)) {
+                openExternal(id);
+                return;
+            }
+            void external.toggleJoin(id).then((changed) => { if (changed) hapticSuccess(); }).catch((error) => {
+                hapticError();
+                Alert.alert(t('feed.error'), t(eventJoinErrorKey(error)));
+            });
+        },
+        [requireAccount, external, openExternal, t],
+    );
+
     const endReachedLockRef = useRef(false);
     const [searchExpanded, setSearchExpanded] = useState<string[]>([]);
     const [searchHits, setSearchHits] = useState<any[]>([]);
@@ -350,12 +405,13 @@ export default function HomeScreen() {
     const friendIdsRef = useRef<Set<string>>(new Set());
     const coincidedIdsRef = useRef<Set<string>>(new Set());
     const requestFeedLoadRef = useRef<(opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => void>(() => {});
-    const { listRef, onScroll, onListLayout, restoreScroll, scrollEventThrottle } = useListScrollRestore<FeedRow>(
+    const { listRef, onScroll, onListLayout, onContentSizeChange, onScrollBeginDrag, restoreScroll, setScrollOffset, scrollEventThrottle } = useListScrollRestore<FeedRow>(
         ScreenKeys.FEED,
-        { restoreOnFocus: false },
+        { restoreOnFocus: true, waitForContent: true },
     );
 
     const onFeedRefresh = useCallback(() => {
+        unifiedOrderRef.current = { key: "", ids: [] };
         hapticSelection();
         requestFeedLoadRef.current({ refresh: true });
     }, []);
@@ -527,13 +583,13 @@ export default function HomeScreen() {
                 setMineSortEpoch((n) => n + 1);
             }
             if (isRefresh && !opts?.skipScrollJump) {
-                setScreenScrollOffset(ScreenKeys.FEED, 0);
+                setScrollOffset(0);
                 requestAnimationFrame(() => {
                     listRef.current?.scrollToOffset({ offset: 0, animated: false });
                 });
             }
         }
-    }, [listRef, sessionUserId]);
+    }, [listRef, sessionUserId, setScrollOffset]);
 
     const fetchDataRef = useRef(fetchData);
     fetchDataRef.current = fetchData;
@@ -1290,11 +1346,7 @@ export default function HomeScreen() {
         userCoords,
     ]);
 
-    const feedFlatten = search.trim().length > 0
-        || selectedCategories.length > 0
-        || selectedSubcategories.length > 0;
-
-    const feedRows = useMemo<FeedRow[]>(() => buildFeedRows({
+    const feedRows = useMemo<SocialFeedRow[]>(() => buildFeedRows({
         plans: filteredPlans,
         currentUserId,
         membershipMap,
@@ -1302,7 +1354,7 @@ export default function HomeScreen() {
         coincidedIds,
         taste: feedTaste,
         coords: userCoords,
-        flatten: feedFlatten,
+        flatten: true,
         searchQuery: search,
         deferMineIds: mineSortEpoch >= 0 ? deferMineSortIdsRef.current : undefined,
     }), [
@@ -1313,7 +1365,6 @@ export default function HomeScreen() {
         coincidedIds,
         feedTaste,
         userCoords,
-        feedFlatten,
         search,
         mineSortEpoch,
     ]);
@@ -1321,7 +1372,7 @@ export default function HomeScreen() {
     const savedPlanIds = useMemo(() => new Set(savedPlans), [savedPlans]);
 
     const feedRowsUi = useMemo<FeedRow[]>(() => {
-        return feedRows.map((row) => {
+        const socialUi = feedRows.map((row) => {
             if (row.kind !== 'plan') return row;
             const pid = String(row.plan.id);
             return {
@@ -1332,7 +1383,21 @@ export default function HomeScreen() {
                 distanceLabel: planDistanceLabel(row.plan),
             };
         });
-    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel]);
+        const ranked = rankUnifiedFeed(socialUi, external.events, {
+            taste: feedTaste,
+            friendIds,
+            coincidedIds,
+            coords: userCoords,
+            currentUserId,
+            eventHistory: external.history,
+        });
+        // Keep the reading order across background taste/membership updates.
+        // Pull-to-refresh resets it explicitly; filters start a new list.
+        const key = JSON.stringify([eventFilters, currentUserId, !loading, external.events.length > 0]);
+        const ordered = retainFeedOrder(unifiedOrderRef.current.key === key ? unifiedOrderRef.current.ids : [], ranked);
+        unifiedOrderRef.current = { key, ids: ordered.map(row => row.id) };
+        return ordered;
+    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel, external.events, external.history, feedTaste, friendIds, coincidedIds, userCoords, currentUserId, eventFilters, loading]);
 
     const feedRowsRef = useRef(feedRowsUi);
     feedRowsRef.current = feedRowsUi;
@@ -1463,6 +1528,18 @@ export default function HomeScreen() {
 
     const renderPlanItem = useCallback(
         ({ item, index }: { item: FeedRow; index: number }) => {
+            if (item.kind === 'event') {
+                return <EventCard
+                    horizontalInset={0}
+                    event={item.event}
+                    variant="editorial"
+                    social={external.social[item.event.id]}
+                    joined={external.joined.has(item.event.id)}
+                    busy={external.busy === item.event.id}
+                    onOpen={() => openExternal(item.event.id)}
+                    onJoin={() => joinExternal(item.event.id)}
+                />;
+            }
             if (item.kind === 'header') {
                 return <Text style={styles.feedSectionTitle}>{t(item.titleKey)}</Text>;
             }
@@ -1496,7 +1573,7 @@ export default function HomeScreen() {
         },
         [
             t,
-            styles.feedSectionTitle,
+            styles.feedSectionTitle, external.social, external.joined, external.busy, openExternal, joinExternal,
             currentUserId,
             currentUserGenero,
             friendIds,
@@ -1793,24 +1870,16 @@ export default function HomeScreen() {
                     keyboardDismissMode="on-drag"
                     keyboardShouldPersistTaps="handled"
                     onLayout={onListLayout}
+                    onContentSizeChange={onContentSizeChange}
+                    onLoad={restoreScroll}
                     onScroll={onScroll}
+                    onScrollBeginDrag={onScrollBeginDrag}
                     scrollEventThrottle={scrollEventThrottle}
                     drawDistance={FLASH_LIST_DRAW_DISTANCE}
                     ListHeaderComponent={
                         <View style={styles.feedChromeHeader}>
+                            {external.error&&<Pressable onPress={()=>void external.refresh()} style={{padding:16}} accessibilityRole="button"><Text style={{color:colors.textMuted}}>{t('events.unavailable')} · {t('events.retry')}</Text></Pressable>}
                             <View style={styles.quickFiltersRow}>
-                                <PressScale
-                                    style={[styles.quickFilterPill, styles.quickFilterBox]}
-                                    onPress={() => requestOpenFeedMap()}
-                                    pressedScale={0.96}
-                                    haptic={false}
-                                >
-                                    <Ionicons name="map" size={15} color={PRIMARY_DARK} />
-                                    <Text style={styles.quickFilterText} numberOfLines={1}>
-                                        {t('feed.map')}
-                                    </Text>
-                                </PressScale>
-
                                 <PressScale
                                     style={[
                                         styles.quickFilterPill,
@@ -1840,7 +1909,7 @@ export default function HomeScreen() {
                         </View>
                     }
                     ListEmptyComponent={
-                        !loading ? (
+                        !loading && !external.loading ? (
                             <EmptySearch
                                 loadError={loadError}
                                 nearbyKm={nearbyKm}
@@ -1865,7 +1934,7 @@ export default function HomeScreen() {
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
-                            onRefresh={onFeedRefresh}
+                            onRefresh={()=>{onFeedRefresh();void external.refresh();}}
                             tintColor={theme.colors.textMuted}
                             colors={[theme.colors.primary]}
                             progressBackgroundColor={theme.colors.surface}
@@ -1877,7 +1946,7 @@ export default function HomeScreen() {
                     onEndReached={() => {
                         if (endReachedLockRef.current) return;
                         endReachedLockRef.current = true;
-                        void loadMoreFeed().finally(() => {
+                        void Promise.all([loadMoreFeed(),external.loadMore()]).finally(() => {
                             setTimeout(() => {
                                 endReachedLockRef.current = false;
                             }, 650);
@@ -1885,7 +1954,7 @@ export default function HomeScreen() {
                     }}
                     onEndReachedThreshold={0.35}
                     ListFooterComponent={
-                        loadingMore ? (
+                        (loadingMore||external.loading) ? (
                             <View style={styles.loadMoreFooter}>
                                 <View style={styles.loadMoreDot} />
                                 <View style={[styles.loadMoreDot, styles.loadMoreDotMid]} />
@@ -1896,7 +1965,7 @@ export default function HomeScreen() {
                         )
                     }
                 />
-                {showFeedSkeleton && !refreshing ? (
+                {showFeedSkeleton && !refreshing && !external.events.length ? (
                     <View style={styles.listLoadingOverlay} pointerEvents="none">
                         <FeedSkeletonList count={3} />
                     </View>

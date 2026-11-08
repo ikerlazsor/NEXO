@@ -1,3 +1,4 @@
+import { randomUUID } from 'expo-crypto';
 import {
     Ionicons } from '@expo/vector-icons';
 import React, { useCallback,
@@ -1339,8 +1340,10 @@ export default function ChatScreen() {
                   : '';
 
         const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const serverMessageId = randomUUID();
         const optimistic: Message = {
             id: tempId,
+            serverMessageId,
             contenido: contenidoPayload,
             emisor_id: currentUserId,
             creado_en: new Date().toISOString(),
@@ -1370,6 +1373,7 @@ export default function ChatScreen() {
             }
             await enqueueChatOutbox({
                 tempId,
+                serverMessageId,
                 kind: 'plan',
                 planId,
                 emisorId: currentUserId,
@@ -1384,6 +1388,7 @@ export default function ChatScreen() {
         const { data, error } = await supabase
             .from('mensajes')
             .insert({
+                id: serverMessageId,
                 plan_id: planId,
                 contenido: contenidoPayload,
                 emisor_id: currentUserId,
@@ -1397,6 +1402,7 @@ export default function ChatScreen() {
             if (tipo === 'texto') {
                 await enqueueChatOutbox({
                     tempId,
+                    serverMessageId,
                     kind: 'plan',
                     planId,
                     emisorId: currentUserId,

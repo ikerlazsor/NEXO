@@ -78,6 +78,8 @@ scheduleCoverPrefetch();
 const BACK_GESTURE_END = 20;
 
 const GUEST_ROOTS = new Set([
+  'event',
+  'agenda-preview',
   '(tabs)',
   'plan',
   'settings',
@@ -657,17 +659,20 @@ function RootStack() {
                 <Stack.Screen
                   name="profile"
                   options={{
+                    presentation: 'modal',
                     animation: 'slide_from_bottom',
                     animationDuration: 280,
                     gestureEnabled: true,
-                    animationMatchesGesture: false,
-                    freezeOnBlur: false,
+                    gestureDirection: 'vertical',
+                    fullScreenGestureEnabled: false,
+                    animationMatchesGesture: true,
+                    freezeOnBlur: true,
                     contentStyle: { backgroundColor: colors.surface },
                   }}
                 />
                 <Stack.Screen
                   name="edit-profile"
-                  options={{ animation: 'slide_from_right', freezeOnBlur: false }}
+                  options={{ animation: 'slide_from_right', animationDuration: 260, freezeOnBlur: true }}
                 />
                 <Stack.Screen
                   name="edit-profile-place"

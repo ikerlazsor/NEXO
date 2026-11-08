@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { discardChatOutbox } from './chatOutbox';
+import { discardOfflineActions } from './offlineActions';
 import { resetNotificationCategoryPrefsCache } from './notificationPrefs';
 import { resetPasswordRecoveryMemory } from './passwordRecovery';
 import { clearAllScreenState } from './screenState';
@@ -16,6 +17,7 @@ const PERSONAL_EXACT_KEYS = new Set([
   '@nexo_norms_seen_v1',
   '@nexo_password_recovery',
   '@nexo_chat_outbox_v1',
+  '@nexo_offline_actions_v1',
   '@nexo_muted_plan_chats_v1',
   '@nexo_analytics_queue_v1',
   '@nexo_notif_prefs_v1',
@@ -76,7 +78,7 @@ async function removePersonalStorage(
  */
 export async function clearLocalUserData(opts?: { preserveSessionMemory?: boolean }): Promise<void> {
   // Invalida primero cualquier envío offline que estuviera todavía en curso.
-  await discardChatOutbox();
+  await Promise.all([discardChatOutbox(), discardOfflineActions()]);
   await removePersonalStorage(false, { preserveSessionMemory: opts?.preserveSessionMemory === true });
   cacheClearAll();
   clearAllScreenState();
@@ -107,7 +109,7 @@ export async function reconcileLocalUserData(userId: string | null): Promise<voi
 
   // En login sin cuenta activa, elimina restos de versiones antiguas pero
   // conserva solo lo necesario para completar registro/verificación/recuperación.
-  await discardChatOutbox();
+  await Promise.all([discardChatOutbox(), discardOfflineActions()]);
   await removePersonalStorage(true);
   cacheClearAll();
   clearAllScreenState();

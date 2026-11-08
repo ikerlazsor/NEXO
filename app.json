@@ -2,10 +2,8 @@
   "expo": {
     "name": "Nexo",
     "slug": "nexo",
-    "version": "1.0.11",
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "version": "1.0.10",
+    "runtimeVersion": "1.0.0",
     "updates": {
       "url": "https://u.expo.dev/edde1434-fc73-4e3b-a3c6-cd46fe2f6a8e",
       "enabled": true,

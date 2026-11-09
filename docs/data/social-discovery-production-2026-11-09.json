@@ -1,0 +1,186 @@
+{
+  "checked_at": "2026-11-09T13:08:15.177905+00:00",
+  "backend": {
+    "project": "nixeproyzxvqzyrvsxcx",
+    "migration": "20261108200000_participatory_discovery.sql",
+    "deployed": {
+      "deployed": true,
+      "enabled": true,
+      "last_success_at": "2026-11-09 13:01:04.547551+00",
+      "active": 344,
+      "scheduled": 1,
+      "dailySync": {
+        "ok": true,
+        "imported": 3,
+        "raw": 1313
+      }
+    },
+    "verification": {
+      "checkedAt": "2026-11-09T13:02:25.946Z",
+      "publishable": 3,
+      "ticketmaster_enabled": false,
+      "duplicate_pairs": 0,
+      "publicPage": 3,
+      "events": [
+        {
+          "id": "e3197248-8fbd-4210-add3-6550d6603be4",
+          "title": "Senderismo de Dehesa de la Villa a Casa de Campo",
+          "starts_at": "2026-11-13T09:00:00+00:00",
+          "venue": "Centro de Información y Educación Ambiental de Casa de Campo",
+          "latitude": 40.4178995003631,
+          "longitude": -3.73093908589311
+        },
+        {
+          "id": "9f3b0ad4-3238-4f65-8bd0-348d86f56599",
+          "title": "Club de lectura con autor: 'Inmóvil' de Amador Analógico Analgésico",
+          "starts_at": "2026-11-19T17:00:00+00:00",
+          "venue": "Biblioteca Pública Municipal David Gistau (Salamanca)",
+          "latitude": 40.4319930972051,
+          "longitude": -3.67092924354371
+        },
+        {
+          "id": "11f36469-33f7-4d59-a96c-d0a95e424c20",
+          "title": "Senderismo urbano: desde la Dehesa al Parque de la Ventilla",
+          "starts_at": "2026-11-29T10:00:00+00:00",
+          "venue": "Centro de Información y Educación Ambiental de Dehesa de la Villa",
+          "latitude": 40.4591410411635,
+          "longitude": -3.71827056367927
+        }
+      ],
+      "allPageEventsConfirmed": true,
+      "detailMapCoordinates": true,
+      "guestIdentitiesHidden": true,
+      "subcategoryFilter": true
+    }
+  },
+  "mobile": {
+    "channel": "production",
+    "published": true,
+    "groups": {
+      "1.0.0": {
+        "id": "4b0be78c-bdca-4154-9881-ab3653e00eee",
+        "published_at": "2026-11-09T13:04:14.184Z",
+        "platforms": [
+          {
+            "platform": "android",
+            "id": "01a1c068-c568-79d9-b50a-58a5d20252d7"
+          },
+          {
+            "platform": "ios",
+            "id": "01a1c068-c568-71b6-b268-0c3e99a57139"
+          }
+        ]
+      },
+      "1.0.11": {
+        "id": "756a3985-729c-46ea-8776-791859295ac0",
+        "published_at": "2026-11-09T13:06:02.916Z",
+        "platforms": [
+          {
+            "platform": "android",
+            "id": "01a1c06a-6e24-798d-bc9e-e33ad63eafa2"
+          },
+          {
+            "platform": "ios",
+            "id": "01a1c06a-6e24-7bbe-b148-ac11c736e358"
+          }
+        ]
+      }
+    },
+    "artifacts": {
+      "1.0.0": {
+        "directory": "/workspace/NEXO/builds/ota/social-discovery-2026-11-09/runtime-1.0.0",
+        "bundles": [
+          {
+            "platform": "android",
+            "path": "_expo/static/js/android/entry-63255d95c73e1ffc1a91a410f85a7c91.hbc",
+            "bytes": 21824122,
+            "sha256": "d6cff24280fbc7a2ce83d3a6a5536a71871d14c6fb6a28f6ac16f0ff3739dd69"
+          },
+          {
+            "platform": "ios",
+            "path": "_expo/static/js/ios/entry-6e0b7f9f078ee8fe8f70cc5c96db1de8.hbc",
+            "bytes": 21823458,
+            "sha256": "8914b0b1a89f50dc1546c52d4b454f843b9cf3d1c22392ef603f0431dfe5ab6e"
+          }
+        ]
+      },
+      "1.0.11": {
+        "directory": "/workspace/NEXO/builds/ota/social-discovery-2026-11-09/runtime-1.0.11",
+        "bundles": [
+          {
+            "platform": "android",
+            "path": "_expo/static/js/android/entry-56f9ac1d2eef6c4e685bf2f446feb60d.hbc",
+            "bytes": 21823766,
+            "sha256": "2e1b34137c4924a4ae994c9cc4e15e9b9cfd9932105edcf53b8380f40aeac5bb"
+          },
+          {
+            "platform": "ios",
+            "path": "_expo/static/js/ios/entry-f1cb728834ee60a111a8efc81a527e29.hbc",
+            "bytes": 21824295,
+            "sha256": "dc12e0705ea756200663194ea84039fa555e30ea3056e8f22af3d705b8220749"
+          }
+        ]
+      }
+    },
+    "verification": [
+      {
+        "checkedAt": "2026-11-09T13:05:12.891Z",
+        "channel": "production",
+        "checks": [
+          {
+            "platform": "android",
+            "runtime": "1.0.0",
+            "updateId": "01a1c068-c568-79d9-b50a-58a5d20252d7",
+            "group": "4b0be78c-bdca-4154-9881-ab3653e00eee",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1c068-c568-79d9-b50a-58a5d20252d7"
+          },
+          {
+            "platform": "ios",
+            "runtime": "1.0.0",
+            "updateId": "01a1c068-c568-71b6-b268-0c3e99a57139",
+            "group": "4b0be78c-bdca-4154-9881-ab3653e00eee",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1c068-c568-71b6-b268-0c3e99a57139"
+          }
+        ]
+      },
+      {
+        "checkedAt": "2026-11-09T13:07:12.135Z",
+        "channel": "production",
+        "checks": [
+          {
+            "platform": "android",
+            "runtime": "1.0.11",
+            "updateId": "01a1c06a-6e24-798d-bc9e-e33ad63eafa2",
+            "group": "756a3985-729c-46ea-8776-791859295ac0",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1c06a-6e24-798d-bc9e-e33ad63eafa2"
+          },
+          {
+            "platform": "ios",
+            "runtime": "1.0.11",
+            "updateId": "01a1c06a-6e24-7bbe-b148-ac11c736e358",
+            "group": "756a3985-729c-46ea-8776-791859295ac0",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1c06a-6e24-7bbe-b148-ac11c736e358"
+          }
+        ]
+      }
+    ],
+    "source_commits": {
+      "1.0.11": "7eafcd0ca6092e699ded89b6b88d9728b9c0bfb3",
+      "1.0.0": "08a111d73cf368c9c24d29c7383ff040c205ff2b"
+    }
+  },
+  "validation": {
+    "test_files_passed": 18,
+    "local_sql_checks_passed": 232,
+    "typecheck_both_variants": true,
+    "lint_errors": 0,
+    "lint_warnings": 71,
+    "native_device_testing": false
+  },
+  "additional_web_sources_enabled": false,
+  "ticketmaster_enabled": false
+}

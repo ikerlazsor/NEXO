@@ -1,5 +1,7 @@
 # Revisión de descubrimiento social · 9 de noviembre de 2026
 
+**Actualización posterior:** el usuario autorizó la publicación y las correcciones ya están en producción. Consultar [estado de publicación](social-discovery-publication-status.md). El contenido siguiente conserva el alcance y la validación de la revisión previa.
+
 Trabajo en `fix/social-discovery-stability`, basado en el código publicado de `6ca0dcf`. No se han aplicado migraciones a producción ni publicado una OTA, una versión de tienda o un entorno. Los cambios previos publicados se conservan; esta revisión añade correcciones sobre ellos.
 
 ## Cambios preparados
@@ -51,4 +53,4 @@ El recolector de revisión (`scripts/events/public-source-review.cjs`) exige `NE
 
 ## Pendiente
 
-Publicación expresamente detenida por la instrucción del usuario. La importación automática desde nuevas webs sigue pendiente de un acceso permitido y una prueba completa de integración. Al preparar una publicación futura habrá que revalidar las fechas, el aforo externo y las cancelaciones de las fichas, aplicar la migración y distribuir los bundles compatibles. No se modificó `main` ni se hizo merge.
+La publicación de las correcciones se autorizó y completó posteriormente, incluida la migración y los bundles compatibles. La importación automática desde nuevas webs sigue pendiente de un acceso permitido y una prueba completa de integración. Al activar una fuente futura habrá que revalidar fechas, aforo externo y cancelaciones. No se modificó `main` ni se hizo merge.

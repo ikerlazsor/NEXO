@@ -1,5 +1,7 @@
 # Feed único publicado — 8 de noviembre de 2026
 
+Esta entrega tiene una actualización posterior: [correcciones publicadas el 9 de noviembre de 2026](social-discovery-publication-status.md). Los grupos de la tabla siguiente corresponden a la entrega histórica del día 8.
+
 **Backend y actualizaciones móviles publicados en producción y verificados.** Se mantiene Madrid activo y Ticketmaster desactivado. No se ha modificado `main` ni hecho merge.
 
 ## Actualizaciones móviles

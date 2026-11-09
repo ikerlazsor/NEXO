@@ -56,6 +56,7 @@ function mount(file, exportName, args, api = {}, profiles = async () => []) {
       publishEventMembership: change => membershipListeners.forEach(listener => listener(change)),
       subscribeEventMembership: listener => { membershipListeners.add(listener); return () => membershipListeners.delete(listener); },
     },
+    './cache': { eventQueryKey: JSON.stringify, peekEventPage: () => undefined, hydrateEventPage: async () => undefined, rememberEventSocial: () => {} },
     './api': {
       fetchEventPage: async () => [],
       fetchEventPersonalization: async () => ({ joined: new Set(), history: { categories: {}, seen: new Set() } }),
@@ -136,7 +137,7 @@ test('changing feed filters discards late results and pagination deduplicates th
   const first = deferred(), second = deferred();
   const calls = [];
   const instant = new Date(Date.now() + 86400000).toISOString();
-  const fixture = { title: 'Concierto social', status: 'active', start_date: instant.slice(0,10), starts_at: instant, venue: 'Sala Madrid', latitude: 40.42, longitude: -3.7 };
+  const fixture = { title: 'Yoga en grupo', status: 'active', start_date: instant.slice(0,10), starts_at: instant, venue: 'Sala Madrid', latitude: 40.42, longitude: -3.7 };
   const page = Array.from({ length: 30 }, (_, n) => ({ ...fixture, id: `event-${n}` }));
   const hook = mount('features/events/useEvents.ts', 'useEvents', [{ query: 'old' }, null], {
     fetchEventPage: (filters, cursor, signal) => {
@@ -144,9 +145,9 @@ test('changing feed filters discards late results and pagination deduplicates th
       return calls.length === 1 ? first.promise : calls.length === 2 ? second.promise : Promise.resolve([page[29], { ...fixture, id: 'last' }]);
     },
   });
-  hook.tick(200);
+  hook.tick(180);
   hook.render([{ query: 'new' }, null]);
-  hook.tick(200);
+  hook.tick(180);
   assert.equal(calls[0].signal.aborted, true);
   second.resolve(page); await hook.flush();
   first.resolve([{ id: 'stale', start_date: '2026-11-01' }]); await hook.flush();
@@ -165,10 +166,10 @@ test('a stale social summary cannot undo a confirmed join or expose another acco
   const requests = [];
   const instant = new Date(Date.now() + 86400000).toISOString();
   const hook = mount('features/events/useEvents.ts','useEvents',[{},'viewer-a'], {
-    fetchEventPage: async () => [{ id:roomA,title:'Concierto social',status:'active',start_date:instant.slice(0,10),starts_at:instant,venue:'Sala Madrid',latitude:40.42,longitude:-3.7 }],
+    fetchEventPage: async () => [{ id:roomA,title:'Yoga en grupo',status:'active',start_date:instant.slice(0,10),starts_at:instant,venue:'Sala Madrid',latitude:40.42,longitude:-3.7 }],
     fetchEventSocialSummaries: (ids,signal) => { const pending = deferred(); requests.push({ ids,signal,pending }); return pending.promise; },
   });
-  hook.tick(200); await hook.flush();
+  hook.tick(0); await hook.flush();
   assert.equal(requests.length,1);
   await hook.value.toggleJoin(roomA); await hook.flush();
   assert.equal(requests.length,2);

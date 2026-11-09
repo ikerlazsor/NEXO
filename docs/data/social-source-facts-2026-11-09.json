@@ -1,0 +1,99 @@
+{
+  "checked_at": "2026-11-09T12:50:03.695Z",
+  "reuse_approved": false,
+  "events": [
+    {
+      "source_id": "https://www.meetup.com/meetup-group-uwzuhxpe/events/317255187/",
+      "source_url": "https://www.meetup.com/meetup-group-uwzuhxpe/events/317255187/",
+      "title": "Language Exchange Sunday",
+      "description": null,
+      "category": "DESCUBRIR",
+      "subcategory": "idiomas",
+      "start_date": "2026-11-15",
+      "end_date": "2026-11-15",
+      "starts_at": "2026-11-15T10:00:00.000Z",
+      "schedule": null,
+      "venue": "Huete Cervecería",
+      "address": "Calle de Sta Engracia, 134, Chamberí, 28003 Madrid, Madrid, Madrid",
+      "latitude": 40.442772,
+      "longitude": -3.701884,
+      "price_text": null,
+      "status": "active",
+      "social_eligible": true,
+      "location_verified": true,
+      "location_source": "publisher"
+    },
+    {
+      "source_id": "https://www.eventbrite.es/e/entradas-yoga-good-vibes-en-hundred-majadahonda-2004010432149",
+      "source_url": "https://www.eventbrite.es/e/entradas-yoga-good-vibes-en-hundred-majadahonda-2004010432149",
+      "title": "Yoga & Good Vibes en HUNDRED Majadahonda",
+      "description": null,
+      "category": "DEPORTES",
+      "subcategory": "otro",
+      "start_date": "2026-11-14",
+      "end_date": "2026-11-14",
+      "starts_at": "2026-11-14T09:00:00.000Z",
+      "schedule": null,
+      "venue": "Av. de la Victoria, 144",
+      "address": "144 Avenida de la Victoria, 28023 Madrid, Madrid",
+      "latitude": 40.4749084,
+      "longitude": -3.8359164,
+      "price_text": null,
+      "status": "active",
+      "social_eligible": true,
+      "location_verified": true,
+      "location_source": "publisher"
+    },
+    {
+      "source_id": "https://www.eventbrite.es/e/vinyasa-hatha-yoga-be-here-be-present-tickets-2004215525589",
+      "source_url": "https://www.eventbrite.es/e/vinyasa-hatha-yoga-be-here-be-present-tickets-2004215525589",
+      "title": "Vinyasa - Hatha Yoga. Be Here, Be Present️",
+      "description": null,
+      "category": "DEPORTES",
+      "subcategory": "otro",
+      "start_date": "2026-11-21",
+      "end_date": "2026-11-21",
+      "starts_at": "2026-11-21T10:00:00.000Z",
+      "schedule": null,
+      "venue": "Pakus - Clases de Yoga, Pilates y Baile en Madrid",
+      "address": "51 Calle de Verdaguer y García, 28027 Madrid, Madrid",
+      "latitude": 40.4409874,
+      "longitude": -3.6534821,
+      "price_text": null,
+      "status": "active",
+      "social_eligible": true,
+      "location_verified": true,
+      "location_source": "publisher"
+    }
+  ],
+  "rawCount": 7,
+  "excluded": {
+    "dateOrTime": 3,
+    "social": 1,
+    "location": 0
+  },
+  "evidence": [
+    {
+      "url": "https://www.meetup.com/meetup-group-uwzuhxpe/events/317255187/",
+      "sha256": "740a3f33e06c070c1018a570c6a66fc74f2f1173e31aa660f585dc6a6c44fa1b",
+      "http_status": 200
+    },
+    {
+      "url": "https://www.eventbrite.es/e/entradas-yoga-good-vibes-en-hundred-majadahonda-2004010432149",
+      "sha256": "3c4d76f0d77873b89aedccfbf10dbddf5f66c9665de8365ee55d1079cf087148",
+      "http_status": 200
+    },
+    {
+      "url": "https://www.eventbrite.es/e/vinyasa-hatha-yoga-be-here-be-present-tickets-2004215525589",
+      "sha256": "911fc385bfc0f3973af4d6da6d1d7288d36c220bd34cb4ea13e0f030e50925a4",
+      "http_status": 200
+    }
+  ],
+  "published": false,
+  "complete_import_snapshot": false,
+  "notes": [
+    "Public event/venue facts only. No external attendees, photographs, descriptions or tokens imported.",
+    "The Meetup discovery listing indicated a waitlist; a Nexo group does not reserve admission.",
+    "A fresh publisher and availability review is required before activation."
+  ]
+}

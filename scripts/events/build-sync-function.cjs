@@ -7,6 +7,7 @@ const sources = [
   "lib/externalEventPolicy.cjs",
   "scripts/events/social-snapshot.cjs",
   "scripts/events/providers.cjs",
+  "scripts/events/publisher-jsonld.cjs",
   "scripts/events/geocode.cjs",
   "scripts/madrid-events-preview.cjs",
   "scripts/madrid-events-fetch.cjs",

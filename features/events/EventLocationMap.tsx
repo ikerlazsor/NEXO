@@ -1,7 +1,4 @@
-import { useState, useCallback } from "react";
-import { useFocusEffect } from "@react-navigation/native";
 import {
-  InteractionManager,
   Linking,
   Platform,
   Pressable,
@@ -14,20 +11,15 @@ import { NexoMapView } from "../../components/NexoMapView";
 import { useAppTheme } from "../../lib/appTheme";
 import { useT } from "../../lib/i18n";
 import type { ExternalEvent } from "./types";
+import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
+import { getCategoryColor } from "../../lib/categories";
+import { eventClassification } from "./covers";
 export function EventLocationMap({ event }: { event: ExternalEvent }) {
-  const [ready, setReady] = useState(false);
+  const ready = useScreenTransitionReady();
   const { colors } = useAppTheme();
   const { t } = useT();
-  useFocusEffect(
-    useCallback(() => {
-      const task = InteractionManager.runAfterInteractions(() =>
-        setReady(true),
-      );
-      return () => task.cancel();
-    }, []),
-  );
   const { latitude, longitude } = event;
-  if (latitude == null || longitude == null) return null;
+  if (latitude == null || longitude == null || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
   const open = () => {
     void Linking.openURL(
       `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`,
@@ -69,7 +61,7 @@ export function EventLocationMap({ event }: { event: ExternalEvent }) {
             liteMode={Platform.OS === "android"}
             pointerEvents="none"
           >
-            <Marker coordinate={{ latitude, longitude }} />
+            <Marker coordinate={{ latitude, longitude }} pinColor={getCategoryColor(eventClassification(event).category)} />
           </NexoMapView>
         ) : (
           <View

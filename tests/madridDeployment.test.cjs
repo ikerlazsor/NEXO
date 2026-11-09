@@ -42,7 +42,7 @@ const source = {
   "@graph": [
     {
       id: 1,
-      title: "Taller de lectura",
+      title: "Club de lectura",
       dtstart: new Date(Date.now() + 86400000).toISOString().slice(0,10),
       dtend: new Date(Date.now() + 86400000).toISOString().slice(0,10),
       time: "18:00",
@@ -194,7 +194,7 @@ test("production plan reads history and source but never deploys, activates or c
     },
   });
   assert.equal(result.applied, false);
-  assert.equal(result.pending.length, 6);
+  assert.equal(result.pending.length, 7);
   assert.equal(calls.length, 3);
 });
 
@@ -292,13 +292,13 @@ test("production apply deploys only the reviewed feature migrations before atomi
   assert.equal(result.applied, true);
   assert.equal(
     sql.length,
-    7,
-    "six feature migrations and one activation transaction",
+    8,
+    "seven feature migrations and one activation transaction",
   );
-  assert.match(sql[6], /^begin;/);
-  assert.match(sql[6], /sync_external_events/);
-  assert.match(sql[6], /existing-synthetic-scheduler/);
-  assert.match(sql[6], /commit;$/);
+  assert.match(sql[7], /^begin;/);
+  assert.match(sql[7], /sync_external_events/);
+  assert.match(sql[7], /existing-synthetic-scheduler/);
+  assert.match(sql[7], /commit;$/);
   assert.ok(
     output.every((value) => !value.includes("existing-synthetic-scheduler")),
   );

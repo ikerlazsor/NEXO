@@ -9,7 +9,7 @@ insert into auth.users(id,aud,role,email,encrypted_password,email_confirmed_at,r
 ('90000000-0000-0000-0000-000000000003','authenticated','authenticated','event-c@nexo.test','unused',now(),'{"provider":"email","providers":["email"]}','{"nombre":"Synthetic C"}',now(),now());
 update public.perfiles set baneado=false where id::text like '90000000-%';
 create function pg_temp.event_snapshot(p_id text,p_title text default null) returns jsonb language sql as $$
- select jsonb_build_array(jsonb_build_object('source_id',p_id,'source_url','https://www.madrid.es/synthetic','title',coalesce(p_title,'Synthetic event '||p_id),'category','DESCUBRIR','start_date',current_date+1,'end_date',current_date+2,'starts_at',now()+interval '1 day','venue','Synthetic venue','latitude',40.7,'longitude',-3.9,'social_eligible',true,'location_verified',true,'status','active'));
+ select jsonb_build_array(jsonb_build_object('source_id',p_id,'source_url','https://www.madrid.es/synthetic','title',coalesce(p_title,'Synthetic yoga '||p_id),'category','DESCUBRIR','start_date',current_date+1,'end_date',current_date+2,'starts_at',now()+interval '1 day','venue','Synthetic venue','latitude',40.7,'longitude',-3.9,'social_eligible',true,'location_verified',true,'status','active'));
 $$;
 select throws_ok($$select public.sync_external_events('madrid',pg_temp.event_snapshot('a'),1)$$,'P0001','provider_not_verified','provider must be reviewed before importing');
 update public.event_providers set enabled=true,license_url='https://creativecommons.org/licenses/by/4.0/',license_verified_at=now(),format_verified_at=now() where id='madrid';
@@ -81,7 +81,7 @@ select set_config('request.jwt.claim.sub','90000000-0000-0000-0000-000000000002'
 select throws_ok($$select public.set_event_membership(pg_temp.eid(),true)$$,'P0001','event_unavailable','cancelled event cannot be joined');
 reset role;
 insert into public.external_events(provider_id,source_id,source_url,title,category,start_date,end_date)
-select 'madrid','page-'||n,'https://www.madrid.es/synthetic','Paging '||n,'SHOWTIME',current_date+5,current_date+5 from generate_series(1,31)n;
+select 'madrid','page-'||n,'https://www.madrid.es/synthetic','Yoga paging '||n,'SHOWTIME',current_date+5,current_date+5 from generate_series(1,31)n;
 update public.external_events set starts_at=now()+interval '5 days',venue='Synthetic venue',latitude=40.7,longitude=-3.9,social_eligible=true,location_verified=true where source_id like 'page-%';
 insert into public.external_events(provider_id,source_id,source_url,title,category,start_date,end_date,starts_at,social_eligible,location_verified) values('madrid','unknown-geo','https://www.madrid.es/synthetic','Unknown geography','DESCUBRIR',current_date+5,current_date+5,now()+interval '5 days',true,false);
 set local role anon;

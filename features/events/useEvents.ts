@@ -7,6 +7,7 @@ import {
   fetchEventSocialSummaries,
 } from "./api";
 import { isPublishableEvent } from "../../lib/externalEventPolicy.cjs";
+import { eventQueryKey, hydrateEventPage, peekEventPage, rememberEventSocial } from "./cache";
 import {
   publishEventMembership,
   subscribeEventMembership,
@@ -18,7 +19,6 @@ import type {
   EventInteractionTaste,
   EventSocialSummary,
 } from "./types";
-const cache = new Map<string, { events: ExternalEvent[]; at: number }>();
 const emptyHistory = (): EventInteractionTaste => ({
   categories: {},
   seen: new Set(),
@@ -28,11 +28,11 @@ export function useEvents(
   userId: string | null,
   enabled = true,
 ) {
-  const key = JSON.stringify(filters);
+  const key = eventQueryKey(filters);
   const currentKey = useRef(key);
   currentKey.current = key;
   const stableFilters = useMemo(() => JSON.parse(key) as EventFilters, [key]);
-  const [events, setEvents] = useState<ExternalEvent[]>([]);
+  const [events, setEvents] = useState<ExternalEvent[]>(() => peekEventPage(key)?.events ?? []);
   const [social, setSocial] = useState<{
     scope: string | null;
     values: Record<string, EventSocialSummary>;
@@ -120,8 +120,10 @@ export function useEvents(
           epoch === socialEpoch.current &&
           !abort.signal.aborted &&
           currentScope.current === scope
-        )
+        ) {
+          rememberEventSocial(scope, values);
           setSocial({ scope, values });
+        }
       })
       .catch(() => {});
     return () => abort.abort();
@@ -217,10 +219,6 @@ export function useEvents(
                 ...previous,
                 ...page.filter((e) => !previous.some((p) => p.id === e.id)),
               ];
-          if (reset) {
-            if (cache.size >= 12) cache.delete(cache.keys().next().value!);
-            cache.set(key, { events: page, at: Date.now() });
-          }
           return next;
         });
       } catch {
@@ -243,7 +241,7 @@ export function useEvents(
     cursor.current = null;
     setHasMore(true);
     setLoading(false);
-    const cached = cache.get(key);
+    const cached = peekEventPage(key);
     setResultKey(key);
     setEvents(cached?.events ?? []);
     setError(false);
@@ -252,11 +250,16 @@ export function useEvents(
       if (last) cursor.current = { date: last.start_date, id: last.id };
       setHasMore(cached.events.length === 30);
     }
+    let active = true;
+    if (enabled && !cached) void hydrateEventPage(key).then(page => {
+      if (page && active && currentKey.current === key && inFlight.current) setEvents(page.events);
+    });
+    // Start alongside the Nexo request; only text searches need debouncing.
     const timer = setTimeout(() => {
-      if (enabled && (!cached || Date.now() - cached.at > 120000))
-        void load(true);
-    }, 200);
+      if (enabled && (!cached || Date.now() - cached.at > 120000)) void load(true);
+    }, stableFilters.query ? 180 : 0);
     return () => {
+      active = false;
       clearTimeout(timer);
       requestGeneration.current++;
       controller.current?.abort();

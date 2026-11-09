@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   ActivityIndicator,
+  InteractionManager,
   Linking,
   Pressable,
   ScrollView,
@@ -33,23 +34,28 @@ import type { ExternalEvent, EventPerson } from "../../features/events/types";
 import { EventLocationMap } from "../../features/events/EventLocationMap";
 import { publishEventMembership } from "../../features/events/membershipBus";
 import { hapticError, hapticSuccess } from "../../lib/haptics";
+import { peekEvent, peekEventSocial } from "../../features/events/cache";
+import { eventClassification } from "../../features/events/covers";
+import { PressScale } from "../../components/PressScale";
+import { JOINED_PLAN_COLORS, planCardActionStyles } from "../../components/planCardActions";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export default function EventDetail() {
   const params = useLocalSearchParams<{ id: string }>();
   const id = typeof params.id === "string" ? params.id : "";
   const router = useRouter();
-  const { colors } = useAppTheme();
+  const { colors, scheme } = useAppTheme();
+  const actionStyles = planCardActionStyles(scheme === 'dark');
   const { t, lang } = useT();
   const { userId, requireAccount } = useAuthSession();
   const scope = JSON.stringify([id, userId]);
   const currentScope = useRef(scope);
   currentScope.current = scope;
-  const [storedEvent, setEvent] = useState<ExternalEvent | null>(null),
+  const [storedEvent, setEvent] = useState<ExternalEvent | null>(() => peekEvent(id)),
     [error, setError] = useState(false),
     [loading, setLoading] = useState(true);
-  const [storedPeople, setPeople] = useState<EventPerson[]>([]),
+  const [storedPeople, setPeople] = useState<EventPerson[]>(() => peekEventSocial(userId, id)?.people ?? []),
     [storedMorePeople, setMorePeople] = useState(false),
-    [storedJoined, setJoined] = useState(false),
+    [storedJoined, setJoined] = useState(() => peekEventSocial(userId, id)?.joined ?? false),
     [privateScope, setPrivateScope] = useState(scope),
     [busyScope, setBusyScope] = useState<string | null>(null);
   const event = storedEvent?.id === id ? storedEvent : null;
@@ -57,6 +63,7 @@ export default function EventDetail() {
   const morePeople = privateScope === scope && storedMorePeople;
   const joined = privateScope === scope && storedJoined;
   const busy = busyScope === scope;
+  const loadedPrivateScope = useRef(scope);
   const personLoading = useRef<object | null>(null),
     mutation = useRef<object | null>(null),
     request = useRef<AbortController | null>(null),
@@ -76,7 +83,8 @@ export default function EventDetail() {
       setError(false);
       if (!quiet) setLoading(true);
       setPrivateScope(scope);
-      if (!quiet) {
+      if (loadedPrivateScope.current !== scope) {
+        loadedPrivateScope.current = scope;
         setPeople([]);
         setMorePeople(false);
         setJoined(false);
@@ -84,15 +92,17 @@ export default function EventDetail() {
       personLoading.current = null;
       try {
         if (!UUID.test(id)) throw new Error("invalid_id");
-        const item = await fetchEvent(id, abort.signal);
+        const detailsRequest = fetchEvent(id, abort.signal);
+        const socialRequest = userId ? Promise.allSettled([
+          fetchEventPeople(id, undefined, abort.signal),
+          fetchEventMembership(id, userId, abort.signal),
+        ]) : null;
+        const item = await detailsRequest;
         if (abort.signal.aborted) throw new Error("request_aborted");
         if (!current()) return;
         setEvent(item);
         if (userId) {
-          const [members, own] = await Promise.allSettled([
-            fetchEventPeople(id, undefined, abort.signal),
-            fetchEventMembership(id, userId, abort.signal),
-          ]);
+          const [members, own] = await socialRequest!;
           if (abort.signal.aborted) throw new Error("request_aborted");
           if (!current()) return;
           if (own.status === "fulfilled") setJoined(own.value);
@@ -118,14 +128,15 @@ export default function EventDetail() {
   useFocusEffect(
     useCallback(() => {
       setBusyScope(null);
-      void load();
+      const task = InteractionManager.runAfterInteractions(() => { void load(!!peekEvent(id)); });
       return () => {
+        task.cancel();
         epoch.current++;
         request.current?.abort();
         personLoading.current = null;
         mutation.current = null;
       };
-    }, [load]),
+    }, [load, id]),
   );
   const unavailable =
     event?.status !== "active" ||
@@ -179,12 +190,13 @@ export default function EventDetail() {
       return;
     }
     Alert.alert(
-      t(joined ? "events.leave" : "events.join"),
-      t("events.socialNotice"),
+      t("feed.leaveTitle"),
+      t("feed.leaveMsg"),
       [
         { text: t("common.cancel"), style: "cancel" },
         {
           text: t(joined ? "events.leave" : "events.join"),
+          style: "destructive",
           onPress: () => void changeMembership(),
         },
       ],
@@ -244,7 +256,7 @@ export default function EventDetail() {
           <Ionicons name="arrow-back" size={22} color={colors.text} />
           <Text style={{ color: colors.text }}>{t("common.back")}</Text>
         </Pressable>
-        {loading && <ActivityIndicator color={colors.primary} />}
+        {loading && !event && <ActivityIndicator color={colors.primary} />}
         {error && (
           <Pressable onPress={() => void load()}>
             <Text style={[s.paragraph, { color: colors.textMuted }]}>
@@ -258,7 +270,7 @@ export default function EventDetail() {
               <EventArtwork event={event} />
             </View>
             <Text style={[s.link, { color: colors.primary }]}>
-              {t(`cat.main.${event.category}`)}
+              {t(`cat.main.${eventClassification(event).category}`)}
             </Text>
             <Text style={[s.heading, { color: colors.text }]}>
               {event.title}
@@ -328,40 +340,6 @@ export default function EventDetail() {
                 {t("events.socialNotice")}
               </Text>
             </View>
-            <Pressable
-              disabled={busy || loading || (!joined && unavailable)}
-              onPress={askJoin}
-              style={[
-                s.button,
-                {
-                  backgroundColor: joined
-                    ? colors.surfaceSubtle
-                    : colors.primary,
-                  opacity: busy || (!joined && unavailable) ? 0.5 : 1,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  s.buttonText,
-                  { color: joined ? colors.text : colors.onPrimary },
-                ]}
-              >
-                {t(joined ? "events.leave" : "events.join")}
-              </Text>
-            </Pressable>
-            {joined && (
-              <Pressable
-                onPress={() =>
-                  router.push({ pathname: "/event-chat/[id]", params: { id } })
-                }
-                style={[s.button, { backgroundColor: colors.primarySoft }]}
-              >
-                <Text style={[s.buttonText, { color: colors.primary }]}>
-                  {t("events.chat")}
-                </Text>
-              </Pressable>
-            )}
             <Text style={[s.heading, { color: colors.text, fontSize: 21 }]}>
               {t("events.people")}
             </Text>
@@ -475,6 +453,21 @@ export default function EventDetail() {
           </>
         )}
       </ScrollView>
+      {event && <View style={{ paddingHorizontal: 20, paddingVertical: 12, borderTopWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, flexDirection: 'row', gap: 12 }}>
+        <PressScale
+          onPress={askJoin}
+          disabled={busy || loading || (!joined && unavailable)}
+          accessibilityRole="button"
+          accessibilityLabel={t(joined ? 'events.leave' : 'events.join')}
+          style={[joined ? actionStyles.joined : actionStyles.button, { flex: 1, minHeight: 52, justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: busy || loading || (!joined && unavailable) ? 0.55 : 1 }]}
+        >
+          {busy ? <ActivityIndicator color={joined ? JOINED_PLAN_COLORS.text : colors.onPrimary} /> : joined ? <Ionicons name="checkmark-circle" size={20} color={JOINED_PLAN_COLORS.text} /> : null}
+          <Text style={{ fontSize: 16, fontWeight: '700', color: joined ? JOINED_PLAN_COLORS.text : colors.onPrimary }}>{t(joined ? 'events.joined' : 'events.join')}</Text>
+        </PressScale>
+        {joined && <PressScale onPress={() => router.push({ pathname: '/event-chat/[id]', params: { id } })} accessibilityRole="button" accessibilityLabel={t('events.chat')} style={{ width: 54, minHeight: 52, borderRadius: 18, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="chatbubbles" size={22} color={colors.onPrimary} />
+        </PressScale>}
+      </View>}
     </SafeAreaView>
   );
 }

@@ -18,6 +18,7 @@ import {
     ActivityIndicator,
     Dimensions,
     InteractionManager,
+    Linking,
     Modal,
     Platform,
     ScrollView,
@@ -42,6 +43,9 @@ import {
     listMyChatGroups,
 } from '../../lib/inviteChatGroup';
 import { NexoMapView } from '../../components/NexoMapView';
+import { useScreenTransitionReady } from '../../hooks/useScreenTransitionReady';
+import { validMapCoordinates } from '../../lib/mapDiscovery';
+import { getCategoryColor } from '../../lib/categories';
 import { PadelLineupSection } from '../../components/PadelLineup';
 import { PlanCoverCarousel } from '../../components/PlanCoverCarousel';
 import { PressScale } from '../../components/PressScale';
@@ -335,7 +339,7 @@ export default function PlanDetailScreen() {
     const [isSaved, setIsSaved] = useState(() => cachedDetail?.isSaved ?? false);
     const [actionBusy, setActionBusy] = useState(false);
     const [mapExpanded, setMapExpanded] = useState(false);
-    const [mapPreviewReady, setMapPreviewReady] = useState(false);
+    const mapPreviewReady = useScreenTransitionReady();
     const [fullMapMounted, setFullMapMounted] = useState(false);
     const [openRating, setOpenRating] = useState<PendingRatingPlan | null>(
         () => cachedDetail?.openRating ?? null,
@@ -886,24 +890,6 @@ export default function PlanDetailScreen() {
         };
     }, [planId]);
 
-    useEffect(() => {
-        if (!plan) {
-            setMapPreviewReady(false);
-            return;
-        }
-        let cancelled = false;
-        const task = InteractionManager.runAfterInteractions(() => {
-            if (!cancelled) setMapPreviewReady(true);
-        });
-        const fallback = setTimeout(() => {
-            if (!cancelled) setMapPreviewReady(true);
-        }, 160);
-        return () => {
-            cancelled = true;
-            task.cancel();
-            clearTimeout(fallback);
-        };
-    }, [plan?.id]);
 
     useEffect(() => {
         if (!planId) return;
@@ -1261,8 +1247,9 @@ export default function PlanDetailScreen() {
         ? eventDate.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })
         : '';
     const sportPlan = plan ? resolvePlanSport(plan) : null;
-    const lat = Number.isFinite(Number(plan?.latitud)) ? Number(plan?.latitud) : 40.4167;
-    const lng = Number.isFinite(Number(plan?.longitud)) ? Number(plan?.longitud) : -3.7033;
+    const hasCoordinates = !!plan && validMapCoordinates(plan);
+    const lat = hasCoordinates ? Number(plan?.latitud) : 40.4167;
+    const lng = hasCoordinates ? Number(plan?.longitud) : -3.7033;
 
     const handleKick = (targetUserId: string, targetName: string) => {
         if (!currentUserId || !planId || !isCreator) return;
@@ -2658,11 +2645,15 @@ export default function PlanDetailScreen() {
                         <TouchableOpacity
                             style={styles.mapCard}
                             activeOpacity={0.92}
-                            onPress={() => setMapExpanded(true)}
+                            onPress={() => {
+                                if (hasCoordinates) setMapExpanded(true);
+                                else void Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(plan.nombre_ubicacion || 'Madrid')}`);
+                            }}
                         >
-                            {mapPreviewReady && !mapExpanded ? (
+                            {mapPreviewReady && hasCoordinates && !mapExpanded ? (
                                 <NexoMapView
                                     key={`preview-${plan.id}-${lat}-${lng}`}
+                                    liteMode={Platform.OS === 'android'}
                                     style={styles.map}
                                     scrollEnabled={false}
                                     zoomEnabled={false}
@@ -2677,7 +2668,7 @@ export default function PlanDetailScreen() {
                                         longitudeDelta: 0.008,
                                     }}
                                 >
-                                    <Marker coordinate={{ latitude: lat, longitude: lng }} />
+                                    <Marker coordinate={{ latitude: lat, longitude: lng }} pinColor={getCategoryColor(plan.categoria, plan.tipo_deporte)} />
                                 </NexoMapView>
                             ) : (
                                 <View style={styles.mapPlaceholder}>
@@ -2767,6 +2758,7 @@ export default function PlanDetailScreen() {
                     >
                         <Marker
                             coordinate={{ latitude: lat, longitude: lng }}
+                            pinColor={getCategoryColor(plan.categoria, plan.tipo_deporte)}
                             title={plan.titulo}
                             description={plan.nombre_ubicacion ?? undefined}
                             onPress={() => void openDirectionsTo(lat, lng, plan.nombre_ubicacion)}

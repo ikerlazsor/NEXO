@@ -62,9 +62,9 @@ async function main({
   const apply = args.includes("--apply");
   const kind =
     args.find((arg) => arg.startsWith("--provider="))?.slice(11) || "madrid";
-  if (!["madrid", "ticketmaster", "ical"].includes(kind))
+  if (!["madrid", "ticketmaster", "ical", "jsonld"].includes(kind))
     throw new Error("Unknown event provider");
-  const provider = kind === "ical" ? env.NEXO_ICAL_PROVIDER_ID : kind;
+  const provider = kind === "ical" ? env.NEXO_ICAL_PROVIDER_ID : kind === "jsonld" ? env.NEXO_JSONLD_PROVIDER_ID : kind;
   const file = args.find((arg) => arg.startsWith("--file="))?.slice(7);
   const reportFile = args.find((arg) => arg.startsWith("--report="))?.slice(9);
   const fs = file || reportFile ? require("node:fs") : null;
@@ -135,6 +135,13 @@ async function main({
         url: "https://app.ticketmaster.com/discovery/v2/events.json",
         fetchedAt: now.toISOString(),
       };
+    } else if (kind === "jsonld") {
+      if (env.NEXO_JSONLD_REVIEWED !== "true" || !provider || !env.NEXO_JSONLD_FEED_URL)
+        throw new Error("Structured source requires a verified provider and complete source page");
+      const { jsonLdSnapshot } = require("./events/publisher-jsonld.cjs");
+      const text = file ? fs.readFileSync(file, "utf8") : await readDocument(env.NEXO_JSONLD_FEED_URL, fetchImpl, "text/html");
+      rawSnapshot = jsonLdSnapshot(text, env.NEXO_JSONLD_FEED_URL);
+      evidence = { kind: file ? "local-file" : "official-download", url: env.NEXO_JSONLD_FEED_URL, fetchedAt: now.toISOString() };
     } else if (kind === "ical") {
       if (
         env.NEXO_ICAL_REVIEWED !== "true" ||

@@ -1,0 +1,15 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(10);
+select ok(public.social_activity_title_is_eligible('Language exchange Madrid'),'language exchanges qualify');
+select ok(public.social_activity_title_is_eligible('Senderismo por la sierra'),'hiking qualifies');
+select ok(public.social_activity_title_is_eligible('Yoga en grupo'),'yoga qualifies');
+select ok(public.social_activity_title_is_eligible('Taller de cerámica'),'participatory workshop qualifies');
+select ok(not public.social_activity_title_is_eligible('Concierto social'),'social marketing does not make a concert participatory');
+select ok(not public.social_activity_title_is_eligible('Teatro para conocer gente'),'theatre is excluded');
+select ok(not public.social_activity_title_is_eligible('Festival de yoga'),'mass festivals stay excluded');
+select ok(not public.social_activity_title_is_eligible('Ajedrez escolar'),'school audience stays excluded');
+select ok(not public.social_activity_title_is_eligible('Una tarde inolvidable'),'vague titles stay excluded');
+select ok(not public.external_event_is_publishable(jsonb_populate_record(null::public.external_events,jsonb_build_object('title','Concierto social','social_eligible',true,'location_verified',true,'status','active','starts_at',now()+interval '1 day','venue','Sala Madrid','latitude',40.42,'longitude',-3.7))),'legacy true flag cannot bypass current policy');
+select * from finish();
+rollback;

@@ -7,9 +7,9 @@ insert into auth.users(id,aud,role,email,encrypted_password,email_confirmed_at,r
 ('97000000-0000-0000-0000-000000000002','authenticated','authenticated','merge-b@nexo.test','unused',now(),'{"provider":"email","providers":["email"]}','{"nombre":"Synthetic B"}',now(),now());
 update public.event_providers set enabled=true,license_verified_at=now(),format_verified_at=now() where id='madrid';
 insert into public.external_events(id,provider_id,source_id,source_url,title,category,subcategory,start_date,end_date,starts_at,venue,latitude,longitude,social_eligible,location_verified) values
-('97100000-0000-0000-0000-000000000001','madrid','old-one','https://www.madrid.es/synthetic','Concierto social','SHOWTIME','concierto',current_date+1,current_date+1,now()+interval '1 day','Synthetic venue',40.42,-3.7,true,true),
-('97100000-0000-0000-0000-000000000002','madrid','old-two','https://www.madrid.es/synthetic','Conciérto social','SHOWTIME','concierto',current_date+1,current_date+1,now()+interval '1 day 2 minutes','Synthetic venue',40.4201,-3.7,true,true),
-('97100000-0000-0000-0000-000000000003','madrid','different-session','https://www.madrid.es/synthetic','Concierto social','SHOWTIME','concierto',current_date+2,current_date+2,now()+interval '2 days','Synthetic venue',40.42,-3.7,true,true);
+('97100000-0000-0000-0000-000000000001','madrid','old-one','https://www.madrid.es/synthetic','Yoga social','SHOWTIME','concierto',current_date+1,current_date+1,now()+interval '1 day','Synthetic venue',40.42,-3.7,true,true),
+('97100000-0000-0000-0000-000000000002','madrid','old-two','https://www.madrid.es/synthetic','Yóga social','SHOWTIME','concierto',current_date+1,current_date+1,now()+interval '1 day 2 minutes','Synthetic venue',40.4201,-3.7,true,true),
+('97100000-0000-0000-0000-000000000003','madrid','different-session','https://www.madrid.es/synthetic','Yoga social','SHOWTIME','concierto',current_date+2,current_date+2,now()+interval '2 days','Synthetic venue',40.42,-3.7,true,true);
 insert into public.external_event_participants(event_id,user_id,joined_at) values
 ('97100000-0000-0000-0000-000000000001','97000000-0000-0000-0000-000000000001',now()),
 ('97100000-0000-0000-0000-000000000002','97000000-0000-0000-0000-000000000001',now()-interval '1 hour'),

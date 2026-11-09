@@ -429,14 +429,14 @@ export const MAIN_CATEGORY_ICONS: Record<MainCategoryId, string> = {
     VIBES: 'sparkles',
 };
 
-/** Colores de acento por categoría: variedades de azul bien diferenciadas. */
+/** Shared category accents for feed cards, filters and native map pins. */
 export const MAIN_CATEGORY_COLORS: Record<MainCategoryId, string> = {
-    FOODIES: '#1E3A8A',
+    FOODIES: '#B75A18',
     DEPORTES: '#2563EB',
-    AIRE_LIBRE: '#0284C7',
-    SHOWTIME: '#1D4ED8',
-    DESCUBRIR: '#0EA5E9',
-    VIBES: '#6366F1',
+    AIRE_LIBRE: '#16835D',
+    SHOWTIME: '#A23DBD',
+    DESCUBRIR: '#087E9B',
+    VIBES: '#7850CE',
 };
 
 /** Mismo color que la categoría padre (p. ej. pills de subcategoría en crear plan). */
@@ -455,9 +455,9 @@ export function findMainForSubcategory(sub: string): MainCategoryId | null {
 /** Color de pin / chip por categoría principal (mapa, tarjetas). */
 export function getCategoryColor(
     categoria: string | null | undefined,
-    _tipoDeporte?: string | null,
+    tipoDeporte?: string | null,
 ): string {
-    const main = normalizeMainCategory(categoria);
+    const main = normalizeMainCategory(categoria) ?? (tipoDeporte && tipoDeporte !== 'otro' ? findMainForSubcategory(tipoDeporte) : null);
     if (!main) return '#2563EB';
     return MAIN_CATEGORY_COLORS[main];
 }

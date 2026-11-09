@@ -16,8 +16,7 @@ async function prepareSocialSnapshot(
     const event = {
       ...row,
       social_eligible:
-        row.social_eligible === true ||
-        isSocialActivity(row.title, row.description || ""),
+        row.social_eligible !== false && isSocialActivity(row.title, row.description || ""),
     };
     if (event.status === "cancelled" || event.status === "stale") {
       events.push(event);
@@ -34,7 +33,7 @@ async function prepareSocialSnapshot(
           ...event,
           latitude: 40.4168,
           longitude: -3.7038,
-          venue: event.venue || "pending",
+          venue: "pending",
         },
         now.getTime(),
       )

@@ -250,6 +250,7 @@ function icsSnapshot(document, sourceUrl) {
   };
 }
 module.exports = {
+  publisherUrl,
   readDocument,
   ticketmasterSnapshot,
   fetchTicketmaster,

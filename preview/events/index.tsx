@@ -71,9 +71,9 @@ function Design() {
             event={event}
             variant="editorial"
             social={{
-              count: index + 2,
+              count: index === 0 ? 0 : index + 2,
               joined: false,
-              people: [
+              people: index === 0 ? [] : [
                 {
                   user_id: "synthetic-ana",
                   nombre: "Ana",

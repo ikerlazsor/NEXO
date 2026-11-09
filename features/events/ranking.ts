@@ -9,11 +9,11 @@ import type { ExternalEvent, EventInteractionTaste } from "./types";
 import { isPublishableEvent } from "../../lib/externalEventPolicy.cjs";
 
 export function rankUnifiedFeed<
-  T extends { id: string; kind: string; plan?: AffinityPlan },
+  T extends { id: string; kind: string; plan?: AffinityPlan; membership?: string },
 >(
   social: T[],
   events: ExternalEvent[],
-  context: RankContext & { eventHistory?: EventInteractionTaste },
+  context: RankContext & { eventHistory?: EventInteractionTaste; joinedEvents?: Set<string> },
 ) {
   const rows: (T | { kind: "event"; id: string; event: ExternalEvent })[] = [
     ...social.filter((row) => row.kind === "plan"),
@@ -58,8 +58,16 @@ export function rankUnifiedFeed<
     );
   };
   const scores = new Map(rows.map((row) => [row.id, score(row)]));
+  const priority = (row: (typeof rows)[number]) => {
+    if (row.kind === "event" && "event" in row) return context.joinedEvents?.has(row.event.id) ? 0 : 2;
+    const socialRow = row as T;
+    const plan = socialRow.plan;
+    if (context.currentUserId && (plan?.creador_id === context.currentUserId || socialRow.membership === "joined")) return 0;
+    if ((plan?.creador_id && context.friendIds.has(plan.creador_id)) || plan?.participantsList?.some(p => !!p.id && context.friendIds.has(p.id))) return 1;
+    return 2;
+  };
   return rows.sort(
-    (a, b) => scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id),
+    (a, b) => priority(a) - priority(b) || scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id),
   );
 }
 

@@ -14,6 +14,7 @@ import { eventClassification, eventCoverSource } from "./covers";
 import type { ExternalEvent, EventSection, EventSocialSummary } from "./types";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { PressScale } from "../../components/PressScale";
+import { getCategoryColor } from "../../lib/categories";
 import {
   planCardActionStyles,
   JOINED_PLAN_COLORS,
@@ -78,6 +79,7 @@ export const EventCard = memo(function EventCard({
   const compact = variant === "compact";
   const date = eventDateLabel(event, lang);
   const classification = eventClassification(event);
+  const accent = getCategoryColor(classification.category);
   return (
     <View
       style={[
@@ -110,9 +112,9 @@ export const EventCard = memo(function EventCard({
         >
           <View style={s.categoryRow}>
             <View
-              style={[s.categoryTag, { backgroundColor: colors.primarySoft }]}
+              style={[s.categoryTag, { backgroundColor: `${accent}14` }]}
             >
-              <Text style={[s.category, { color: colors.primary }]}>
+              <Text style={[s.category, { color: accent }]}>
                 {t(`cat.main.${classification.category}`)}
               </Text>
             </View>
@@ -158,7 +160,7 @@ export const EventCard = memo(function EventCard({
         </View>
       </Pressable>
       <View style={[s.actions, compact && s.compactActions]}>
-        <Pressable
+        {(social?.count ?? 0) > 0 ? <Pressable
           onPress={onOpen}
           accessibilityRole="button"
           accessibilityLabel={t("events.going", { n: social?.count ?? 0 })}
@@ -196,7 +198,7 @@ export const EventCard = memo(function EventCard({
           >
             {t("events.going", { n: social?.count ?? 0 })}
           </Text>
-        </Pressable>
+        </Pressable> : <View style={s.sourceRow} />}
         <PressScale
           onPress={onJoin}
           disabled={busy || preview}

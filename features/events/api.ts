@@ -1,6 +1,7 @@
 import { supabase } from "../../lib/supabase";
 import { getPublicProfiles } from "../../lib/profileData";
 import { withRequestDeadline } from "../../lib/requestDeadline";
+import { eventQueryKey, rememberEvent, rememberEventPage } from "./cache";
 import type {
   ExternalEvent,
   EventCursor,
@@ -25,7 +26,7 @@ export async function fetchEventPage(
   cursor: EventCursor | null,
   signal?: AbortSignal,
 ): Promise<ExternalEvent[]> {
-  return (
+  const page = (
     (await request<ExternalEvent[]>(
       (deadline) =>
         supabase
@@ -45,6 +46,9 @@ export async function fetchEventPage(
       signal,
     )) || []
   );
+  page.forEach(rememberEvent);
+  if (!cursor) rememberEventPage(eventQueryKey(filters), page);
+  return page;
 }
 export async function fetchEvent(
   id: string,
@@ -59,6 +63,7 @@ export async function fetchEvent(
     signal,
   );
   if (!event) throw new Error("event_not_found");
+  rememberEvent(event);
   return event;
 }
 export async function setEventMembership(eventId: string, join: boolean) {

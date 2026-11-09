@@ -6,25 +6,25 @@ export function previewEvents(): ExternalEvent[] {
     new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
   return [
     {
-      title: "Una tarde entre arte y nuevas miradas",
+      title: "Intercambio de idiomas en Madrid",
       category: "DESCUBRIR",
-      subcategory: "museo",
+      subcategory: "idiomas",
       venue: "Centro cultural · Madrid",
     },
     {
-      title: "Música al atardecer, buena compañía",
-      category: "SHOWTIME",
-      subcategory: "concierto",
+      title: "Juegos de mesa para conocer gente",
+      category: "VIBES",
+      subcategory: "juegos_mesa",
       venue: "Auditorio municipal · Madrid",
     },
     {
-      title: "Un paseo para descubrir otro Madrid",
+      title: "Senderismo en grupo por la sierra",
       category: "AIRE_LIBRE",
-      subcategory: "otro",
+      subcategory: "senderismo",
       venue: "Parque de Madrid",
     },
     {
-      title: "Muévete a tu ritmo: encuentro deportivo",
+      title: "Yoga en grupo al aire libre",
       category: "DEPORTES",
       subcategory: "otro",
       venue: "Instalación municipal · Madrid",

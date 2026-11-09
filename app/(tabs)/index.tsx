@@ -164,9 +164,9 @@ import { theme } from '../../theme';
 import { EventCard } from '../../features/events/EventCards';
 import { useEvents } from '../../features/events/useEvents';
 import { rankUnifiedFeed, retainFeedOrder } from '../../features/events/ranking';
+import { rememberEvent } from '../../features/events/cache';
 import type { ExternalEvent, EventFilters } from '../../features/events/types';
 import { eventJoinErrorKey } from '../../features/events/api';
-import { horizon } from '../../lib/externalEventPolicy.cjs';
 type FeedRow = SocialFeedRow | {kind:'event';id:string;event:ExternalEvent};
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
@@ -348,6 +348,7 @@ export default function HomeScreen() {
     const feedCursorRef = useRef<FeedMoreCursor | null>(null);
     const loadingMoreRef = useRef(false);
     const unifiedOrderRef = useRef<{ key: string; ids: string[] }>({ key: "", ids: [] });
+    const reorderAfterRefreshRef = useRef(false);
     const eventFilters = useMemo<EventFilters>(() => {
         const now = new Date();
         const madridDay = (d: Date) =>
@@ -370,7 +371,7 @@ export default function HomeScreen() {
                     ? madridDay(now)
                     : dateFilter === 'week'
                       ? madridDay(new Date(now.getTime() + 7 * 86400000))
-                      : /^\d{4}-\d{2}-\d{2}$/.test(dateFilter) ? dateFilter : madridDay(horizon(now)),
+                      : /^\d{4}-\d{2}-\d{2}$/.test(dateFilter) ? dateFilter : undefined,
         };
     }, [selectedCategories, selectedSubcategories, search, userCoords, nearbyKm, dateFilter]);
     const external = useEvents(
@@ -378,9 +379,22 @@ export default function HomeScreen() {
         sessionUserId,
         true,
     );
+    const { listRef, onScroll, onListLayout, onContentSizeChange, onScrollBeginDrag, restoreScroll, captureScroll, setScrollOffset, scrollEventThrottle } = useListScrollRestore<FeedRow>(
+        ScreenKeys.FEED,
+        {
+            restoreOnFocus: true, waitForContent: true,
+            itemKeyAt: (index) => feedRowsRef.current[index]?.id,
+            indexOfKey: (key) => feedRowsRef.current.findIndex(row => row.id === key),
+        },
+    );
     const openExternal = useCallback(
-        (id: string) => router.push({ pathname: '/event/[id]', params: { id } }),
-        [router],
+        (id: string) => {
+            const event = external.events.find(row => row.id === id);
+            if (event) rememberEvent(event);
+            captureScroll();
+            router.push({ pathname: '/event/[id]', params: { id } });
+        },
+        [router, external.events, captureScroll],
     );
     const joinExternal = useCallback(
         (id: string) => {
@@ -405,13 +419,9 @@ export default function HomeScreen() {
     const friendIdsRef = useRef<Set<string>>(new Set());
     const coincidedIdsRef = useRef<Set<string>>(new Set());
     const requestFeedLoadRef = useRef<(opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => void>(() => {});
-    const { listRef, onScroll, onListLayout, onContentSizeChange, onScrollBeginDrag, restoreScroll, setScrollOffset, scrollEventThrottle } = useListScrollRestore<FeedRow>(
-        ScreenKeys.FEED,
-        { restoreOnFocus: true, waitForContent: true },
-    );
 
     const onFeedRefresh = useCallback(() => {
-        unifiedOrderRef.current = { key: "", ids: [] };
+        reorderAfterRefreshRef.current = true;
         hapticSelection();
         requestFeedLoadRef.current({ refresh: true });
     }, []);
@@ -1372,6 +1382,7 @@ export default function HomeScreen() {
     const savedPlanIds = useMemo(() => new Set(savedPlans), [savedPlans]);
 
     const feedRowsUi = useMemo<FeedRow[]>(() => {
+        if (loading && !plans.length) return [];
         const socialUi = feedRows.map((row) => {
             if (row.kind !== 'plan') return row;
             const pid = String(row.plan.id);
@@ -1390,14 +1401,19 @@ export default function HomeScreen() {
             coords: userCoords,
             currentUserId,
             eventHistory: external.history,
+            joinedEvents: external.joined,
         });
         // Keep the reading order across background taste/membership updates.
         // Pull-to-refresh resets it explicitly; filters start a new list.
-        const key = JSON.stringify([eventFilters, currentUserId, !loading, external.events.length > 0]);
+        const key = JSON.stringify([selectedCategories, selectedSubcategories, search, dateFilter, nearbyKm, sessionUserId]);
+        if (reorderAfterRefreshRef.current && !refreshing && !external.loading) {
+            unifiedOrderRef.current = { key: "", ids: [] };
+            reorderAfterRefreshRef.current = false;
+        }
         const ordered = retainFeedOrder(unifiedOrderRef.current.key === key ? unifiedOrderRef.current.ids : [], ranked);
         unifiedOrderRef.current = { key, ids: ordered.map(row => row.id) };
         return ordered;
-    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel, external.events, external.history, feedTaste, friendIds, coincidedIds, userCoords, currentUserId, eventFilters, loading]);
+    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel, external.events, external.history, external.joined, external.loading, refreshing, feedTaste, friendIds, coincidedIds, userCoords, currentUserId, loading, plans.length, selectedCategories, selectedSubcategories, search, dateFilter, nearbyKm, sessionUserId]);
 
     const feedRowsRef = useRef(feedRowsUi);
     feedRowsRef.current = feedRowsUi;
@@ -1407,6 +1423,7 @@ export default function HomeScreen() {
 
     const openPlanDetail = useCallback(
         (planId: string) => {
+            captureScroll();
             try {
                 const found = plansRef.current.find((p) => String(p.id) === String(planId));
                 const mid = String(planId);
@@ -1476,7 +1493,7 @@ export default function HomeScreen() {
                 if (__DEV__) console.warn('openPlanDetail nav', e);
             }
         },
-        [router, friendIds, coincidedIds, currentUserId, currentUserGenero, savedPlanIds, feedTaste],
+        [router, captureScroll, friendIds, coincidedIds, currentUserId, currentUserGenero, savedPlanIds, feedTaste],
     );
 
     const openProfile = useCallback(
@@ -1861,6 +1878,7 @@ export default function HomeScreen() {
                     ref={listRef}
                     style={{ flex: 1 }}
                     data={feedRowsUi}
+                    maintainVisibleContentPosition={{ disabled: true }}
                     keyExtractor={(item) => item.id}
                     getItemType={(item) => item.kind}
                     extraData={joiningPlanId}
@@ -1965,7 +1983,7 @@ export default function HomeScreen() {
                         )
                     }
                 />
-                {showFeedSkeleton && !refreshing && !external.events.length ? (
+                {showFeedSkeleton && !refreshing && !feedRowsUi.length ? (
                     <View style={styles.listLoadingOverlay} pointerEvents="none">
                         <FeedSkeletonList count={3} />
                     </View>

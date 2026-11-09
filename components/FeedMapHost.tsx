@@ -49,8 +49,9 @@ import { cacheGetStale } from '../lib/ttlCache';
 import { lockTabPager, unlockTabPager } from '../lib/tabPagerScroll';
 
 import { useEvents } from '../features/events/useEvents';
-import { eventCoverSource } from '../features/events/covers';
+import { eventClassification, eventCoverSource } from '../features/events/covers';
 import type { ExternalEvent } from '../features/events/types';
+import { discoveryPins, validMapCoordinates } from '../lib/mapDiscovery';
 const INK = theme.colors.text;
 const SCREEN_W = Dimensions.get('window').width;
 const SCREEN_H = Dimensions.get('window').height;
@@ -92,14 +93,7 @@ function planAccentColor(plan: { categoria?: string | null; tipo_deporte?: strin
     return getCategoryColor(plan.categoria ?? null, plan.tipo_deporte ?? null);
 }
 
-function hasMapCoords(p: object): boolean {
-    const rec = p as { latitud?: unknown; longitud?: unknown };
-    const lat = Number(rec.latitud);
-    const lng = Number(rec.longitud);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
-    if (Math.abs(lat) < 0.01 && Math.abs(lng) < 0.01) return false;
-    return true;
-}
+const hasMapCoords = validMapCoordinates;
 
 function sortMapPlans(plans: MapPlan[], userCoords: UserCoords | null): MapPlan[] {
     const out = [...plans];
@@ -129,72 +123,6 @@ function formatDist(km: number, lang: string): string {
     return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
 }
 
-/**
- * Pin estático: no cambia de layout al seleccionar (evita el bug de iOS
- * donde el marker custom desaparece o deja un halo raro).
- */
-function FeedMapPin({
-    id,
-    latitude,
-    longitude,
-    count,
-    color,
-    onPress,
-}: {
-    id: string;
-    latitude: number;
-    longitude: number;
-    count: number;
-    color: string;
-    onPress: () => void;
-}) {
-    const styles = useThemedStyles(createFeedStyles);
-    // iOS/Android a menudo pintan el marker custom vacío si tracksViewChanges
-    // empieza en false. En Android dejamos unos frames extra para que onLayout
-    // fije el bitmap al tamaño real (si no, el pin sale cortado a la derecha).
-    const [tracks, setTracks] = useState(true);
-    useEffect(() => {
-        let cancelled = false;
-        let inner: ReturnType<typeof requestAnimationFrame> | null = null;
-        const outer = requestAnimationFrame(() => {
-            inner = requestAnimationFrame(() => {
-                if (!cancelled) setTracks(false);
-            });
-        });
-        const fallback = setTimeout(() => {
-            if (!cancelled) setTracks(false);
-        }, Platform.OS === 'android' ? 450 : 80);
-        return () => {
-            cancelled = true;
-            cancelAnimationFrame(outer);
-            if (inner != null) cancelAnimationFrame(inner);
-            clearTimeout(fallback);
-        };
-    }, [color, count]);
-
-    return (
-        <Marker
-            identifier={id}
-            coordinate={{ latitude, longitude }}
-            tracksViewChanges={tracks}
-            anchor={{ x: 0.5, y: 1 }}
-            stopPropagation
-            onPress={(e) => {
-                e?.stopPropagation?.();
-                onPress();
-            }}
-        >
-            <View collapsable={false} style={styles.mapPinHit}>
-                <View style={[styles.mapPinBubble, { backgroundColor: color }]}>
-                    <Ionicons name="people" size={11} color="#FFF" />
-                    <Text style={styles.mapPinCount}>{count}</Text>
-                </View>
-                <View style={[styles.mapPinTail, { borderTopColor: color }]} />
-            </View>
-        </Marker>
-    );
-}
-
 export function FeedMapHost() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -202,6 +130,9 @@ export function FeedMapHost() {
     const styles = useThemedStyles(createFeedStyles);
     const { userId } = useAuthSession();
     const [visible, setVisible] = useState(false);
+    const [explore, setExplore] = useState(false);
+    const [renderMap, setRenderMap] = useState(false);
+    const [viewport, setViewport] = useState(MADRID_REGION);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
     const [selectedId, setSelectedId] = useState<string | null>(null);
     /** Plan centrado en el carrusel (borde de color aunque no haya selección). */
@@ -232,6 +163,7 @@ export function FeedMapHost() {
 
     const resetAfterClose = useCallback(() => {
         setVisible(false);
+        setRenderMap(false);
         setSelectedId(null);
         setPeekPlanId(null);
         selectedIdRef.current = null;
@@ -330,7 +262,7 @@ export function FeedMapHost() {
 
     const cachedPlans = useMemo(() => readMapPlans(userCoords), [userCoords, tick, visible]);
     // Keep both kinds represented even when the cached Nexo list fills the cap.
-    const plans = useMemo(() => {
+    const allPlans = useMemo(() => {
         const local = sortMapPlans(remotePlans ?? cachedPlans, userCoords);
         const events: MapPlan[] = external.events.map(event => ({
             id: `event:${event.id}`,
@@ -339,8 +271,8 @@ export function FeedMapHost() {
             longitud: event.longitude,
             titulo: event.title,
             fecha_evento: event.starts_at,
-            categoria: event.category,
-            tipo_deporte: event.subcategory,
+            categoria: eventClassification(event).category,
+            tipo_deporte: eventClassification(event).subcategory,
             nombre_ubicacion: event.venue,
             joinedCount: external.social[event.id]?.count ?? 0,
             participantsList: external.social[event.id]?.people.map(person => ({
@@ -355,6 +287,8 @@ export function FeedMapHost() {
             ...nearbyEvents.slice(0, Math.max(40, 80 - local.length)),
         ], userCoords);
     }, [remotePlans, cachedPlans, external.events, external.social, userCoords]);
+    const plans = useMemo(() => allPlans.filter(p => hasMapCoords(p) && (explore || Number(p.joinedCount ?? p.participantsList?.length ?? 0) > 0 || p.creador_id === userId)), [allPlans, explore, userId]);
+    const pins = useMemo(() => discoveryPins(plans, viewport, selectedId), [plans, viewport, selectedId]);
     const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
     useEffect(() => {
         if (visible && !eventsLoading && !eventsError && moreEvents && external.events.length < 90) {
@@ -507,9 +441,9 @@ export function FeedMapHost() {
 
     useEffect(() => {
         if (!visible) return;
-        // Si onMapReady tarda, no dejar el sheet colgado fuera de pantalla.
-        const fallback = setTimeout(() => animateSheetOpen(), 220);
-        return () => clearTimeout(fallback);
+        animateSheetOpen();
+        const mount = setTimeout(() => setRenderMap(true), MAP_SLIDE_MS);
+        return () => clearTimeout(mount);
     }, [visible, animateSheetOpen]);
 
     useEffect(() => {
@@ -730,7 +664,7 @@ export function FeedMapHost() {
                 pointerEvents={visible ? 'auto' : 'none'}
             >
             <View style={styles.mapModalContainer}>
-                <NexoMapView
+                {renderMap && <NexoMapView
                     ref={mapRef}
                     style={mapHostStyles.map}
                     loadingEnabled={false}
@@ -742,32 +676,32 @@ export function FeedMapHost() {
                     initialRegion={MADRID_REGION}
                     minZoomLevel={2}
                     maxZoomLevel={19}
-                    onMapReady={() => animateSheetOpen()}
+                    onRegionChangeComplete={setViewport}
+                    onMapReady={() => { mapReadyRef.current = true; }}
                 >
-                    {plans.map((p) => {
-                        const lat = Number(p.latitud);
-                        const lng = Number(p.longitud);
-                        const count = Number(p.joinedCount ?? p.participantsList?.length ?? 0);
-                        const planId = String(p.id);
-                        const accent = planAccentColor(p);
-                        return (
-                            <FeedMapPin
-                                key={`${planId}:${accent}`}
-                                id={planId}
-                                latitude={lat}
-                                longitude={lng}
-                                count={count}
-                                color={accent}
-                                onPress={() => focusPlanId(planId, { scroll: true, mapDuration: MAP_FOCUS_MS })}
-                            />
-                        );
-                    })}
-                </NexoMapView>
+                    {pins.map(pin => <Marker
+                        key={pin.key}
+                        identifier={pin.key}
+                        coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
+                        pinColor={pin.color}
+                        tracksViewChanges={false}
+                        title={pin.members.length > 1 ? t('feed.mapGroup', { n: pin.members.length }) : pin.members[0].titulo || ''}
+                        onPress={() => {
+                            if (pin.members.length === 1) focusPlanId(String(pin.members[0].id), { scroll: true, mapDuration: MAP_FOCUS_MS });
+                            else mapRef.current?.animateToRegion({ latitude: pin.latitude, longitude: pin.longitude, latitudeDelta: Math.max(0.001, viewport.latitudeDelta / 3), longitudeDelta: Math.max(0.001, viewport.longitudeDelta / 3) }, 250);
+                        }}
+                    />)}
+                </NexoMapView>}
 
                 <View style={styles.mapModalHeader}>
                     <TouchableOpacity style={styles.mapCloseBtn} onPress={closeMap}>
                         <Ionicons name="chevron-back" size={24} color={INK} />
                     </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: 8, marginLeft: 12 }}>
+                        {[false, true].map(value => <TouchableOpacity key={String(value)} accessibilityRole="button" accessibilityState={{ selected: explore === value }} onPress={() => { setExplore(value); setSelectedId(null); }} style={{ paddingHorizontal: 16, paddingVertical: 11, borderRadius: 22, backgroundColor: explore === value ? theme.colors.primary : theme.colors.surface }}>
+                            <Text style={{ fontWeight: '700', color: explore === value ? '#FFF' : INK }}>{t(value ? 'feed.mapExplore' : 'feed.mapWithPeople')}</Text>
+                        </TouchableOpacity>)}
+                    </View>
                 </View>
 
                 {loadingPlans && plans.length === 0 ? (
@@ -777,7 +711,7 @@ export function FeedMapHost() {
                     </View>
                 ) : plans.length === 0 ? (
                     <View style={styles.mapModalFooter}>
-                        <Text style={styles.mapFooterHint}>{t('feed.filterZoneEmpty')}</Text>
+                        <Text style={styles.mapFooterHint}>{t(explore ? 'feed.filterZoneEmpty' : 'feed.mapNoPeople')}</Text>
                     </View>
                 ) : (
                     <View style={[styles.mapCarouselWrap, { bottom: Math.max(insets.bottom, 8) + 10 }]} pointerEvents="box-none">
@@ -879,12 +813,12 @@ export function FeedMapHost() {
                                                 ) : (
                                                     <View />
                                                 )}
-                                                <View style={styles.mapMiniSpotsPill}>
+                                                {count > 0 && <View style={styles.mapMiniSpotsPill}>
                                                     <Ionicons name="people" size={12} color={INK} />
                                                     <Text style={styles.mapMiniSpotsText}>
                                                         {max > 0 ? `${count}/${max}` : String(count)}
                                                     </Text>
-                                                </View>
+                                                </View>}
                                             </LinearGradient>
                                         </View>
                                         <View style={styles.mapMiniBody}>

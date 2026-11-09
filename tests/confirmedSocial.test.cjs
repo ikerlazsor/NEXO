@@ -20,7 +20,7 @@ const {
 const now = new Date("2026-11-08T12:00:00Z");
 const event = (extra = {}) => ({
   id: "e",
-  title: "Concierto de jazz",
+  title: "Yoga en grupo",
   description: null,
   provider_id: "madrid",
   source_id: "1",
@@ -89,7 +89,7 @@ test("curation retains explicit cancellations without inventing recurring sessio
       "@graph": [
         {
           id: 1,
-          title: "Concierto",
+          title: "Yoga en grupo",
           dtstart: "2026-11-12 00:00:00.0",
           dtend: "2026-11-12 23:59:00.0",
           time: "19:00",
@@ -99,7 +99,7 @@ test("curation retains explicit cancellations without inventing recurring sessio
         },
         {
           id: 2,
-          title: "Concierto",
+          title: "Yoga en grupo",
           dtstart: "2026-11-10",
           dtend: "2026-12-31",
           time: "19:00",
@@ -173,13 +173,13 @@ test("venue lookup requires one corroborated Madrid match and reuses positive/ne
 test("Ticketmaster with time TBD is withheld; complete paging is mandatory", async () => {
   const item = {
     id: "tm-1",
-    name: "Concierto Jazz",
+    name: "Yoga en grupo",
     url: "https://www.ticketmaster.es/event/1",
     dates: {
       start: { dateTime: "2026-11-12T18:00:00Z", localDate: "2026-11-12" },
       status: { code: "onsale" },
     },
-    classifications: [{ segment: { name: "Music" } }],
+    classifications: [{ segment: { name: "Sports" } }],
     _embedded: {
       venues: [
         {
@@ -211,7 +211,7 @@ test("Ticketmaster with time TBD is withheld; complete paging is mandatory", asy
 });
 test("authorised organizer calendar imports known instants, skips recurrence rules and withholds floating timezone", async () => {
   const ics =
-    "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:one\r\nSUMMARY:Concierto\r\nDTSTART;TZID=Europe/Madrid:20261112T190000\r\nLOCATION:Sala Madrid\r\nGEO:40.41;-3.7\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:two\r\nSUMMARY:Concierto\r\nDTSTART:20261112T190000\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:recurring\r\nRRULE:FREQ=WEEKLY\r\nDTSTART:20261112T190000Z\r\nEND:VEVENT\r\nEND:VCALENDAR";
+    "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:one\r\nSUMMARY:Yoga en grupo\r\nDTSTART;TZID=Europe/Madrid:20261112T190000\r\nLOCATION:Sala Madrid\r\nGEO:40.41;-3.7\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:two\r\nSUMMARY:Yoga en grupo\r\nDTSTART:20261112T190000\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:recurring\r\nRRULE:FREQ=WEEKLY\r\nDTSTART:20261112T190000Z\r\nEND:VEVENT\r\nEND:VCALENDAR";
   const raw = icsSnapshot(ics, "https://organizer.example/calendar.ics");
   assert.equal(raw.skippedRecurring, 1);
   const ready = await prepareSocialSnapshot(raw, { now });
@@ -297,7 +297,7 @@ test("postponed and tentative activities remain unavailable even when a provider
         status: { code: "postponed" },
         start: { dateTime: "2026-11-12T18:00:00Z", localDate: "2026-11-12" },
       },
-      classifications: [{ segment: { name: "Music" } }],
+      classifications: [{ segment: { name: "Sports" } }],
       _embedded: {
         venues: [
           {

@@ -58,8 +58,8 @@ reset role;
 select set_config('request.jwt.claim.sub','',true);
 update public.event_providers set enabled=true,license_verified_at=now(),format_verified_at=now() where id='madrid';
 insert into public.external_events(id,provider_id,source_id,source_url,title,category,start_date,end_date) values
- ('95000000-0000-0000-0000-000000000001','madrid','boundary-event-1','https://www.madrid.es/synthetic','Synthetic event','DESCUBRIR',current_date+1,current_date+2),
- ('95000000-0000-0000-0000-000000000002','madrid','boundary-event-2','https://www.madrid.es/synthetic','Synthetic event two','DESCUBRIR',current_date+1,current_date+2);
+ ('95000000-0000-0000-0000-000000000001','madrid','boundary-event-1','https://www.madrid.es/synthetic','Synthetic yoga','DESCUBRIR',current_date+1,current_date+2),
+ ('95000000-0000-0000-0000-000000000002','madrid','boundary-event-2','https://www.madrid.es/synthetic','Synthetic yoga two','DESCUBRIR',current_date+1,current_date+2);
 update public.external_events set starts_at=now()+interval '1 day',venue='Synthetic venue',latitude=40.42,longitude=-3.7,social_eligible=true,location_verified=true where source_id like 'boundary-event-%';
 set local role authenticated;
 select set_config('request.jwt.claim.sub','94000000-0000-0000-0000-000000000001',true);

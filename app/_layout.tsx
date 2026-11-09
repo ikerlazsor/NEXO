@@ -659,7 +659,7 @@ function RootStack() {
                 <Stack.Screen
                   name="profile"
                   options={{
-                    presentation: 'modal',
+                    presentation: 'card',
                     animation: 'slide_from_bottom',
                     animationDuration: 280,
                     gestureEnabled: true,
@@ -702,6 +702,7 @@ function RootStack() {
                 <Stack.Screen name="plan-history" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="user-profile/[id]" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="plan/[id]" options={{ animation: 'slide_from_right', freezeOnBlur: false }} />
+                <Stack.Screen name="event/[id]" options={{ animation: 'slide_from_right', animationDuration: 260, freezeOnBlur: false }} />
                 <Stack.Screen
                   name="direct-chat/[id]"
                   options={{ animation: 'slide_from_right', animationDuration: 260 }}

@@ -9,7 +9,7 @@ insert into auth.users(id,aud,role,email,encrypted_password,email_confirmed_at,r
 update public.perfiles set baneado=false where id::text like '98000000-%';
 update public.event_providers set enabled=true,license_verified_at=now(),format_verified_at=now() where id in ('madrid','ticketmaster');
 create function pg_temp.snapshot(p_id text,p_patch jsonb default '{}') returns jsonb language sql as $$
- select jsonb_build_array(jsonb_build_object('source_id',p_id,'source_url','https://www.madrid.es/synthetic','title',case when p_id in ('confirmed','ticket-1') then 'Concierto social Madrid' else 'Concierto social Madrid '||p_id end,'category','SHOWTIME','subcategory','concierto','start_date',current_date+1,'end_date',current_date+1,'starts_at',now()+interval '1 day','venue','Sala sintética','latitude',40.42,'longitude',-3.70,'social_eligible',true,'location_verified',true,'location_source','publisher','status','active')||p_patch);
+ select jsonb_build_array(jsonb_build_object('source_id',p_id,'source_url','https://www.madrid.es/synthetic','title',case when p_id in ('confirmed','ticket-1') then 'Yoga social Madrid' else 'Yoga social Madrid '||p_id end,'category','SHOWTIME','subcategory','concierto','start_date',current_date+1,'end_date',current_date+1,'starts_at',now()+interval '1 day','venue','Sala sintética','latitude',40.42,'longitude',-3.70,'social_eligible',true,'location_verified',true,'location_source','publisher','status','active')||p_patch);
 $$;
 select is(public.sync_external_events('madrid',
  pg_temp.snapshot('confirmed')||
@@ -45,8 +45,8 @@ select is(jsonb_array_length(public.get_event_social_summaries(array[pg_temp.can
 select ok(not has_function_privilege('authenticated','public.cache_event_geocodes(jsonb)','execute'),'members cannot inject geocoding results');
 reset role;
 
-select is(public.sync_external_events('ticketmaster',pg_temp.snapshot('ticket-1',jsonb_build_object('title','Conciérto social Madrid','source_url','https://www.ticketmaster.es/synthetic','starts_at',now()+interval '1 day 2 minutes','latitude',40.4201)),1),1,'second provider imports the same occurrence');
-select is((select count(*)::int from public.external_events where title_key='concierto social madrid' and starts_at=now()+interval '1 day'),1,'cross-provider normalization keeps one canonical occurrence');
+select is(public.sync_external_events('ticketmaster',pg_temp.snapshot('ticket-1',jsonb_build_object('title','Yóga social Madrid','source_url','https://www.ticketmaster.es/synthetic','starts_at',now()+interval '1 day 2 minutes','latitude',40.4201)),1),1,'second provider imports the same occurrence');
+select is((select count(*)::int from public.external_events where title_key='yoga social madrid' and starts_at=now()+interval '1 day'),1,'cross-provider normalization keeps one canonical occurrence');
 select is((select event_id from public.external_event_sources where provider_id='ticketmaster' and source_id='ticket-1'),pg_temp.canonical(),'source aliases share the social group');
 select is((select count(*)::int from public.external_event_participants where event_id=pg_temp.canonical()),2,'deduplication preserves all participants');
 select is((select count(*)::int from public.external_event_messages where event_id=pg_temp.canonical()),1,'deduplication preserves chat history');
@@ -94,7 +94,7 @@ select set_config('request.jwt.claim.sub','',true);
 insert into public.external_events(provider_id,source_id,source_url,title,category,start_date,end_date,starts_at,venue,latitude,longitude,social_eligible,location_verified,status)
 select 'ticketmaster','history-'||n,'https://www.ticketmaster.es/synthetic','History '||n,'SHOWTIME',current_date-2,current_date-2,now()-interval '2 days','Synthetic venue',40.42,-3.7,true,true,'expired' from generate_series(1,101)n;
 insert into public.external_event_participants(event_id,user_id) select id,'98000000-0000-0000-0000-000000000001' from public.external_events where source_id like 'history-%';
-select public.sync_external_events('ticketmaster',pg_temp.snapshot('future',jsonb_build_object('title','Another concert')),1);
+select public.sync_external_events('ticketmaster',pg_temp.snapshot('future',jsonb_build_object('title','Another yoga session')),1);
 create function pg_temp.future() returns uuid language sql security definer set search_path=public,pg_temp as $$select event_id from public.external_event_sources where provider_id='ticketmaster' and source_id='future';$$;
 grant execute on function pg_temp.future() to authenticated;
 set local role authenticated;
@@ -102,7 +102,7 @@ select set_config('request.jwt.claim.sub','98000000-0000-0000-0000-000000000001'
 select lives_ok($$select public.set_event_membership(pg_temp.future(),true)$$,'101 historical groups do not block a new confirmed plan');
 reset role;
 insert into public.external_events(provider_id,source_id,source_url,title,category,start_date,end_date,starts_at,venue,latitude,longitude,social_eligible,location_verified)
-select 'ticketmaster','limit-'||n,'https://www.ticketmaster.es/synthetic','Limit '||n,'SHOWTIME',current_date+1,current_date+1,now()+interval '1 day','Synthetic venue',40.42,-3.7,true,true from generate_series(1,100)n;
+select 'ticketmaster','limit-'||n,'https://www.ticketmaster.es/synthetic','Yoga limit '||n,'SHOWTIME',current_date+1,current_date+1,now()+interval '1 day','Synthetic venue',40.42,-3.7,true,true from generate_series(1,100)n;
 insert into public.external_event_participants(event_id,user_id) select id,'98000000-0000-0000-0000-000000000001' from public.external_events where source_id like 'limit-%' and source_id<>'limit-100';
 create function pg_temp.over_limit() returns uuid language sql security definer set search_path=public,pg_temp as $$ select id from public.external_events where source_id='limit-100'; $$;
 grant execute on function pg_temp.over_limit() to authenticated;
@@ -113,7 +113,7 @@ select lives_ok($$select public.set_event_membership(pg_temp.future(),true)$$,'r
 reset role;
 
 insert into public.external_events(provider_id,source_id,source_url,title,category,subcategory,start_date,end_date,starts_at,venue,latitude,longitude,social_eligible,location_verified)
-select 'ticketmaster','filtered-'||n,'https://www.ticketmaster.es/synthetic','Filtered '||n,'SHOWTIME','teatro',current_date+2,current_date+2,now()+interval '2 days','Synthetic venue',40.42,-3.7,true,true from generate_series(1,31)n;
+select 'ticketmaster','filtered-'||n,'https://www.ticketmaster.es/synthetic','Yoga filtered '||n,'SHOWTIME','teatro',current_date+2,current_date+2,now()+interval '2 days','Synthetic venue',40.42,-3.7,true,true from generate_series(1,31)n;
 set local role anon;
 select set_config('request.jwt.claim.sub','',true);
 select is((select count(*)::int from public.get_external_events_page_filtered(p_subcategories=>array['teatro'])),30,'subcategory filters before the page limit, even after a hundred other activities');

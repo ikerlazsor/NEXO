@@ -26,6 +26,6 @@ Las otras fuentes siguen en el estado documentado en [la revisión anterior](soc
 - 242 comprobaciones SQL locales aprobadas en 12 archivos.
 - API HTTP de Supabase local: usuarios ficticios, privacidad del invitado, apuntarse, avatares públicos, chat compartido, deduplicación de reintentos y revocación al salir.
 - Chromium: detalle a 390 y 360 píxeles, sin desbordamientos ni errores JavaScript; portada, CTA, vuelta y mapa diferido hasta entrar en pantalla. Datos de vista previa ficticios.
-- Pendiente en este punto: exportaciones finales de los dos runtimes y publicación/verificación. El estado definitivo se registra por separado tras completar la publicación.
+- Exportaciones Hermes de Android e iOS aprobadas para los dos runtimes. La nueva ronda fue autorizada explícitamente y publicada; los cuatro manifiestos y hashes públicos se verificaron. Consultar el [estado definitivo de publicación](instant-event-feed-publication-status.md).
 
 No se ha probado en un dispositivo real. Las pruebas web y los bundles no validan por sí solos el rendimiento de las animaciones ni la estabilidad del mapa nativo.

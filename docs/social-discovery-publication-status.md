@@ -1,5 +1,7 @@
 # Correcciones de descubrimiento publicadas · 9 de noviembre de 2026
 
+**Entrega posterior:** la [actualización del 10 de noviembre](instant-event-feed-publication-status.md) ya está publicada: catálogo de 14 actividades, carga al arranque, mapa único y nuevo detalle. Este documento conserva el registro de la entrega del día 9.
+
 **Backend y OTA publicados en producción y verificados.** Esta entrega incorpora el orden estable del feed, la restauración de la tarjeta al volver, los cambios de mapa, participación, portadas y navegación de perfil/detalle. El usuario autorizó expresamente esta publicación después de revisar el trabajo preparado.
 
 | Aplicaciones destinatarias | Runtime | Publicación, hora de Madrid | Grupo Expo |

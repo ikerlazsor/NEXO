@@ -49,3 +49,15 @@ test('location acquisition without a distance filter cannot restart the event qu
   assert.equal(eventQueryKey({}),eventQueryKey({categories:[],query:' ',latitude:40.4,longitude:-3.7}));
   assert.notEqual(eventQueryKey({}),eventQueryKey({radius:5,latitude:40.4,longitude:-3.7}));
 });
+
+test('adult creative workshops and group walks qualify without admitting children-only activities or shows', () => {
+  for (const title of ["Taller 'Fanzineitor'", "'Pintar la luz' Visita-taller para personas adultas", 'Taller de Collage para adultos', 'Paseo ornitológico', 'Taller de ROPE FLOW', 'Pon a punto tu bici. Taller de mecánica básica', 'Taller de lectura: La Odisea']) assert.equal(policy.isSocialActivity(title), true, title);
+  for (const description of ['Público familiar, a partir de 5 años.', 'Dirigido a: chicos y chicas de 8 a 10 años.', 'Debe asistir solo un adulto por inscripción.', 'Taller para niños de 6 a 12 años.']) assert.equal(policy.isSocialActivity('Taller de cerámica', description), false, description);
+  assert.equal(policy.isSocialActivity("Taller 'Fanzineitor'", 'Personas de entre 15 y 30 años. El profesor también imparte cómic infantil.'), true);
+  assert.equal(policy.isSocialActivity('Paseo ornitológico', 'Dirigido a personas a partir de 9 años. Si el grupo familiar es de más de 4 miembros, puedes apuntar a todos.'), true);
+  assert.equal(policy.isSocialActivity('Concierto de jazz', 'Taller de improvisación para socializar'), false);
+  const classify = require('../lib/externalEventClassification.cjs').classifyExternalEvent;
+  assert.deepEqual(classify('Taller de ROPE FLOW'), {category:'DEPORTES',subcategory:'otro'});
+  assert.deepEqual(classify('Taller de Collage para adultos'), {category:'VIBES',subcategory:'otro'});
+  assert.deepEqual(classify('Paseo ornitológico'), {category:'AIRE_LIBRE',subcategory:'otro'});
+});

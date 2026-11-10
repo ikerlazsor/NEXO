@@ -1,6 +1,8 @@
 import { memo } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
+import type { ImageStyle } from "expo-image";
+import type { StyleProp } from "react-native";
 import {
   Pressable,
   StyleSheet,
@@ -34,16 +36,18 @@ export function eventDateLabel(
 export function EventArtwork({
   event,
   compact = false,
+  style,
 }: {
   event: ExternalEvent;
   compact?: boolean;
+  style?: StyleProp<ImageStyle>;
 }) {
   const { t } = useT();
   const { category, subcategory } = eventClassification(event);
   return (
     <Image
       source={eventCoverSource(event)}
-      style={[s.art, compact ? s.artCompact : s.artLarge]}
+      style={[s.art, compact ? s.artCompact : s.artLarge, style]}
       contentFit="cover"
       cachePolicy="memory-disk"
       recyclingKey={`${event.provider_id}:${event.source_id}:${category}:${subcategory}`}

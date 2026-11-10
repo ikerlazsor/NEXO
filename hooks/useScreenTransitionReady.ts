@@ -10,7 +10,7 @@ export function useScreenTransitionReady(): boolean {
         if (!focused) { setReady(false); return; }
         // transitionEnd is native-stack's completion event. A bounded fallback
         // covers initial/deep-linked screens that have no transition event.
-        const timer = setTimeout(() => setReady(true), 340);
+        const timer = setTimeout(() => setReady(true), 500);
         const stop = (navigation as any).addListener('transitionEnd', (event: { data?: { closing?: boolean } }) => {
             if (!event.data?.closing) { clearTimeout(timer); setReady(true); }
         });

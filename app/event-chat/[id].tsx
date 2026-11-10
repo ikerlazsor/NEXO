@@ -66,9 +66,6 @@ export default function EventChat() {
         <Text style={{ fontSize: 22, fontWeight: "800", color: colors.text }}>
           {t("events.chat")}
         </Text>
-        <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 8 }}>
-          {t("events.socialNotice")}
-        </Text>
       </View>
       {failed && (
         <Pressable onPress={() => void refresh()}>

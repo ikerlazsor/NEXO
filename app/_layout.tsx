@@ -28,6 +28,8 @@ import { scheduleCoverPrefetch } from '../lib/prefetchCovers';
 import { hydrateFeedFromDisk, hydrateChatsFromDisk, hydrateMyPlansFromDisk, scheduleOnboardingPrefetch } from '../lib/prefetchHome';
 import { screenCacheKey } from '../lib/screenCaches';
 import { hydrateUserCoordsFromDisk } from '../lib/location';
+import { hydrateEventPage } from '../features/events/cache';
+import { prefetchPublicEvents } from '../features/events/prefetch';
 import { getIsOnline, subscribeNetwork } from '../lib/network';
 import { flushOfflineActions } from '../lib/offlineActions';
 import { cacheGetStale } from '../lib/ttlCache';
@@ -187,6 +189,8 @@ function AuthGate({ children }: { children: ReactNode }) {
 
       // OTA en paralelo: no bloquear splash ni forzar reload aquí.
       void ensureStartupAppUpdateCheck();
+      // Public catalogue can start before auth; never hold the splash for network.
+      void prefetchPublicEvents().catch(() => {});
 
       const result = await coordinator.run<StartupSnapshot>(
         async (signal) => {
@@ -206,6 +210,7 @@ function AuthGate({ children }: { children: ReactNode }) {
           throwIfAborted(signal);
 
           await Promise.all([
+            hydrateEventPage('{}'),
             hydrateFeedFromDisk(nextUserId),
             nextUserId ? hydrateChatsFromDisk(nextUserId) : Promise.resolve(),
             nextUserId ? hydrateMyPlansFromDisk(nextUserId) : Promise.resolve(),
@@ -253,6 +258,7 @@ function AuthGate({ children }: { children: ReactNode }) {
         if (localSession) {
           await hydrateUserCoordsFromDisk().catch(() => undefined);
           await Promise.all([
+            hydrateEventPage('{}'),
             hydrateFeedFromDisk(localSession.user.id),
             hydrateChatsFromDisk(localSession.user.id),
             hydrateMyPlansFromDisk(localSession.user.id),

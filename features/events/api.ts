@@ -2,6 +2,7 @@ import { supabase } from "../../lib/supabase";
 import { getPublicProfiles } from "../../lib/profileData";
 import { withRequestDeadline } from "../../lib/requestDeadline";
 import { eventQueryKey, rememberEvent, rememberEventPage } from "./cache";
+import { publicCatalog } from "./publicCatalog";
 import type {
   ExternalEvent,
   EventCursor,
@@ -21,34 +22,43 @@ async function request<T>(
   if (result.error) throw result.error;
   return result.data;
 }
+const pendingPages = new Map<string, Promise<ExternalEvent[]>>();
 export async function fetchEventPage(
   filters: EventFilters,
   cursor: EventCursor | null,
   signal?: AbortSignal,
 ): Promise<ExternalEvent[]> {
-  const page = (
-    (await request<ExternalEvent[]>(
+  const filterKey = eventQueryKey(filters);
+  const key = JSON.stringify([filterKey, cursor]);
+  let pending = pendingPages.get(key);
+  if (!pending) {
+    const canonical = JSON.parse(filterKey) as EventFilters;
+    pending = request<ExternalEvent[]>(
       (deadline) =>
-        supabase
+        publicCatalog
           .rpc("get_external_events_page_filtered", {
             p_after_date: cursor?.date ?? null,
             p_after_id: cursor?.id ?? null,
-            p_categories: filters.categories ?? null,
-            p_subcategories: filters.subcategories ?? null,
-            p_query: filters.query ?? null,
-            p_lat: filters.latitude ?? null,
-            p_lon: filters.longitude ?? null,
-            p_radius: filters.radius ?? null,
-            p_from: filters.from ?? null,
-            p_until: filters.until ?? null,
+            p_categories: canonical.categories ?? null,
+            p_subcategories: canonical.subcategories ?? null,
+            p_query: canonical.query ?? null,
+            p_lat: canonical.latitude ?? null,
+            p_lon: canonical.longitude ?? null,
+            p_radius: canonical.radius ?? null,
+            p_from: canonical.from ?? null,
+            p_until: canonical.until ?? null,
           })
           .abortSignal(deadline),
-      signal,
-    )) || []
-  );
-  page.forEach(rememberEvent);
-  if (!cursor) rememberEventPage(eventQueryKey(filters), page);
-  return page;
+    ).then(data => {
+      const page = data || [];
+      page.forEach(rememberEvent);
+      if (!cursor) rememberEventPage(filterKey, page);
+      return page;
+    }).finally(() => pendingPages.delete(key));
+    pendingPages.set(key, pending);
+  }
+  // A screen leaving cancels its subscription, not another screen's prefetch.
+  return signal ? withAbort(pending, signal) : pending;
 }
 export async function fetchEvent(
   id: string,

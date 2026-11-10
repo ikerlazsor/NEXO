@@ -30,6 +30,9 @@ type Dict = Record<string, string>;
 const es: Dict = {
     "events.going": "Ya vamos {n}",
     "events.location": "Ubicación",
+    "events.about": "El plan",
+    "events.detailsAndBooking": "Información y reservas",
+    "events.seePeople": "Inicia sesión para ver quién va",
     "events.openMap": "Ver ubicación en el mapa",
     "events.signInAgain": "Vuelve a iniciar sesión para apuntarte.",
     "events.unavailableJoin": "Esta actividad ya no admite inscripciones. Actualiza el feed para ver las próximas.",
@@ -2073,6 +2076,9 @@ const es: Dict = {
 const en: Dict = {
     "events.going": "{n} going",
     "events.location": "Location",
+    "events.about": "About this plan",
+    "events.detailsAndBooking": "Information and booking",
+    "events.seePeople": "Sign in to see who’s going",
     "events.openMap": "View location on map",
     "events.signInAgain": "Sign in again to join.",
     "events.unavailableJoin": "This activity is no longer accepting members. Refresh the feed for upcoming activities.",

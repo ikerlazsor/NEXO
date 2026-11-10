@@ -20,6 +20,7 @@ test("join, chat and analytics work with React Native actual AbortSignal, withou
         },
       },
       "../../lib/profileData": { getPublicProfiles: async () => [] },
+      "./publicCatalog": { publicCatalog: {} },
     },
     {
       AbortController: native.AbortController,
@@ -75,4 +76,33 @@ test("request deadline cancels a stalled native request and respects an already 
     /request_aborted/,
   );
   assert.equal(called, false);
+});
+
+test('startup and feed share the public catalogue request; cancelling one caller leaves the other alive', async () => {
+  let resolve, calls = 0, requestSignal;
+  const response = new Promise(yes => { resolve = yes; });
+  const load = createLoader({
+    '../../lib/supabase': { supabase: { rpc: () => { throw new Error('must not wait for authenticated client'); } } },
+    '../../lib/profileData': { getPublicProfiles: async () => [] },
+    '../../lib/diskCache': { diskGet: async () => null, diskSet: async () => {} },
+    './publicCatalog': { publicCatalog: { rpc: () => ({ abortSignal: signal => { calls++; requestSignal = signal; return response; } }) } },
+  });
+  const { fetchEventPage } = load('features/events/api.ts');
+  const controller = new native.AbortController();
+  const first = fetchEventPage({}, null, controller.signal);
+  const second = fetchEventPage({ latitude: 40.4, longitude: -3.7 }, null);
+  controller.abort();
+  await assert.rejects(first, /request_aborted/);
+  assert.equal(requestSignal.aborted, false);
+  resolve({ data: [{ id: 'public-event' }], error: null });
+  assert.equal((await second)[0].id, 'public-event');
+  assert.equal(calls, 1);
+});
+test('public catalogue uses the anon token without creating an auth session', async () => {
+  let options;
+  createLoader({
+    '@supabase/supabase-js': { createClient: (_url, _key, value) => { options = value; return {}; } },
+    '../../lib/supabase': { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_ANON_KEY: 'public-key' },
+  })('features/events/publicCatalog.ts');
+  assert.equal(await options.accessToken(), 'public-key');
 });

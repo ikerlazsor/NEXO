@@ -69,6 +69,7 @@ export function useEvents(
     memberController = useRef<AbortController | null>(null);
   const socialEpoch = useRef(0),
     socialController = useRef<AbortController | null>(null);
+  const pageRevision = useRef(0);
   const refreshPersonal = useCallback(() => {
     const epoch = ++memberEpoch.current;
     memberController.current?.abort();
@@ -210,6 +211,7 @@ export function useEvents(
         )
           return;
         const last = page[page.length - 1];
+        pageRevision.current++;
         if (last) cursor.current = { date: last.start_date, id: last.id };
         setHasMore(page.length === 30);
         setEvents((previous) => {
@@ -251,12 +253,20 @@ export function useEvents(
       setHasMore(cached.events.length === 30);
     }
     let active = true;
+    const revision = pageRevision.current;
     if (enabled && !cached) void hydrateEventPage(key).then(page => {
-      if (page && active && currentKey.current === key && inFlight.current) setEvents(page.events);
+      if (page && active && currentKey.current === key && pageRevision.current === revision) {
+        setEvents(page.events);
+        const last = page.events[page.events.length - 1];
+        if (last) cursor.current = { date: last.start_date, id: last.id };
+        setHasMore(page.events.length === 30);
+      }
     });
     // Start alongside the Nexo request; only text searches need debouncing.
     const timer = setTimeout(() => {
-      if (enabled && (!cached || Date.now() - cached.at > 120000)) void load(true);
+      if (enabled && (!cached || Date.now() - cached.at > 120000)) {
+        void load(true);
+      }
     }, stableFilters.query ? 180 : 0);
     return () => {
       active = false;

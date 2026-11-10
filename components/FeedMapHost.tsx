@@ -130,7 +130,6 @@ export function FeedMapHost() {
     const styles = useThemedStyles(createFeedStyles);
     const { userId } = useAuthSession();
     const [visible, setVisible] = useState(false);
-    const [explore, setExplore] = useState(false);
     const [renderMap, setRenderMap] = useState(false);
     const [viewport, setViewport] = useState(MADRID_REGION);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
@@ -287,7 +286,7 @@ export function FeedMapHost() {
             ...nearbyEvents.slice(0, Math.max(40, 80 - local.length)),
         ], userCoords);
     }, [remotePlans, cachedPlans, external.events, external.social, userCoords]);
-    const plans = useMemo(() => allPlans.filter(p => hasMapCoords(p) && (explore || Number(p.joinedCount ?? p.participantsList?.length ?? 0) > 0 || p.creador_id === userId)), [allPlans, explore, userId]);
+    const plans = useMemo(() => allPlans.filter(hasMapCoords), [allPlans]);
     const pins = useMemo(() => discoveryPins(plans, viewport, selectedId), [plans, viewport, selectedId]);
     const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
     useEffect(() => {
@@ -697,11 +696,6 @@ export function FeedMapHost() {
                     <TouchableOpacity style={styles.mapCloseBtn} onPress={closeMap}>
                         <Ionicons name="chevron-back" size={24} color={INK} />
                     </TouchableOpacity>
-                    <View style={{ flexDirection: 'row', gap: 8, marginLeft: 12 }}>
-                        {[false, true].map(value => <TouchableOpacity key={String(value)} accessibilityRole="button" accessibilityState={{ selected: explore === value }} onPress={() => { setExplore(value); setSelectedId(null); }} style={{ paddingHorizontal: 16, paddingVertical: 11, borderRadius: 22, backgroundColor: explore === value ? theme.colors.primary : theme.colors.surface }}>
-                            <Text style={{ fontWeight: '700', color: explore === value ? '#FFF' : INK }}>{t(value ? 'feed.mapExplore' : 'feed.mapWithPeople')}</Text>
-                        </TouchableOpacity>)}
-                    </View>
                 </View>
 
                 {loadingPlans && plans.length === 0 ? (
@@ -711,7 +705,7 @@ export function FeedMapHost() {
                     </View>
                 ) : plans.length === 0 ? (
                     <View style={styles.mapModalFooter}>
-                        <Text style={styles.mapFooterHint}>{t(explore ? 'feed.filterZoneEmpty' : 'feed.mapNoPeople')}</Text>
+                        <Text style={styles.mapFooterHint}>{t('feed.filterZoneEmpty')}</Text>
                     </View>
                 ) : (
                     <View style={[styles.mapCarouselWrap, { bottom: Math.max(insets.bottom, 8) + 10 }]} pointerEvents="box-none">

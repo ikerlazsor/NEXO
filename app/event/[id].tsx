@@ -3,10 +3,8 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   ActivityIndicator,
-  InteractionManager,
   Linking,
   Pressable,
-  ScrollView,
   Text,
   View,
 } from "react-native";
@@ -16,10 +14,7 @@ import { useAppTheme } from "../../lib/appTheme";
 import { useT } from "../../lib/i18n";
 import { useAuthSession } from "../../lib/authSession";
 import { Alert } from "../../lib/nexoAlert";
-import { ProfileAvatar } from "../../components/ProfileAvatar";
 import {
-  EventArtwork,
-  eventDateLabel,
   eventStyles as s,
 } from "../../features/events/EventCards";
 import {
@@ -35,7 +30,8 @@ import { EventLocationMap } from "../../features/events/EventLocationMap";
 import { publishEventMembership } from "../../features/events/membershipBus";
 import { hapticError, hapticSuccess } from "../../lib/haptics";
 import { peekEvent, peekEventSocial } from "../../features/events/cache";
-import { eventClassification } from "../../features/events/covers";
+import { EventDetailContent } from "../../features/events/EventDetailContent";
+import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
 import { PressScale } from "../../components/PressScale";
 import { JOINED_PLAN_COLORS, planCardActionStyles } from "../../components/planCardActions";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -45,7 +41,8 @@ export default function EventDetail() {
   const router = useRouter();
   const { colors, scheme } = useAppTheme();
   const actionStyles = planCardActionStyles(scheme === 'dark');
-  const { t, lang } = useT();
+  const { t } = useT();
+  const transitionReady = useScreenTransitionReady();
   const { userId, requireAccount } = useAuthSession();
   const scope = JSON.stringify([id, userId]);
   const currentScope = useRef(scope);
@@ -127,16 +124,16 @@ export default function EventDetail() {
   );
   useFocusEffect(
     useCallback(() => {
+      if (!transitionReady) return;
       setBusyScope(null);
-      const task = InteractionManager.runAfterInteractions(() => { void load(!!peekEvent(id)); });
+      void load(!!peekEvent(id));
       return () => {
-        task.cancel();
         epoch.current++;
         request.current?.abort();
         personLoading.current = null;
         mutation.current = null;
       };
-    }, [load, id]),
+    }, [load, id, transitionReady]),
   );
   const unavailable =
     event?.status !== "active" ||
@@ -245,214 +242,32 @@ export default function EventDetail() {
       style={[s.screen, { backgroundColor: colors.background }]}
       edges={["top", "bottom"]}
     >
-      <ScrollView contentContainerStyle={s.content}>
-        <Pressable
-          accessibilityRole="button"
-          style={s.back}
-          onPress={() =>
-            router.canGoBack() ? router.back() : router.replace("/")
-          }
-        >
+      {event ? <EventDetailContent
+        key={id}
+        event={event}
+        people={people}
+        signedIn={!!userId}
+        morePeople={morePeople}
+        unavailable={unavailable}
+        error={error}
+        onBack={() => router.canGoBack() ? router.back() : router.replace("/")}
+        onRetry={() => void load()}
+        onOfficial={() => void openOfficial()}
+        onPerson={personId => router.push({ pathname: "/user-profile/[id]", params: { id: personId } })}
+        onAccount={() => requireAccount({ type: "event", eventId: id })}
+        onMorePeople={() => void loadPeople()}
+        renderMap={visible => <EventLocationMap event={event} enabled={visible && transitionReady} />}
+      /> : <View style={[s.content, { flex: 1 }]}>
+        <Pressable accessibilityRole="button" accessibilityLabel={t("common.back")} style={s.back}
+          onPress={() => router.canGoBack() ? router.back() : router.replace("/")}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
           <Text style={{ color: colors.text }}>{t("common.back")}</Text>
         </Pressable>
-        {loading && !event && <ActivityIndicator color={colors.primary} />}
-        {error && (
-          <Pressable onPress={() => void load()}>
-            <Text style={[s.paragraph, { color: colors.textMuted }]}>
-              {t("events.unavailable")} · {t("events.retry")}
-            </Text>
-          </Pressable>
-        )}
-        {event && (
-          <>
-            <View style={{ borderRadius: 24, overflow: "hidden" }}>
-              <EventArtwork event={event} />
-            </View>
-            <Text style={[s.link, { color: colors.primary }]}>
-              {t(`cat.main.${eventClassification(event).category}`)}
-            </Text>
-            <Text style={[s.heading, { color: colors.text }]}>
-              {event.title}
-            </Text>
-            {unavailable && (
-              <View style={[s.notice, { backgroundColor: colors.warningSoft }]}>
-                <Text style={{ color: colors.text }}>
-                  {t(
-                    event.status === "cancelled"
-                      ? "events.cancelled"
-                      : "events.unavailable",
-                  )}
-                </Text>
-              </View>
-            )}
-            <Text style={[s.paragraph, { color: colors.text }]}>
-              {eventDateLabel(event, lang)}
-              {event.end_date !== event.start_date
-                ? ` — ${event.end_date}`
-                : ""}
-            </Text>
-            <Text style={{ color: colors.textMuted }}>
-              {event.schedule ||
-                (event.starts_at
-                  ? new Date(event.starts_at).toLocaleTimeString(lang, {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      timeZone: "Europe/Madrid",
-                    })
-                  : t("events.dateUnknown"))}
-            </Text>
-            {event.end_date !== event.start_date && (
-              <Text style={[s.paragraph, { color: colors.textMuted }]}>
-                {t("events.calendarNotice")}
-              </Text>
-            )}
-            <View style={s.row}>
-              <Ionicons
-                name="location-outline"
-                size={22}
-                color={colors.primary}
-              />
-              <Text style={{ color: colors.text, flex: 1 }}>
-                {event.venue || t("events.venueUnknown")}
-              </Text>
-            </View>
-            {event.description && (
-              <Text style={[s.paragraph, { color: colors.text }]}>
-                {event.description}
-              </Text>
-            )}
-            <Text style={[s.paragraph, { color: colors.textMuted }]}>
-              {event.price_text || t("events.priceUnknown")}
-            </Text>
-            <Pressable
-              accessibilityRole="link"
-              onPress={() => void openOfficial()}
-              style={s.row}
-            >
-              <Ionicons name="open-outline" size={18} color={colors.primary} />
-              <Text style={[s.link, { color: colors.primary }]}>
-                {t("events.official")}
-              </Text>
-            </Pressable>
-            <View style={[s.notice, { backgroundColor: colors.primarySoft }]}>
-              <Text style={{ color: colors.text, lineHeight: 21 }}>
-                {t("events.socialNotice")}
-              </Text>
-            </View>
-            <Text style={[s.heading, { color: colors.text, fontSize: 21 }]}>
-              {t("events.people")}
-            </Text>
-            {!userId ? (
-              <Pressable
-                onPress={() => requireAccount({ type: "event", eventId: id })}
-              >
-                <Text style={[s.link, { color: colors.primary }]}>
-                  {t("events.chatNotice")}
-                </Text>
-              </Pressable>
-            ) : (
-              <>
-                {!people.length && (
-                  <Text style={{ color: colors.textMuted }}>
-                    {t("events.peopleEmpty")}
-                  </Text>
-                )}
-                {people.map((p) => (
-                  <Pressable
-                    key={p.user_id}
-                    style={s.row}
-                    onPress={() =>
-                      router.push({
-                        pathname: "/user-profile/[id]",
-                        params: { id: p.user_id },
-                      })
-                    }
-                  >
-                    <ProfileAvatar uri={p.avatar_url} size={40} />
-                    <Text style={{ color: colors.text, fontWeight: "600" }}>
-                      {p.nombre}
-                    </Text>
-                  </Pressable>
-                ))}
-                {morePeople && (
-                  <Pressable onPress={() => void loadPeople()}>
-                    <Text style={[s.link, { color: colors.primary }]}>
-                      {t("events.morePeople")}
-                    </Text>
-                  </Pressable>
-                )}
-              </>
-            )}
-            <EventLocationMap event={event} />
-            <Text
-              style={{ color: colors.textMuted, fontSize: 11, marginTop: 24 }}
-            >
-              {t("events.updated")}{" "}
-              {new Date(event.last_seen_at).toLocaleDateString(lang)}
-            </Text>
-            <View
-              style={{
-                flexDirection: "row",
-                flexWrap: "wrap",
-                gap: 16,
-                marginTop: 8,
-              }}
-            >
-              <Pressable
-                accessibilityRole="link"
-                onPress={() => {
-                  void Linking.openURL(
-                    event.provider_id === "madrid"
-                      ? "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100"
-                      : event.source_url,
-                  ).catch(() => Alert.alert(t("events.error")));
-                }}
-              >
-                <Text
-                  style={{
-                    color: colors.primary,
-                    fontSize: 12,
-                    fontWeight: "600",
-                  }}
-                >
-                  {t("events.license")}
-                </Text>
-              </Pressable>
-              {event.provider_id === "madrid" && (
-                <Pressable
-                  accessibilityRole="link"
-                  onPress={() => {
-                    void Linking.openURL(
-                      "https://creativecommons.org/licenses/by/4.0/",
-                    ).catch(() => Alert.alert(t("events.error")));
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: colors.primary,
-                      fontSize: 12,
-                      fontWeight: "600",
-                    }}
-                  >
-                    CC BY 4.0
-                  </Text>
-                </Pressable>
-              )}
-            </View>
-            <Text
-              style={{
-                color: colors.textMuted,
-                fontSize: 11,
-                lineHeight: 16,
-                marginTop: 8,
-              }}
-            >
-              {t("events.dataAdapted")}
-            </Text>
-          </>
-        )}
-      </ScrollView>
+        {loading && <ActivityIndicator color={colors.primary} />}
+        {error && <Pressable onPress={() => void load()} accessibilityRole="button">
+          <Text style={[s.paragraph, { color: colors.textMuted }]}>{t("events.unavailable")} · {t("events.retry")}</Text>
+        </Pressable>}
+      </View>}
       {event && <View style={{ paddingHorizontal: 20, paddingVertical: 12, borderTopWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, flexDirection: 'row', gap: 12 }}>
         <PressScale
           onPress={askJoin}

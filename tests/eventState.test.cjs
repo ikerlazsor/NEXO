@@ -18,7 +18,7 @@ const message = (id, date, room = roomA) => ({
 
 // Executes the real hooks with persistent React slots and explicit effect commits.
 // Rendering before commit lets the tests observe the account-change privacy boundary.
-function mount(file, exportName, args, api = {}, profiles = async () => []) {
+function mount(file, exportName, args, api = {}, profiles = async () => [], cache = {}) {
   const slots = [], effects = [], timers = new Map();
   const membershipListeners = new Set();
   let index = 0, timerId = 0, uuid = 0, dirty = false, result;
@@ -56,7 +56,7 @@ function mount(file, exportName, args, api = {}, profiles = async () => []) {
       publishEventMembership: change => membershipListeners.forEach(listener => listener(change)),
       subscribeEventMembership: listener => { membershipListeners.add(listener); return () => membershipListeners.delete(listener); },
     },
-    './cache': { eventQueryKey: JSON.stringify, peekEventPage: () => undefined, hydrateEventPage: async () => undefined, rememberEventSocial: () => {} },
+    './cache': { eventQueryKey: JSON.stringify, peekEventPage: () => undefined, hydrateEventPage: async () => undefined, rememberEventSocial: () => {}, ...cache },
     './api': {
       fetchEventPage: async () => [],
       fetchEventPersonalization: async () => ({ joined: new Set(), history: { categories: {}, seen: new Set() } }),
@@ -271,5 +271,40 @@ test('a revoked membership clears event messages, participant names and the draf
   assert.equal(Object.keys(hook.value.names).length, 0);
   assert.equal(hook.value.text, '');
   assert.equal(hook.value.member, false);
+  hook.unmount();
+});
+
+const cachedEvent = (id) => ({ id, title: 'Yoga en grupo', status: 'active', starts_at: new Date(Date.now() + 86400000).toISOString(), start_date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), venue: 'Centro de yoga', latitude: 40.42, longitude: -3.7 });
+test('disk activities appear before the request timer and update when the network completes', async () => {
+  const network = deferred();
+  const hook = mount('features/events/useEvents.ts', 'useEvents', [{}, null], {
+    fetchEventPage: () => network.promise,
+  }, undefined, { hydrateEventPage: async () => ({ events: [cachedEvent('cached')], at: 0 }) });
+  await hook.flush();
+  assert.equal(hook.value.events[0]?.id, 'cached');
+  hook.tick(0); await hook.flush();
+  assert.equal(hook.value.events[0]?.id, 'cached');
+  network.resolve([cachedEvent('fresh')]); await hook.flush();
+  assert.equal(hook.value.events[0]?.id, 'fresh');
+  hook.unmount();
+});
+test('late disk hydration cannot replace a successful network page', async () => {
+  const disk = deferred();
+  const hook = mount('features/events/useEvents.ts', 'useEvents', [{}, null], {
+    fetchEventPage: async () => [cachedEvent('fresh')],
+  }, undefined, { hydrateEventPage: () => disk.promise });
+  hook.tick(0); await hook.flush();
+  disk.resolve({ events: [cachedEvent('old')], at: 0 }); await hook.flush();
+  assert.equal(hook.value.events[0]?.id, 'fresh');
+  hook.unmount();
+});
+test('late disk hydration still recovers activities after a network failure', async () => {
+  const disk = deferred();
+  const hook = mount('features/events/useEvents.ts', 'useEvents', [{}, null], {
+    fetchEventPage: async () => { throw new Error('offline'); },
+  }, undefined, { hydrateEventPage: () => disk.promise });
+  hook.tick(0); await hook.flush();
+  disk.resolve({ events: [cachedEvent('offline')], at: 0 }); await hook.flush();
+  assert.equal(hook.value.events[0]?.id, 'offline');
   hook.unmount();
 });

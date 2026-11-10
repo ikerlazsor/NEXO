@@ -6,7 +6,8 @@ const assert = require("node:assert/strict");
 const { randomUUID } = require("node:crypto");
 (async () => {
   const status = JSON.parse(
-    execFileSync("npx", ["--yes", "supabase", "status", "-o", "json"], {
+    execFileSync(process.env.NEXO_SUPABASE_CLI || "npx", process.env.NEXO_SUPABASE_CLI
+      ? ["status", "-o", "json"] : ["--yes", "supabase", "status", "-o", "json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     }),
@@ -50,7 +51,7 @@ const { randomUUID } = require("node:crypto");
           provider_id: "madrid",
           source_id: `synthetic-smoke-${run}`,
           source_url: "https://www.madrid.es/synthetic",
-          title: "SYNTHETIC local API test",
+          title: "Yoga en grupo · SYNTHETIC local API test",
           category: "DESCUBRIR",
           starts_at: new Date(Date.now() + 86400000).toISOString(),
           venue: "Synthetic venue",

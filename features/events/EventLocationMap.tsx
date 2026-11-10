@@ -11,11 +11,13 @@ import { NexoMapView } from "../../components/NexoMapView";
 import { useAppTheme } from "../../lib/appTheme";
 import { useT } from "../../lib/i18n";
 import type { ExternalEvent } from "./types";
-import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
+import { useEffect, useState } from "react";
 import { getCategoryColor } from "../../lib/categories";
 import { eventClassification } from "./covers";
-export function EventLocationMap({ event }: { event: ExternalEvent }) {
-  const ready = useScreenTransitionReady();
+export function EventLocationMap({ event, enabled }: { event: ExternalEvent; enabled: boolean }) {
+  const [mounted, setMounted] = useState(false);
+  // Keep an existing map through the outgoing animation; unmount with the route.
+  useEffect(() => { if (enabled) setMounted(true); }, [enabled]);
   const { colors } = useAppTheme();
   const { t } = useT();
   const { latitude, longitude } = event;
@@ -45,7 +47,7 @@ export function EventLocationMap({ event }: { event: ExternalEvent }) {
           backgroundColor: colors.surfaceSubtle,
         }}
       >
-        {ready ? (
+        {mounted ? (
           <NexoMapView
             style={{ flex: 1 }}
             initialRegion={{

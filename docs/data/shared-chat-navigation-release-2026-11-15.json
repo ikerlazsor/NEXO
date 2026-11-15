@@ -1,0 +1,62 @@
+{
+  "checked_at": "2026-11-15T12:48:56.821Z",
+  "status": "blocked_pending_valid_supabase_token",
+  "channel": "production",
+  "client_commits": {
+    "1.0.0": "0b4f2f4",
+    "1.0.11": "e9764d2"
+  },
+  "artifacts": {
+    "1.0.0": {
+      "directory": "/workspace/NEXO/builds/ota/shared-chat-navigation-2026-11-15/runtime-1.0.0",
+      "bundles": [
+        {
+          "platform": "ios",
+          "path": "_expo/static/js/ios/entry-dd936dbff4a4abc99bf57763ab2b4438.hbc",
+          "bytes": 21874583,
+          "sha256": "62783e2077e45a4cef05317cd477bafdf0e6a15e333c23ae10e43de53c946918"
+        },
+        {
+          "platform": "android",
+          "path": "_expo/static/js/android/entry-b3cde7b92767fed58d3d7da1e687c3df.hbc",
+          "bytes": 21875129,
+          "sha256": "196b5b83c4185cb17ce40fe2db94f4838b0faad4c8d9b3ec0f25943d4b5f4456"
+        }
+      ]
+    },
+    "1.0.11": {
+      "directory": "/workspace/NEXO/builds/ota/shared-chat-navigation-2026-11-15/runtime-1.0.11",
+      "bundles": [
+        {
+          "platform": "android",
+          "path": "_expo/static/js/android/entry-5eb678ba4f26258ff0faae28cce3b21f.hbc",
+          "bytes": 21874758,
+          "sha256": "b2895f8c8ff0a7ee9e78ab84de3fa2c39d4c28a7dac12e54e29deb365b8f71a5"
+        },
+        {
+          "platform": "ios",
+          "path": "_expo/static/js/ios/entry-dc1c22d1adef0988f1e2fd8210729633.hbc",
+          "bytes": 21875125,
+          "sha256": "7749ade4378d9443072d1e2cb527ce2fe87db4378f1fc44c2d4db6a815026979"
+        }
+      ]
+    }
+  },
+  "migration": "20261115120000_unified_event_chat.sql",
+  "migration_applied_to_production": false,
+  "ota_published": false,
+  "blocker": {
+    "service": "Supabase Management API",
+    "http_status": 401,
+    "message": "Invalid access token",
+    "setting": "SUPABASE_ACCESS_TOKEN"
+  },
+  "checks": {
+    "exports_all_platforms_both_runtimes": true,
+    "client_source_identical_between_runtimes": true,
+    "typecheck_legacy": true,
+    "local_test_files": 19,
+    "local_sql_checks": 280,
+    "native_device_testing": false
+  }
+}

@@ -11,7 +11,6 @@ import { useCallback,
     useState } from 'react';
 import {
     ScrollView,
-    InteractionManager,
     Text,
     TouchableOpacity,
     View,
@@ -106,6 +105,7 @@ import { formatProfilePlace, parseProfilePlace, ensureAutoProfilePlace, mergePer
 import { readCoverUrl } from '../lib/profileCover';
 import { theme } from '../theme';
 import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
+import { useScreenTransitionReady } from '../hooks/useScreenTransitionReady';
 import { ScreenKeys } from '../lib/screenState';
 
 const INK = theme.colors.text;
@@ -117,6 +117,7 @@ export default function ProfileScreen() {
 }
 
 function OwnProfileScreen() {
+    const transitionReady = useScreenTransitionReady();
     const router = useRouter();
     const { t, lang } = useT();
     const { colors } = useAppTheme();
@@ -626,13 +627,14 @@ function OwnProfileScreen() {
             // and prefetching until the native entrance transition has finished.
             const latest = userId ? cacheGetStale<ProfileUiSnapshot>(screenCacheKey.profileUI(userId)) : null;
             if (latest?.userId === userId) applyProfileSnapshot(latest);
-            const task = InteractionManager.runAfterInteractions(() => {
-                void fetchUserData().catch(() => {});
-                warmFriendsAndSavedPlans();
-            });
-            return () => { task.cancel(); profileLoads.current?.invalidate(); };
-        }, [fetchUserData, applyProfileSnapshot, userId])
+        }, [applyProfileSnapshot, userId])
     );
+    useEffect(() => {
+        if (!transitionReady) return;
+        void fetchUserData().catch(() => {});
+        warmFriendsAndSavedPlans();
+        return () => profileLoads.current?.invalidate();
+    }, [transitionReady, fetchUserData]);
 
     const quickActions: QuickAction[] = isOrganizer
         ? []

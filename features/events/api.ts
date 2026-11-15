@@ -3,6 +3,9 @@ import { getPublicProfiles } from "../../lib/profileData";
 import { withRequestDeadline } from "../../lib/requestDeadline";
 import { eventQueryKey, rememberEvent, rememberEventPage } from "./cache";
 import { publicCatalog } from "./publicCatalog";
+import { getChatFileObjectName } from "../../lib/chatUpload";
+import type { Message } from "../chat/chatModel";
+import type { MessageReaction } from "../../lib/messageReactions";
 import type {
   ExternalEvent,
   EventCursor,
@@ -236,16 +239,44 @@ export async function sendEventMessage(
   id: string,
   clientId: string,
   body: string,
+  type: Message['tipo'] = 'texto',
+  file: string | null = null,
 ) {
   await request((deadline) =>
     supabase
-      .rpc("send_event_message", {
+      .rpc("send_event_chat_message", {
         p_event: id,
         p_client: clientId,
         p_body: body,
+        p_type: type,
+        p_file: getChatFileObjectName(file),
       })
       .abortSignal(deadline),
   );
+}
+export async function fetchEventReactions(id: string, signal?: AbortSignal): Promise<MessageReaction[]> {
+  return (await request<MessageReaction[]>(deadline => supabase.rpc('get_event_chat_reactions', { p_event: id }).abortSignal(deadline), signal)) || [];
+}
+export async function toggleEventReaction(id: string, message: string, emoji: string) {
+  await request(deadline => supabase.rpc('toggle_event_chat_reaction', { p_event: id, p_message: message, p_emoji: emoji }).abortSignal(deadline));
+}
+export async function deleteEventMessage(id: string, message: string) {
+  await request(deadline => supabase.rpc('delete_event_chat_message', { p_event: id, p_message: message }).abortSignal(deadline));
+}
+export function subscribeEventChat(id: string, onChange: () => void): () => void {
+  const channel = supabase.channel(`event-chat:${id}`).on('postgres_changes', {
+    event: '*', schema: 'public', table: 'external_event_messages', filter: `event_id=eq.${id}`,
+  }, onChange).subscribe();
+  return () => { void supabase.removeChannel(channel); };
+}
+export type EventChatThread = { event: ExternalEvent; last_message: EventMessage | null; unread: number; muted: boolean };
+export async function fetchEventChatThreads(): Promise<EventChatThread[]> {
+  return (await request<EventChatThread[]>(deadline => supabase.rpc('get_event_chat_threads').abortSignal(deadline))) || [];
+}
+export async function setEventChatPreferences(id: string, values: { read?: boolean; hidden?: boolean; muted?: boolean }) {
+  await request(deadline => supabase.rpc('set_event_chat_preferences', {
+    p_event: id, p_read: values.read ?? false, p_hidden: values.hidden ?? null, p_muted: values.muted ?? null,
+  }).abortSignal(deadline));
 }
 export async function reportEventMessage(
   messageId: string,

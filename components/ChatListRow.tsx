@@ -10,12 +10,15 @@ import { prefetchChatRow, seedChatThreadPeek } from '../lib/prefetchChats';
 import { stripPlanTitleSuffix } from '../lib/planDisplay';
 import { resolvePlanImageSource } from '../lib/sports';
 import { type ThemeColors } from '../theme';
+import type { ExternalEvent } from '../features/events/types';
+import { EventArtwork } from '../features/events/EventCards';
 
 export type ChatListItem = {
     id: string;
     title: string;
     image_url: string | null;
-    kind: 'plan' | 'group' | 'direct';
+    kind: 'plan' | 'group' | 'direct' | 'event';
+    event?: ExternalEvent;
     peerId?: string;
     creadorId?: string;
     fechaEvento?: string | null;
@@ -118,7 +121,7 @@ function ChatListRowInner({
                     onPressIn={handlePressIn}
                     onPress={handlePress}
                 >
-                    {item.kind === 'direct' ? (
+                    {item.kind === 'event' && item.event ? <EventArtwork event={item.event} style={styles.chatImage} /> : item.kind === 'direct' ? (
                         <ProfileAvatar
                             uri={item.image_url}
                             name={stripPlanTitleSuffix(item.title)}

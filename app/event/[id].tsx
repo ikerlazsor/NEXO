@@ -279,7 +279,7 @@ export default function EventDetail() {
           {busy ? <ActivityIndicator color={joined ? JOINED_PLAN_COLORS.text : colors.onPrimary} /> : joined ? <Ionicons name="checkmark-circle" size={20} color={JOINED_PLAN_COLORS.text} /> : null}
           <Text style={{ fontSize: 16, fontWeight: '700', color: joined ? JOINED_PLAN_COLORS.text : colors.onPrimary }}>{t(joined ? 'events.joined' : 'events.join')}</Text>
         </PressScale>
-        {joined && <PressScale onPress={() => router.push({ pathname: '/event-chat/[id]', params: { id } })} accessibilityRole="button" accessibilityLabel={t('events.chat')} style={{ width: 54, minHeight: 52, borderRadius: 18, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+        {joined && <PressScale onPress={() => router.push({ pathname: '/event-chat/[id]', params: { id, fromEvent: '1' } })} accessibilityRole="button" accessibilityLabel={t('events.chat')} style={{ width: 54, minHeight: 52, borderRadius: 18, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }}>
           <Ionicons name="chatbubbles" size={22} color={colors.onPrimary} />
         </PressScale>}
       </View>}

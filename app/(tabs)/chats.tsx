@@ -1,3 +1,5 @@
+import { fetchEventChatThreads, setEventChatPreferences } from '../../features/events/api';
+import { subscribeEventMembership } from '../../features/events/membershipBus';
 import {
     Ionicons } from '@expo/vector-icons';
 import { useFocusEffect,
@@ -70,6 +72,7 @@ import { invalidatePlanMembershipCaches, screenCacheKey, ScreenCacheTTL } from '
 import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
 import { cacheGetStale, cacheIsFresh, cacheInvalidate, cacheSet } from '../../lib/ttlCache';
 import { supabase } from '../../lib/supabase';
+
 
 type ChatRow = ChatListItem;
 
@@ -149,6 +152,8 @@ export default function MyChatsScreen() {
         // Siempre pedir red al conocer userId (caché [] no cuenta).
         void fetchMyChatsRef.current({ silent: hasDataRef.current, force: !hasDataRef.current });
     }, [userId]);
+
+    useEffect(() => subscribeEventMembership(() => scheduleSilentRefresh()), [scheduleSilentRefresh]);
 
     useEffect(() => {
         const unsub = subscribeChatUnread(() => {
@@ -269,6 +274,7 @@ export default function MyChatsScreen() {
 
             void runPlanLifecycleMaintenance();
 
+            const eventThreadsRequest = fetchEventChatThreads().catch(() => []);
             const summaries = await getChatSummaries(user.id, {
                 // Los INSERT en tiempo real y el pull-to-refresh deben saltarse el TTL.
                 force: !!opts?.force || !!opts?.silent,
@@ -343,7 +349,14 @@ export default function MyChatsScreen() {
                 unread: conversation.unread,
             }));
 
-            const rows = [...planRows, ...directRows].sort(
+            const eventThreads = await eventThreadsRequest;
+            const eventRows: ChatRow[] = eventThreads.map(thread => ({
+                id: thread.event.id, title: thread.event.title, image_url: null, kind: 'event', event: thread.event,
+                fechaEvento: thread.event.starts_at, lastAt: thread.last_message?.created_at || thread.event.last_seen_at,
+                ultimoTexto: thread.last_message ? formatPreview({ tipo: thread.last_message.message_type || 'texto', contenido: thread.last_message.body, emisor_id: thread.last_message.sender_id }, {}, user.id) : t('chats.noMessages'),
+                unread: thread.unread,
+            }));
+            const rows = [...planRows, ...directRows, ...eventRows].sort(
                 (a, b) => new Date(b.lastAt || 0).getTime() - new Date(a.lastAt || 0).getTime()
             );
 
@@ -405,6 +418,15 @@ export default function MyChatsScreen() {
     }, []);
 
     const confirmDeleteChat = useCallback((item: ChatRow) => {
+        if (item.kind === 'event') {
+            Alert.alert(t('chat.deleteChat'), t('chat.deleteDirectConfirm'), [
+                { text: t('common.cancel'), style: 'cancel' },
+                { text: t('common.delete'), style: 'destructive', onPress: () => {
+                    void setEventChatPreferences(item.id, { hidden: true }).then(() => setChats(prev => prev.filter(row => row.kind !== 'event' || row.id !== item.id))).catch(() => Alert.alert(t('chat.errorTitle'), t('events.error')));
+                } },
+            ]);
+            return;
+        }
         if (!currentUserId) return;
         openSwipeRef.current?.close();
 
@@ -521,6 +543,8 @@ export default function MyChatsScreen() {
 
     const handleMarkChatRead = useCallback((item: ChatRow) => {
         if (!currentUserId || item.unread <= 0) return;
+        if (item.kind === 'event') { void setEventChatPreferences(item.id, { read: true }).catch(() => {}); }
+        else
         if (item.kind === 'direct' && item.peerId) {
             void markDirectChatRead(currentUserId, item.peerId);
         } else {
@@ -535,7 +559,8 @@ export default function MyChatsScreen() {
 
     const handleOpenChat = useCallback((item: ChatRow) => {
         openSwipeRef.current?.close();
-        if (item.kind === 'direct' && item.peerId) {
+        if (item.kind === 'event') { router.push(`/event-chat/${item.id}`); }
+        else if (item.kind === 'direct' && item.peerId) {
             router.push(`/direct-chat/${item.peerId}`);
         } else {
             router.push(`/chat/${item.id}`);

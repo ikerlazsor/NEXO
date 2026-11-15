@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
-    BackHandler,
+    Modal,
     Dimensions,
     FlatList,
     NativeScrollEvent,
@@ -15,14 +15,6 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import Animated, {
-    cancelAnimation,
-    Easing,
-    runOnJS,
-    useAnimatedStyle,
-    useSharedValue,
-    withTiming,
-} from 'react-native-reanimated';
 import { Marker } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NexoMapView } from './NexoMapView';
@@ -52,10 +44,9 @@ import { useEvents } from '../features/events/useEvents';
 import { eventClassification, eventCoverSource } from '../features/events/covers';
 import type { ExternalEvent } from '../features/events/types';
 import { discoveryPins, validMapCoordinates } from '../lib/mapDiscovery';
+import { createMapCameraLifecycle, validMapRegion } from '../lib/mapCameraLifecycle';
 const INK = theme.colors.text;
 const SCREEN_W = Dimensions.get('window').width;
-const SCREEN_H = Dimensions.get('window').height;
-const MAP_SLIDE_MS = 320;
 
 /** Madrid ciudad + alrededores. */
 const MADRID_REGION = {
@@ -146,61 +137,52 @@ export function FeedMapHost() {
     const closeHandledRef = useRef(false);
     const selectedIdRef = useRef<string | null>(null);
     const jumpingLoopRef = useRef(false);
-    const mapAnimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const didInitCarousel = useRef(false);
     /** Evita auto-seleccionar al abrir. */
     const userEngagedRef = useRef(false);
     const scrollOffsetRef = useRef(0);
     const loadGenRef = useRef(0);
-    const slideY = useSharedValue(SCREEN_H);
-    const mapReadyRef = useRef(false);
-    const sheetOpenedRef = useRef(false);
+    const closingRef = useRef(false);
+    const visibleRef = useRef(false);
+    const camera = useRef<ReturnType<typeof createMapCameraLifecycle> | null>(null);
+    if (!camera.current) camera.current = createMapCameraLifecycle((region, duration) => {
+        mapRef.current?.animateToRegion(region, duration);
+    });
+    const mapEpochRef = useRef(0);
+    const mapEpoch = mapEpochRef.current;
 
-    const sheetStyle = useAnimatedStyle(() => ({
-        transform: [{ translateY: slideY.value }],
-    }));
-
-    const resetAfterClose = useCallback(() => {
-        setVisible(false);
+    const finishDismiss = useCallback(() => {
+        if (closeHandledRef.current || !closingRef.current) return;
+        closeHandledRef.current = true;
         setRenderMap(false);
         setSelectedId(null);
         setPeekPlanId(null);
         selectedIdRef.current = null;
         didInitCarousel.current = false;
         userEngagedRef.current = false;
-        mapReadyRef.current = false;
-        sheetOpenedRef.current = false;
-        slideY.value = SCREEN_H;
-    }, [slideY]);
+        closingRef.current = false;
+        const planId = pendingPlanIdRef.current;
+        pendingPlanIdRef.current = null;
+        if (planId?.startsWith('event:')) router.push({ pathname: '/event/[id]', params: { id: planId.slice(6) } });
+        else if (planId) router.push({ pathname: '/plan/[id]', params: { id: planId } });
+    }, [router]);
 
-    const animateSheetOpen = useCallback(() => {
-        if (sheetOpenedRef.current) return;
-        sheetOpenedRef.current = true;
-        cancelAnimation(slideY);
-        slideY.value = withTiming(0, {
-            duration: MAP_SLIDE_MS,
-            easing: Easing.out(Easing.cubic),
-        });
-    }, [slideY]);
-
-    const animateSheetClose = useCallback(
-        (onFinished?: () => void) => {
-            cancelAnimation(slideY);
-            slideY.value = withTiming(
-                SCREEN_H,
-                {
-                    duration: MAP_SLIDE_MS,
-                    easing: Easing.in(Easing.cubic),
-                },
-                (finished) => {
-                    if (!finished) return;
-                    runOnJS(resetAfterClose)();
-                    if (onFinished) runOnJS(onFinished)();
-                },
-            );
-        },
-        [resetAfterClose, slideY],
-    );
+    const animateSheetClose = useCallback(() => {
+        if (!visibleRef.current || closingRef.current) return;
+        closingRef.current = true;
+        visibleRef.current = false;
+        camera.current!.close();
+        loadGenRef.current++;
+        setVisible(false);
+    }, []);
+    useEffect(() => {
+        // Android has no onDismiss callback. Let the native slide finish before
+        // pushing a detail screen, so two native transitions never overlap.
+        if (Platform.OS === 'ios' || visible || !closingRef.current) return;
+        const timer = setTimeout(finishDismiss, 350);
+        return () => clearTimeout(timer);
+    }, [visible, finishDismiss]);
+    useEffect(() => () => { camera.current?.close(); loadGenRef.current++; }, []);
 
     const refreshPlansInBackground = useCallback(
         (gen: number, peeked: UserCoords | null) => {
@@ -311,12 +293,13 @@ export function FeedMapHost() {
     );
 
     const open = useCallback(() => {
+        if (visibleRef.current || closingRef.current) return;
+        visibleRef.current = true;
+        closeHandledRef.current = false;
+        mapEpochRef.current = camera.current!.open();
         const gen = ++loadGenRef.current;
+        setRenderMap(false);
         setTick((n) => n + 1);
-        mapReadyRef.current = false;
-        sheetOpenedRef.current = false;
-        cancelAnimation(slideY);
-        slideY.value = SCREEN_H;
         setVisible(true);
         didInitCarousel.current = false;
         userEngagedRef.current = false;
@@ -396,7 +379,7 @@ export function FeedMapHost() {
                 if (gen === loadGenRef.current) setLoadingPlans(false);
             }
         })();
-    }, [userId, refreshPlansInBackground, slideY]);
+    }, [userId, refreshPlansInBackground]);
 
     useEffect(() => {
         const unsub = subscribeOpenFeedMap(open);
@@ -411,64 +394,25 @@ export function FeedMapHost() {
     }, []);
 
     /** Misma distancia (delta) que Madrid; centro = usuario si hay permiso, si no Madrid. */
+    const latitude = userCoords?.latitude, longitude = userCoords?.longitude;
     useEffect(() => {
         if (!visible) return;
-        const target = userCoords
+        const target = latitude != null && longitude != null
             ? {
-                  latitude: userCoords.latitude,
-                  longitude: userCoords.longitude,
+                  latitude,
+                  longitude,
                   latitudeDelta: MADRID_REGION.latitudeDelta,
                   longitudeDelta: MADRID_REGION.longitudeDelta,
               }
             : MADRID_REGION;
-        const t = setTimeout(() => {
-            try {
-                mapRef.current?.animateToRegion(target, 280);
-            } catch {
-                /* ignore */
-            }
-        }, MAP_SLIDE_MS + 80);
-        return () => clearTimeout(t);
-    }, [visible, userCoords?.latitude, userCoords?.longitude]);
+        camera.current!.move(target, 280);
+    }, [visible, latitude, longitude]);
 
     useEffect(() => {
         if (!visible) return;
-        closeHandledRef.current = false;
         lockTabPager();
         return () => unlockTabPager();
     }, [visible]);
-
-    useEffect(() => {
-        if (!visible) return;
-        animateSheetOpen();
-        const mount = setTimeout(() => setRenderMap(true), MAP_SLIDE_MS);
-        return () => clearTimeout(mount);
-    }, [visible, animateSheetOpen]);
-
-    useEffect(() => {
-        if (visible) return;
-        if (closeHandledRef.current && !pendingPlanIdRef.current) return;
-        const t = setTimeout(() => {
-            if (closeHandledRef.current) return;
-            closeHandledRef.current = true;
-            const planId = pendingPlanIdRef.current;
-            pendingPlanIdRef.current = null;
-            if (!planId) return;
-            if (planId.startsWith('event:')) router.push({ pathname: '/event/[id]', params: { id: planId.slice(6) } });
-            else router.push({ pathname: '/plan/[id]', params: { id: planId } });
-        }, Platform.OS === 'ios' ? 360 : 280);
-        return () => clearTimeout(t);
-    }, [visible, router]);
-
-    useEffect(() => {
-        if (!visible) return;
-        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-            pendingPlanIdRef.current = null;
-            animateSheetClose();
-            return true;
-        });
-        return () => sub.remove();
-    }, [visible, animateSheetClose]);
 
     useEffect(() => {
         selectedIdRef.current = selectedId;
@@ -478,23 +422,9 @@ export function FeedMapHost() {
         const lat = Number(plan.latitud);
         const lng = Number(plan.longitud);
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-        if (mapAnimTimer.current) clearTimeout(mapAnimTimer.current);
-        mapAnimTimer.current = setTimeout(() => {
-            try {
-                const latShift = SELECT_DELTA * SELECT_CENTER_LAT_SHIFT;
-                mapRef.current?.animateToRegion(
-                    {
-                        latitude: lat - latShift,
-                        longitude: lng,
-                        latitudeDelta: SELECT_DELTA,
-                        longitudeDelta: SELECT_DELTA,
-                    },
-                    duration,
-                );
-            } catch {
-                /* ignore */
-            }
-        }, 16);
+        const latShift = SELECT_DELTA * SELECT_CENTER_LAT_SHIFT;
+        camera.current!.move({ latitude: lat - latShift, longitude: lng,
+            latitudeDelta: SELECT_DELTA, longitudeDelta: SELECT_DELTA }, duration);
     }, []);
 
     /** Scroll nativo a la copia más cercana (sin RAF custom = sin trabarse). */
@@ -654,15 +584,16 @@ export function FeedMapHost() {
         animateSheetClose();
     }, [animateSheetClose]);
 
-    if (!visible) return null;
-
     return (
-        <View style={mapHostStyles.host} pointerEvents="box-none">
-            <Animated.View
-                style={[mapHostStyles.sheet, sheetStyle]}
-                pointerEvents={visible ? 'auto' : 'none'}
-            >
+        <Modal visible={visible} animationType="slide"
+            presentationStyle="fullScreen" onRequestClose={closeMap}
+            onShow={() => { if (visibleRef.current && !closingRef.current) setRenderMap(true); }}
+            onDismiss={finishDismiss}>
             <View style={styles.mapModalContainer}>
+                {!renderMap && <View style={[mapHostStyles.map, { backgroundColor: theme.colors.backgroundAlt, alignItems: 'center', justifyContent: 'center', gap: 12 }]}>
+                    <Ionicons name="map-outline" size={40} color={theme.colors.primary} />
+                    <ActivityIndicator color={theme.colors.primary} />
+                </View>}
                 {renderMap && <NexoMapView
                     ref={mapRef}
                     style={mapHostStyles.map}
@@ -675,8 +606,10 @@ export function FeedMapHost() {
                     initialRegion={MADRID_REGION}
                     minZoomLevel={2}
                     maxZoomLevel={19}
-                    onRegionChangeComplete={setViewport}
-                    onMapReady={() => { mapReadyRef.current = true; }}
+                    onRegionChangeComplete={region => {
+                        if (camera.current!.isActive(mapEpoch) && validMapRegion(region)) setViewport(region);
+                    }}
+                    onMapReady={() => camera.current!.ready(mapEpoch)}
                 >
                     {pins.map(pin => <Marker
                         key={pin.key}
@@ -687,7 +620,7 @@ export function FeedMapHost() {
                         title={pin.members.length > 1 ? t('feed.mapGroup', { n: pin.members.length }) : pin.members[0].titulo || ''}
                         onPress={() => {
                             if (pin.members.length === 1) focusPlanId(String(pin.members[0].id), { scroll: true, mapDuration: MAP_FOCUS_MS });
-                            else mapRef.current?.animateToRegion({ latitude: pin.latitude, longitude: pin.longitude, latitudeDelta: Math.max(0.001, viewport.latitudeDelta / 3), longitudeDelta: Math.max(0.001, viewport.longitudeDelta / 3) }, 250);
+                            else camera.current!.move({ latitude: pin.latitude, longitude: pin.longitude, latitudeDelta: Math.max(0.001, viewport.latitudeDelta / 3), longitudeDelta: Math.max(0.001, viewport.longitudeDelta / 3) }, 250);
                         }}
                     />)}
                 </NexoMapView>}
@@ -870,21 +803,11 @@ export function FeedMapHost() {
                     </View>
                 )}
             </View>
-            </Animated.View>
-        </View>
+        </Modal>
     );
 }
 
 const mapHostStyles = StyleSheet.create({
-    host: {
-        ...StyleSheet.absoluteFillObject,
-        zIndex: 200,
-        elevation: 200,
-    },
-    sheet: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: theme.colors.background,
-    },
     map: {
         position: 'absolute',
         left: 0,

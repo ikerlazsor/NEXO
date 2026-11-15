@@ -65,6 +65,8 @@ function mount(file, exportName, args, api = {}, profiles = async () => [], cach
       fetchEventMembership: async () => true,
       fetchEventMessages: async () => [],
       sendEventMessage: async () => {},
+      fetchEventReactions: async () => [],
+      subscribeEventChat: () => () => {},
       ...api,
     },
   };
@@ -307,4 +309,16 @@ test('late disk hydration still recovers activities after a network failure', as
   disk.resolve({ events: [cachedEvent('offline')], at: 0 }); await hook.flush();
   assert.equal(hook.value.events[0]?.id, 'offline');
   hook.unmount();
+});
+
+test('a realtime message arriving during pagination schedules another latest-page read', async () => {
+  const first = deferred(); let changes, pages = 0;
+  const hook = mount('features/events/useEventChat.ts', 'useEventChat', [roomA, 'viewer-a'], {
+    fetchEventMembership: async () => true,
+    fetchEventMessages: async () => { if (++pages === 1) return first.promise; return [message('second','2026-11-15T12:00:01Z')]; },
+    subscribeEventChat: (_id, notify) => { changes = notify; return () => {}; },
+  });
+  await hook.flush(); assert.equal(pages, 1);
+  changes(); first.resolve([message('first','2026-11-15T12:00:00Z')]); await hook.flush();
+  assert.equal(pages, 2); assert.equal(hook.value.messages[0].id, 'second'); hook.unmount();
 });

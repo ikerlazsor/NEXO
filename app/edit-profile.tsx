@@ -1,3 +1,4 @@
+import { useScreenTransitionReady } from '../hooks/useScreenTransitionReady';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -5,7 +6,6 @@ import { useFocusEffect, useNavigation, useRouter, type Href } from 'expo-router
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
-    InteractionManager,
     KeyboardAvoidingView,
     Modal,
     Platform,
@@ -102,7 +102,9 @@ import type { ProfileUiSnapshot } from '../features/profile/types';
 const INK = theme.colors.text;
 const PRIMARY_DARK = theme.colors.primary;
 
+
 export default function EditProfileScreen() {
+    const transitionReady = useScreenTransitionReady();
     const router = useRouter();
     const navigation = useNavigation();
     const { t, lang } = useT();
@@ -144,6 +146,7 @@ export default function EditProfileScreen() {
     const aboutRef = useRef<TextInput>(null);
     const scrollYRef = useRef(0);
     const readyRef = useRef(false);
+    const loadVersion = useRef(0);
     const countryCodeRef = useRef<string | null>(null);
     /** Nacionalidad ya confirmada en servidor (los autosave de privacidad/ubi no escriben la UI pendiente). */
     const countryCodeSavedRef = useRef<string | null>(null);
@@ -170,8 +173,11 @@ export default function EditProfileScreen() {
     const galleryItems = organizerMeta.galeria ?? [];
     const galleryMax = MAX_ORGANIZER_GALLERY;
 
-    const load = useCallback(async () => {
+    const load = useCallback(async (remote = true) => {
+        const version = ++loadVersion.current;
+        const current = () => version === loadVersion.current;
         const user = await getAuthUser();
+        if (!current()) return;
         if (!user) {
             router.replace('/login');
             return;
@@ -252,7 +258,9 @@ export default function EditProfileScreen() {
             readyRef.current = true;
         }
 
+        if (!remote) return;
         const row = await loadProfileRow(user.id);
+        if (!current()) return;
         const data = row.data;
         const org = parseOrganizerMeta(data?.organizador);
         setIsOrganizer(data?.es_organizador === true);
@@ -314,6 +322,7 @@ export default function EditProfileScreen() {
         // Auto-ubicación en segundo plano: no bloquea ni pisa la nacionalidad.
         if (!data?.es_organizador && !effectivePlace?.ciudad && !placeDirtyRef.current) {
             void ensureAutoProfilePlace(user.id).then((autoPlace) => {
+                if (!current()) return;
                 if (!autoPlace || shouldPreferProfileCache() || placeDirtyRef.current) return;
                 setPlace((prev) => {
                     if (prev?.ciudad) return prev;
@@ -377,14 +386,18 @@ export default function EditProfileScreen() {
             void hydrateEditProfileHints().then(() => setShowHints(shouldShowEditProfileHints()));
             // First entry hydrates cached fields immediately; returning from a
             // child screen defers remote work so it cannot stall the back swipe.
-            const task = readyRef.current ? InteractionManager.runAfterInteractions(() => void load()) : null;
-            if (!task) void load();
+            void load(false);
             return () => {
-                task?.cancel();
+                loadVersion.current++;
                 void markEditProfileHintsSeen();
             };
         }, [load]),
     );
+    useEffect(() => {
+        if (!transitionReady) return;
+        void load();
+        return () => { loadVersion.current++; };
+    }, [transitionReady, load]);
 
     const buildGustos = useCallback(
         (

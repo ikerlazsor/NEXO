@@ -40,7 +40,7 @@ test('map ignores invalid coordinates and bounds markers, grouping by category w
   assert.deepEqual(Array.from(pins,p=>p.color).sort(),['blue','green']);
   assert.equal(pins.reduce((n,p)=>n+p.members.length,0),1000);
   assert.equal(discoveryPins([...items,{id:'invalid',latitud:NaN,longitud:null}],region).length,2);
-  assert.equal(discoveryPins(items,region,'24').find(p=>p.key==='selected:24').members[0].id,'24');
+  assert.equal(discoveryPins(items,region,'24').find(p=>p.key==='pin:24').members[0].id,'24');
   assert.ok(discoveryPins(Array.from({length:200},(_,n)=>({id:n,latitud:40.3+n%20*.01,longitud:-3.8+Math.floor(n/20)*.01})),region).length<=36);
 });
 

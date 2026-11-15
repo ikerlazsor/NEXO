@@ -3,7 +3,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { AppState } from "react-native";
 import * as Crypto from "expo-crypto";
 import { getPublicProfiles } from "../../lib/profileData";
-import { fetchEventMembership, fetchEventMessages, sendEventMessage } from "./api";
+import { fetchEventMembership, fetchEventMessages, sendEventMessage, fetchEventReactions, subscribeEventChat } from "./api";
+import type { Message } from "../chat/chatModel";
+import type { MessageReaction } from "../../lib/messageReactions";
 import type { EventMessage } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,11 +13,14 @@ const empty = (scope: string) => ({
   scope,
   messages: [] as EventMessage[],
   names: {} as Record<string, string>,
+  profiles: {} as Record<string, { nombre: string; avatar_url: string | null }>,
+  reactions: [] as MessageReaction[],
   text: "",
   member: false,
   failed: false,
   sending: false,
   more: false,
+  loading: true,
 });
 type ChatState = ReturnType<typeof empty>;
 
@@ -26,15 +31,17 @@ export function useEventChat(id: string, userId: string | null) {
   const [state, setState] = useState(() => empty(scope));
   const visible = state.scope === scope ? state : empty(scope);
   const active = useRef(false),
+    refreshQueued = useRef(false),
     generation = useRef(0),
     request = useRef<AbortController | null>(null),
     olderLoaded = useRef(false),
     sending = useRef<object | null>(null),
-    pending = useRef<{ scope: string; id: string; body: string } | null>(null);
+    pending = useRef<{ scope: string; id: string; body: string; type: Message['tipo']; file: string | null } | null>(null);
 
   const refresh = useCallback(async (older?: EventMessage) => {
     if (!userId || !UUID.test(id) || !active.current || currentScope.current !== scope || request.current) return;
     const epoch = generation.current;
+    refreshQueued.current = false;
     const abort = new AbortController();
     request.current = abort;
     const timeout = setTimeout(() => abort.abort(), 12000);
@@ -48,7 +55,7 @@ export function useEventChat(id: string, userId: string | null) {
       if (!member) {
         pending.current = null;
         olderLoaded.current = false;
-        update(() => empty(scope));
+        update(() => ({ ...empty(scope), loading: false }));
         generation.current++;
         return;
       }
@@ -68,6 +75,7 @@ export function useEventChat(id: string, userId: string | null) {
           messages,
           more: older || !olderLoaded.current ? page.length === 40 : previous.more,
           failed: false,
+          loading: false,
         };
       });
       // Names enhance the bubbles; a slow profile service must not delay chat
@@ -76,15 +84,18 @@ export function useEventChat(id: string, userId: string | null) {
         .then((profiles) => update((previous) => ({
           ...previous,
           names: { ...previous.names, ...Object.fromEntries(profiles.map((profile) => [profile.id, profile.nombre || "Nexo"])) },
+          profiles: { ...previous.profiles, ...Object.fromEntries(profiles.map(profile => [profile.id, { nombre: profile.nombre || "Nexo", avatar_url: profile.avatar_url ?? null }])) },
         })))
         .catch(() => {});
+      void fetchEventReactions(id, abort.signal).then(reactions => update(previous => ({ ...previous, reactions }))).catch(() => {});
     } catch {
       // A timeout is actionable; cleanup/account changes invalidate the epoch.
       if (active.current && currentScope.current === scope && epoch === generation.current)
-        setState((previous) => ({ ...(previous.scope === scope ? previous : empty(scope)), failed: true }));
+        setState((previous) => ({ ...(previous.scope === scope ? previous : empty(scope)), failed: true, loading: false }));
     } finally {
       clearTimeout(timeout);
       if (request.current === abort) request.current = null;
+      if (refreshQueued.current && active.current && currentScope.current === scope) void refresh();
     }
   }, [id, userId, scope]);
 
@@ -94,10 +105,15 @@ export function useEventChat(id: string, userId: string | null) {
     request.current?.abort();
     request.current = null;
     olderLoaded.current = false;
+    refreshQueued.current = false;
     if (pending.current?.scope !== scope) pending.current = null;
     sending.current = null;
     setState((previous) => ({ ...empty(scope), text: previous.scope === scope ? previous.text : "" }));
     void refresh();
+    const stopRealtime = userId && UUID.test(id) ? subscribeEventChat(id, () => {
+      refreshQueued.current = true;
+      void refresh();
+    }) : () => {};
     const timer = setInterval(() => {
       if (AppState.currentState === "active") void refresh();
     }, 10000);
@@ -107,33 +123,35 @@ export function useEventChat(id: string, userId: string | null) {
       request.current?.abort();
       request.current = null;
       clearInterval(timer);
+      stopRealtime();
     };
-  }, [refresh, scope]));
+  }, [refresh, scope, id, userId]));
 
   const setText = (text: string) => {
     if (currentScope.current === scope)
       setState((previous) => ({ ...(previous.scope === scope ? previous : empty(scope)), text }));
   };
-  const send = async () => {
-    const body = visible.text.trim();
+  const send = async (content = visible.text, type: Message['tipo'] = 'texto', file: string | null = null) => {
+    const body = content.trim();
     if (!body || !userId || !visible.member || !active.current || currentScope.current !== scope || sending.current) return;
     const operation = {};
     const epoch = generation.current;
     const current = () => active.current && currentScope.current === scope && generation.current === epoch && sending.current === operation;
     sending.current = operation;
     setState((previous) => ({ ...previous, sending: true }));
-    if (pending.current?.scope !== scope || pending.current.body !== body)
-      pending.current = { scope, id: Crypto.randomUUID(), body };
+    if (pending.current?.scope !== scope || pending.current.body !== body || pending.current.type !== type || pending.current.file !== file)
+      pending.current = { scope, id: Crypto.randomUUID(), body, type, file };
     try {
-      await sendEventMessage(id, pending.current.id, body);
+      await sendEventMessage(id, pending.current.id, body, type, file);
       if (!current()) return;
       pending.current = null;
-      setState((previous) => ({ ...previous, text: "" }));
+      setState((previous) => ({ ...previous, text: previous.text === visible.text && type === 'texto' ? "" : previous.text }));
       // Supersede an older poll so its snapshot cannot hide this new message.
       generation.current++;
       request.current?.abort();
       request.current = null;
       await refresh();
+      return true;
     } catch (error) {
       if (current()) throw error;
     } finally {

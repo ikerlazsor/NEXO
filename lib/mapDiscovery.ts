@@ -24,8 +24,10 @@ export function discoveryPins<T extends MapItem>(items: T[], region: MapViewport
         const group = groups.get(key) ?? [];
         group.push(item); groups.set(key, group);
     }
-    return [...groups].sort((a,b) => Number(b[1].some(x => String(x.id) === selectedId)) - Number(a[1].some(x => String(x.id) === selectedId))).slice(0, 36).map(([key, members]) => ({
-        key, members,
+    return [...groups].sort((a,b) => Number(b[1].some(x => String(x.id) === selectedId)) - Number(a[1].some(x => String(x.id) === selectedId))).slice(0, 36).map(([, members]) => ({
+        // Grid coordinates change on every zoom. Native MapKit annotations keep
+        // their identity when a group moves cells or its representative is selected.
+        key: `pin:${members.map(item => String(item.id)).sort()[0]}`, members,
         latitude: members.reduce((n, p) => n + Number(p.latitud), 0) / members.length,
         longitude: members.reduce((n, p) => n + Number(p.longitud), 0) / members.length,
         color: getCategoryColor(members[0].categoria, members[0].tipo_deporte),

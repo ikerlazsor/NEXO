@@ -52,6 +52,9 @@ export type EventMessage = {
   body: string;
   created_at: string;
   client_id: string;
+  message_type?: "texto" | "imagen" | "video" | "audio";
+  archivo_url?: string | null;
+  eliminado_en?: string | null;
 };
 export type EventPerson = {
   user_id: string;

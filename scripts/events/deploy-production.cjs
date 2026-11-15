@@ -20,6 +20,7 @@ const migrationNames = [
   "20261108180000_consolidate_legacy_event_groups.sql",
   "20261108200000_participatory_discovery.sql",
   "20261110100000_social_workshop_discovery.sql",
+  "20261115120000_unified_event_chat.sql",
 ];
 const literal = (value) => "'" + String(value).replace(/'/g, "''") + "'";
 

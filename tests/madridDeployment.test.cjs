@@ -194,7 +194,7 @@ test("production plan reads history and source but never deploys, activates or c
     },
   });
   assert.equal(result.applied, false);
-  assert.equal(result.pending.length, 8);
+  assert.equal(result.pending.length, 9);
   assert.equal(calls.length, 3);
 });
 
@@ -292,13 +292,13 @@ test("production apply deploys only the reviewed feature migrations before atomi
   assert.equal(result.applied, true);
   assert.equal(
     sql.length,
-    9,
-    "eight feature migrations and one activation transaction",
+    10,
+    "nine feature migrations and one activation transaction",
   );
-  assert.match(sql[8], /^begin;/);
-  assert.match(sql[8], /sync_external_events/);
-  assert.match(sql[8], /existing-synthetic-scheduler/);
-  assert.match(sql[8], /commit;$/);
+  assert.match(sql[9], /^begin;/);
+  assert.match(sql[9], /sync_external_events/);
+  assert.match(sql[9], /existing-synthetic-scheduler/);
+  assert.match(sql[9], /commit;$/);
   assert.ok(
     output.every((value) => !value.includes("existing-synthetic-scheduler")),
   );

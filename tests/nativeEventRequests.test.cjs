@@ -21,6 +21,7 @@ test("join, chat and analytics work with React Native actual AbortSignal, withou
       },
       "../../lib/profileData": { getPublicProfiles: async () => [] },
       "./publicCatalog": { publicCatalog: {} },
+      "../../lib/chatUpload": { getChatFileObjectName: () => null },
     },
     {
       AbortController: native.AbortController,
@@ -42,7 +43,7 @@ test("join, chat and analytics work with React Native actual AbortSignal, withou
   await api.trackEvent("event-id", "view");
   assert.deepEqual(
     calls.map((c) => c.name),
-    ["set_event_membership", "send_event_message", "track_event_interaction"],
+    ["set_event_membership", "send_event_chat_message", "track_event_interaction"],
   );
   assert.ok(
     calls.every(
@@ -85,6 +86,7 @@ test('startup and feed share the public catalogue request; cancelling one caller
     '../../lib/supabase': { supabase: { rpc: () => { throw new Error('must not wait for authenticated client'); } } },
     '../../lib/profileData': { getPublicProfiles: async () => [] },
     '../../lib/diskCache': { diskGet: async () => null, diskSet: async () => {} },
+    '../../lib/chatUpload': { getChatFileObjectName: () => null },
     './publicCatalog': { publicCatalog: { rpc: () => ({ abortSignal: signal => { calls++; requestSignal = signal; return response; } }) } },
   });
   const { fetchEventPage } = load('features/events/api.ts');

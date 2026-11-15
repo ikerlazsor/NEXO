@@ -794,16 +794,20 @@ export default function PlanDetailScreen() {
         useCallback(() => {
             lockTabPager();
             if (planId) dismissPushForPlanDetail(planId);
-            void loadPlan();
             return () => unlockTabPager();
-        }, [loadPlan, planId]),
+        }, [planId]),
     );
+    useEffect(() => {
+        if (!mapPreviewReady) return;
+        void loadPlan();
+        return () => { loadGenRef.current++; };
+    }, [mapPreviewReady, loadPlan]);
 
     // Desde el detalle casi siempre se toca al creador: su perfil se deja listo
     // en segundo plano para que al abrirlo no haya espera.
     useEffect(() => {
         const creatorId = creator?.id ?? plan?.creador_id;
-        if (!creatorId) return;
+        if (!creatorId || !mapPreviewReady) return;
         seedUserProfilePeek({
             id: creatorId,
             nombre: creator?.nombre,
@@ -812,7 +816,7 @@ export default function PlanDetailScreen() {
         });
         const task = InteractionManager.runAfterInteractions(() => prefetchUserProfile(creatorId));
         return () => task.cancel();
-    }, [creator?.id, creator?.nombre, creator?.avatar_url, plan?.creador_id, plan?.es_organizador]);
+    }, [creator?.id, creator?.nombre, creator?.avatar_url, plan?.creador_id, plan?.es_organizador, mapPreviewReady]);
 
     useEffect(() => {
         if (openRating?.phase !== 'waiting') return;

@@ -6,13 +6,10 @@ import React, { useCallback,
     useMemo,
     useRef,
     useState } from 'react';
-import { Audio,
-} from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams,
     useRouter } from 'expo-router';
-import { FlashList } from '@shopify/flash-list';
 import { Image } from 'expo-image';
 import {
     ActivityIndicator,
@@ -26,38 +23,36 @@ import {
 } from 'react-native';
 import { Alert } from '../../lib/nexoAlert';
 import { theme } from '../../theme';
+import { useChatMedia } from '../../features/chat/useChatMedia';
+import { ChatHeader } from '../../features/chat/ChatHeader';
+import { ChatComposer } from '../../features/chat/ChatComposer';
+import { ChatTimeline } from '../../features/chat/ChatTimeline';
 import { createChatStyles } from '../../features/chat/chatStyles';
-import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
+import { useThemedStyles } from '../../lib/appTheme';
 import { ChatMediaModals } from '../../features/chat/ChatMediaModals';
 import { MomentsAlbum } from '../../components/MomentsAlbum';
 import {
     PAGE_SIZE,
     PLAN_CHAT_TTL_MS,
     planChatKey,
-    formatDuration,
-    parseStoredDuration,
     mapMessageRow,
     mergeMessages,
-    chatListKey,
     reconcileIncomingChatMessage,
     withFallbackProfile,
     type Message,
     type PlanChatSnapshot,
 } from '../../features/chat/chatModel';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChatMessageRow, chatMessageItemType } from '../../components/ChatMessageRow';
+import { ChatMessageRow } from '../../components/ChatMessageRow';
 import { ReactionEmojiPicker, applyMessageReaction, useMessageReactions } from '../../components/MessageReactionsBar';
 import { PlanImage } from '../../components/PlanImage';
-import { PressScale } from '../../components/PressScale';
 import { ChatKeyboardAnimated, useChatKeyboardBottomPad } from '../../lib/chatKeyboard';
-import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
 import {
     isSameChatFile,
     resolveChatFileUrl,
     resolveChatFileUrls,
-    uploadChatFile,
 } from '../../lib/chatUpload';
-import { encodeMoments, type MomentItem } from '../../lib/planMoments';
+import { type MomentItem } from '../../lib/planMoments';
 import { markPlanChatRead } from '../../lib/chatUnread';
 import { useInvertedChatStickiness } from '../../lib/chatScroll';
 import { clearChatOpenedFromPlan, wasChatOpenedFromPlan } from '../../lib/chatFromPlan';
@@ -119,7 +114,6 @@ export default function ChatScreen() {
     const router = useRouter();
     const { t, lang } = useT();
     const { userId: sessionUserId } = useAuthSession();
-    const { scheme } = useAppTheme();
     const styles = useThemedStyles(createChatStyles);
     const insets = useSafeAreaInsets();
     // Subida del teclado animada (iOS/Android), sin el corte de KeyboardAvoidingView.
@@ -164,29 +158,26 @@ export default function ChatScreen() {
     const [planLocationName, setPlanLocationName] = useState<string | null>(null);
     const [chatExpiryLabel, setChatExpiryLabel] = useState<string | null>(null);
     const [canKeepChat, setCanKeepChat] = useState(false);
-    const [pendingFiles, setPendingFiles] = useState<{ uri: string; type: 'image' | 'video' }[]>([]);
     const [friendIds, setFriendIds] = useState<Set<string>>(() => new Set());
     const [coincidedIds, setCoincidedIds] = useState<Set<string>>(() => new Set());
     const [isSaved, setIsSaved] = useState(false);
 
-    const [recording, setRecording] = useState<Audio.Recording | null>(null);
-    const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
     const [modalImage, setModalImage] = useState<string | null>(null);
     const [momentsAlbum, setMomentsAlbum] = useState<MomentItem[] | null>(null);
     const [modalVideo, setModalVideo] = useState<string | null>(null);
-    const [isUploading, setIsUploading] = useState(false);
     const [isSending, setIsSending] = useState(false);
+    const mediaSendRef = useRef<(type: Message['tipo'], url?: string, duration?: number, content?: string) => Promise<unknown>>(async () => {});
+    const { pendingFiles, setPendingFiles, recording, playingMessageId, isUploading, audioDurations, recordingDuration,
+        pickMedia, pickMoments, sendPendingFiles, startRecording, stopRecording, playAudio } = useChatMedia({
+        roomId: planId, viewerId: sessionUserId, accessDenied, messages, send: (...args) => mediaSendRef.current(...args),
+    });
     const sendLockRef = useRef(false);
-    const [audioDurations, setAudioDurations] = useState<Record<string, number>>({});
-    const [recordingDuration, setRecordingDuration] = useState(0);
     const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
 
-    const soundRef = useRef<Audio.Sound | null>(null);
     const isMountedRef = useRef(true);
     const deadChatNavRef = useRef(false);
     /** Cada carga de chat tiene su turno: una carga vieja no pisa la nueva. */
     const initGenRef = useRef(0);
-    const loadingDurationsRef = useRef<Set<string>>(new Set());
     const messagesRef = useRef(messages);
     messagesRef.current = messages;
     const {
@@ -263,14 +254,6 @@ export default function ChatScreen() {
             avatar_url: me?.avatar_url ?? null,
         };
     }, [members, currentUserId, t]);
-
-    const stopAudio = useCallback(async () => {
-        if (soundRef.current) {
-            await soundRef.current.unloadAsync();
-            soundRef.current = null;
-        }
-        setPlayingMessageId(null);
-    }, []);
 
     const fetchParticipants = useCallback(async (pid: string, ownerIdHint?: string | null) => {
         // El creador ya viene del plan en la carga inicial: una consulta menos antes
@@ -700,65 +683,8 @@ export default function ChatScreen() {
 
     useEffect(() => {
         isMountedRef.current = true;
-
-        return () => {
-            isMountedRef.current = false;
-            soundRef.current?.unloadAsync();
-        };
+        return () => { isMountedRef.current = false; };
     }, []);
-
-    const loadAudioDuration = useCallback(async (messageId: string, audioUrl: string) => {
-        if (loadingDurationsRef.current.has(messageId)) return;
-        loadingDurationsRef.current.add(messageId);
-
-        try {
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: false,
-                playsInSilentModeIOS: true,
-            });
-            const { sound } = await Audio.Sound.createAsync({ uri: audioUrl }, { shouldPlay: false });
-            const status = await sound.getStatusAsync();
-            await sound.unloadAsync();
-
-            if (status.isLoaded && status.durationMillis) {
-                const seconds = Math.max(1, Math.round(status.durationMillis / 1000));
-                setAudioDurations((prev) => ({ ...prev, [messageId]: seconds }));
-            }
-        } catch {
-            /* duración opcional */
-        } finally {
-            loadingDurationsRef.current.delete(messageId);
-        }
-    }, []);
-
-    useEffect(() => {
-        messages.forEach((message) => {
-            if (message.tipo !== 'audio' || !message.archivo_url) return;
-            if (parseStoredDuration(message.contenido)) return;
-            if (audioDurations[message.id]) return;
-            loadAudioDuration(message.id, message.archivo_url);
-        });
-    }, [messages, audioDurations, loadAudioDuration]);
-
-    useEffect(() => {
-        if (!recording) {
-            setRecordingDuration(0);
-            return;
-        }
-
-        const interval = setInterval(async () => {
-            try {
-                const status = await recording.getStatusAsync();
-                if (status.isRecording && status.durationMillis) {
-                    setRecordingDuration(Math.floor(status.durationMillis / 1000));
-                }
-            } catch {
-                // ignore polling errors while recording
-            }
-        }, 500);
-
-        return () => clearInterval(interval);
-    }, [recording]);
 
     useEffect(() => {
         if (!planId) return;
@@ -1448,72 +1374,7 @@ export default function ChatScreen() {
         trackFunnel('chat_send', { userId: currentUserId, props: { planId, tipo } });
     };
 
-    const pickMedia = async () => {
-        if (isUploading || accessDenied) return;
-
-        const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permissionResult.granted) {
-            Alert.alert(t('chat.permRequired'), t('chat.galleryPerm'));
-            return;
-        }
-
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images', 'videos'],
-            allowsEditing: false,
-            quality: 0.8,
-            videoMaxDuration: 120,
-        });
-
-        if (result.canceled || !result.assets[0]) return;
-        const selectedAsset = result.assets[0];
-        setPendingFiles([{
-            uri: selectedAsset.uri,
-            type: selectedAsset.type === 'video' ? 'video' : 'image',
-        }]);
-    };
-
-    const pickMoments = async () => {
-        if (isUploading || accessDenied) return;
-        const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permissionResult.granted) {
-            Alert.alert(t('chat.permRequired'), t('chat.galleryPerm'));
-            return;
-        }
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images', 'videos'],
-            allowsMultipleSelection: true,
-            selectionLimit: 12,
-            quality: 0.7,
-            videoMaxDuration: 60,
-        });
-        if (result.canceled || !result.assets?.length) return;
-        setPendingFiles(result.assets.slice(0, 12).map((asset) => ({
-            uri: asset.uri,
-            type: asset.type === 'video' ? 'video' : 'image',
-        })));
-    };
-
-    const sendPendingFiles = async () => {
-        if (!pendingFiles.length || !planId || isUploading || sendLockRef.current) return;
-        const batch = pendingFiles;
-        setPendingFiles([]);
-        setIsUploading(true);
-        const uploaded: MomentItem[] = [];
-        for (const file of batch) {
-            const url = await uploadChatFile(file.uri, file.type === 'video' ? 'video' : 'image', planId);
-            if (url) uploaded.push({ url, type: file.type });
-        }
-        setIsUploading(false);
-        if (!uploaded.length) {
-            Alert.alert(t('chat.errorTitle'), t('chat.uploadError'));
-            return;
-        }
-        if (uploaded.length === 1) {
-            await sendMessage(uploaded[0].type === 'video' ? 'video' : 'imagen', uploaded[0].url);
-            return;
-        }
-        await sendMessage('imagen', uploaded[0].url, undefined, encodeMoments(uploaded));
-    };
+    mediaSendRef.current = sendMessage;
 
     const confirmKeepChat = () => {
         if (!planId) return;
@@ -1539,69 +1400,6 @@ export default function ChatScreen() {
         ]);
     };
 
-    const startRecording = async () => {
-        if (isUploading || accessDenied) return;
-
-        try {
-            const permission = await Audio.requestPermissionsAsync();
-            if (permission.status !== 'granted') {
-                Alert.alert(t('chat.permRequired'), t('chat.micPerm'));
-                return;
-            }
-
-            await stopAudio();
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: true,
-                playsInSilentModeIOS: true,
-            });
-
-            const { recording: newRecording } = await Audio.Recording.createAsync(
-                Audio.RecordingOptionsPresets.HIGH_QUALITY
-            );
-            setRecording(newRecording);
-        } catch (err) {
-            console.error('Fallo al iniciar la grabación', err);
-            Alert.alert(t('chat.errorTitle'), t('chat.recordError'));
-        }
-    };
-
-    const stopRecording = async () => {
-        if (!recording || !planId) return;
-
-        const activeRecording = recording;
-        setRecording(null);
-
-        try {
-            const status = await activeRecording.getStatusAsync();
-            const durationSec = Math.max(
-                1,
-                Math.round((status.durationMillis ?? recordingDuration * 1000) / 1000)
-            );
-
-            const uri = activeRecording.getURI();
-            await activeRecording.stopAndUnloadAsync();
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: false,
-                playsInSilentModeIOS: true,
-            });
-
-            if (!uri) return;
-
-            setIsUploading(true);
-            const uploadedUrl = await uploadChatFile(uri, 'audio', planId);
-            setIsUploading(false);
-
-            if (uploadedUrl) {
-                await sendMessage('audio', uploadedUrl, durationSec);
-            } else {
-                Alert.alert(t('chat.errorTitle'), t('chat.voiceError'));
-            }
-        } catch (err) {
-            console.error('Fallo al detener la grabación', err);
-            setIsUploading(false);
-        }
-    };
-
     const handleActionPress = () => {
         if (isUploading || isSending) return;
 
@@ -1615,39 +1413,6 @@ export default function ChatScreen() {
             startRecording();
         }
     };
-
-    const playAudio = useCallback(async (messageId: string, audioUrl: string) => {
-        try {
-            if (playingMessageId === messageId) {
-                await stopAudio();
-                return;
-            }
-
-            await stopAudio();
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: false,
-                playsInSilentModeIOS: true,
-            });
-
-            const { sound: newSound } = await Audio.Sound.createAsync(
-                { uri: audioUrl },
-                { shouldPlay: true }
-            );
-
-            soundRef.current = newSound;
-            setPlayingMessageId(messageId);
-
-            newSound.setOnPlaybackStatusUpdate((status) => {
-                if (status.isLoaded && status.didJustFinish) {
-                    soundRef.current = null;
-                    setPlayingMessageId(null);
-                }
-            });
-        } catch (error) {
-            if (__DEV__) console.error('Error reproduciendo audio:', error);
-            setPlayingMessageId(null);
-        }
-    }, [playingMessageId, stopAudio]);
 
     const inputDisabled = isUploading || isSending || accessDenied;
     const actionIcon = useMemo(() => {
@@ -1880,18 +1645,11 @@ export default function ChatScreen() {
 
     return (
         <View style={styles.container}>
-            <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-                <TouchableOpacity
-                    onPress={() => {
-                        clearChatOpenedFromPlan(planId);
-                        router.back();
-                    }}
-                    style={styles.backBtn}
-                >
-                    <Ionicons name="chevron-back" size={28} color={PRIMARY} />
-                </TouchableOpacity>
-
-                <TouchableOpacity
+            <ChatHeader title={planName || (loading ? t('chat.loading') : '')}
+                subtitle={participantNames || (loading ? t('chat.loading') : '')}
+                onBack={() => { clearChatOpenedFromPlan(planId); router.back(); }}
+                onInfo={openChatHeaderInfo} onInfoPressIn={isFixedGroupChat ? undefined : seedPlanFromChat}
+                image={<>                <TouchableOpacity
                     onPress={
                         canEditGroupPhoto
                             ? showGroupPhotoMenu
@@ -1932,23 +1690,7 @@ export default function ChatScreen() {
                     )}
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={styles.headerTitleContainer}
-                    activeOpacity={0.7}
-                    onPressIn={isFixedGroupChat ? undefined : seedPlanFromChat}
-                    onPress={openChatHeaderInfo}
-                >
-                    <Text style={styles.headerTitle} numberOfLines={1}>
-                        {planName || (loading ? t('chat.loading') : '')}
-                    </Text>
-                    {(participantNames || loading) ? (
-                        <Text style={styles.headerSubtitle} numberOfLines={1}>
-                            {participantNames || (loading ? t('chat.loading') : '')}
-                        </Text>
-                    ) : null}
-                </TouchableOpacity>
-
-                <TouchableOpacity onPress={() => setShowMembers(true)} style={styles.membersBtn}>
+</>} actions={<>                <TouchableOpacity onPress={() => setShowMembers(true)} style={styles.membersBtn}>
                     <Ionicons name="people" size={22} color={PRIMARY} />
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => void toggleMuteChat()} style={styles.membersBtn} hitSlop={6}>
@@ -1958,7 +1700,7 @@ export default function ChatScreen() {
                         color={chatMuted ? theme.colors.textSubtle : PRIMARY}
                     />
                 </TouchableOpacity>
-            </View>
+</>} />
 
             {chatExpiryLabel || canKeepChat ? (
                 <View style={styles.expiryBanner}>
@@ -1997,27 +1739,11 @@ export default function ChatScreen() {
                     </View>
                 ) : (
                     <View style={styles.messagesPanel}>
-                        <FlashList
-                            ref={messagesListRef}
-                            style={{ flex: 1 }}
-                            data={messages}
-                            keyExtractor={chatListKey}
-                            renderItem={renderItem}
-                            getItemType={chatMessageItemType}
-                            inverted
-                            drawDistance={FLASH_LIST_DRAW_DISTANCE}
-                            contentContainerStyle={styles.listContent}
-                            keyboardShouldPersistTaps="handled"
-                            onScroll={onMessagesScroll}
-                            onScrollBeginDrag={onMessagesScrollBeginDrag}
-                            onScrollEndDrag={onMessagesScrollEndDrag}
-                            onMomentumScrollEnd={onMessagesMomentumScrollEnd}
-                            onContentSizeChange={onMessagesContentSizeChange}
-                            scrollEventThrottle={16}
-                            onEndReached={loadMoreMessages}
-                            onEndReachedThreshold={0.3}
-                            ListFooterComponent={renderListFooter}
-                        />
+                        <ChatTimeline listRef={messagesListRef} messages={messages} renderItem={renderItem}
+                            onScroll={onMessagesScroll} onScrollBeginDrag={onMessagesScrollBeginDrag}
+                            onScrollEndDrag={onMessagesScrollEndDrag} onMomentumScrollEnd={onMessagesMomentumScrollEnd}
+                            onContentSizeChange={onMessagesContentSizeChange} onEndReached={loadMoreMessages}
+                            footer={renderListFooter} />
                         {loading && messages.length === 0 ? (
                             <View style={styles.emptyChatOverlay} pointerEvents="none">
                                 <ActivityIndicator color={PRIMARY} size="large" />
@@ -2038,102 +1764,11 @@ export default function ChatScreen() {
                     </Text>
                 ) : null}
 
-                {replyTo ? (
-                    <View style={styles.replyChip}>
-                        <View style={styles.replyChipBody}>
-                            <Text style={styles.replyChipName} numberOfLines={1}>
-                                {t('chat.replyingTo', { name: replyTo.name })}
-                            </Text>
-                            <Text style={styles.replyChipPreview} numberOfLines={1}>
-                                {replyTo.preview}
-                            </Text>
-                        </View>
-                        <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={8}>
-                            <Ionicons name="close" size={20} color={theme.colors.textMuted} />
-                        </TouchableOpacity>
-                    </View>
-                ) : null}
-
-                {pendingFiles.length ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingBottom: 8 }}>
-                        <Image
-                            source={{ uri: pendingFiles[0].uri }}
-                            style={{ width: 48, height: 48, borderRadius: 10 }}
-                            contentFit="cover"
-                        />
-                        <Text style={{ flex: 1, color: theme.colors.text, fontWeight: '700' }} numberOfLines={1}>
-                            {pendingFiles.length > 1
-                                ? `${t('chat.moments')} · ${pendingFiles.length}`
-                                : t('chat.readyToSend')}
-                        </Text>
-                        <TouchableOpacity onPress={() => setPendingFiles([])} hitSlop={8}>
-                            <Ionicons name="close" size={20} color={theme.colors.textMuted} />
-                        </TouchableOpacity>
-                    </View>
-                ) : null}
-
-                <View style={styles.inputBar}>
-                    <TouchableOpacity
-                        onPress={pickMedia}
-                        style={styles.attachBtn}
-                        disabled={inputDisabled}
-                    >
-                        <Ionicons
-                            name="add"
-                            size={26}
-                            color={inputDisabled ? '#CBD5E1' : theme.colors.textMuted}
-                        />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={() => void pickMoments()}
-                        style={styles.attachBtn}
-                        disabled={inputDisabled}
-                        accessibilityLabel={t('chat.moments')}
-                    >
-                        <Ionicons
-                            name="folder-outline"
-                            size={22}
-                            color={inputDisabled ? '#CBD5E1' : theme.colors.textMuted}
-                        />
-                    </TouchableOpacity>
-
-                    <View style={styles.inputContainer}>
-                        <TextInput
-                            testID="group-chat-message-input"
-                            placeholder={
-                                recording
-                                    ? `${t('chat.recording')} ${formatDuration(recordingDuration)}...`
-                                    : accessDenied
-                                      ? t('chat.cannotWrite')
-                                      : ''
-                            }
-                            placeholderTextColor={theme.colors.textMuted}
-                            keyboardAppearance={scheme}
-                            style={styles.textInput}
-                            value={messageText}
-                            onChangeText={onMessageTextChange}
-                            multiline
-                            editable={!recording && !inputDisabled}
-                        />
-                    </View>
-
-                    <PressScale
-                        testID="group-chat-send"
-                        accessibilityLabel="Enviar mensaje"
-                        onPress={handleActionPress}
-                        style={[
-                            styles.sendCircle,
-                            recording && styles.recordingActive,
-                            inputDisabled && styles.sendCircleDisabled,
-                        ]}
-                        disabled={inputDisabled && !recording}
-                        pressedScale={0.86}
-                        minTouch={false}
-                        haptic={false}
-                    >
-                        <Ionicons name={actionIcon} size={18} color="white" />
-                    </PressScale>
-                </View>
+                <ChatComposer replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
+                  pendingFiles={pendingFiles} onClearFiles={() => setPendingFiles([])}
+                  inputDisabled={inputDisabled} accessDenied={accessDenied} recording={!!recording}
+                  recordingDuration={recordingDuration} messageText={messageText} onChangeText={onMessageTextChange}
+                  onPickMedia={pickMedia} onPickMoments={() => void pickMoments()} onAction={handleActionPress} actionIcon={actionIcon} />
             </ChatKeyboardAnimated.View>
 
             <ReactionEmojiPicker

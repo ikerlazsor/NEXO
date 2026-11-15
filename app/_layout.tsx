@@ -612,12 +612,12 @@ function RootStack() {
               <Stack
                 screenOptions={{
                   headerShown: false,
-                  freezeOnBlur: true,
-                  animation: 'slide_from_right',
-                  animationDuration: 280,
+                  freezeOnBlur: Platform.OS !== 'ios',
+                  animation: Platform.OS === 'ios' ? 'default' : 'slide_from_right',
+                  ...(Platform.OS !== 'ios' ? { animationDuration: 280 } : {}),
                   gestureEnabled: Platform.OS === 'ios',
                   fullScreenGestureEnabled: false,
-                  animationMatchesGesture: Platform.OS === 'ios',
+                  animationMatchesGesture: false,
                   contentStyle: { backgroundColor: colors.backgroundAlt },
                   ...(Platform.OS === 'ios'
                     ? { gestureResponseDistance: { end: BACK_GESTURE_END } }
@@ -626,7 +626,7 @@ function RootStack() {
               >
                 <Stack.Screen
                   name="(tabs)"
-                  options={{ animation: 'none', gestureEnabled: false, freezeOnBlur: true }}
+                  options={{ gestureEnabled: false, freezeOnBlur: Platform.OS !== 'ios' }}
                 />
                 <Stack.Screen name="my-plans" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen
@@ -665,20 +665,22 @@ function RootStack() {
                 <Stack.Screen
                   name="profile"
                   options={{
+                    // Keep profile and its editor in the same navigation stack.
+                    // A modal here dismisses/re-presents when pushing the editor.
                     presentation: 'card',
                     animation: 'slide_from_bottom',
-                    animationDuration: 280,
+                    animationDuration: 300,
                     gestureEnabled: true,
                     gestureDirection: 'vertical',
                     fullScreenGestureEnabled: false,
-                    animationMatchesGesture: true,
-                    freezeOnBlur: true,
+                    animationMatchesGesture: false,
+                    freezeOnBlur: Platform.OS !== 'ios',
                     contentStyle: { backgroundColor: colors.surface },
                   }}
                 />
                 <Stack.Screen
                   name="edit-profile"
-                  options={{ animation: 'slide_from_right', animationDuration: 260, freezeOnBlur: true }}
+                  options={{ animation: Platform.OS === 'ios' ? 'default' : 'slide_from_right', freezeOnBlur: Platform.OS !== 'ios' }}
                 />
                 <Stack.Screen
                   name="edit-profile-place"
@@ -707,8 +709,10 @@ function RootStack() {
                 <Stack.Screen name="saved-plans" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="plan-history" options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="user-profile/[id]" options={{ animation: 'slide_from_right' }} />
-                <Stack.Screen name="plan/[id]" options={{ animation: 'slide_from_right', freezeOnBlur: false }} />
-                <Stack.Screen name="event/[id]" options={{ animation: 'slide_from_right', animationDuration: 260, freezeOnBlur: false }} />
+                <Stack.Screen name="plan/[id]" options={{ animation: Platform.OS === 'ios' ? 'default' : 'slide_from_right', freezeOnBlur: false }} />
+                <Stack.Screen name="event/[id]" options={{ animation: Platform.OS === 'ios' ? 'default' : 'slide_from_right', freezeOnBlur: false }} />
+                <Stack.Screen name="chat/[id]" options={{ animation: Platform.OS === 'ios' ? 'default' : 'slide_from_right', freezeOnBlur: false }} />
+                <Stack.Screen name="event-chat/[id]" options={{ animation: Platform.OS === 'ios' ? 'default' : 'slide_from_right', freezeOnBlur: false }} />
                 <Stack.Screen
                   name="direct-chat/[id]"
                   options={{ animation: 'slide_from_right', animationDuration: 260 }}

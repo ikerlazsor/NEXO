@@ -18,7 +18,7 @@ type PrefetchChatRow = {
     id: string;
     title: string;
     image_url: string | null;
-    kind: 'plan' | 'group' | 'direct';
+    kind: 'plan' | 'group' | 'direct' | 'event';
     peerId?: string;
     creadorId?: string;
     fechaEvento?: string | null;
@@ -158,6 +158,7 @@ export function prefetchChatRow(userId: string | null | undefined, row: Prefetch
 }
 
 async function warmChatRow(userId: string, row: PrefetchChatRow): Promise<void> {
+    if (row.kind === 'event') return;
     if (row.kind === 'direct') {
         const peerId = row.peerId;
         if (!peerId) return;
@@ -221,6 +222,7 @@ export function seedChatThreadPeek(
     row: PrefetchChatRow,
 ): void {
     if (!row?.id) return;
+    if (row.kind === 'event') return;
     if (row.kind === 'direct') {
         const peerId = row.peerId;
         if (!peerId || !userId) return;

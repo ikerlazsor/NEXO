@@ -1,18 +1,26 @@
-# Publicación del chat compartido y navegación · 15 de noviembre de 2026
+# Chat compartido y navegación publicados · 15 de noviembre de 2026
 
-**Publicación autorizada por el usuario y preparada; bloqueada por un token de Supabase inválido.** No se ha aplicado la migración a producción ni publicado ninguno de los nuevos bundles OTA.
+**Migración y actualización OTA publicadas en producción y verificadas.** El usuario autorizó la publicación y sustituyó el token de Supabase que bloqueaba la entrega.
 
-La API de administración de Supabase devolvió HTTP 401 con `Invalid access token` al leer el historial de migraciones y al comprobar el acceso a proyectos. La variable afectada es `SUPABASE_ACCESS_TOKEN`. Se solicitó sustituirla mediante los ajustes seguros del entorno; no se necesitan valores de credenciales en el chat.
+Esta ronda incorpora los componentes compartidos de chat para planes y eventos, los adjuntos, respuestas y reacciones de eventos, su bandeja de chats y los ajustes de navegación de mapa, planes, eventos y perfil.
 
-La publicación debe continuar con la migración revisada `20261115120000_unified_event_chat.sql` y después la OTA. Publicar el cliente antes de disponer de sus nuevos RPC dejaría incompleto el chat de eventos.
+| Instalaciones destinatarias | Runtime | Publicación, hora de Madrid | Grupo Expo |
+| --- | --- | --- | --- |
+| Instalaciones anteriores compatibles | 1.0.0 | 15:34 | `24aa62d3-640d-46b3-bbc4-ed4f5e13a8a1` |
+| Versión 1.0.11 | 1.0.11 | 15:32 | `015ec434-ac08-4929-b127-9ec48f75ad45` |
 
-Ya se han preparado con las variables de producción los cuatro bundles Hermes: Android/iOS para runtime 1.0.0 y Android/iOS para runtime 1.0.11. Se conservaron sus dependencias nativas y se comparó el código cliente de ambas variantes sin diferencias. La comprobación actual de builds Expo mantiene estas dos familias de instalaciones; no se está creando una nueva versión de tienda.
+Los dos grupos incluyen Android e iOS. Los cuatro manifiestos públicos del canal `production` devolvieron los UUID esperados y el SHA-256 exacto del bundle correspondiente. Última verificación: 15:34, hora de Madrid. Las dependencias nativas de cada runtime se conservaron y el código cliente se comparó sin diferencias entre las dos variantes.
 
-- Código actual: `e9764d2`, rama `fix/shared-chat-smooth-navigation`.
-- Variante compatible con instalaciones anteriores: `0b4f2f4`, rama `release/shared-chat-navigation-runtime-1.0.0`.
-- Artefactos locales: `builds/ota/shared-chat-navigation-2026-11-15/runtime-1.0.0/` y `runtime-1.0.11/`, ignorados por Git.
-- Verificación previa: 19 archivos de pruebas, 280 comprobaciones SQL locales, TypeScript, ESLint con 0 errores y 71 advertencias, y vista de componentes en Chromium. No se han realizado pruebas en dispositivo real.
+Supabase recibió únicamente `20261115120000_unified_event_chat.sql`. Quedó registrada en el historial, los nuevos RPC están disponibles para cuentas autenticadas, el bucket sigue siendo privado y la publicación de mensajes por Realtime está activa. Los conteos de eventos, integrantes y mensajes, y la huella del contenido de los mensajes existentes, coinciden antes y después de la migración. No se ejecutó una nueva importación del catálogo ni se desplegó el sincronizador.
 
-No se han modificado el catálogo de actividades ni las funciones de sincronización en esta preparación. No se ha modificado `main` ni hecho merge. Meetup continúa pendiente por decisión del usuario.
+La comprobación HTTP confirmó que el feed público responde HTTP 200 y que los RPC de bandeja, reacciones y envío de eventos rechazan invitados con HTTP 401. No se crearon usuarios ni mensajes de prueba en producción.
 
-[Revisión funcional](shared-chat-navigation-review-2026-11-15.md) · [Hashes y estado de preparación](data/shared-chat-navigation-release-2026-11-15.json)
+Código cliente: `e9764d2` para runtime 1.0.11 y `0b4f2f4` para runtime 1.0.0. Artefactos locales: `builds/ota/shared-chat-navigation-2026-11-15/runtime-1.0.0/` y `runtime-1.0.11/`, ignorados por Git.
+
+Validación previa: 19 archivos de pruebas aprobados, 280 comprobaciones SQL locales, TypeScript en las dos variantes, ESLint con 0 errores y 71 advertencias, vista de componentes en Chromium y cuatro bundles Hermes. No se han probado las transiciones ni reproducido el cierre del mapa en un dispositivo real; la publicación no sustituye esa comprobación.
+
+La integración de Meetup sigue pendiente por decisión del usuario. No se modificó `main`, no se hizo merge y no se creó una nueva versión de tienda.
+
+Para recibir la actualización: abrir NEXO con conexión, dejar que se descargue y cerrar y volver a abrir si aún aparece la versión anterior. **No repetir la publicación: los dos grupos ya existen.**
+
+[Revisión funcional](shared-chat-navigation-review-2026-11-15.md) · [Evidencia de backend, IDs y hashes](data/shared-chat-navigation-release-2026-11-15.json)

@@ -1,5 +1,7 @@
 # Navegación y chat compartido · 15 de noviembre de 2026
 
+**Actualización de publicación:** el usuario autorizó la entrega, renovó el token y la migración y los cuatro bundles OTA ya están publicados y verificados. Consultar el [estado definitivo](shared-chat-navigation-publication-status.md). El informe siguiente conserva la revisión previa a la publicación.
+
 Implementado en `fix/shared-chat-smooth-navigation`, sobre el proyecto actual y conservando los cambios de navegación que ya había en el borrador. **No se ha publicado una OTA, aplicado SQL a producción ni modificado `main`.**
 
 ## Arquitectura revisada

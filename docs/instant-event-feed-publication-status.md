@@ -1,5 +1,7 @@
 # Carga y detalle de actividades publicados · 10 de noviembre de 2026
 
+**Entrega posterior:** el [chat compartido y la navegación del 15 de noviembre](shared-chat-navigation-publication-status.md) ya están publicados y verificados. Este documento conserva el registro de la entrega del día 10.
+
 **Backend y actualización OTA publicados en producción, con autorización expresa del usuario para esta nueva ronda.** La entrega corrige la carga tardía de actividades, unifica el mapa, amplía la selección social y renueva el detalle.
 
 - El catálogo público devuelve **14 actividades confirmadas**, frente a 3. La descarga contiene 1.272 registros y se mantienen fecha/hora/lugar, horizonte de tres meses y exclusiones de espectáculos. Cero pares duplicados en la verificación pública.

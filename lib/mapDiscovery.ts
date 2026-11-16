@@ -14,7 +14,7 @@ export function validMapCoordinates(value: object): boolean {
  * todo lo de un barrio en un pin: al abrir faltaban pines que solo aparecían al
  * acercar con el carrusel. */
 const SAME_SPOT_STEP = 0.0004;
-const MAX_PINS = 120;
+const MAX_PINS = 400;
 
 /** Un pin por actividad (los del mismo sitio se agrupan), siempre desde la
  * apertura; el mapa nativo ya descarta lo que queda fuera de pantalla. */

@@ -121,6 +121,8 @@ export const EventCard = memo(function EventCard({
   const dark = scheme === "dark";
   const when = eventWhenLabel(event, lang);
   const attendance = attendanceLabelCount(event.attendance_hint);
+  const madridDay = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Europe/Madrid" });
+  const isToday = !!event.starts_at && madridDay(new Date(event.starts_at)) === madridDay(new Date());
   return (
     <View
       style={[
@@ -128,7 +130,8 @@ export const EventCard = memo(function EventCard({
         { marginHorizontal: horizontalInset },
         {
           backgroundColor: colors.surface,
-          borderColor: dark ? colors.borderStrong : "rgba(15,23,42,0.07)",
+          // Borde fino del color de la categoría (naranja si es hoy), como las tarjetas de planes.
+          borderColor: isToday ? "#D97706" : `${accent}${dark ? "AA" : "8C"}`,
           shadowColor: dark ? "#000" : "#0F172A",
         },
         compact && s.compact,
@@ -142,6 +145,12 @@ export const EventCard = memo(function EventCard({
       >
         <View>
           <EventArtwork event={event} compact={compact} />
+          {/* «HOY» naranja, igual que en las tarjetas de planes de Nexo. */}
+          {isToday && !compact ? (
+            <View style={s.todayBadge} pointerEvents="none">
+              <Text style={s.todayBadgeText}>{t("card.todayBadge")}</Text>
+            </View>
+          ) : null}
           {!compact ? (
             <>
               <LinearGradient
@@ -420,13 +429,15 @@ const s = StyleSheet.create({
     marginBottom: 20,
     borderRadius: 22,
     overflow: "hidden",
-    borderWidth: StyleSheet.hairlineWidth * 2,
+    borderWidth: 1.5,
     elevation: 3,
     shadowOpacity: 0.08,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
   },
   pressed: { opacity: 0.94 },
+  todayBadge: { position: "absolute", top: 14, alignSelf: "center", backgroundColor: "#D97706", paddingHorizontal: 13, paddingVertical: 5, borderRadius: 18, zIndex: 5, elevation: 4 },
+  todayBadgeText: { color: "#FFF", fontSize: 11, fontWeight: "900", letterSpacing: 1.1 },
   artScrim: { position: "absolute", left: 0, right: 0, bottom: 0, height: 90 },
   artBadges: {
     position: "absolute",

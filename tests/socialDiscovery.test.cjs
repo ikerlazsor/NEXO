@@ -43,7 +43,7 @@ test('map ignores invalid coordinates and bounds markers, grouping by category w
   assert.equal(discoveryPins(items,region,'24').find(p=>p.key==='pin:24').members[0].id,'24');
   // Separate venues each keep their own pin from the first frame, up to the bound.
   assert.equal(discoveryPins(Array.from({length:60},(_,n)=>({id:n,latitud:40.3+n%20*.01,longitud:-3.8+Math.floor(n/20)*.01})),region).length,60);
-  assert.ok(discoveryPins(Array.from({length:200},(_,n)=>({id:n,latitud:40.3+n%20*.01,longitud:-3.8+Math.floor(n/20)*.01})),region).length<=120);
+  assert.ok(discoveryPins(Array.from({length:200},(_,n)=>({id:n,latitud:40.3+n%20*.01,longitud:-3.8+Math.floor(n/20)*.01})),region).length<=400);
 });
 
 test('location acquisition without a distance filter cannot restart the event query', () => {

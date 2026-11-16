@@ -12,6 +12,14 @@ import { isParticipatoryActivity, isPublishableEvent } from "../../lib/externalE
  * social; van por delante de conciertos o teatro con la misma afinidad. */
 export const PARTICIPATORY_EVENT_BOOST = 18;
 
+/** Cuánta gente va: sube rápido con los primeros y se limita a 18 para que la
+ * afinidad siga mandando (1 → 5, 3 → 10, 7 → 15, 15+ → 18). */
+export function popularityBoost(count: unknown): number {
+  const n = Number(count);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(18, 5 * Math.log2(1 + n));
+}
+
 export function rankUnifiedFeed<
   T extends { id: string; kind: string; plan?: AffinityPlan; membership?: string },
 >(
@@ -43,6 +51,7 @@ export function rankUnifiedFeed<
       return (
         interactionBoost +
         (isParticipatoryActivity(e.title, e.subcategory ?? "") ? PARTICIPATORY_EVENT_BOOST : 0) +
+        popularityBoost(e.attendance_hint) +
         scoreFeedPlanRanked(
           {
             id: row.id,
@@ -58,6 +67,7 @@ export function rankUnifiedFeed<
     }
     return (
       scoreFeedPlanRanked((row as T).plan || {}, context) +
+      popularityBoost((row as T).plan?.joinedCount) +
       24 +
       interactionBoost
     );

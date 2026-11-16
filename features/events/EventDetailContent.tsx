@@ -12,7 +12,6 @@ import { BounceHeart } from "../../components/BounceHeart";
 import { PressScale } from "../../components/PressScale";
 import { EventArtwork, isFreeEvent } from "./EventCards";
 import { eventClassification } from "./covers";
-import { CURATED_PROVIDER } from "../../lib/externalEventPolicy.cjs";
 import type { ExternalEvent, EventPerson } from "./types";
 
 type Props = {
@@ -61,7 +60,6 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
   const { category } = eventClassification(event);
   const accent = getCategoryColor(category);
   const free = isFreeEvent(event.price_text);
-  const curated = event.provider_id === CURATED_PROVIDER;
   const start = event.starts_at ? new Date(event.starts_at) : null;
   const dateRaw = (start || new Date(`${event.start_date}T12:00:00Z`)).toLocaleDateString(lang, {
     weekday: "long", day: "numeric", month: "long", timeZone: "Europe/Madrid",
@@ -131,7 +129,6 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
       <Text accessibilityRole="header" style={[s.title, { color: colors.text }]}>{event.title}</Text>
       {!free && !!event.price_text && <Text style={[s.price, { color: colors.textMuted }]} numberOfLines={2}>{event.price_text}</Text>}
       {unavailable && <Text style={[s.notice, { color: colors.text, backgroundColor: colors.warningSoft }]}>{t("events.cancelled")}</Text>}
-      {!unavailable && curated && <Text style={[s.notice, { color: colors.text, backgroundColor: colors.warningSoft }]}>{t("events.limitedSpots")}</Text>}
       {error && <Pressable onPress={onRetry} accessibilityRole="button">
         <Text style={{ color: colors.primary, lineHeight: 21 }}>{t("events.unavailable")} · {t("events.retry")}</Text>
       </Pressable>}
@@ -154,6 +151,22 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
           <Ionicons name="navigate-outline" size={18} color={colors.primary} />
         </Pressable>
       </View>
+
+
+      {/* Como en el detalle de un plan de Nexo: la descripción dentro de un recuadro. */}
+      {!!event.description && <View style={[s.aboutCard, { backgroundColor: dark ? colors.surfaceSubtle : "#F1F5F9" }]}>
+        <Text accessibilityRole="header" style={[s.aboutTitle, { color: colors.text }]}>{t("events.about")}</Text>
+        <Text
+          style={[s.paragraph, { color: dark ? colors.text : "#1E293B" }]}
+          numberOfLines={aboutOpen ? undefined : 6}
+          onTextLayout={e => { if (!aboutOpen && e.nativeEvent.lines.length >= 6) setAboutClamped(true); }}
+        >
+          {event.description}
+        </Text>
+        {aboutClamped && <Pressable onPress={() => { hapticLight(); setAboutOpen(o => !o); }} accessibilityRole="button" hitSlop={8}>
+          <Text style={[s.link, { color: colors.primary }]}>{t(aboutOpen ? "events.readLess" : "events.readMore")}</Text>
+        </Pressable>}
+      </View>}
 
       <View style={s.section}>
         <View style={s.sectionHead}>
@@ -184,28 +197,15 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
         </View>}
       </View>
 
-      {!!event.description && <View style={s.section}>
-        <Text accessibilityRole="header" style={sectionTitle}>{t("events.about")}</Text>
-        <Text
-          style={[s.paragraph, { color: colors.text }]}
-          numberOfLines={aboutOpen ? undefined : 6}
-          onTextLayout={e => { if (!aboutOpen && e.nativeEvent.lines.length >= 6) setAboutClamped(true); }}
-        >
-          {event.description}
-        </Text>
-        {aboutClamped && <Pressable onPress={() => { hapticLight(); setAboutOpen(o => !o); }} accessibilityRole="button" hitSlop={8}>
-          <Text style={[s.link, { color: colors.primary }]}>{t(aboutOpen ? "events.readLess" : "events.readMore")}</Text>
-        </Pressable>}
-      </View>}
-
-      <PressScale onPress={onOfficial} accessibilityRole="link" pressedScale={0.98} minTouch={false}
+      {/* Enlace a la fuente oficial solo en la agenda municipal. */}
+      {event.provider_id === "madrid" && <PressScale onPress={onOfficial} accessibilityRole="link" pressedScale={0.98} minTouch={false}
         style={[s.source, { backgroundColor: colors.surface, borderColor: dark ? colors.borderStrong : "rgba(15,23,42,0.08)" }]}>
         <View style={[s.factIcon, { backgroundColor: colors.surfaceSubtle }]}>
           <Ionicons name="information-circle-outline" size={20} color={colors.primary} />
         </View>
         <Text style={[s.sourceText, { color: colors.text }]}>{t("events.detailsAndBooking")}</Text>
         <Ionicons name="open-outline" size={18} color={colors.textMuted} />
-      </PressScale>
+      </PressScale>}
 
       <View onLayout={e => { viewport.current.mapTop = e.nativeEvent.layout.y; checkMapVisible(); }}>
         {renderMap(mapVisible)}
@@ -263,7 +263,9 @@ const s = StyleSheet.create({
   sectionHead: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 },
   sectionTitle: { fontSize: 19, lineHeight: 24, fontWeight: "800", letterSpacing: -0.3 },
   count: { fontSize: 13, fontWeight: "700" },
-  paragraph: { fontSize: 15, lineHeight: 23 },
+  paragraph: { fontSize: 15, lineHeight: 24, marginTop: 6 },
+  aboutCard: { borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14 },
+  aboutTitle: { fontSize: 16, fontWeight: "800", marginBottom: 2 },
   people: { gap: 14, paddingRight: 8 },
   person: { alignItems: "center", width: 66, gap: 6 },
   avatarRing: { borderWidth: 2, borderRadius: 32, padding: 2 },

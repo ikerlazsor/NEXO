@@ -28,11 +28,15 @@ export function EventLocationMap({ event, enabled }: { event: ExternalEvent; ena
     ).catch(() => {});
   };
   return (
-    <View style={{ marginTop: 24, gap: 10 }}>
-      <Text style={{ fontSize: 20, fontWeight: "800", color: colors.text }}>
-        {t("events.location")}
-      </Text>
-      <Text style={{ color: colors.textMuted }}>
+    // Mismo bloque que la ubicación de un plan de Nexo: título con icono, lugar y mapa grande.
+    <View style={{ gap: 8 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Ionicons name="location" size={18} color={colors.primary} />
+        <Text style={{ fontSize: 19, fontWeight: "800", color: colors.text }}>
+          {t("planDetail.location")}
+        </Text>
+      </View>
+      <Text style={{ color: colors.textMuted, fontSize: 15, fontWeight: "500", marginBottom: 4 }}>
         {event.venue}
         {event.address ? ` · ${event.address}` : ""}
       </Text>
@@ -41,10 +45,10 @@ export function EventLocationMap({ event, enabled }: { event: ExternalEvent; ena
         accessibilityRole="button"
         accessibilityLabel={t("events.openMap")}
         style={{
-          height: 190,
-          borderRadius: 20,
+          height: 280,
+          borderRadius: 18,
           overflow: "hidden",
-          backgroundColor: colors.surfaceSubtle,
+          backgroundColor: colors.primarySoft,
         }}
       >
         {mounted ? (
@@ -69,14 +73,15 @@ export function EventLocationMap({ event, enabled }: { event: ExternalEvent; ena
           <View
             style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
           >
-            <Ionicons name="map-outline" size={32} color={colors.primary} />
+            <Ionicons name="map-outline" size={36} color={colors.primary} />
           </View>
         )}
-      </Pressable>
-      <Pressable onPress={open} accessibilityRole="link">
-        <Text style={{ color: colors.primary, fontWeight: "700" }}>
-          {t("events.openMap")}
-        </Text>
+        <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 12, alignItems: "center" }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(15,42,74,0.72)", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 }}>
+            <Ionicons name="expand" size={16} color="#FFF" />
+            <Text style={{ color: "#FFF", fontSize: 13, fontWeight: "700" }}>{t("planDetail.expandMap")}</Text>
+          </View>
+        </View>
       </Pressable>
       {event.location_source === "openstreetmap" && (
         <Pressable

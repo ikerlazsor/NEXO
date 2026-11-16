@@ -37,7 +37,7 @@ import { localeTag } from '../lib/locale';
 import { sharePlanLink } from '../lib/sharePlan';
 import { fetchTournamentConfig } from '../lib/footballTournament';
 import { requestTournamentShare } from '../lib/shareTournamentPitch';
-import { resolvePlanSport } from '../lib/categories';
+import { getCategoryColor, resolvePlanSport } from '../lib/categories';
 import { prioritizeTournamentPrefetch } from '../lib/tournamentLineupCache';
 import { prefetchPlanDetail } from '../lib/planDetailCache';
 import { getPlanPendingInvitees, sendPlanInvite, cancelPlanInvite } from '../lib/planInvites';
@@ -295,6 +295,7 @@ function PlanCardInner({
     const participants = item.participantsList || [];
     const eventDate = item.fecha_evento ? new Date(item.fecha_evento) : null;
     const isToday = eventDate ? isSameCalendarDay(eventDate, new Date()) : false;
+    const catAccent = getCategoryColor(item.categoria, item.tipo_deporte);
     const isPast = eventDate ? eventDate.getTime() < Date.now() : false;
     const friendParticipants =
         !viewerIsOrganizer && friendIds
@@ -650,7 +651,8 @@ function PlanCardInner({
                     )}
                     {isCalmPremium && (
                         <LinearGradient
-                            colors={['#BFDBFE', '#93C5FD', '#60A5FA']}
+                            // Borde fino del color de la categoría del plan (antes azul fijo).
+                            colors={[`${catAccent}99`, catAccent, `${catAccent}CC`]}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 1 }}
                             style={styles.premiumBorder}
@@ -671,6 +673,7 @@ function PlanCardInner({
                         isFriendsOnly && styles.cardInnerFriends,
                         isPrivate && styles.cardInnerPrivate,
                         isCalmPremium && styles.cardInnerPremium,
+                        isCalmPremium && { borderColor: `${catAccent}66` },
                         isFull && styles.cardInnerFull,
                     ]}>
                     <View style={styles.imageWrap} pointerEvents="box-none">
@@ -833,7 +836,7 @@ function PlanCardInner({
                                 <Ionicons
                                     name="calendar-outline"
                                     size={15}
-                                    color={isPrivate ? colors.text : isFriendsOnly ? '#15803D' : isToday ? '#B45309' : PRIMARY_DARK}
+                                    color={isPrivate ? colors.text : isFriendsOnly ? '#15803D' : isToday ? '#B45309' : catAccent}
                                 />
                                 <Text style={[
                                     styles.metaText,

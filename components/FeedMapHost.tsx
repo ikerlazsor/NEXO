@@ -66,7 +66,7 @@ const SELECT_DELTA = 0.052;
 /** Fracción del delta que desplaza el centro al sur → el pin queda más arriba en pantalla. */
 const SELECT_CENTER_LAT_SHIFT = 0.18;
 /** Copias del carrusel para loop infinito (impar → el bloque del medio es el “real”). */
-const CAROUSEL_LOOPS = 5;
+const CAROUSEL_LOOPS = 3;
 const MAP_FOCUS_MS = 280;
 
 type MapPlan = Record<string, unknown> & {
@@ -100,7 +100,8 @@ function sortMapPlans(plans: MapPlan[], userCoords: UserCoords | null): MapPlan[
             return da - db;
         });
     }
-    return out.slice(0, 80);
+    // Todos los planes con ubicación (antes 80: muchos no salían en el mapa).
+    return out.slice(0, 400);
 }
 
 function readMapPlans(userCoords: UserCoords | null): MapPlan[] {
@@ -316,15 +317,23 @@ export function FeedMapHost() {
         }));
         const nearbyEvents = sortMapPlans(events, userCoords);
         return sortMapPlans([
-            ...local.slice(0, Math.max(40, 80 - nearbyEvents.length)),
-            ...nearbyEvents.slice(0, Math.max(40, 80 - local.length)),
+            ...local,
+            ...nearbyEvents,
         ], userCoords);
     }, [remotePlans, cachedPlans, external.events, external.social, userCoords]);
     const plans = useMemo(() => allPlans.filter(hasMapCoords), [allPlans]);
     const pins = useMemo(() => discoveryPins(plans, MADRID_REGION, selectedId), [plans, selectedId]);
+    // Android pinta las vistas de los pines como imagen: seguir sus cambios un momento
+    // al cambiar los pines y luego congelar (rendimiento).
+    const [trackPinViews, setTrackPinViews] = useState(true);
+    useEffect(() => {
+        setTrackPinViews(true);
+        const timer = setTimeout(() => setTrackPinViews(false), 900);
+        return () => clearTimeout(timer);
+    }, [pins]);
     const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
     useEffect(() => {
-        if (!eventsLoading && !eventsError && moreEvents && external.events.length < 90) {
+        if (!eventsLoading && !eventsError && moreEvents && external.events.length < 400) {
             void loadMoreEvents();
         }
     }, [eventsLoading, eventsError, moreEvents, external.events.length, loadMoreEvents]);
@@ -720,17 +729,21 @@ export function FeedMapHost() {
                         key={pin.key}
                         identifier={pin.key}
                         coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
-                        pinColor={pin.color}
-                        tracksViewChanges={false}
-                        // iOS: el globo moderno (MKMarkerAnnotationView) se oculta solo al
-                        // solaparse y reaparece con zoom. El pin clásico se ve siempre.
-                        useLegacyPinView
+                        // Pin propio en forma de gota (color de la categoría, borde blanco). Al ser
+                        // una vista propia, el mapa no lo oculta al solaparse con otros.
+                        anchor={{ x: 0.5, y: 1 }}
+                        tracksViewChanges={trackPinViews}
                         title={pin.members.length > 1 ? t('feed.mapGroup', { n: pin.members.length }) : pin.members[0].titulo || ''}
                         onPress={() => {
                             if (pin.members.length === 1) focusPlanId(String(pin.members[0].id), { scroll: true, mapDuration: MAP_FOCUS_MS });
                             else camera.current!.move({ latitude: pin.latitude, longitude: pin.longitude, latitudeDelta: Math.max(0.001, viewport.latitudeDelta / 3), longitudeDelta: Math.max(0.001, viewport.longitudeDelta / 3) }, 250);
                         }}
-                    />)}
+                    >
+                        <View style={mapHostStyles.pinWrap} collapsable={false}>
+                            <Ionicons name="location" size={40} color="#FFFFFF" style={mapHostStyles.pinBack} />
+                            <Ionicons name="location" size={34} color={pin.color} />
+                        </View>
+                    </Marker>)}
                 </NexoMapView></Animated.View>
 
                 <View style={styles.mapModalHeader}>
@@ -922,6 +935,8 @@ export function FeedMapHost() {
 const mapHostStyles = StyleSheet.create({
     // Por encima de la cabecera y la barra inferior del chrome (zIndex 30).
     sheet: { zIndex: 1000, elevation: 1000 },
+    pinWrap: { width: 40, height: 42, alignItems: "center", justifyContent: "flex-end" },
+    pinBack: { position: "absolute", bottom: -2 },
     // Aparcado: detrás del degradado del chrome (zIndex 0), invisible pero en
     // pantalla para que el mapa cargue teselas.
     parked: { zIndex: -1, elevation: 0 },

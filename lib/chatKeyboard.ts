@@ -41,7 +41,9 @@ function liftFromEvent(
  * Sube el composer + lista al ritmo del teclado (Reanimated), en lugar del
  * KeyboardAvoidingView de RN que reflowa a saltos.
  *
- * paddingBottom animado: cerrado = safe area; abierto = alto del teclado + 6px.
+ * paddingBottom animado: cerrado = safe area.
+ * iOS abierto = altura de teclado + 6px; Android (adjustResize) = 6px,
+ * porque el sistema ya reduce el alto útil de la pantalla.
  */
 export function useChatKeyboardBottomPad(safeBottom: number) {
     const { height: windowHeight } = useWindowDimensions();
@@ -79,8 +81,16 @@ export function useChatKeyboardBottomPad(safeBottom: number) {
 
         const onShow = (e: KeyboardEvent) => {
             openRef.current = true;
+            if (Platform.OS === 'android') {
+                // Android uses adjustResize (app.json: softwareKeyboardLayoutMode).
+                // The available window has ALREADY shrunk above the keyboard.
+                // Adding keyboard height again to paddingBottom pushes the
+                // input bar out of view on some devices / Gboard versions.
+                animateTo(6, e.duration ?? 0);
+                return;
+            }
             const lift = liftFromEvent(e, windowHeightRef.current, fullHeightRef.current);
-            // 6px de aire: el teclado no pisa el recuadro.
+            // On iOS the keyboard overlays the window and needs compensation.
             animateTo(Math.max(6, lift + 6), e.duration ?? 0);
         };
 
@@ -90,7 +100,7 @@ export function useChatKeyboardBottomPad(safeBottom: number) {
         };
 
         const onFrame = (e: KeyboardEvent) => {
-            if (!openRef.current) return;
+            if (!openRef.current || Platform.OS === 'android') return;
             const lift = liftFromEvent(e, windowHeightRef.current, fullHeightRef.current);
             if (lift <= 0) return;
             // iOS a veces manda frames con duration; mantener sync sin saltos.

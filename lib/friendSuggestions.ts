@@ -177,7 +177,7 @@ async function collectAffinityPoolIds(userId: string, exclude: Set<string>, view
     };
 
     const tagQuery = viewerTags.filter(Boolean).slice(0, 11);
-    const [activeRes, tagPrefRes, tagEtiquetaRes, myFollowsRes] = await Promise.all([
+    const [activeRes, tagCandidatesRes, myFollowsRes] = await Promise.all([
         supabase
             .from('estadisticas_usuario')
             .select('usuario_id')
@@ -185,31 +185,13 @@ async function collectAffinityPoolIds(userId: string, exclude: Set<string>, view
             .order('numero_planes_realizados', { ascending: false })
             .limit(80),
         tagQuery.length
-            ? supabase
-                .from('perfiles')
-                .select('id')
-                .eq('es_organizador', false)
-                .eq('registro_completado', true)
-                .overlaps('ambientes_preferidos', tagQuery)
-                .neq('id', userId)
-                .limit(60)
-            : Promise.resolve({ data: [] as Array<{ id: string }> }),
-        tagQuery.length
-            ? supabase
-                .from('perfiles')
-                .select('id')
-                .eq('es_organizador', false)
-                .eq('registro_completado', true)
-                .overlaps('etiquetas', tagQuery)
-                .neq('id', userId)
-                .limit(60)
-            : Promise.resolve({ data: [] as Array<{ id: string }> }),
+            ? supabase.rpc('get_profile_interest_candidates', { p_tags: tagQuery, p_limit: 120 })
+            : Promise.resolve({ data: [] as { id: string }[] }),
         supabase.from('seguidores').select('organizador_id').eq('seguidor_id', userId),
     ]);
 
     for (const row of activeRes.data ?? []) take(row.usuario_id as string);
-    for (const row of tagPrefRes.data ?? []) take(row.id);
-    for (const row of tagEtiquetaRes.data ?? []) take(row.id);
+    for (const row of tagCandidatesRes.data ?? []) take(String(row.id));
 
     const myOrgs = [...new Set((myFollowsRes.data ?? []).map((row) => String(row.organizador_id || '')).filter(Boolean))].slice(0, 40);
     if (myOrgs.length) {

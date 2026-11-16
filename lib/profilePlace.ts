@@ -1,4 +1,6 @@
-import { shouldPreferProfileCache } from './profileOptimistic';
+import { getProfileEditRevision, shouldPreferProfileCache } from './profileOptimistic';
+import { getAuthSession } from './auth';
+import { getMyProfile } from './profileData';
 import { invalidateProfilePresentationCaches } from './screenCaches';
 import { supabase } from './supabase';
 import * as Location from 'expo-location';
@@ -170,18 +172,22 @@ export function placesEqual(
  * la rellena vía RPC (no pisa nacionalidad, ubicación manual ni otros campos).
  */
 export async function ensureAutoProfilePlace(userId: string | null | undefined): Promise<ProfilePlace | null> {
-    if (!userId) return null;
-    if (shouldPreferProfileCache()) return null;
+    if (!userId || shouldPreferProfileCache()) return null;
+    const editRevision = getProfileEditRevision();
+    const editIsCurrent = () => editRevision === getProfileEditRevision() && !shouldPreferProfileCache();
+    const currentSession = async () => {
+        if (!editIsCurrent()) return null;
+        const session = await getAuthSession();
+        return editIsCurrent() && session?.user.id === userId ? session : null;
+    };
     try {
+        if (!(await currentSession())) return null;
         const { status } = await Location.getForegroundPermissionsAsync();
-        if (status !== 'granted') return null;
+        if (status !== 'granted' || !editIsCurrent()) return null;
 
-        const { data } = await supabase
-            .from('perfiles')
-            .select('perfil_gustos')
-            .eq('id', userId)
-            .maybeSingle();
-        const gustos = (data?.perfil_gustos as Record<string, unknown> | null) ?? null;
+        const { data, error: readError } = await getMyProfile();
+        if (readError || data?.id !== userId || !(await currentSession())) return null;
+        const gustos = data.perfil_gustos;
         // Elegida a mano → nunca tocar.
         if (isManualProfilePlace(gustos)) {
             return parseProfilePlace(gustos);
@@ -193,17 +199,16 @@ export async function ensureAutoProfilePlace(userId: string | null | undefined):
             (await getUserCoords({ requestPermission: false, force: true })) ??
             peekUserCoords() ??
             (await hydrateUserCoordsFromDisk());
-        if (!coords) return null;
+        if (!coords || !(await currentSession())) return null;
         const place = await reverseGeocodePlace(coords);
-        if (!place) return null;
-        if (shouldPreferProfileCache()) return null;
-        // Releer: puede haberse guardado a mano mientras geocodificábamos.
-        const { data: again } = await supabase
-            .from('perfiles')
-            .select('perfil_gustos')
-            .eq('id', userId)
-            .maybeSingle();
-        const gustos2 = (again?.perfil_gustos as Record<string, unknown> | null) ?? null;
+        if (!place || !(await currentSession())) return null;
+        // Releer mediante el RPC privado: puede haberse guardado a mano mientras
+        // geocodificábamos, incluso si ya terminó el TTL del edit optimista.
+        const { data: again, error: rereadError } = await getMyProfile();
+        if (rereadError || again?.id !== userId) return null;
+        const writeSession = await currentSession();
+        if (!writeSession) return null;
+        const gustos2 = again.perfil_gustos;
         if (isManualProfilePlace(gustos2) || parseProfilePlace(gustos2)?.ciudad) {
             return parseProfilePlace(gustos2);
         }
@@ -211,8 +216,8 @@ export async function ensureAutoProfilePlace(userId: string | null | undefined):
         const { error } = await supabase.rpc('set_perfil_ubicacion', {
             p_ciudad: place.ciudad,
             p_pais: place.pais || '',
-        });
-        if (error) return null;
+        }).setHeader('Authorization', `Bearer ${writeSession.access_token}`);
+        if (error || !(await currentSession())) return null;
         invalidateProfilePresentationCaches(userId);
         return place;
     } catch {

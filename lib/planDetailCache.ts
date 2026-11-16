@@ -1,3 +1,5 @@
+import { parseGenero, type Genero } from './profileFields';
+import type { PendingRatingPlan } from './ratings';
 import { getAuthUser } from './auth';
 import { getCoincidedUserIds } from './coincidences';
 import { FEED_CACHE_KEY } from './feedCache';
@@ -76,8 +78,8 @@ export type PlanDetailSnapshot = {
     friendIds: string[];
     coincidedIds: string[];
     isSaved: boolean;
-    currentUserGenero: string | null;
-    openRating: null;
+    currentUserGenero: Genero | null;
+    openRating: PendingRatingPlan | null;
     currentUserId: string | null;
     organizerFollowers?: number | null;
     /** Porcentaje de compatibilidad precargado desde el feed */
@@ -304,7 +306,7 @@ export function seedPlanDetailFromFeed(
         friendIds: opts?.friendIds ?? existing?.friendIds ?? [],
         coincidedIds: opts?.coincidedIds ?? existing?.coincidedIds ?? [],
         isSaved: opts?.isSaved ?? existing?.isSaved ?? false,
-        currentUserGenero: opts?.currentUserGenero ?? existing?.currentUserGenero ?? null,
+        currentUserGenero: parseGenero(opts?.currentUserGenero ?? existing?.currentUserGenero),
         openRating: null,
         currentUserId: opts?.currentUserId ?? existing?.currentUserId ?? null,
         organizerFollowers,
@@ -596,7 +598,7 @@ export function prefetchPlanDetail(planId: string): Promise<void> {
                 friendIds: friendsData.map((f) => f.id),
                 coincidedIds: [...coincidedSet],
                 isSaved: !!savedRes.data,
-                currentUserGenero: (myProfileRes.data?.genero as string | null) ?? null,
+                currentUserGenero: parseGenero(myProfileRes.data?.genero),
                 openRating: null,
                 currentUserId: user?.id ?? null,
                 organizerFollowers: followStats.followers,

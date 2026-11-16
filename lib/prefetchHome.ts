@@ -62,6 +62,7 @@ import { runWhenIdle } from './runWhenIdle';
 import { warmMapRegion, warmMapRegionsFromPlans, warmMapsForSignedInUser } from './mapWarm';
 import { syncNotificationCategoryPrefsFromServer } from './notificationPrefs';
 import { syncPushPreferenceFromServer } from './push';
+import { prefetchPublicEvents } from '../features/events/prefetch';
 
 const FEED_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHATS_DISK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -461,6 +462,7 @@ export async function hydrateMyPlansFromDisk(userId: string): Promise<void> {
 }
 
 async function prefetchFeed(userId: string | null): Promise<void> {
+    void prefetchPublicEvents().catch(() => {});
     if (cacheIsFresh(FEED_CACHE_KEY)) {
         const snap = cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY);
         if (!userId) return;

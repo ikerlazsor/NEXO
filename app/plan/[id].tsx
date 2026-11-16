@@ -18,6 +18,7 @@ import {
     ActivityIndicator,
     Dimensions,
     InteractionManager,
+    Linking,
     Modal,
     Platform,
     ScrollView,
@@ -42,6 +43,9 @@ import {
     listMyChatGroups,
 } from '../../lib/inviteChatGroup';
 import { NexoMapView } from '../../components/NexoMapView';
+import { useScreenTransitionReady } from '../../hooks/useScreenTransitionReady';
+import { validMapCoordinates } from '../../lib/mapDiscovery';
+import { getCategoryColor } from '../../lib/categories';
 import { PadelLineupSection } from '../../components/PadelLineup';
 import { PlanCoverCarousel } from '../../components/PlanCoverCarousel';
 import { PressScale } from '../../components/PressScale';
@@ -125,7 +129,7 @@ import {
     profileCardsFromRows,
     type PublicProfileCard,
 } from '../../lib/profileData';
-import { type Genero } from '../../lib/profileFields';
+import { parseGenero, type Genero } from '../../lib/profileFields';
 import { type AffinityPerson } from '../../lib/profileAffinity';
 import {
     peekOrComputePairAffinity,
@@ -335,7 +339,7 @@ export default function PlanDetailScreen() {
     const [isSaved, setIsSaved] = useState(() => cachedDetail?.isSaved ?? false);
     const [actionBusy, setActionBusy] = useState(false);
     const [mapExpanded, setMapExpanded] = useState(false);
-    const [mapPreviewReady, setMapPreviewReady] = useState(false);
+    const mapPreviewReady = useScreenTransitionReady();
     const [fullMapMounted, setFullMapMounted] = useState(false);
     const [openRating, setOpenRating] = useState<PendingRatingPlan | null>(
         () => cachedDetail?.openRating ?? null,
@@ -699,7 +703,7 @@ export default function PlanDetailScreen() {
                     : nextMembership;
             const nextFriends = friendsData.map((f) => f.id);
             const nextCoincided = [...coincidedSet];
-            const nextGenero = (myProfileRes.data?.genero as Genero) ?? null;
+            const nextGenero = parseGenero(myProfileRes.data?.genero);
             const nextSaved = !!savedRes.data;
             setCurrentUserIsOrganizer(myProfileRes.data?.es_organizador === true);
             rememberViewerIsOrganizer(myProfileRes.data?.es_organizador === true);
@@ -790,16 +794,20 @@ export default function PlanDetailScreen() {
         useCallback(() => {
             lockTabPager();
             if (planId) dismissPushForPlanDetail(planId);
-            void loadPlan();
             return () => unlockTabPager();
-        }, [loadPlan, planId]),
+        }, [planId]),
     );
+    useEffect(() => {
+        if (!mapPreviewReady) return;
+        void loadPlan();
+        return () => { loadGenRef.current++; };
+    }, [mapPreviewReady, loadPlan]);
 
     // Desde el detalle casi siempre se toca al creador: su perfil se deja listo
     // en segundo plano para que al abrirlo no haya espera.
     useEffect(() => {
         const creatorId = creator?.id ?? plan?.creador_id;
-        if (!creatorId) return;
+        if (!creatorId || !mapPreviewReady) return;
         seedUserProfilePeek({
             id: creatorId,
             nombre: creator?.nombre,
@@ -808,7 +816,7 @@ export default function PlanDetailScreen() {
         });
         const task = InteractionManager.runAfterInteractions(() => prefetchUserProfile(creatorId));
         return () => task.cancel();
-    }, [creator?.id, creator?.nombre, creator?.avatar_url, plan?.creador_id, plan?.es_organizador]);
+    }, [creator?.id, creator?.nombre, creator?.avatar_url, plan?.creador_id, plan?.es_organizador, mapPreviewReady]);
 
     useEffect(() => {
         if (openRating?.phase !== 'waiting') return;
@@ -886,24 +894,6 @@ export default function PlanDetailScreen() {
         };
     }, [planId]);
 
-    useEffect(() => {
-        if (!plan) {
-            setMapPreviewReady(false);
-            return;
-        }
-        let cancelled = false;
-        const task = InteractionManager.runAfterInteractions(() => {
-            if (!cancelled) setMapPreviewReady(true);
-        });
-        const fallback = setTimeout(() => {
-            if (!cancelled) setMapPreviewReady(true);
-        }, 160);
-        return () => {
-            cancelled = true;
-            task.cancel();
-            clearTimeout(fallback);
-        };
-    }, [plan?.id]);
 
     useEffect(() => {
         if (!planId) return;
@@ -1261,8 +1251,9 @@ export default function PlanDetailScreen() {
         ? eventDate.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })
         : '';
     const sportPlan = plan ? resolvePlanSport(plan) : null;
-    const lat = Number.isFinite(Number(plan?.latitud)) ? Number(plan?.latitud) : 40.4167;
-    const lng = Number.isFinite(Number(plan?.longitud)) ? Number(plan?.longitud) : -3.7033;
+    const hasCoordinates = !!plan && validMapCoordinates(plan);
+    const lat = hasCoordinates ? Number(plan?.latitud) : 40.4167;
+    const lng = hasCoordinates ? Number(plan?.longitud) : -3.7033;
 
     const handleKick = (targetUserId: string, targetName: string) => {
         if (!currentUserId || !planId || !isCreator) return;
@@ -1649,7 +1640,6 @@ export default function PlanDetailScreen() {
                 currentUserId={sessionUserId ?? currentUserId}
                 preferredTeam={preferredTeam}
                 enabled={
-                    footballLineupMode !== 'partido' &&
                     !currentUserIsOrganizer &&
                     (!plan || !isPastPlan)
                 }
@@ -2659,11 +2649,15 @@ export default function PlanDetailScreen() {
                         <TouchableOpacity
                             style={styles.mapCard}
                             activeOpacity={0.92}
-                            onPress={() => setMapExpanded(true)}
+                            onPress={() => {
+                                if (hasCoordinates) setMapExpanded(true);
+                                else void Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(plan.nombre_ubicacion || 'Madrid')}`);
+                            }}
                         >
-                            {mapPreviewReady && !mapExpanded ? (
+                            {mapPreviewReady && hasCoordinates && !mapExpanded ? (
                                 <NexoMapView
                                     key={`preview-${plan.id}-${lat}-${lng}`}
+                                    liteMode={Platform.OS === 'android'}
                                     style={styles.map}
                                     scrollEnabled={false}
                                     zoomEnabled={false}
@@ -2678,7 +2672,7 @@ export default function PlanDetailScreen() {
                                         longitudeDelta: 0.008,
                                     }}
                                 >
-                                    <Marker coordinate={{ latitude: lat, longitude: lng }} />
+                                    <Marker coordinate={{ latitude: lat, longitude: lng }} pinColor={getCategoryColor(plan.categoria, plan.tipo_deporte)} />
                                 </NexoMapView>
                             ) : (
                                 <View style={styles.mapPlaceholder}>
@@ -2768,6 +2762,7 @@ export default function PlanDetailScreen() {
                     >
                         <Marker
                             coordinate={{ latitude: lat, longitude: lng }}
+                            pinColor={getCategoryColor(plan.categoria, plan.tipo_deporte)}
                             title={plan.titulo}
                             description={plan.nombre_ubicacion ?? undefined}
                             onPress={() => void openDirectionsTo(lat, lng, plan.nombre_ubicacion)}

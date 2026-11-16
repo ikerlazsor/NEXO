@@ -1,0 +1,11 @@
+Añade la agenda social de Madrid con Para ti, Planes y Agenda; fichas, participantes y chat propios; portadas de las 6 categorías y 30 subcategorías existentes; botones compartidos con PlanCard sin «+» en eventos. La fecha queda bajo el título y no hay frase introductoria ni estrellas en Para ti. El perfil abre desde abajo con datos inmediatos y descarta lecturas anteriores a una edición o cambio de cuenta.
+
+Reutiliza las correcciones Android/dependencias de #43 y corrige privacidad, colas offline, duplicados de chat y estados cruzados entre cuentas. Conserva el contrato documentado de enlaces UUID para meetups privados ocultos del feed, con casos negativos de chats/cancelados. El archivado global pasa al servidor y deja de ser una API del cliente.
+
+El backend de producción está activado con 1.385 actividades. La función conserva JWT más secreto interno; se comprobaron API pública, filtros, ficha, denegaciones y pg_cron → Edge → sincronización real (HTTP 200). El esquema histórico se revisó sin reaplicar sus migraciones manuales.
+
+Validación: TypeScript y suite unitaria (13 archivos); 166 comprobaciones SQL locales; ESLint 0 errores/72 advertencias previas; Chromium, exportaciones Hermes y compilaciones nativas EAS Android/iOS. Auditoría previa: 0 críticos y 18 altos pendientes. Las pruebas en dispositivos se omiten por instrucción del usuario.
+
+Distribución 1.0.11 iniciada con runtime por versión. Los dos builds y sus envíos están vinculados a IDs concretos; ambas compilaciones nativas finalizadas; iOS enviado a App Store Connect. Google rechazó el envío Android a producción/completed por ausencia de países habilitados; requiere configurar Países/regiones en Play Console antes de reintentar. La disponibilidad pública requiere completar el proceso y revisión de cada tienda; App Store Connect necesita enviar la versión a revisión. El bloqueo de red de subida está resuelto. No se publica OTA, no se modifica `main` y no se hace merge.
+
+Estado de los jobs y evidencias: `docs/madrid-events-launch.md` y `docs/data/madrid-production-deployment-2026-11-07.json`. Novedades preparadas: `docs/release-notes-1.0.11.md`. Diseño: `docs/event-card-design.md` y `docs/screenshots/`.

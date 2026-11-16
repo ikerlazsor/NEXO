@@ -1,0 +1,95 @@
+{
+  "reviewDate": "2026-11-07",
+  "datasetUrl": "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100",
+  "source": {
+    "kind": "official-download",
+    "url": "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100/resource/206974-0-agenda-eventos-culturales-100-json/download/206974-0-agenda-eventos-culturales-100.json",
+    "fetchedAt": "2026-11-07T14:10:32.350Z",
+    "bytes": 2952683,
+    "sha256": "0829f363a6557effb7ceb1832db1c1ef55b66b40b5cb7d71e2117446e6f2e2b1"
+  },
+  "publisher": "Ayuntamiento de Madrid",
+  "declaredLicense": {
+    "name": "CC BY 4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "observedOnDatasetPage": true
+  },
+  "publisherDatasetUpdatedOn": "2026-11-06",
+  "publisherUpdateFrequency": "daily",
+  "counts": {
+    "raw": 1443,
+    "accepted": 1385,
+    "rejected": 0,
+    "expired": 58,
+    "duplicates": 0,
+    "acceptedWithClockTime": 1097,
+    "acceptedWithoutVenue": 88
+  },
+  "categories": {
+    "DESCUBRIR": 608,
+    "SHOWTIME": 667,
+    "FOODIES": 12,
+    "VIBES": 37,
+    "AIRE_LIBRE": 54,
+    "DEPORTES": 7
+  },
+  "subcategories": {
+    "DESCUBRIR/otro": 196,
+    "DESCUBRIR/estudio": 230,
+    "DESCUBRIR/viajes": 33,
+    "SHOWTIME/espectaculo": 115,
+    "DESCUBRIR/museo": 133,
+    "DESCUBRIR/idiomas": 16,
+    "FOODIES/otro": 2,
+    "FOODIES/cafe": 2,
+    "SHOWTIME/concierto": 245,
+    "SHOWTIME/cine": 140,
+    "VIBES/juegos_mesa": 15,
+    "AIRE_LIBRE/otro": 22,
+    "SHOWTIME/teatro": 167,
+    "VIBES/otro": 8,
+    "FOODIES/comer": 6,
+    "VIBES/compras": 1,
+    "VIBES/gaming": 2,
+    "AIRE_LIBRE/senderismo": 30,
+    "VIBES/fiesta": 11,
+    "DEPORTES/otro": 6,
+    "FOODIES/cenar": 1,
+    "AIRE_LIBRE/mirador": 2,
+    "FOODIES/tapas": 1,
+    "DEPORTES/running": 1
+  },
+  "observedFields": [
+    "@id",
+    "@type",
+    "id",
+    "title",
+    "description",
+    "free",
+    "price",
+    "dtstart",
+    "dtend",
+    "time",
+    "excluded-days",
+    "uid",
+    "link",
+    "event-location",
+    "references",
+    "relation",
+    "address",
+    "location",
+    "organization"
+  ],
+  "localValidation": {
+    "transactionImported": 1385,
+    "anonymousPageSize": 30,
+    "transactionRolledBack": true
+  },
+  "productionActivated": false,
+  "notes": [
+    "Date ranges include ongoing and permanent activities; accepted count is not a count of individually bookable sessions.",
+    "Municipal timestamps lack an explicit offset: source clock text is preserved without inventing UTC instants.",
+    "Excluded days and recurring calendars require source-page consultation and further launch QA; no individual sessions are fabricated.",
+    "Covers come from the existing Nexo catalog, not municipal event images."
+  ]
+}

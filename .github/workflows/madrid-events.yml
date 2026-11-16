@@ -1,0 +1,29 @@
+name: Madrid events (opt-in staging)
+on:
+  schedule:
+    - cron: '20 5 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: madrid-events-import
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: vars.MADRID_EVENTS_IMPORT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: madrid-events-staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ vars.MADRID_EVENTS_REF || 'develop' }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch, validate and import complete official snapshot
+        env:
+          MADRID_EVENTS_IMPORT_ENABLED: 'true'
+          NEXO_EVENTS_SUPABASE_URL: ${{ vars.NEXO_EVENTS_SUPABASE_URL }}
+          NEXO_EVENTS_SERVICE_ROLE_KEY: ${{ secrets.NEXO_EVENTS_SERVICE_ROLE_KEY }}
+        run: node scripts/madrid-events-sync.cjs --apply

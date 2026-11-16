@@ -1,0 +1,107 @@
+{
+  "recordedAt": "2026-11-07T15:15:24.569Z",
+  "project": "nixeproyzxvqzyrvsxcx",
+  "provider": "madrid",
+  "productionEnabled": true,
+  "activeActivities": 1385,
+  "rawSourceRecords": 1443,
+  "license": "CC BY 4.0",
+  "migrations": [
+    "20261106170000",
+    "20261106190000",
+    "20261107120000",
+    "20261107160000"
+  ],
+  "migrationHistoryMatchesSource": true,
+  "edge": {
+    "slug": "sync-madrid-events",
+    "status": "ACTIVE",
+    "verifyJwt": true,
+    "independentSchedulerSecret": true
+  },
+  "scheduleUtc": "20 5 * * *",
+  "publicApiChecks": {
+    "checkedAt": "2026-11-07T15:11:01.864Z",
+    "project": "nixeproyzxvqzyrvsxcx",
+    "anonymousPage": 30,
+    "sportFilter": 7,
+    "detail": 1,
+    "participantTableDenied": 401,
+    "gatewayDenied": 401,
+    "internalSecretDenied": 401
+  },
+  "scheduledSync": {
+    "checkedAt": "2026-11-07T15:12:35.945Z",
+    "requestId": 53097,
+    "status": 200,
+    "timedOut": false,
+    "ok": true,
+    "imported": 1385,
+    "raw": 1443
+  },
+  "mobileRelease": {
+    "version": "1.0.11",
+    "runtimePolicy": "appVersion",
+    "newBuildQueued": true,
+    "storeSubmission": false,
+    "otaPublished": false,
+    "blocker": "Google Play production track targets no countries (HTTP 403). Configure production countries/regions in Play Console before retrying the existing Android build.",
+    "deviceTests": "omitted at user request",
+    "storeSubmissionScheduled": true,
+    "storageAccessVerifiedAt": "2026-11-07T15:48:06Z",
+    "lastCheckedAt": "2026-11-07T16:09:13.251Z",
+    "builds": [
+      {
+        "id": "2b3b2ddf-8fd8-4ddb-85ca-b6b1c618e0b7",
+        "status": "FINISHED",
+        "platform": "ANDROID",
+        "completedAt": "2026-11-07T16:07:30.913Z",
+        "runtime": {
+          "version": "1.0.11"
+        },
+        "error": null
+      },
+      {
+        "id": "fa35602d-1362-4c6d-ab83-58614c5ed584",
+        "status": "FINISHED",
+        "platform": "IOS",
+        "completedAt": "2026-11-07T15:55:53.646Z",
+        "runtime": {
+          "version": "1.0.11"
+        },
+        "error": null
+      }
+    ],
+    "submissions": [
+      {
+        "id": "88660cc7-c6b9-41d9-8222-e173352679e6",
+        "status": "FINISHED",
+        "platform": "IOS",
+        "submittedBuild": {
+          "id": "fa35602d-1362-4c6d-ab83-58614c5ed584"
+        },
+        "completedAt": "2026-11-07T15:56:09.313Z",
+        "error": null
+      },
+      {
+        "id": "c687a00a-460b-4e7d-836d-d312f143d9ed",
+        "status": "ERRORED",
+        "platform": "ANDROID",
+        "submittedBuild": {
+          "id": "2b3b2ddf-8fd8-4ddb-85ca-b6b1c618e0b7"
+        },
+        "completedAt": "2026-11-07T16:09:09.332Z",
+        "error": {
+          "errorCode": "EAS_GOOGLE_PLAY_REQUEST_FAILED",
+          "message": "Google Play rejected the request (HTTP 403): Release in track targeting no countries Check the app settings before submitting again.\n\nApp: com.ikerlazsor.nexo\nGoogle Play Console: https://play.google.com/console/"
+        }
+      }
+    ],
+    "googlePlayTrack": "production",
+    "publicAvailabilityVerified": false,
+    "appStoreReviewSubmittedByAgent": false,
+    "appStoreReviewStatusVerified": false
+  },
+  "mainChanged": false,
+  "pullRequestMerged": false
+}

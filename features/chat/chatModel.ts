@@ -27,6 +27,8 @@ export interface Message {
   eliminado_en?: string | null;
   /** Key estable de lista: no cambia al pasar de local-* al id del servidor. */
   clientKey?: string;
+  /** Server UUID allocated before sending; distinguishes repeated identical messages. */
+  serverMessageId?: string;
 }
 
 export function normalizeProfile(
@@ -121,7 +123,7 @@ export function reconcileIncomingChatMessage(
     return { next: changed ? next : prev, kind: "dup" };
   }
   const idx = prev.findIndex(
-    (m) => isOptimisticId(m.id) && isSameOptimistic(m),
+    (m) => isOptimisticId(m.id) && (m.serverMessageId ? m.serverMessageId === incoming.id : isSameOptimistic(m)),
   );
   if (idx >= 0) {
     const next = prev.slice();
@@ -164,9 +166,11 @@ export function mergeMessages(a: Message[], b: Message[]): Message[] {
       const twin = server.find(
         (s) =>
           !claimed.has(s.id) &&
-          s.emisor_id === loc.emisor_id &&
-          s.tipo === loc.tipo &&
-          s.contenido === loc.contenido,
+          (loc.serverMessageId
+            ? s.id === loc.serverMessageId
+            : s.emisor_id === loc.emisor_id &&
+              s.tipo === loc.tipo &&
+              s.contenido === loc.contenido),
       );
       if (twin) {
         claimed.add(twin.id);

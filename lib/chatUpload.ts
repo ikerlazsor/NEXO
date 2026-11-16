@@ -21,6 +21,7 @@ const SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 /** Extracts the private Storage object name from current and legacy URLs. */
 export function getChatFileObjectName(value: string | null | undefined): string | null {
     if (!value) return null;
+    if (/^event_[0-9a-f-]{36}_[\w.-]+$/i.test(value)) return value;
     const match = value.match(CHAT_FILE_URL_RE);
     if (!match?.[1]) return null;
     try {
@@ -83,10 +84,11 @@ export function isSameChatFile(a: string | null, b: string | null): boolean {
 export async function uploadChatFile(
     uri: string,
     fileType: ChatFileType,
-    planId: string
+    planId: string,
+    kind: 'plan' | 'event' = 'plan',
 ): Promise<string | null> {
     try {
-        const fileName = `chat_${planId}_${Date.now()}_${Math.floor(Math.random() * 10000)}.${EXTENSIONS[fileType]}`;
+        const fileName = `${kind === 'event' ? 'event' : 'chat'}_${planId}_${Date.now()}_${Math.floor(Math.random() * 10000)}.${EXTENSIONS[fileType]}`;
         await uploadLocalUriToStorage({
             bucket: 'chat-files',
             path: fileName,

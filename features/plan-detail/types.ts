@@ -1,8 +1,3 @@
-import type { Membership } from "../../lib/participants";
-import type { Genero } from "../../lib/profileFields";
-import type { PendingRatingPlan } from "../../lib/ratings";
-import type { UserStats } from "../../lib/stats";
-
 export type Participant = {
   id: string;
   nombre: string;
@@ -35,27 +30,4 @@ export type PlanRow = {
   es_organizador?: boolean;
 };
 
-export type PlanDetailSnapshot = {
-  plan: PlanRow;
-  participants: Participant[];
-  joinedCount: number;
-  creator: Participant | null;
-  creatorStats: UserStats;
-  membership: Membership;
-  friendIds: string[];
-  coincidedIds: string[];
-  isSaved: boolean;
-  currentUserGenero: Genero | null;
-  openRating: PendingRatingPlan | null;
-  currentUserId: string | null;
-  organizerFollowers?: number | null;
-  /** Compatibilidad precargada desde el feed / seed. */
-  fitPct?: number | null;
-  /** Semilla incompleta del feed: no salta el fetch real. */
-  partial?: boolean;
-  /**
-   * `participants` trae a todos los unidos, no la muestra de avatares del feed
-   * (get_feed_plan_people recorta la lista a 8).
-   */
-  participantsComplete?: boolean;
-};
+export type { PlanDetailSnapshot } from "../../lib/planDetailCache";

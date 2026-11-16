@@ -33,7 +33,6 @@ import { ensureBackgroundPrefetchLifecycle, scheduleHomePrefetch } from '../lib/
 import { emitFeedHomeRetap } from '../lib/feedReload';
 import { requestOpenFeedMap } from '../lib/feedMapIntent';
 import { FeedMapHost } from './FeedMapHost';
-import { NativeMapWarmHost } from './NativeMapWarmHost';
 import { PeopleSearchIcon } from './PeopleSearchIcon';
 import { cacheGetStale, cacheIsFresh } from '../lib/ttlCache';
 import { screenCacheKey } from '../lib/screenCaches';
@@ -247,7 +246,6 @@ export function MainChrome({ active: activeProp, children }: Props) {
     const { t } = useT();
     const { colors } = useAppTheme();
     const styles = useThemedStyles(createChromeStyles);
-    const [mapWarm, setMapWarm] = useState(false);
     const [mapSheet, setMapSheet] = useState(false);
     const { isGuest, requireAccount, session, userId: sessionUserId } = useAuthSession();
     const sessionAvatar =
@@ -435,15 +433,12 @@ export function MainChrome({ active: activeProp, children }: Props) {
     }, [sessionUserId, isGuest]);
 
     useEffect(() => {
-        let warmTimer: ReturnType<typeof setTimeout> | undefined;
         let sheetTimer: ReturnType<typeof setTimeout> | undefined;
         const task = InteractionManager.runAfterInteractions(() => {
-            warmTimer = setTimeout(() => setMapWarm(true), 700);
             sheetTimer = setTimeout(() => setMapSheet(true), 1600);
         });
         return () => {
             task.cancel();
-            if (warmTimer) clearTimeout(warmTimer);
             if (sheetTimer) clearTimeout(sheetTimer);
         };
     }, []);
@@ -478,7 +473,6 @@ export function MainChrome({ active: activeProp, children }: Props) {
             <LinearGradient colors={[colors.gradientTop, colors.gradientBottom]} style={StyleSheet.absoluteFill} />
 
             <View style={styles.body}>{children}</View>
-            {mapWarm ? <NativeMapWarmHost /> : null}
             {mapSheet ? <FeedMapHost /> : null}
 
             <View

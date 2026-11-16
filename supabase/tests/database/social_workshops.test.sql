@@ -1,0 +1,15 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(10);
+select ok(public.social_activity_is_eligible('Taller de Collage para adultos',null),'adult collage qualifies');
+select ok(public.social_activity_is_eligible('Pintar la luz: Visita-taller para personas adultas','Aforo: 20 personas'),'participatory adult museum workshop qualifies');
+select ok(public.social_activity_is_eligible('Taller ''Fanzineitor''','Personas de entre 15 y 30 años. Profesor de cómic infantil.'),'incidental biography does not exclude an adult audience');
+select ok(public.social_activity_is_eligible('Paseo ornitológico','Dirigido a personas a partir de 9 años. Si el grupo familiar es de más de 4 miembros, puedes apuntar a todos.'),'general audience walk is not a children-only workshop');
+select ok(public.social_activity_is_eligible('Taller de ROPE FLOW','Apta para todas las edades y niveles'),'group exercise qualifies');
+select ok(not public.social_activity_is_eligible('Taller de cerámica','Público familiar, a partir de 5 años.'),'family workshop excluded by description');
+select ok(not public.social_activity_is_eligible('Taller de cerámica','Dirigido a: chicos y chicas de 8 a 10 años.'),'children audience excluded');
+select ok(not public.social_activity_is_eligible('Taller de cerámica','Debe asistir solo un adulto por inscripción.'),'child accompaniment excluded');
+select ok(not public.social_activity_is_eligible('Concierto social','Taller para conocer gente'),'spectator title stays excluded');
+select ok(not public.social_activity_is_eligible('Actividad secreta','Un encuentro social'),'vague title stays excluded');
+select * from finish();
+rollback;

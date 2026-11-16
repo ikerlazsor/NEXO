@@ -658,13 +658,9 @@ async function fetchAcceptedParticipantRows(planIds: string[]): Promise<Particip
 }
 
 async function getAcceptedPeers(planId: string, excludeUserId: string): Promise<RatingPeer[]> {
-    const { data } = await supabase
-        .from('participantes')
-        .select('usuario_id, perfiles:usuario_id(id, nombre, avatar_url, genero)')
-        .eq('plan_id', planId)
-        .eq('estado', 'aceptado');
-
-    return peersFromParticipanteRows(data ?? [], excludeUserId);
+    // Reuse the paginated, privacy-aware participant projection instead of
+    // reading the private gender column through a raw profile join.
+    return peersFromParticipanteRows(await fetchAcceptedParticipantRows([planId]), excludeUserId);
 }
 
 type ParticipanteProfileRow = {

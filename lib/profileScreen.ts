@@ -20,6 +20,7 @@ export type ProfileScreenProfile = {
     descripcion: string | null;
     etiquetas: string[];
     fecha_nacimiento: string | null;
+    edad?: number | null;
     genero: string | null;
     habitos_consumo: Record<string, unknown>;
     ambientes_preferidos: string[];
@@ -115,6 +116,8 @@ export async function loadProfileScreen(userId: string): Promise<ProfileScreenBu
             descripcion: typeof profileRaw.descripcion === 'string' ? profileRaw.descripcion : null,
             etiquetas: asStringList(profileRaw.etiquetas),
             fecha_nacimiento: typeof profileRaw.fecha_nacimiento === 'string' ? profileRaw.fecha_nacimiento : null,
+            edad: typeof profileRaw.edad === 'number' && Number.isInteger(profileRaw.edad)
+                && profileRaw.edad >= 0 && profileRaw.edad <= 130 ? profileRaw.edad : null,
             genero: typeof profileRaw.genero === 'string' ? profileRaw.genero : null,
             habitos_consumo: asRecord(profileRaw.habitos_consumo),
             ambientes_preferidos: asStringList(profileRaw.ambientes_preferidos),
@@ -130,18 +133,33 @@ export async function loadProfileScreen(userId: string): Promise<ProfileScreenBu
     };
 }
 
-/** Deja el perfil propio en memoria antes de que el usuario lo abra. */
-export async function warmOwnProfile(userId: string): Promise<void> {
+const profileWarmups = new Map<string, Promise<void>>();
+
+/** Precarga de mejor esfuerzo; nunca retrasa abrir la ficha ni pisa un edit nuevo. */
+export function warmOwnProfile(userId: string): Promise<void> {
+    if (!userId || cacheGetStale(screenCacheKey.profileUI(userId))) return Promise.resolve();
+    const pending = profileWarmups.get(userId);
+    if (pending) return pending;
+    const warmup = warmOwnProfileSnapshot(userId)
+        .catch(() => { /* La ficha hace su propia carga al enfocarse. */ })
+        .finally(() => profileWarmups.delete(userId));
+    profileWarmups.set(userId, warmup);
+    return warmup;
+}
+
+async function warmOwnProfileSnapshot(userId: string): Promise<void> {
     if (!userId) return;
     const key = screenCacheKey.profileUI(userId);
     if (cacheGetStale(key)) return;
     const disk = await diskGet<ProfileUiSnapshot>(key, 3 * 24 * 60 * 60 * 1000);
+    // El perfil puede haberse editado o cargado mientras leíamos el disco.
+    if (cacheGetStale(key)) return;
     if (disk?.userId === userId) {
         cacheSet(key, disk, ScreenCacheTTL.profileUI);
         return;
     }
     const screen = await loadProfileScreen(userId);
-    if (!screen) return;
+    if (!screen || cacheGetStale(key)) return;
     const habitos = parseHabitos(screen.profile.habitos_consumo);
     const snap: ProfileUiSnapshot = {
         userId,
@@ -150,7 +168,7 @@ export async function warmOwnProfile(userId: string): Promise<void> {
         aboutMe: screen.profile.descripcion ?? '',
         avatarUrl: screen.profile.avatar_url,
         coverUrl: screen.profile.cover_url,
-        age: calcAge(screen.profile.fecha_nacimiento),
+        age: screen.profile.edad ?? calcAge(screen.profile.fecha_nacimiento),
         genero: (screen.profile.genero as Genero) || null,
         habitoBebida: habitos.bebida,
         habitoTabaco: habitos.tabaco,

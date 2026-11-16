@@ -60,7 +60,7 @@ select ok(
 );
 
 select ok(
-  not has_function_privilege('authenticated', 'public.consume_ai_search_quota(uuid)', 'execute'),
+  not has_function_privilege('authenticated', 'public.consume_ai_search_quota()', 'execute'),
   'consume_ai_search_quota is not client-callable'
 );
 

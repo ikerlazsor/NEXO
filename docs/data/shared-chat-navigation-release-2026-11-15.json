@@ -1,0 +1,194 @@
+{
+  "checked_at": "2026-11-15T14:34:20.220Z",
+  "status": "published_verified",
+  "channel": "production",
+  "client_commits": {
+    "1.0.0": "0b4f2f4",
+    "1.0.11": "e9764d2"
+  },
+  "artifacts": {
+    "1.0.0": {
+      "directory": "/workspace/NEXO/builds/ota/shared-chat-navigation-2026-11-15/runtime-1.0.0",
+      "bundles": [
+        {
+          "platform": "ios",
+          "path": "_expo/static/js/ios/entry-dd936dbff4a4abc99bf57763ab2b4438.hbc",
+          "bytes": 21874583,
+          "sha256": "62783e2077e45a4cef05317cd477bafdf0e6a15e333c23ae10e43de53c946918"
+        },
+        {
+          "platform": "android",
+          "path": "_expo/static/js/android/entry-b3cde7b92767fed58d3d7da1e687c3df.hbc",
+          "bytes": 21875129,
+          "sha256": "196b5b83c4185cb17ce40fe2db94f4838b0faad4c8d9b3ec0f25943d4b5f4456"
+        }
+      ]
+    },
+    "1.0.11": {
+      "directory": "/workspace/NEXO/builds/ota/shared-chat-navigation-2026-11-15/runtime-1.0.11",
+      "bundles": [
+        {
+          "platform": "android",
+          "path": "_expo/static/js/android/entry-5eb678ba4f26258ff0faae28cce3b21f.hbc",
+          "bytes": 21874758,
+          "sha256": "b2895f8c8ff0a7ee9e78ab84de3fa2c39d4c28a7dac12e54e29deb365b8f71a5"
+        },
+        {
+          "platform": "ios",
+          "path": "_expo/static/js/ios/entry-dc1c22d1adef0988f1e2fd8210729633.hbc",
+          "bytes": 21875125,
+          "sha256": "7749ade4378d9443072d1e2cb527ce2fe87db4378f1fc44c2d4db6a815026979"
+        }
+      ]
+    }
+  },
+  "migration": "20261115120000_unified_event_chat.sql",
+  "migration_applied_to_production": true,
+  "ota_published": true,
+  "backend": {
+    "target": "nixeproyzxvqzyrvsxcx",
+    "migration_sha256": "ea9bc512d5541511bdf20b5015f499e2134168a0cf0aac7ded4b54fb6706e43a",
+    "checkedAt": "2026-11-15T14:30:45.327Z",
+    "before": {
+      "events": 1384,
+      "participants": 1,
+      "messages": 1,
+      "message_fingerprint": "d93d8582d4a3969b74f5d4e65914aa84"
+    },
+    "after": {
+      "events": 1384,
+      "participants": 1,
+      "messages": 1,
+      "message_fingerprint": "d93d8582d4a3969b74f5d4e65914aa84"
+    },
+    "existing_data_unchanged": true,
+    "verification": {
+      "realtime": true,
+      "recorded": true,
+      "privateRls": true,
+      "guestDenied": true,
+      "sendAvailable": true,
+      "inboxAvailable": true,
+      "membersGranted": true
+    },
+    "http": {
+      "checkedAt": "2026-11-15T14:31:46.146Z",
+      "publicFeedStatus": 200,
+      "publicPageCount": 8,
+      "guestDenied": [
+        {
+          "rpc": "get_event_chat_threads",
+          "status": 401
+        },
+        {
+          "rpc": "get_event_chat_reactions",
+          "status": 401
+        },
+        {
+          "rpc": "send_event_chat_message",
+          "status": 401
+        }
+      ],
+      "anonymousSqlInboxEmpty": true
+    }
+  },
+  "mobile": {
+    "publications": {
+      "1.0.0": [
+        {
+          "id": "01a1dfa1-39b1-7eb9-b357-cde46df0fc2a",
+          "group": "24aa62d3-640d-46b3-bbc4-ed4f5e13a8a1",
+          "platform": "android",
+          "runtimeVersion": "1.0.0",
+          "createdAt": "2026-11-15T14:34:07.665Z"
+        },
+        {
+          "id": "01a1dfa1-39b1-7528-a034-7068d2856020",
+          "group": "24aa62d3-640d-46b3-bbc4-ed4f5e13a8a1",
+          "platform": "ios",
+          "runtimeVersion": "1.0.0",
+          "createdAt": "2026-11-15T14:34:07.665Z"
+        }
+      ],
+      "1.0.11": [
+        {
+          "id": "01a1dfa0-1b1d-780a-9b37-a7f0f381e8c4",
+          "group": "015ec434-ac08-4929-b127-9ec48f75ad45",
+          "platform": "android",
+          "runtimeVersion": "1.0.11",
+          "createdAt": "2026-11-15T14:32:54.301Z"
+        },
+        {
+          "id": "01a1dfa0-1b1d-709d-83c8-bf48bf66d1a8",
+          "group": "015ec434-ac08-4929-b127-9ec48f75ad45",
+          "platform": "ios",
+          "runtimeVersion": "1.0.11",
+          "createdAt": "2026-11-15T14:32:54.301Z"
+        }
+      ]
+    },
+    "verification": [
+      {
+        "checkedAt": "2026-11-15T14:34:20.220Z",
+        "channel": "production",
+        "checks": [
+          {
+            "platform": "android",
+            "runtime": "1.0.0",
+            "updateId": "01a1dfa1-39b1-7eb9-b357-cde46df0fc2a",
+            "group": "24aa62d3-640d-46b3-bbc4-ed4f5e13a8a1",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1dfa1-39b1-7eb9-b357-cde46df0fc2a"
+          },
+          {
+            "platform": "ios",
+            "runtime": "1.0.0",
+            "updateId": "01a1dfa1-39b1-7528-a034-7068d2856020",
+            "group": "24aa62d3-640d-46b3-bbc4-ed4f5e13a8a1",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1dfa1-39b1-7528-a034-7068d2856020"
+          }
+        ]
+      },
+      {
+        "checkedAt": "2026-11-15T14:33:22.147Z",
+        "channel": "production",
+        "checks": [
+          {
+            "platform": "android",
+            "runtime": "1.0.11",
+            "updateId": "01a1dfa0-1b1d-780a-9b37-a7f0f381e8c4",
+            "group": "015ec434-ac08-4929-b127-9ec48f75ad45",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1dfa0-1b1d-780a-9b37-a7f0f381e8c4"
+          },
+          {
+            "platform": "ios",
+            "runtime": "1.0.11",
+            "updateId": "01a1dfa0-1b1d-709d-83c8-bf48bf66d1a8",
+            "group": "015ec434-ac08-4929-b127-9ec48f75ad45",
+            "bundleHashVerified": true,
+            "manifestUrl": "https://u.expo.dev/update/01a1dfa0-1b1d-709d-83c8-bf48bf66d1a8"
+          }
+        ]
+      }
+    ]
+  },
+  "checks": {
+    "exports_all_platforms_both_runtimes": true,
+    "client_source_identical_between_runtimes": true,
+    "typecheck_legacy": true,
+    "local_test_files": 19,
+    "local_sql_checks": 280,
+    "native_device_testing": false,
+    "all_four_public_manifest_hashes_verified": true
+  },
+  "resolved_blocker": {
+    "service": "Supabase Management API",
+    "previous_status": 401,
+    "previous_message": "Invalid access token",
+    "resolved": true
+  },
+  "additional_web_sources_enabled": false,
+  "ticketmaster_enabled": false
+}

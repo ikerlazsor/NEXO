@@ -6,7 +6,9 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
+    BackHandler,
     FlatList,
+    ScrollView,
     Image,
     Keyboard,
     KeyboardAvoidingView,
@@ -136,6 +138,19 @@ export default function OnboardingScreen() {
         // Only re-align when entering the age step, not while scrolling updates age.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [step]);
+
+    // Android: «atrás» vuelve al paso anterior en vez de salir del registro a medias.
+    useEffect(() => {
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+            if (completing || saving) return true;
+            if (step > 0 && step < 5) {
+                setStep(step - 1);
+                return true;
+            }
+            return true;
+        });
+        return () => sub.remove();
+    }, [step, completing, saving]);
 
     const birthDate = useMemo(() => dateYearsAgo(age), [age]);
     const birthValid = age >= MIN_AGE && age <= MAX_AGE;
@@ -446,6 +461,14 @@ export default function OnboardingScreen() {
                                     )}
                                     <Text style={styles.backText}>{t('onboarding.cancelRegister')}</Text>
                                 </Pressable>
+                                {/* Con 10 intereses no cabía en móviles pequeños (iPhone SE)
+                                    y «Continuar» quedaba fuera de pantalla: la lista se desplaza
+                                    y el botón queda siempre abajo. */}
+                                <ScrollView
+                                    style={styles.flex}
+                                    contentContainerStyle={{ paddingBottom: 8 }}
+                                    showsVerticalScrollIndicator={false}
+                                >
                                 <Text style={[styles.question, styles.interestsQuestion]}>
                                     {t('onboarding.personalitiesQuestion')}
                                 </Text>
@@ -506,6 +529,7 @@ export default function OnboardingScreen() {
                                         );
                                     })}
                                 </View>
+                                </ScrollView>
                                 {continueBtn(personalitiesValid, () => {
                                     hapticMedium();
                                     setStep(1);

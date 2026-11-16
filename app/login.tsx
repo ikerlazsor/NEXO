@@ -22,7 +22,7 @@ import { LoginPenguin, PENGUIN_PERCH_RATIO, PENGUIN_SIZE, type PenguinMood } fro
 import { useAppTheme, useThemedStyles } from '../lib/appTheme';
 import { authRedirectPath } from '../lib/authDeepLink';
 import { NEXO_NORMS_URL, NEXO_PRIVACY_URL, NEXO_TERMS_URL, openNexoPage } from '../lib/brand';
-import { setPendingVerifyEmail } from '../lib/emailVerification';
+import { clearPendingVerifyEmail, setPendingVerifyEmail } from '../lib/emailVerification';
 import { useT } from '../lib/i18n';
 import { Alert } from '../lib/nexoAlert';
 import { scheduleOnboardingPrefetch } from '../lib/prefetchHome';
@@ -41,6 +41,8 @@ import { type ThemeColors } from '../theme';
 
 const EMAIL_MAX_LENGTH = 120;
 const OTP_LEN = 6;
+/** Supabase no deja pedir otro código al mismo correo antes de 60 s. */
+const RESEND_COOLDOWN_S = 60;
 
 type AuthPhase = 'methods' | 'email' | 'code';
 
@@ -80,7 +82,14 @@ export default function LoginScreen() {
     const [loading, setLoading] = useState(false);
     const [socialLoading, setSocialLoading] = useState<'apple' | 'google' | null>(null);
     const [focused, setFocused] = useState(false);
+    const [cooldown, setCooldown] = useState(0);
     const codeRef = useRef<TextInput>(null);
+
+    useEffect(() => {
+        if (cooldown <= 0) return;
+        const tmr = setTimeout(() => setCooldown((s) => Math.max(0, s - 1)), 1000);
+        return () => clearTimeout(tmr);
+    }, [cooldown]);
 
     useEffect(() => {
         if (phase === 'code') {
@@ -135,13 +144,13 @@ export default function LoginScreen() {
         }
     };
 
-    const sendEmailCode = async () => {
+    const sendEmailCode = async (isResend = false) => {
         const mail = email.trim().toLowerCase();
         if (!validateEmail(mail)) {
             Alert.alert(t('login.authError'), t('login.invalidEmailMsg'));
             return;
         }
-        if (loading) return;
+        if (loading || (isResend && cooldown > 0)) return;
         setLoading(true);
         try {
             const { error } = await supabase.auth.signInWithOtp({
@@ -155,6 +164,8 @@ export default function LoginScreen() {
             await setPendingVerifyEmail(mail);
             setPhase('code');
             setCode('');
+            setCooldown(RESEND_COOLDOWN_S);
+            if (isResend) Alert.alert(t('verifyEmail.resentTitle'), t('verifyEmail.resentMsg'));
         } catch (e: any) {
             const msg = typeof e?.message === 'string' ? e.message : '';
             Alert.alert(
@@ -189,11 +200,15 @@ export default function LoginScreen() {
             if (data.user) {
                 await ensureProfile(data.user).catch(() => {});
             }
+            // Ya verificado: si quedara guardado, al cerrar sesión más adelante la app
+            // volvía a mandar a «Confirma tu email» en cada arranque.
+            await clearPendingVerifyEmail();
             scheduleOnboardingPrefetch();
             // El root layout enruta a onboarding / feed según registro_completado.
         } catch {
-            Alert.alert(t('login.authError'), t('login.authErrorHint'));
+            Alert.alert(t('verifyEmail.error'), t('verifyEmail.invalidCode'));
             setCode('');
+            setTimeout(() => codeRef.current?.focus(), 250);
         } finally {
             releaseUpdateHold();
             setLoading(false);
@@ -201,8 +216,8 @@ export default function LoginScreen() {
     };
 
     const resendCode = async () => {
-        if (loading) return;
-        await sendEmailCode();
+        if (loading || cooldown > 0) return;
+        await sendEmailCode(true);
     };
 
     return (
@@ -308,6 +323,7 @@ export default function LoginScreen() {
                                             style={styles.fieldInput}
                                             value={email}
                                             onChangeText={(text) => setEmail(text.slice(0, EMAIL_MAX_LENGTH))}
+                                            autoFocus
                                             onFocus={() => setFocused(true)}
                                             onBlur={() => setFocused(false)}
                                             autoCapitalize="none"
@@ -338,10 +354,14 @@ export default function LoginScreen() {
                             {phase === 'code' ? (
                                 <View style={styles.emailPhase}>
                                     <PressableBack
-                                        label={t('login.backToMethods')}
+                                        label={t('verifyEmail.changeEmail')}
                                         onPress={() => {
                                             setPhase('email');
                                             setCode('');
+                                            setCooldown(0);
+                                            // Abandonar el código no debe dejar la app atada a
+                                            // «Confirma tu email» en el próximo arranque.
+                                            void clearPendingVerifyEmail();
                                         }}
                                         color={colors.primary}
                                     />
@@ -386,10 +406,14 @@ export default function LoginScreen() {
                                     <TouchableOpacity
                                         style={styles.resendBtn}
                                         onPress={() => void resendCode()}
-                                        disabled={loading}
+                                        disabled={loading || cooldown > 0}
                                         activeOpacity={0.8}
                                     >
-                                        <Text style={styles.resendText}>{t('login.resendCode')}</Text>
+                                        <Text style={[styles.resendText, cooldown > 0 && { color: colors.textSubtle }]}>
+                                            {cooldown > 0
+                                                ? t('login.resendIn', { s: cooldown })
+                                                : t('login.resendCode')}
+                                        </Text>
                                     </TouchableOpacity>
                                 </View>
                             ) : null}

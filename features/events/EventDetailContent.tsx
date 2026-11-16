@@ -12,6 +12,7 @@ import { BounceHeart } from "../../components/BounceHeart";
 import { PressScale } from "../../components/PressScale";
 import { EventArtwork, isFreeEvent } from "./EventCards";
 import { eventClassification } from "./covers";
+import { CURATED_PROVIDER } from "../../lib/externalEventPolicy.cjs";
 import type { ExternalEvent, EventPerson } from "./types";
 
 type Props = {
@@ -60,6 +61,7 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
   const { category } = eventClassification(event);
   const accent = getCategoryColor(category);
   const free = isFreeEvent(event.price_text);
+  const curated = event.provider_id === CURATED_PROVIDER;
   const start = event.starts_at ? new Date(event.starts_at) : null;
   const dateRaw = (start || new Date(`${event.start_date}T12:00:00Z`)).toLocaleDateString(lang, {
     weekday: "long", day: "numeric", month: "long", timeZone: "Europe/Madrid",
@@ -129,6 +131,7 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
       <Text accessibilityRole="header" style={[s.title, { color: colors.text }]}>{event.title}</Text>
       {!free && !!event.price_text && <Text style={[s.price, { color: colors.textMuted }]} numberOfLines={2}>{event.price_text}</Text>}
       {unavailable && <Text style={[s.notice, { color: colors.text, backgroundColor: colors.warningSoft }]}>{t("events.cancelled")}</Text>}
+      {!unavailable && curated && <Text style={[s.notice, { color: colors.text, backgroundColor: colors.warningSoft }]}>{t("events.limitedSpots")}</Text>}
       {error && <Pressable onPress={onRetry} accessibilityRole="button">
         <Text style={{ color: colors.primary, lineHeight: 21 }}>{t("events.unavailable")} · {t("events.retry")}</Text>
       </Pressable>}
@@ -207,7 +210,7 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
       <View onLayout={e => { viewport.current.mapTop = e.nativeEvent.layout.y; checkMapVisible(); }}>
         {renderMap(mapVisible)}
       </View>
-      <View style={[s.credits, { borderTopColor: dark ? colors.borderStrong : "rgba(15,23,42,0.08)" }]}>
+      {event.provider_id === "madrid" && <View style={[s.credits, { borderTopColor: dark ? colors.borderStrong : "rgba(15,23,42,0.08)" }]}>
         <View style={s.creditLinks}>
           <Pressable onPress={() => { void Linking.openURL(event.provider_id === "madrid"
             ? "https://datos.madrid.es/dataset/206974-0-agenda-eventos-culturales-100" : event.source_url).catch(() => {}); }} accessibilityRole="link">
@@ -218,7 +221,7 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
           </Pressable>}
         </View>
         <Text style={{ color: colors.textMuted, fontSize: 11, lineHeight: 16 }}>{t("events.dataAdapted")}</Text>
-      </View>
+      </View>}
     </View>
   </ScrollView>;
 }

@@ -21,6 +21,7 @@ import { BounceHeart } from "../../components/BounceHeart";
 import { emitHeartBurst } from "../../lib/heartBurst";
 import { hapticLight } from "../../lib/haptics";
 import { getCategoryColor } from "../../lib/categories";
+import { attendanceLabelCount } from "../../lib/externalEventPolicy.cjs";
 import {
   planCardActionStyles,
   JOINED_PLAN_COLORS,
@@ -119,6 +120,7 @@ export const EventCard = memo(function EventCard({
   const accent = getCategoryColor(classification.category);
   const dark = scheme === "dark";
   const when = eventWhenLabel(event, lang);
+  const attendance = attendanceLabelCount(event.attendance_hint);
   return (
     <View
       style={[
@@ -300,7 +302,10 @@ export const EventCard = memo(function EventCard({
             <Ionicons name="people" size={14} color={accent} />
           </View>
           <Text style={[s.openGroupTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>
-            {t("events.openGroup")}
+            {/* Asistentes del evento original (redondeado a la baja), no usuarios de Nexo. */}
+            {attendance
+              ? t(attendance.exact ? "events.attendeesExact" : "events.attendees", { n: attendance.n })
+              : t("events.openGroup")}
           </Text>
         </Pressable>}
         <PressScale

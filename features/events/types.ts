@@ -22,6 +22,8 @@ export type ExternalEvent = {
   latitude: number | null;
   longitude: number | null;
   price_text: string | null;
+  /** Asistentes conocidos del evento original (no son usuarios de Nexo). */
+  attendance_hint?: number | null;
   status: "active" | "cancelled" | "expired" | "stale";
   last_seen_at: string;
 };

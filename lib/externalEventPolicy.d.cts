@@ -23,7 +23,11 @@ export function isPublishableEvent(
     latitude: number | null;
     longitude: number | null;
     social_eligible?: boolean;
+    provider_id?: string;
+    subcategory?: string | null;
   },
   now?: number,
 ): boolean;
 export function identityTitle(value: string): string;
+export const CURATED_PROVIDER: string;
+export function attendanceLabelCount(n: unknown): { n: number; exact: boolean } | null;

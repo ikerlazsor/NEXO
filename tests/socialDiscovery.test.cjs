@@ -75,3 +75,17 @@ test('participatory meetups are told apart from go-together shows for ranking', 
   assert.equal(policy.isParticipatoryActivity('Encinar de San Pedro', 'senderismo'), true);
   for (const title of ['Concierto de jazz', 'Recital Flamenco', 'Teatro: La mujer sola', 'Yoga infantil']) assert.equal(policy.isParticipatoryActivity(title), false, title);
 });
+
+test('curated social meetups publish without title keywords and show rounded attendance', () => {
+  const soon = new Date(Date.now() + 86400000).toISOString();
+  const base = { title: 'Lightning Talks #55', status: 'active', starts_at: soon, venue: 'Bar confirmado', latitude: 40.42, longitude: -3.7, social_eligible: true };
+  assert.equal(policy.isPublishableEvent({ ...base, provider_id: 'nexo_curated' }), true);
+  assert.equal(policy.isPublishableEvent({ ...base, provider_id: 'madrid' }), false);
+  assert.equal(policy.isPublishableEvent({ ...base, provider_id: 'nexo_curated', social_eligible: false }), false);
+  assert.deepEqual(policy.attendanceLabelCount(53), { n: 50, exact: false });
+  assert.deepEqual(policy.attendanceLabelCount(7), { n: 7, exact: true });
+  assert.deepEqual(policy.attendanceLabelCount(237), { n: 200, exact: false });
+  assert.deepEqual(policy.attendanceLabelCount(1234), { n: 1200, exact: false });
+  assert.equal(policy.attendanceLabelCount(3), null);
+  assert.equal(policy.attendanceLabelCount(null), null);
+});

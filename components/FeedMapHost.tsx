@@ -16,6 +16,7 @@ import {
     View,
 } from 'react-native';
 import { Marker } from 'react-native-maps';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NexoMapView } from './NexoMapView';
 import { PlanImage } from './PlanImage';
@@ -477,7 +478,8 @@ export function FeedMapHost() {
     );
 
     useEffect(() => {
-        if (!visible || plans.length === 0) return;
+        // El carrusel solo existe cuando el panel ya terminó de deslizarse (renderMap).
+        if (!visible || !renderMap || plans.length === 0) return;
         // Al abrir: sin plan seleccionado, mapa en Madrid; carrusel en el bloque medio.
         if (didInitCarousel.current) return;
         didInitCarousel.current = true;
@@ -494,7 +496,7 @@ export function FeedMapHost() {
                 animated: false,
             });
         });
-    }, [visible, plans, middleBlock, mapCardInterval]);
+    }, [visible, renderMap, plans, middleBlock, mapCardInterval]);
 
     const openPlan = useCallback((plan: MapPlan) => {
         const planId = String(plan.id);
@@ -590,13 +592,14 @@ export function FeedMapHost() {
             onShow={() => { if (visibleRef.current && !closingRef.current) setRenderMap(true); }}
             onDismiss={finishDismiss}>
             <View style={styles.mapModalContainer}>
-                {!renderMap && <View style={[mapHostStyles.map, { backgroundColor: theme.colors.backgroundAlt, alignItems: 'center', justifyContent: 'center', gap: 12 }]}>
-                    <Ionicons name="map-outline" size={40} color={theme.colors.primary} />
-                    <ActivityIndicator color={theme.colors.primary} />
-                </View>}
-                {renderMap && <NexoMapView
+                {/* Fondo siempre presente: el mapa entra con fundido encima, sin parpadeo. */}
+                <View style={[mapHostStyles.map, { backgroundColor: theme.colors.backgroundAlt, alignItems: 'center', justifyContent: 'center', gap: 12 }]}>
+                    {!renderMap && <Ionicons name="map-outline" size={40} color={theme.colors.primary} />}
+                    {!renderMap && <ActivityIndicator color={theme.colors.primary} />}
+                </View>
+                {renderMap && <Animated.View entering={FadeIn.duration(280)} style={mapHostStyles.map}><NexoMapView
                     ref={mapRef}
-                    style={mapHostStyles.map}
+                    style={StyleSheet.absoluteFill}
                     loadingEnabled={false}
                     showsUserLocation={!!userCoords}
                     moveOnMarkerPress={false}
@@ -623,7 +626,7 @@ export function FeedMapHost() {
                             else camera.current!.move({ latitude: pin.latitude, longitude: pin.longitude, latitudeDelta: Math.max(0.001, viewport.latitudeDelta / 3), longitudeDelta: Math.max(0.001, viewport.longitudeDelta / 3) }, 250);
                         }}
                     />)}
-                </NexoMapView>}
+                </NexoMapView></Animated.View>}
 
                 <View style={styles.mapModalHeader}>
                     <TouchableOpacity style={styles.mapCloseBtn} onPress={closeMap}>
@@ -640,8 +643,12 @@ export function FeedMapHost() {
                     <View style={styles.mapModalFooter}>
                         <Text style={styles.mapFooterHint}>{t('feed.filterZoneEmpty')}</Text>
                     </View>
-                ) : (
-                    <View style={[styles.mapCarouselWrap, { bottom: Math.max(insets.bottom, 8) + 10 }]} pointerEvents="box-none">
+                ) : !renderMap ? null : (
+                    <Animated.View
+                        entering={FadeIn.duration(260)}
+                        style={[styles.mapCarouselWrap, { bottom: Math.max(insets.bottom, 8) + 10 }]}
+                        pointerEvents="box-none"
+                    >
                         <FlatList
                             ref={carouselRef}
                             data={loopedPlans}
@@ -800,7 +807,7 @@ export function FeedMapHost() {
                                 );
                             }}
                         />
-                    </View>
+                    </Animated.View>
                 )}
             </View>
         </Modal>

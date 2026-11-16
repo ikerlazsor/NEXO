@@ -668,10 +668,11 @@ function RootStack() {
                     // Keep profile and its editor in the same navigation stack.
                     // A modal here dismisses/re-presents when pushing the editor.
                     presentation: 'card',
-                    animation: 'slide_from_bottom',
-                    animationDuration: 300,
-                    gestureEnabled: true,
-                    gestureDirection: 'vertical',
+                    // Mismo deslizamiento nativo que el resto de pantallas (iOS: push
+                    // nativo con volver deslizando desde el borde; Android: desde la derecha).
+                    animation: Platform.OS === 'ios' ? 'default' : 'slide_from_right',
+                    ...(Platform.OS !== 'ios' ? { animationDuration: 280 } : {}),
+                    gestureEnabled: Platform.OS === 'ios',
                     fullScreenGestureEnabled: false,
                     animationMatchesGesture: false,
                     freezeOnBlur: Platform.OS !== 'ios',

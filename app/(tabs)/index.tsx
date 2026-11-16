@@ -137,6 +137,7 @@ import {
     syncPlanDetailParticipantsFromFeed,
 } from '../../lib/planDetailCache';
 import { prefetchTournamentLineup } from '../../lib/tournamentLineupCache';
+import { runAfterNavTransition } from '../../lib/afterTransition';
 import { isPlanActiveForFeed, runPlanLifecycleMaintenance } from '../../lib/planLifecycle';
 import { canJoinMorePlans, countLocalActivePlans, MAX_ACTIVE_PLANS } from '../../lib/planLimits';
 import { canSeePlanInFeed } from '../../lib/planVisibility';
@@ -1424,6 +1425,9 @@ export default function HomeScreen() {
     const openPlanDetail = useCallback(
         (planId: string) => {
             captureScroll();
+            // Precargas de red: se lanzan al terminar el deslizamiento, no al pulsar.
+            // Si arrancan antes, sus respuestas llegan a mitad de la animación y la cortan.
+            const deferred: Array<() => void> = [];
             try {
                 const found = plansRef.current.find((p) => String(p.id) === String(planId));
                 const mid = String(planId);
@@ -1436,14 +1440,16 @@ export default function HomeScreen() {
                             avatar_url: found.host?.avatar_url,
                             es_organizador: !!found.es_organizador,
                         });
-                        prefetchUserProfile(hostId);
+                        deferred.push(() => prefetchUserProfile(hostId));
                         if (
                             currentUserId &&
                             hostId !== String(currentUserId) &&
                             !found.es_organizador
                         ) {
-                            void prefetchPairAffinity(currentUserId, hostId, {
-                                isFriends: friendIds.has(hostId),
+                            deferred.push(() => {
+                                void prefetchPairAffinity(currentUserId, hostId, {
+                                    isFriends: friendIds.has(hostId),
+                                });
                             });
                         }
                     }
@@ -1483,7 +1489,7 @@ export default function HomeScreen() {
                             : undefined,
                     );
                 }
-                prefetchPlanDetail(mid);
+                deferred.push(() => { void prefetchPlanDetail(mid); });
             } catch (e) {
                 if (__DEV__) console.warn('openPlanDetail seed', e);
             }
@@ -1492,6 +1498,11 @@ export default function HomeScreen() {
             } catch (e) {
                 if (__DEV__) console.warn('openPlanDetail nav', e);
             }
+            runAfterNavTransition(() => {
+                for (const job of deferred) {
+                    try { job(); } catch (e) { if (__DEV__) console.warn('openPlanDetail prefetch', e); }
+                }
+            });
         },
         [router, captureScroll, friendIds, coincidedIds, currentUserId, currentUserGenero, savedPlanIds, feedTaste],
     );
@@ -1518,11 +1529,12 @@ export default function HomeScreen() {
                 es_organizador: !!fromPlan?.es_organizador && String(fromPlan?.creador_id) === String(userId),
                 friendStatus: friendIds.has(userId) ? 'friends' : undefined,
             });
-            prefetchUserProfile(userId);
             router.push({
                 pathname: '/user-profile/[id]',
                 params: { id: userId, isFriend: friendIds.has(userId) ? '1' : '0' },
             });
+            // La precarga de red espera al fin del deslizamiento para no cortarlo.
+            runAfterNavTransition(() => prefetchUserProfile(userId));
         },
         [requireAccount, router, friendIds],
     );

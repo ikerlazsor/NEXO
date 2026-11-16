@@ -48,6 +48,7 @@ import { wasKickedFromPlan } from '../lib/planKicks';
 import { supabase } from '../lib/supabase';
 import { fetchSavedEvents, setEventSaved } from '../features/events/api';
 import { SavedEventRow } from '../features/events/SavedEventRow';
+import { markEventSaved } from '../features/events/savedEvents';
 import type { ExternalEvent } from '../features/events/types';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 
@@ -207,6 +208,7 @@ export default function SavedPlansScreen() {
     );
     const removeSavedEvent = (eventId: string) => {
         setSavedEvents((prev) => prev.filter((e) => e.id !== eventId));
+        markEventSaved(eventId, false);
         void setEventSaved(eventId, false).catch(() => {
             void fetchSavedEvents().then(setSavedEvents).catch(() => undefined);
         });

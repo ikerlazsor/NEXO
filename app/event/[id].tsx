@@ -21,16 +21,16 @@ import {
   fetchEvent,
   fetchEventMembership,
   fetchEventPeople,
-  fetchEventSaved,
   setEventMembership,
-  setEventSaved,
   trackEvent,
   eventJoinErrorKey,
 } from "../../features/events/api";
 import type { ExternalEvent, EventPerson } from "../../features/events/types";
 import { EventLocationMap } from "../../features/events/EventLocationMap";
 import { publishEventMembership } from "../../features/events/membershipBus";
-import { hapticError, hapticLight, hapticSuccess } from "../../lib/haptics";
+import { hapticError, hapticSuccess } from "../../lib/haptics";
+import { toggleEventSaved, useSavedEventIds } from "../../features/events/savedEvents";
+import { FeedHeartBurstHost } from "../../components/FeedHeartBurstHost";
 import { peekEvent, peekEventSocial } from "../../features/events/cache";
 import { EventDetailContent } from "../../features/events/EventDetailContent";
 import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
@@ -64,35 +64,16 @@ export default function EventDetail() {
   const morePeople = privateScope === scope && storedMorePeople;
   const joined = privateScope === scope && storedJoined;
   const busy = busyScope === scope;
-  const [savedState, setSavedState] = useState<{ scope: string; saved: boolean } | null>(null);
-  const saved = savedState?.scope === scope && savedState.saved;
-  const saving = useRef(false);
-  useFocusEffect(useCallback(() => {
-    if (!userId || !transitionReady) return;
-    let alive = true;
-    void fetchEventSaved(id, userId)
-      .then((value) => { if (alive) setSavedState({ scope, saved: value }); })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, [id, userId, scope, transitionReady]));
+  // Mismo estado que la tarjeta del feed (guardar en uno se ve en el otro).
+  const savedIds = useSavedEventIds(userId ?? null);
+  const saved = !!userId && savedIds.has(id);
   const toggleSave = async () => {
     if (!userId) {
       requireAccount({ type: "event", eventId: id });
       return;
     }
-    if (saving.current) return;
-    saving.current = true;
-    const next = !saved;
-    setSavedState({ scope, saved: next });
-    hapticLight();
-    try {
-      await setEventSaved(id, next);
-    } catch {
-      setSavedState({ scope, saved: !next });
-      Alert.alert(t("feed.error"), t("events.error"));
-    } finally {
-      saving.current = false;
-    }
+    const ok = await toggleEventSaved(id);
+    if (!ok) Alert.alert(t("feed.error"), t("events.error"));
   };
   const shareEvent = () => {
     if (!event) return;
@@ -337,6 +318,7 @@ export default function EventDetail() {
           <Ionicons name="chatbubbles" size={22} color={colors.onPrimary} />
         </PressScale>}
       </View>}
+      <FeedHeartBurstHost />
     </SafeAreaView>
   );
 }

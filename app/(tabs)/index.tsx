@@ -162,7 +162,9 @@ import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
 import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
-import { EventCard } from '../../features/events/EventCards';
+import { EventCard, eventWhenLabel } from '../../features/events/EventCards';
+import { toggleEventSaved, useSavedEventIds } from '../../features/events/savedEvents';
+import { shareEventLink } from '../../lib/shareEvent';
 import { useEvents } from '../../features/events/useEvents';
 import { rankUnifiedFeed, retainFeedOrder } from '../../features/events/ranking';
 import { rememberEvent } from '../../features/events/cache';
@@ -410,6 +412,28 @@ export default function HomeScreen() {
             });
         },
         [requireAccount, external, openExternal, t],
+    );
+    // Guardar / compartir eventos de la agenda desde la tarjeta (como los planes).
+    const savedEventIds = useSavedEventIds(sessionUserId ?? null);
+    const toggleSaveExternal = useCallback(
+        (id: string) => {
+            if (requireAccount({ type: 'event', eventId: id })) return;
+            void toggleEventSaved(id).then((ok) => {
+                if (!ok) Alert.alert(t('feed.error'), t('events.error'));
+            });
+        },
+        [requireAccount, t],
+    );
+    const shareExternal = useCallback(
+        (event: ExternalEvent) => {
+            void shareEventLink({
+                eventId: event.id,
+                title: event.title,
+                when: eventWhenLabel(event, lang),
+                venue: event.venue,
+            });
+        },
+        [lang],
     );
 
     const endReachedLockRef = useRef(false);
@@ -1567,6 +1591,10 @@ export default function HomeScreen() {
                     busy={external.busy === item.event.id}
                     onOpen={() => openExternal(item.event.id)}
                     onJoin={() => joinExternal(item.event.id)}
+                    saved={savedEventIds.has(item.event.id)}
+                    canBurst={!!sessionUserId}
+                    onToggleSave={() => toggleSaveExternal(item.event.id)}
+                    onShare={() => shareExternal(item.event)}
                 />;
             }
             if (item.kind === 'header') {
@@ -1603,6 +1631,7 @@ export default function HomeScreen() {
         [
             t,
             styles.feedSectionTitle, external.social, external.joined, external.busy, openExternal, joinExternal,
+            savedEventIds, sessionUserId, toggleSaveExternal, shareExternal,
             currentUserId,
             currentUserGenero,
             friendIds,
@@ -2009,7 +2038,7 @@ export default function HomeScreen() {
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
-                            onRefresh={()=>{onFeedRefresh();void external.refresh();}}
+                            onRefresh={()=>{hapticSelection();onFeedRefresh();void external.refresh();}}
                             tintColor={theme.colors.textMuted}
                             colors={[theme.colors.primary]}
                             progressBackgroundColor={theme.colors.surface}

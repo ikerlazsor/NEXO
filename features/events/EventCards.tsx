@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useRef } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -17,6 +17,9 @@ import { eventClassification, eventCoverSource } from "./covers";
 import type { ExternalEvent, EventSection, EventSocialSummary } from "./types";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { PressScale } from "../../components/PressScale";
+import { BounceHeart } from "../../components/BounceHeart";
+import { emitHeartBurst } from "../../lib/heartBurst";
+import { hapticLight } from "../../lib/haptics";
 import { getCategoryColor } from "../../lib/categories";
 import {
   planCardActionStyles,
@@ -85,6 +88,10 @@ export const EventCard = memo(function EventCard({
   preview = false,
   horizontalInset = 16,
   social,
+  saved = false,
+  canBurst = true,
+  onToggleSave,
+  onShare,
 }: {
   event: ExternalEvent;
   variant: "compact" | "editorial";
@@ -95,7 +102,14 @@ export const EventCard = memo(function EventCard({
   preview?: boolean;
   horizontalInset?: number;
   social?: EventSocialSummary;
+  /** Guardar/compartir sobre la imagen, igual que las tarjetas de planes. */
+  saved?: boolean;
+  /** Invitados no guardan (se les pide cuenta): sin explosión de corazones. */
+  canBurst?: boolean;
+  onToggleSave?: () => void;
+  onShare?: () => void;
 }) {
+  const heartHostRef = useRef<View>(null);
   const { t, lang } = useT();
   const { colors, scheme } = useAppTheme();
   const actionStyles = planCardActionStyles(scheme === "dark");
@@ -134,18 +148,58 @@ export const EventCard = memo(function EventCard({
                 colors={["rgba(15,23,42,0)", "rgba(15,23,42,0.28)"]}
                 style={s.artScrim}
               />
-              <View style={s.artBadges} pointerEvents="none">
-                <View style={s.glassPill}>
-                  <View style={[s.dot, { backgroundColor: accent }]} />
-                  <Text style={s.glassPillText} numberOfLines={1}>
-                    {classification.subcategory === "otro"
-                      ? t(`cat.main.${classification.category}`)
-                      : t(`cat.sub.${classification.subcategory}`)}
-                  </Text>
+              <View style={s.artBadges} pointerEvents="box-none">
+                <View style={s.badgeLeft} pointerEvents="none">
+                  <View style={s.glassPill}>
+                    <View style={[s.dot, { backgroundColor: accent }]} />
+                    <Text style={s.glassPillText} numberOfLines={1}>
+                      {classification.subcategory === "otro"
+                        ? t(`cat.main.${classification.category}`)
+                        : t(`cat.sub.${classification.subcategory}`)}
+                    </Text>
+                  </View>
+                  {free ? (
+                    <View style={[s.glassPill, s.freePill]}>
+                      <Text style={[s.glassPillText, s.freePillText]}>{t("events.free")}</Text>
+                    </View>
+                  ) : null}
                 </View>
-                {free ? (
-                  <View style={[s.glassPill, s.freePill]}>
-                    <Text style={[s.glassPillText, s.freePillText]}>{t("events.free")}</Text>
+                {(onShare || onToggleSave) && !preview ? (
+                  <View style={s.topRightGroup}>
+                    {onShare ? (
+                      <PressScale
+                        style={s.iconBtnOnImage}
+                        pressedScale={0.88}
+                        minTouch={false}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          hapticLight();
+                          onShare();
+                        }}
+                        accessibilityLabel={t("card.share")}
+                      >
+                        <Ionicons name="share-outline" size={26} color="#FFFFFF" style={s.iconOnImage} />
+                      </PressScale>
+                    ) : null}
+                    {onToggleSave ? (
+                      <View ref={heartHostRef} style={s.iconBtnOnImage} collapsable={false}>
+                        <BounceHeart
+                          saved={saved}
+                          size={26}
+                          iconStyle={s.iconOnImage}
+                          onPress={() => {
+                            if (!saved && canBurst) {
+                              requestAnimationFrame(() => {
+                                heartHostRef.current?.measureInWindow((x, y, w, h) => {
+                                  emitHeartBurst(x + w / 2, y + h / 2);
+                                });
+                              });
+                            }
+                            onToggleSave();
+                          }}
+                        />
+                      </View>
+                    ) : null}
                   </View>
                 ) : null}
               </View>
@@ -258,14 +312,9 @@ export const EventCard = memo(function EventCard({
           <View style={[s.firstIcon, { backgroundColor: `${accent}1A` }]}>
             <Ionicons name="people" size={14} color={accent} />
           </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={[s.openGroupTitle, { color: colors.text }]} numberOfLines={1}>
-              {t("events.openGroup")}
-            </Text>
-            <Text style={[s.sourceText, { color: colors.textMuted }]} numberOfLines={1}>
-              {t("events.openGroupSub")}
-            </Text>
-          </View>
+          <Text style={[s.openGroupTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>
+            {t("events.openGroup")}
+          </Text>
         </Pressable>}
         <PressScale
           onPress={onJoin}
@@ -408,6 +457,14 @@ const s = StyleSheet.create({
     maxWidth: "70%",
   },
   glassPillText: { fontSize: 12, fontWeight: "700", color: "#0F172A" },
+  badgeLeft: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1 },
+  topRightGroup: { flexDirection: "row", alignItems: "center", gap: 2, flexShrink: 0, marginTop: -6, marginRight: -6 },
+  iconBtnOnImage: { width: 40, height: 40, alignItems: "center", justifyContent: "center", overflow: "visible" },
+  iconOnImage: {
+    textShadowColor: "rgba(0,0,0,0.65)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
   dot: { width: 7, height: 7, borderRadius: 4 },
   freePill: { backgroundColor: "#059669" },
   freePillText: { color: "#FFFFFF" },

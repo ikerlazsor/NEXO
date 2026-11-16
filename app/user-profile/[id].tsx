@@ -23,6 +23,8 @@ import { ProfileScreenSkeleton } from '../../components/SkeletonShimmer';
 import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { MediaLightbox } from '../../components/MediaLightbox';
 import { TranslatedText } from '../../components/TranslatedText';
+import { DeferredSection } from '../../components/DeferredSection';
+import { useTransitionSettled } from '../../hooks/useTransitionSettled';
 import { ProfileAvatar } from '../../components/ProfileAvatar';
 import { ProfileReputationStats } from '../../components/ProfileReputationStats';
 import {
@@ -174,6 +176,12 @@ export default function UserProfileScreen() {
     const cached = profileId ? cacheGetStale<UserProfileSnapshot>(userProfileKey(profileId)) : null;
 
     const [loading, setLoading] = useState(() => !cached?.userProfile);
+    // Con datos en caché (abierto desde el feed) la pantalla ya se puede pintar:
+    // la recarga de red espera al fin del deslizamiento para que su respuesta no
+    // vuelva a pintar el perfil a mitad de la animación. Sin caché carga al momento.
+    const [waitForTransition] = useState(() => !!cached?.userProfile);
+    const transitionSettled = useTransitionSettled();
+    const networkGateOpen = !waitForTransition || transitionSettled;
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(() => cached?.userProfile ?? null);
     const [currentUserId, setCurrentUserId] = useState<string | null>(
         () => sessionUserId ?? cached?.currentUserId ?? null,
@@ -632,6 +640,7 @@ export default function UserProfileScreen() {
 
     useFocusEffect(
         useCallback(() => {
+            if (!networkGateOpen) return;
             void loadProfile();
             if (profileId && sessionUserId && sessionUserId !== profileId) {
                 recordOrganizerProfileView(profileId);
@@ -670,7 +679,7 @@ export default function UserProfileScreen() {
             return () => {
                 cancelled = true;
             };
-        }, [loadProfile, profileId, sessionUserId, coalesceFriendStatus])
+        }, [networkGateOpen, loadProfile, profileId, sessionUserId, coalesceFriendStatus])
     );
 
     const handleSendRequest = () => {
@@ -1349,6 +1358,7 @@ export default function UserProfileScreen() {
                         variant={isOrganizerProfile ? 'organizer' : 'person'}
                     />
 
+                    <DeferredSection ready={transitionSettled}>
                     {!isOrganizerProfile ? (
                         <>
                             {aboutText ? (
@@ -1424,6 +1434,7 @@ export default function UserProfileScreen() {
                             ) : null}
                         </>
                     )}
+                    </DeferredSection>
                 </ScrollView>
             )}
 

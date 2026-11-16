@@ -44,6 +44,8 @@ import {
 } from '../../lib/inviteChatGroup';
 import { NexoMapView } from '../../components/NexoMapView';
 import { useScreenTransitionReady } from '../../hooks/useScreenTransitionReady';
+import { useTransitionSettled } from '../../hooks/useTransitionSettled';
+import { DeferredSection } from '../../components/DeferredSection';
 import { validMapCoordinates } from '../../lib/mapDiscovery';
 import { getCategoryColor } from '../../lib/categories';
 import { PadelLineupSection } from '../../components/PadelLineup';
@@ -340,6 +342,10 @@ export default function PlanDetailScreen() {
     const [actionBusy, setActionBusy] = useState(false);
     const [mapExpanded, setMapExpanded] = useState(false);
     const mapPreviewReady = useScreenTransitionReady();
+    // Descripción, ubicación y hoja de invitar quedan por debajo de la primera
+    // pantalla: se montan al terminar el deslizamiento (la descripción además
+    // dispara la traducción, cuya respuesta llegaba a mitad de la animación).
+    const lowerSectionsReady = useTransitionSettled();
     const [fullMapMounted, setFullMapMounted] = useState(false);
     const [openRating, setOpenRating] = useState<PendingRatingPlan | null>(
         () => cachedDetail?.openRating ?? null,
@@ -2627,6 +2633,7 @@ export default function PlanDetailScreen() {
                         ) : null}
                     </View>
 
+                    <DeferredSection ready={lowerSectionsReady}>
                     <View style={styles.section}>
                         <View style={styles.aboutCard}>
                             <Text style={styles.aboutCardTitle}>{t('planDetail.about')}</Text>
@@ -2692,6 +2699,7 @@ export default function PlanDetailScreen() {
                             }
                         />
                     </View>
+                    </DeferredSection>
                 </View>
             </ScrollView>
 
@@ -2810,7 +2818,7 @@ export default function PlanDetailScreen() {
                 </View>
             </Modal>
 
-            {canInvitePeople ? (
+            {canInvitePeople && (lowerSectionsReady || showInviteSheet) ? (
                 <InvitePeopleSheet
                     visible={showInviteSheet}
                     onClose={() => setShowInviteSheet(false)}

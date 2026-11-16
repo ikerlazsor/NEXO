@@ -4,6 +4,7 @@ import { AppState } from "react-native";
 import * as Crypto from "expo-crypto";
 import { getPublicProfiles } from "../../lib/profileData";
 import { fetchEventMembership, fetchEventMessages, sendEventMessage, fetchEventReactions, subscribeEventChat } from "./api";
+import { notifyEventMessage } from "../../lib/push";
 import type { Message } from "../chat/chatModel";
 import type { MessageReaction } from "../../lib/messageReactions";
 import type { EventMessage } from "./types";
@@ -142,7 +143,10 @@ export function useEventChat(id: string, userId: string | null) {
     if (pending.current?.scope !== scope || pending.current.body !== body || pending.current.type !== type || pending.current.file !== file)
       pending.current = { scope, id: Crypto.randomUUID(), body, type, file };
     try {
-      await sendEventMessage(id, pending.current.id, body, type, file);
+      const clientId = pending.current.id;
+      await sendEventMessage(id, clientId, body, type, file);
+      // Aviso push al resto del grupo (antes los chats de eventos no notificaban).
+      notifyEventMessage(id, clientId);
       if (!current()) return;
       pending.current = null;
       setState((previous) => ({ ...previous, text: previous.text === visible.text && type === 'texto' ? "" : previous.text }));

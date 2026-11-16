@@ -6,7 +6,7 @@
  * {
  *   type: 'friend_request' | 'friend_accepted' | 'plan_join_request' | 'plan_joined'
  *       | 'plan_invite' | 'plan_message' | 'direct_message' | 'compliment' | 'spark'
- *       | 'plan_cancelled' | 'plan_updated',
+ *       | 'plan_cancelled' | 'plan_updated' | 'event_message',
  *   // aceptación se gestiona desde el outbox; rechazo y "te han valorado" no se envían
  *   ...campos según tipo
  * }
@@ -615,6 +615,62 @@ serve(async (req) => {
           changedPlace,
         };
       }
+    } else if (type === 'event_message') {
+      // Chat de grupo de un evento de la agenda (external_events). Mismo aviso que
+      // un chat de plan; el mensaje se identifica por el client_id del emisor.
+      const eventId = readUuid(body.eventId, 'eventId');
+      const clientId = readUuid(body.clientId, 'clientId');
+      const { data: membership } = await admin
+        .from('external_event_participants')
+        .select('user_id')
+        .eq('event_id', eventId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (!membership) throw new Error('not_allowed');
+
+      const { data: message, error: messageError } = await admin
+        .from('external_event_messages')
+        .select('id, body, message_type, created_at, eliminado_en')
+        .eq('event_id', eventId)
+        .eq('sender_id', user.id)
+        .eq('client_id', clientId)
+        .maybeSingle();
+      if (messageError || !message || message.eliminado_en || !isRecentMessage(message.created_at)) {
+        throw new Error('invalid_message');
+      }
+      const { data: event } = await admin
+        .from('external_events')
+        .select('title')
+        .eq('id', eventId)
+        .maybeSingle();
+
+      const { data: members } = await admin
+        .from('external_event_participants')
+        .select('user_id')
+        .eq('event_id', eventId);
+      const ids = new Set<string>((members ?? []).map((m) => m.user_id as string));
+      ids.delete(user.id);
+      targetIds = [...ids];
+      if (targetIds.length) {
+        const { data: prefs } = await admin
+          .from('external_event_chat_preferences')
+          .select('user_id, muted')
+          .eq('event_id', eventId)
+          .in('user_id', targetIds);
+        const muted = new Set((prefs ?? []).filter((p) => p.muted === true).map((p) => p.user_id as string));
+        targetIds = targetIds.filter((id) => !muted.has(id));
+      }
+
+      data = { type, screen: 'event-chat', eventId, avatarUrl, senderName };
+      category = 'messages';
+      collapseId = `event-msg:${eventId}`;
+      copyCtx = {
+        type: 'plan_message',
+        senderName,
+        planTitle: (event?.title as string) || undefined,
+        messageTipo: message.message_type,
+        messageContenido: message.body,
+      };
     } else {
       return new Response(JSON.stringify({ error: 'unknown_type' }), {
         status: 400,

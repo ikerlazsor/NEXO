@@ -16,6 +16,7 @@ import {
     StyleSheet,
     Switch,
     Text,
+    TouchableOpacity,
     View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -46,10 +47,11 @@ import { type ThemeColors } from '../theme';
 type RowProps = {
     icon: keyof typeof Ionicons.glyphMap;
     label: string;
+    hint?: string;
     right?: React.ReactNode;
 };
 
-const Row = ({ icon, label, right }: RowProps) => {
+const Row = ({ icon, label, hint, right }: RowProps) => {
     const { colors } = useAppTheme();
     const styles = useThemedStyles(createStyles);
     return (
@@ -57,7 +59,10 @@ const Row = ({ icon, label, right }: RowProps) => {
             <View style={[styles.rowIcon, { backgroundColor: colors.primarySoft }]}>
                 <Ionicons name={icon} size={20} color={colors.primary} />
             </View>
-            <Text style={[styles.rowLabel, { color: colors.text, flex: 1 }]}>{label}</Text>
+            <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.rowLabel, { color: colors.text }]}>{label}</Text>
+                {hint ? <Text style={[styles.rowHint, { color: colors.textMuted }]}>{hint}</Text> : null}
+            </View>
             {right}
         </View>
     );
@@ -105,12 +110,16 @@ export default function NotificationSettingsScreen() {
 
     const handleCategoryToggle = async (key: keyof NotificationCategoryPrefs, value: boolean) => {
         hapticToggle(value);
+        const previous = catPrefs;
         const next = { ...catPrefs, [key]: value };
         setCatPrefs(next);
 
         if (value) {
             const result = await enablePushWithPermission(userId ?? undefined);
             if (result.denied) {
+                // Sin permiso del sistema no se activa nada: el interruptor no debe
+                // quedarse encendido como si funcionara.
+                setCatPrefs(previous);
                 setOsDenied(true);
                 hapticWarning();
                 Alert.alert(t('settings.notifPermissionDenied'), t('settings.notifPermissionBody'), [
@@ -141,31 +150,38 @@ export default function NotificationSettingsScreen() {
             <SafeAreaView style={{ flex: 1 }} edges={['top']}>
                 <ScreenHeader compact embedded title={t('settings.notifications')} onBack={() => router.back()} />
                 <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+                    <Text style={[styles.intro, { color: colors.textMuted }]}>
+                        {t('settings.notificationsHint')}
+                    </Text>
                     {osDenied ? (
+                        // Bloqueadas en el sistema: explicarlo y dar un botón grande, no un enlace pequeño.
                         <View style={[styles.card, { marginBottom: 14 }]}>
                             <Row
-                                icon="warning-outline"
+                                icon="notifications-off-outline"
                                 label={t('settings.notifPermissionDenied')}
-                                right={
-                                    <Text
-                                        style={{ color: colors.brand, fontWeight: '700', fontSize: 13 }}
-                                        onPress={() => {
-                                            void openSystemNotificationSettings();
-                                        }}
-                                    >
-                                        {t('settings.notifOpenSettings')}
-                                    </Text>
-                                }
+                                hint={t('settings.notifPermissionBody')}
                             />
+                            <TouchableOpacity
+                                style={[styles.openSettingsBtn, { backgroundColor: colors.primary }]}
+                                activeOpacity={0.88}
+                                onPress={() => {
+                                    void openSystemNotificationSettings();
+                                }}
+                            >
+                                <Text style={[styles.openSettingsText, { color: colors.onPrimary }]}>
+                                    {t('settings.notifOpenSettings')}
+                                </Text>
+                            </TouchableOpacity>
                         </View>
                     ) : null}
                     <View style={styles.card}>
                         <Row
                             icon="chatbubbles-outline"
                             label={t('settings.notifMessages')}
+                            hint={t('settings.notifMessagesHint')}
                             right={
                                 <Switch
-                                    value={catPrefs.messages}
+                                    value={catPrefs.messages && !osDenied}
                                     onValueChange={(v) => {
                                         void handleCategoryToggle('messages', v);
                                     }}
@@ -178,9 +194,10 @@ export default function NotificationSettingsScreen() {
                         <Row
                             icon="people-outline"
                             label={t('settings.notifSocial')}
+                            hint={t('settings.notifSocialHint')}
                             right={
                                 <Switch
-                                    value={catPrefs.social}
+                                    value={catPrefs.social && !osDenied}
                                     onValueChange={(v) => {
                                         void handleCategoryToggle('social', v);
                                     }}
@@ -193,9 +210,10 @@ export default function NotificationSettingsScreen() {
                         <Row
                             icon="alarm-outline"
                             label={t('settings.notifReminders')}
+                            hint={t('settings.notifRemindersHint')}
                             right={
                                 <Switch
-                                    value={catPrefs.reminders}
+                                    value={catPrefs.reminders && !osDenied}
                                     onValueChange={(v) => {
                                         void handleCategoryToggle('reminders', v);
                                     }}
@@ -230,6 +248,10 @@ function createStyles(c: ThemeColors) {
         row: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
         rowIcon: { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
         rowLabel: { fontSize: 16, fontWeight: '600' },
+        rowHint: { fontSize: 13, marginTop: 2, lineHeight: 18 },
+        intro: { fontSize: 14, lineHeight: 20, marginBottom: 14, marginHorizontal: 4 },
+        openSettingsBtn: { marginHorizontal: 16, marginBottom: 16, borderRadius: 14, minHeight: 46, alignItems: 'center', justifyContent: 'center' },
+        openSettingsText: { fontSize: 15, fontWeight: '800' },
         divider: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 68 },
     });
 }

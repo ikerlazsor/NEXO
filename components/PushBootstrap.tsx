@@ -6,6 +6,7 @@ import { AppState, Platform } from 'react-native';
 import {
     getActiveConversation,
     isActiveDirectChat,
+    isActiveEventChat,
     isActivePlanChat,
 } from '../lib/activeConversation';
 import { flushChatOutbox } from '../lib/chatOutbox';
@@ -90,6 +91,10 @@ function shouldSuppressForeground(raw: Record<string, unknown> | undefined): boo
     ) {
         return true;
     }
+    const eventId = data.eventId ? String(data.eventId) : '';
+    if (eventId && type === 'event_message' && isActiveEventChat(eventId)) {
+        return true;
+    }
     // Fallback: active conversation matches payload
     const active = getActiveConversation();
     if (active?.kind === 'plan' && planId && active.id === planId && type.includes('message')) {
@@ -145,8 +150,12 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
                 // Red de seguridad: el push pudo salir antes de guardarse la preferencia.
                 if (type) {
                     const cats = await getNotificationCategoryPrefs();
-                    const isMessage = type === 'plan_message' || type === 'direct_message';
-                    const isReminder = type === 'plan_today' || type === 'plan_rating';
+                    const isMessage =
+                        type === 'plan_message' || type === 'direct_message' || type === 'event_message';
+                    // El recordatorio local de valorar se programa como 'rating_ready'; antes solo se
+                    // miraba 'plan_rating' y caía en «Social» (se ocultaba con Social apagado).
+                    const isReminder =
+                        type === 'plan_today' || type === 'plan_rating' || type === 'rating_ready' || type === 'rate_plan';
                     const allowed = isMessage
                         ? cats.messages
                         : isReminder

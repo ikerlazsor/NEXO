@@ -3,7 +3,8 @@ import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { Linking, Platform } from 'react-native';
-import { getStoredLang } from './i18n';
+import { getStoredLang, tOffline } from './i18n';
+import { Alert } from './nexoAlert';
 import { localeTag } from './locale';
 import { persistPreferredLanguage } from './appLanguage';
 import {
@@ -233,17 +234,62 @@ export async function enablePushWithPermission(userId?: string): Promise<{
     return { enabled: true, denied: false };
 }
 
-/** Primera vez tras onboarding: pide permiso si aún no se ha decidido. No insiste si ya lo denegó. */
+/**
+ * Al arrancar: registra el token si ya hay permiso. Ya NO pide el permiso del
+ * sistema nada más terminar el registro (salía a la vez que el de ubicación y sin
+ * contexto; en iOS solo se puede pedir una vez). Se pide en contexto con
+ * maybeAskPushPermission, tras una acción social.
+ */
 export async function bootstrapPushForUser(userId: string): Promise<void> {
     const enabled = await syncPushPreferenceFromServer(userId);
     if (!enabled) return;
     const perm = await getNotificationPermissionStatus();
     if (perm === 'granted') {
         await registerPushToken(userId);
-        return;
     }
-    if (perm === 'undetermined') {
-        await enablePushWithPermission(userId);
+}
+
+const SOFT_ASK_KEY = '@nexo_push_soft_ask';
+const SOFT_ASK_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000;
+const SOFT_ASK_MAX = 3;
+let softAskInFlight = false;
+
+/**
+ * Tras unirse a un plan, escribir en un chat, etc. (cuando alguien puede
+ * responder): explica para qué sirven y, si acepta, pide el permiso del sistema.
+ * Como mucho 3 veces, separadas 3 días; nunca si ya decidió en el sistema.
+ */
+export async function maybeAskPushPermission(): Promise<void> {
+    if (Platform.OS === 'web' || !Device.isDevice || softAskInFlight) return;
+    softAskInFlight = true;
+    try {
+        if ((await getNotificationPermissionStatus()) !== 'undetermined') return;
+        if (!(await getPushPreference())) return;
+        let state = { count: 0, at: 0 };
+        try {
+            const raw = await AsyncStorage.getItem(SOFT_ASK_KEY);
+            if (raw) state = { ...state, ...(JSON.parse(raw) as typeof state) };
+        } catch {
+            /* ignore */
+        }
+        if (state.count >= SOFT_ASK_MAX || Date.now() - state.at < SOFT_ASK_COOLDOWN_MS) return;
+        await AsyncStorage.setItem(SOFT_ASK_KEY, JSON.stringify({ count: state.count + 1, at: Date.now() }));
+        const lang = await getStoredLang();
+        // Pequeña espera: que termine la animación / el aviso de la acción.
+        await new Promise<void>((resolve) => setTimeout(resolve, 900));
+        Alert.alert(tOffline(lang, 'push.askTitle'), tOffline(lang, 'push.askBody'), [
+            { text: tOffline(lang, 'push.askLater'), style: 'cancel' },
+            {
+                text: tOffline(lang, 'push.askYes'),
+                onPress: () => {
+                    void enablePushWithPermission();
+                },
+            },
+        ]);
+    } catch {
+        /* ignore */
+    } finally {
+        softAskInFlight = false;
     }
 }
 
@@ -381,10 +427,14 @@ export type PushNotifyType =
     | 'compliment'
     | 'spark'
     | 'plan_cancelled'
-    | 'plan_updated';
+    | 'plan_updated'
+    | 'event_message';
 
 /** Dispara la Edge Function send-push (fire-and-forget, 1 reintento). */
 export function notifyPush(payload: Record<string, unknown> & { type: PushNotifyType }): void {
+    // Acaba de hacer algo social (unirse, escribir, invitar...): buen momento para
+    // ofrecer avisos cuando le respondan.
+    void maybeAskPushPermission();
     void withRetry(
         async () => {
             const { error } = await supabase.functions.invoke('send-push', { body: payload });
@@ -429,6 +479,11 @@ export function notifyPlanInvite(planId: string, toUserId: string) {
 
 export function notifyPlanMessage(planId: string, messageId: string) {
     notifyPush({ type: 'plan_message', planId, messageId });
+}
+
+/** Mensaje en el chat de grupo de un evento de la agenda. */
+export function notifyEventMessage(eventId: string, clientId: string) {
+    notifyPush({ type: 'event_message', eventId, clientId });
 }
 
 export function notifyDirectMessage(toUserId: string, messageId: string) {
@@ -778,11 +833,13 @@ export function normalizePushData(
         'inviter_id',
     );
     const inviteId = pick('inviteId', 'invite_id');
+    const eventId = pick('eventId', 'event_id');
     const screen = pick('screen');
     const type = pick('type');
 
     return {
         ...data,
+        ...(eventId ? { eventId } : {}),
         ...(type ? { type } : {}),
         ...(screen ? { screen } : {}),
         ...(planId ? { planId } : {}),
@@ -844,6 +901,10 @@ export function resolvePushNavigation(raw: Record<string, unknown> | undefined):
             return planId ? { href: `/chat/${planId}` } : { href: '/(tabs)/chats' };
         case 'direct_message':
             return otherUserId ? { href: `/direct-chat/${otherUserId}` } : { href: '/(tabs)/chats' };
+        case 'event_message': {
+            const eventId = data.eventId ? String(data.eventId) : '';
+            return eventId ? { href: `/event-chat/${eventId}` } : { href: '/(tabs)/chats' };
+        }
         case 'rating_ready':
         case 'rate_plan':
             return planId ? { href: `/rate-plan?planId=${encodeURIComponent(planId)}` } : null;

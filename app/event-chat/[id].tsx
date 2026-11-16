@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { setActiveConversation } from '../../lib/activeConversation';
 import { ActivityIndicator, Modal, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -44,6 +45,11 @@ function EventConversation({ id, userId, fromEvent }: { id: string; userId: stri
   const insets = useSafeAreaInsets();
   const keyboardStyle = useChatKeyboardBottomPad(insets.bottom);
   const chat = useEventChat(id, userId);
+  // Con este chat abierto no salta su propio aviso push, y se quitan los ya mostrados.
+  useFocusEffect(useCallback(() => {
+    setActiveConversation({ kind: 'event', id });
+    return () => setActiveConversation(null);
+  }, [id]));
   const [event, setEvent] = useState(() => peekEvent(id));
   const [people, setPeople] = useState<EventPerson[]>([]);
   const [membersOpen, setMembersOpen] = useState(false);

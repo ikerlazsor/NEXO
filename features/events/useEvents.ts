@@ -1,3 +1,4 @@
+import { maybeAskPushPermission } from "../../lib/push";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
@@ -293,6 +294,8 @@ export function useEvents(
       try {
         const next = !joined.has(id);
         await setEventMembership(id, next);
+        // Se acaba de unir a un grupo: ofrecer avisos de su chat.
+        if (next) void maybeAskPushPermission();
         if (currentScope.current === scope)
           publishEventMembership({ userId: scope, eventId: id, joined: next });
         if (joinLock.current === operation && currentScope.current === scope)

@@ -8,6 +8,7 @@ export type PresentedPushMatch = {
     screens?: string[];
     planId?: string;
     otherUserId?: string;
+    eventId?: string;
 };
 
 function str(data: Record<string, unknown> | undefined, key: string): string {
@@ -33,6 +34,8 @@ function dataMatches(raw: Record<string, unknown> | undefined, match: PresentedP
     if (match.planId && !planId) return false;
     if (match.otherUserId && otherUserId && match.otherUserId !== otherUserId) return false;
     if (match.otherUserId && !otherUserId) return false;
+    const eventId = str(data, 'eventId');
+    if (match.eventId && match.eventId !== eventId) return false;
     return true;
 }
 
@@ -108,9 +111,11 @@ export function dismissPushFromPayload(raw: Record<string, unknown> | undefined)
     const type = str(data, 'type');
     const planId = str(data, 'planId');
     const otherUserId = str(data, 'otherUserId');
+    const eventId = str(data, 'eventId');
     void dismissPresentedPush({
         types: type ? [type] : undefined,
         planId: planId || undefined,
         otherUserId: otherUserId || undefined,
+        eventId: eventId || undefined,
     });
 }

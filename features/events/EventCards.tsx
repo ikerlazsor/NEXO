@@ -118,7 +118,6 @@ export const EventCard = memo(function EventCard({
   const classification = eventClassification(event);
   const accent = getCategoryColor(classification.category);
   const dark = scheme === "dark";
-  const free = isFreeEvent(event.price_text);
   const when = eventWhenLabel(event, lang);
   return (
     <View
@@ -158,11 +157,6 @@ export const EventCard = memo(function EventCard({
                         : t(`cat.sub.${classification.subcategory}`)}
                     </Text>
                   </View>
-                  {free ? (
-                    <View style={[s.glassPill, s.freePill]}>
-                      <Text style={[s.glassPillText, s.freePillText]}>{t("events.free")}</Text>
-                    </View>
-                  ) : null}
                 </View>
                 {(onShare || onToggleSave) && !preview ? (
                   <View style={s.topRightGroup}>
@@ -466,8 +460,6 @@ const s = StyleSheet.create({
     textShadowRadius: 4,
   },
   dot: { width: 7, height: 7, borderRadius: 4 },
-  freePill: { backgroundColor: "#059669" },
-  freePillText: { color: "#FFFFFF" },
   whenText: {
     fontSize: 13,
     fontWeight: "800",

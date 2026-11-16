@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as ExpoImage } from 'expo-image';
+import { Asset } from 'expo-asset';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -66,6 +67,15 @@ const AGE_ITEM_H = 52;
 
 const IMG_AVATAR = require('../assets/images/Vacio foto perfil.png');
 const IMG_AVATAR_F = require('../assets/images/Vacio foto perfil femenino.png');
+/** Avatar por defecto si se elige «Añadir más tarde» (JPEG con fondo: el avatar se sube como JPEG). */
+const DEFAULT_AVATAR_M = require('../assets/images/avatar-default-penguin.jpg');
+const DEFAULT_AVATAR_F = require('../assets/images/avatar-default-penguin-f.jpg');
+
+async function defaultAvatarUri(genero: Genero | null): Promise<string> {
+    const asset = Asset.fromModule(genero === 'femenino' ? DEFAULT_AVATAR_F : DEFAULT_AVATAR_M);
+    await asset.downloadAsync();
+    return asset.localUri ?? asset.uri;
+}
 
 let onboardingFinishLock = false;
 
@@ -93,6 +103,9 @@ export default function OnboardingScreen() {
     const [age, setAge] = useState(DEFAULT_AGE);
     const [genero, setGenero] = useState<Genero | null>(null);
     const [avatarUri, setAvatarUri] = useState<string | null>(null);
+    /** «Añadir más tarde»: se usa el pingüino/pingüina según el género elegido. */
+    const [defaultAvatar, setDefaultAvatar] = useState(false);
+    const [resolvingDefault, setResolvingDefault] = useState(false);
     const [cropUri, setCropUri] = useState<string | null>(null);
     const [cropWidth, setCropWidth] = useState<number | null>(null);
     const [cropHeight, setCropHeight] = useState<number | null>(null);
@@ -306,7 +319,9 @@ export default function OnboardingScreen() {
                 const userId = authUser.id;
                 const nombre = normalizeDisplayName(displayName);
 
-                const { url, error: uploadError } = await uploadAvatarFromUri(userId, avatarUri);
+                // Si eligió «más tarde» y luego cambió el género, el pingüino sigue al género.
+                const sourceUri = defaultAvatar ? await defaultAvatarUri(genero) : avatarUri;
+                const { url, error: uploadError } = await uploadAvatarFromUri(userId, sourceUri);
                 if (uploadError || !url) {
                     lastError = uploadError ?? t('profile.uploadError');
                     continue;
@@ -653,10 +668,36 @@ export default function OnboardingScreen() {
                                         </TouchableOpacity>
                                     </View>
                                 </View>
-                                {continueBtn(!!avatarUri, () => {
+                                {continueBtn(!!avatarUri && !defaultAvatar, () => {
                                     hapticLight();
                                     setStep(4);
                                 })}
+                                <TouchableOpacity
+                                    style={styles.laterBtn}
+                                    disabled={resolvingDefault}
+                                    activeOpacity={0.8}
+                                    onPress={() => {
+                                        hapticLight();
+                                        setResolvingDefault(true);
+                                        void defaultAvatarUri(genero)
+                                            .then((uri) => {
+                                                setAvatarUri(uri);
+                                                setDefaultAvatar(true);
+                                                setStep(4);
+                                            })
+                                            .catch(() => Alert.alert(t('onboarding.notice'), t('onboarding.photoError')))
+                                            .finally(() => setResolvingDefault(false));
+                                    }}
+                                >
+                                    {resolvingDefault ? (
+                                        <ActivityIndicator color={colors.primary} />
+                                    ) : (
+                                        <>
+                                            <Text style={styles.laterText}>{t('onboarding.photoLater')}</Text>
+                                            <Text style={styles.laterHint}>{t('onboarding.photoLaterHint')}</Text>
+                                        </>
+                                    )}
+                                </TouchableOpacity>
                             </View>
                         )}
 
@@ -719,6 +760,7 @@ export default function OnboardingScreen() {
                 }}
                 onConfirm={(cropped) => {
                     setAvatarUri(cropped);
+                    setDefaultAvatar(false);
                     setCropUri(null);
                     setCropWidth(null);
                     setCropHeight(null);
@@ -911,6 +953,9 @@ function createOnboardingStyles(c: ThemeColors) {
             alignItems: 'center',
         },
         btnDisabled: { opacity: 0.45 },
+        laterBtn: { alignItems: 'center', paddingTop: 14, paddingBottom: 2, minHeight: 48, justifyContent: 'center' },
+        laterText: { color: PRIMARY_DARK, fontSize: 15, fontWeight: '800' },
+        laterHint: { color: c.textMuted, fontSize: 12, marginTop: 3, textAlign: 'center' },
         btnText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
         completingOverlay: {
             ...StyleSheet.absoluteFillObject,

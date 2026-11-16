@@ -29,6 +29,7 @@ type Dict = Record<string, string>;
 
 const es: Dict = {
     "events.going": "Ya vamos {n}",
+    "events.free": "Gratis",
     "events.location": "Ubicación",
     "events.about": "El plan",
     "events.detailsAndBooking": "Información y reservas",
@@ -2075,6 +2076,7 @@ const es: Dict = {
 
 const en: Dict = {
     "events.going": "{n} going",
+    "events.free": "Free",
     "events.location": "Location",
     "events.about": "About this plan",
     "events.detailsAndBooking": "Information and booking",

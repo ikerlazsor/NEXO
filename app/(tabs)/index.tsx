@@ -171,6 +171,8 @@ import { rememberEvent } from '../../features/events/cache';
 import type { ExternalEvent, EventFilters } from '../../features/events/types';
 import { eventJoinErrorKey } from '../../features/events/api';
 type FeedRow = SocialFeedRow | {kind:'event';id:string;event:ExternalEvent};
+/** Tiempo mínimo del spinner de recarga para que no parpadee. */
+const MIN_REFRESH_MS = 650;
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
 
@@ -330,6 +332,18 @@ export default function HomeScreen() {
     const [loading, setLoading] = useState(() => cachedFeed == null);
     const showFeedSkeleton = useDelayedVisible(loading && plans.length === 0);
     const [refreshing, setRefreshing] = useState(false);
+    const [refreshEpoch, setRefreshEpoch] = useState(0);
+    const feedFade = useSharedValue(1);
+    useEffect(() => {
+        if (!refreshEpoch) return;
+        cancelAnimation(feedFade);
+        feedFade.value = 0;
+        feedFade.value = withTiming(1, { duration: 340, easing: Easing.out(Easing.cubic) });
+    }, [refreshEpoch, feedFade]);
+    const feedFadeStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(feedFade.value, [0, 1], [0.5, 1]),
+        transform: [{ translateY: interpolate(feedFade.value, [0, 1], [12, 0]) }],
+    }));
     const [loadError, setLoadError] = useState(false);
     const [joiningPlanId, setJoiningPlanId] = useState<string | null>(null);
     const joiningRef = useRef(false);
@@ -443,12 +457,12 @@ export default function HomeScreen() {
     const currentUserIdRef = useRef<string | null>(null);
     const friendIdsRef = useRef<Set<string>>(new Set());
     const coincidedIdsRef = useRef<Set<string>>(new Set());
-    const requestFeedLoadRef = useRef<(opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => void>(() => {});
+    const requestFeedLoadRef = useRef<(opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean; animate?: boolean }) => void>(() => {});
 
     const onFeedRefresh = useCallback(() => {
         reorderAfterRefreshRef.current = true;
         hapticSelection();
-        requestFeedLoadRef.current({ refresh: true });
+        requestFeedLoadRef.current({ refresh: true, animate: true });
     }, []);
 
     useEffect(() => {
@@ -520,8 +534,9 @@ export default function HomeScreen() {
     friendIdsRef.current = friendIds;
     coincidedIdsRef.current = coincidedIds;
 
-    const fetchData = useCallback(async (opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => {
+    const fetchData = useCallback(async (opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean; animate?: boolean }) => {
         let finished = false;
+        const fetchStartedAt = Date.now();
         const isRefresh = !!opts?.refresh;
         const quiet = !!opts?.quiet;
         const safetyTimer = setTimeout(() => {
@@ -611,7 +626,13 @@ export default function HomeScreen() {
             clearTimeout(safetyTimer);
             hasDataRef.current = true;
             setLoading(false);
-            setRefreshing(false);
+            // El spinner se queda un mínimo (sin parpadeo) y al cerrarse el contenido nuevo entra con un fundido.
+            const settle = () => {
+                setRefreshing(false);
+                if (isRefresh && opts?.animate) setRefreshEpoch((n) => n + 1);
+            };
+            const wait = isRefresh && !quiet ? Math.max(0, MIN_REFRESH_MS - (Date.now() - fetchStartedAt)) : 0;
+            if (wait > 0) setTimeout(settle, wait); else settle();
             // Tras recargar, ya se pueden reordenar los planes a los que te uniste.
             if (deferMineSortIdsRef.current.size > 0) {
                 deferMineSortIdsRef.current.clear();
@@ -698,7 +719,7 @@ export default function HomeScreen() {
         selectedSubcategories.length,
     ]);
 
-    const requestFeedLoad = useCallback((opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean }) => {
+    const requestFeedLoad = useCallback((opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean; animate?: boolean }) => {
         if (fetchInFlightRef.current) {
             // Casita / pull-to-refresh mientras ya carga: encolar una recarga al terminar.
             if (opts?.refresh) pendingFeedRefreshRef.current = true;
@@ -948,7 +969,8 @@ export default function HomeScreen() {
             const from = getScreenScrollOffset(ScreenKeys.FEED);
             // Ya arriba: solo recarga (sin pelear con el scroll).
             if (from <= 16) {
-                requestFeedLoad({ refresh: true, skipScrollJump: true });
+                hapticSelection();
+                requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true, animate: true });
                 setTimeout(release, 700);
                 return;
             }
@@ -957,7 +979,7 @@ export default function HomeScreen() {
                 (opts) => listRef.current?.scrollToOffset(opts),
                 from,
                 () => {
-                    requestFeedLoad({ refresh: true, skipScrollJump: true });
+                    requestFeedLoad({ refresh: true, skipScrollJump: true, quiet: true, animate: true });
                     setTimeout(release, 400);
                 },
             );
@@ -1949,6 +1971,7 @@ export default function HomeScreen() {
             ) : null}
 
             <View style={styles.listWrap}>
+                <Animated.View style={[{ flex: 1 }, feedFadeStyle]}>
                 <FlashList
                     ref={listRef}
                     style={{ flex: 1 }}
@@ -2038,7 +2061,7 @@ export default function HomeScreen() {
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
-                            onRefresh={()=>{hapticSelection();onFeedRefresh();void external.refresh();}}
+                            onRefresh={()=>{onFeedRefresh();void external.refresh();}}
                             tintColor={theme.colors.textMuted}
                             colors={[theme.colors.primary]}
                             progressBackgroundColor={theme.colors.surface}
@@ -2070,6 +2093,7 @@ export default function HomeScreen() {
                         )
                     }
                 />
+                </Animated.View>
                 {showFeedSkeleton && !refreshing && !feedRowsUi.length ? (
                     <View style={styles.listLoadingOverlay} pointerEvents="none">
                         <FeedSkeletonList count={3} />

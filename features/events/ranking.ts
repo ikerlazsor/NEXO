@@ -29,7 +29,7 @@ export function rankUnifiedFeed<
 ) {
   const rows: (T | { kind: "event"; id: string; event: ExternalEvent })[] = [
     ...social.filter((row) => row.kind === "plan"),
-    ...events
+    ...dedupeSameSlotEvents(events)
       .filter((event) => isPublishableEvent(event, context.now ?? Date.now()))
       .map((event) => ({
         kind: "event" as const,
@@ -166,7 +166,7 @@ export function rankExternalEvents(
   coords: { latitude: number; longitude: number } | null,
   now = Date.now(),
 ) {
-  const remaining = [...new Map(events.map((e) => [e.id, e])).values()].filter(
+  const remaining = dedupeSameSlotEvents([...new Map(events.map((e) => [e.id, e])).values()]).filter(
     (e) => e.status === "active",
   );
   const scores = new Map(
@@ -231,4 +231,24 @@ export function interleaveSocialRows<T>(
       output.push({ kind: "event", id: `event:${event.id}`, event });
     }
   return output;
+}
+
+/** Quita eventos repetidos: mismo sitio y misma hora (p. ej. el mismo intercambio
+ * anunciado en dos idiomas). Se queda con el que más gente apuntada tiene. */
+export function dedupeSameSlotEvents<E extends { id: string; starts_at?: string | null; venue?: string | null; attendance_hint?: number | null }>(events: E[]): E[] {
+  const best = new Map<string, E>();
+  const out: E[] = [];
+  for (const e of events) {
+    const venue = (e.venue || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const t = e.starts_at ? Date.parse(e.starts_at) : NaN;
+    if (!venue || !Number.isFinite(t)) { out.push(e); continue; }
+    const key = `${venue}|${Math.round(t / 60000)}`;
+    const prev = best.get(key);
+    if (!prev) { best.set(key, e); out.push(e); continue; }
+    if ((e.attendance_hint ?? 0) > (prev.attendance_hint ?? 0)) {
+      best.set(key, e);
+      out[out.indexOf(prev)] = e;
+    }
+  }
+  return out;
 }

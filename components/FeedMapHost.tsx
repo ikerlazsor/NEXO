@@ -63,6 +63,8 @@ const MADRID_REGION = {
 
 /** Más zoom al seleccionar (delta más bajo = más cerca). */
 const SELECT_DELTA = 0.052;
+/** Zoom inicial cuando conocemos la posición del usuario (~4-5 km alrededor). */
+const USER_DELTA = 0.045;
 /** Fracción del delta que desplaza el centro al sur → el pin queda más arriba en pantalla. */
 const SELECT_CENTER_LAT_SHIFT = 0.18;
 /** Copias del carrusel para loop infinito (impar → el bloque del medio es el “real”). */
@@ -475,7 +477,7 @@ export function FeedMapHost() {
         });
     }, []);
 
-    /** Misma distancia (delta) que Madrid; centro = usuario si hay permiso, si no Madrid. */
+    /** Con permiso: zoom cercano centrado en el usuario; si no, vista de Madrid. */
     const latitude = userCoords?.latitude, longitude = userCoords?.longitude;
     useEffect(() => {
         if (!visible) return;
@@ -483,8 +485,8 @@ export function FeedMapHost() {
             ? {
                   latitude,
                   longitude,
-                  latitudeDelta: MADRID_REGION.latitudeDelta,
-                  longitudeDelta: MADRID_REGION.longitudeDelta,
+                  latitudeDelta: USER_DELTA,
+                  longitudeDelta: USER_DELTA,
               }
             : MADRID_REGION;
         camera.current!.move(target, 280);
@@ -733,15 +735,14 @@ export function FeedMapHost() {
                         // una vista propia, el mapa no lo oculta al solaparse con otros.
                         anchor={{ x: 0.5, y: 1 }}
                         tracksViewChanges={trackPinViews}
-                        title={pin.members.length > 1 ? t('feed.mapGroup', { n: pin.members.length }) : pin.members[0].titulo || ''}
                         onPress={() => {
                             if (pin.members.length === 1) focusPlanId(String(pin.members[0].id), { scroll: true, mapDuration: MAP_FOCUS_MS });
                             else camera.current!.move({ latitude: pin.latitude, longitude: pin.longitude, latitudeDelta: Math.max(0.001, viewport.latitudeDelta / 3), longitudeDelta: Math.max(0.001, viewport.longitudeDelta / 3) }, 250);
                         }}
                     >
                         <View style={mapHostStyles.pinWrap} collapsable={false}>
-                            <Ionicons name="location" size={40} color="#FFFFFF" style={mapHostStyles.pinBack} />
-                            <Ionicons name="location" size={34} color={pin.color} />
+                            <Ionicons name="location" size={29} color="#FFFFFF" style={mapHostStyles.pinBack} />
+                            <Ionicons name="location" size={25} color={pin.color} />
                         </View>
                     </Marker>)}
                 </NexoMapView></Animated.View>
@@ -935,8 +936,8 @@ export function FeedMapHost() {
 const mapHostStyles = StyleSheet.create({
     // Por encima de la cabecera y la barra inferior del chrome (zIndex 30).
     sheet: { zIndex: 1000, elevation: 1000 },
-    pinWrap: { width: 40, height: 42, alignItems: "center", justifyContent: "flex-end" },
-    pinBack: { position: "absolute", bottom: -2 },
+    pinWrap: { width: 29, height: 31, alignItems: "center", justifyContent: "flex-end" },
+    pinBack: { position: "absolute", bottom: -1.5 },
     // Aparcado: detrás del degradado del chrome (zIndex 0), invisible pero en
     // pantalla para que el mapa cargue teselas.
     parked: { zIndex: -1, elevation: 0 },

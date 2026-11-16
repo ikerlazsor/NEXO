@@ -673,7 +673,6 @@ function PlanCardInner({
                         isFriendsOnly && styles.cardInnerFriends,
                         isPrivate && styles.cardInnerPrivate,
                         isCalmPremium && styles.cardInnerPremium,
-                        isCalmPremium && { borderColor: `${catAccent}66` },
                         isFull && styles.cardInnerFull,
                     ]}>
                     <View style={styles.imageWrap} pointerEvents="box-none">
@@ -840,6 +839,8 @@ function PlanCardInner({
                                 />
                                 <Text style={[
                                     styles.metaText,
+                                    // Fecha y hora en negrita y del color de la categoría, como en los eventos.
+                                    { color: catAccent, fontWeight: '800' },
                                     isToday && styles.metaTextToday,
                                     isFriendsOnly && styles.metaTextFriends,
                                     isPrivate && styles.metaTextPrivate,
@@ -1129,19 +1130,19 @@ function createPlanCardStyles(c: ThemeColors) {
     const actionStyles = planCardActionStyles(isDark);
     return StyleSheet.create({
     card: { borderRadius: 26, marginBottom: 22, overflow: 'hidden', elevation: 10, shadowColor: isDark ? '#000' : '#1E3A8A', shadowOpacity: isDark ? 0.45 : 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, backgroundColor: c.surface },
-    cardFull: { padding: 3, overflow: 'visible', elevation: 10, shadowColor: DANGER_DARK, shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderRadius: 28 },
+    cardFull: { padding: 1.5, overflow: 'visible', elevation: 10, shadowColor: DANGER_DARK, shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderRadius: 28 },
     fullBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInnerFull: { borderColor: DANGER, borderWidth: 2, backgroundColor: 'transparent' },
-    cardToday: { padding: 3, overflow: 'visible', elevation: 10, shadowColor: '#D97706', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderRadius: 28 },
-    cardSoloChicas: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#DB2777', shadowOpacity: 0.35, borderRadius: 28 },
+    cardInnerFull: { borderColor: DANGER, borderWidth: 0, borderRadius: 26.5, backgroundColor: 'transparent' },
+    cardToday: { padding: 1.5, overflow: 'visible', elevation: 10, shadowColor: '#D97706', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, borderRadius: 28 },
+    cardSoloChicas: { padding: 1.5, overflow: 'visible', elevation: 14, shadowColor: '#DB2777', shadowOpacity: 0.35, borderRadius: 28 },
     soloChicasBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInnerSoloChicas: { backgroundColor: 'transparent', borderColor: isDark ? '#9D174D' : '#F9A8D4', borderWidth: 2 },
-    cardFriends: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#16A34A', shadowOpacity: 0.32, borderRadius: 28 },
+    cardInnerSoloChicas: { backgroundColor: 'transparent', borderColor: isDark ? '#9D174D' : '#F9A8D4', borderWidth: 0, borderRadius: 26.5 },
+    cardFriends: { padding: 1.5, overflow: 'visible', elevation: 14, shadowColor: '#16A34A', shadowOpacity: 0.32, borderRadius: 28 },
     friendsBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInnerFriends: { backgroundColor: 'transparent', borderColor: isDark ? '#166534' : '#86EFAC', borderWidth: 2 },
-    cardPrivate: { padding: 3, overflow: 'visible', elevation: 14, shadowColor: '#020617', shadowOpacity: 0.45, borderRadius: 28 },
+    cardInnerFriends: { backgroundColor: 'transparent', borderColor: isDark ? '#166534' : '#86EFAC', borderWidth: 0, borderRadius: 26.5 },
+    cardPrivate: { padding: 1.5, overflow: 'visible', elevation: 14, shadowColor: '#020617', shadowOpacity: 0.45, borderRadius: 28 },
     privateBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-    cardInnerPrivate: { backgroundColor: 'transparent', borderColor: isDark ? c.borderStrong : '#64748B', borderWidth: 2 },
+    cardInnerPrivate: { backgroundColor: 'transparent', borderColor: isDark ? c.borderStrong : '#64748B', borderWidth: 0, borderRadius: 26.5 },
     cardContentFriends: { backgroundColor: isDark ? c.successSoft : '#FAFDFB' },
     cardContentPrivate: { backgroundColor: isDark ? c.surfaceSubtle : '#EEF2F7' },
     cardContentToday: { backgroundColor: c.warningSoft },
@@ -1180,7 +1181,7 @@ function createPlanCardStyles(c: ThemeColors) {
     expandHintTextPrivate: { color: c.text, fontWeight: '800' },
     descLabelPrivate: { color: c.text },
     descriptionTextPrivate: { color: c.textMuted },
-    cardPremium: { padding: 2, overflow: 'visible', elevation: 12, shadowColor: '#2563EB', shadowOpacity: 0.2, borderRadius: 28 },
+    cardPremium: { padding: 1.5, overflow: 'visible', elevation: 12, shadowColor: '#2563EB', shadowOpacity: 0.2, borderRadius: 28 },
     cardOrganizer: {
         padding: 3,
         overflow: 'visible',
@@ -1215,8 +1216,9 @@ function createPlanCardStyles(c: ThemeColors) {
     todayBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
     premiumBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
     cardInner: { borderRadius: 24, overflow: 'hidden', backgroundColor: 'transparent', borderWidth: 2, borderColor: isDark ? c.borderStrong : 'rgba(37,99,235,0.22)' },
-    cardInnerToday: { backgroundColor: 'transparent', borderColor: c.warning, borderWidth: 2 },
-    cardInnerPremium: { backgroundColor: 'transparent', borderColor: isDark ? c.primaryBorder : 'rgba(37,99,235,0.38)', borderWidth: 2 },
+    cardInnerToday: { backgroundColor: 'transparent', borderColor: c.warning, borderWidth: 0, borderRadius: 26.5 },
+    // Mismo grosor que las tarjetas de eventos (1,5 px): solo el degradado exterior.
+    cardInnerPremium: { backgroundColor: 'transparent', borderColor: 'transparent', borderWidth: 0, borderRadius: 26.5 },
     todayBadge: { position: 'absolute', top: 14, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#D97706', paddingHorizontal: 13, paddingVertical: 5, borderRadius: 18, zIndex: 5, elevation: 4, shadowColor: '#92400E', shadowOpacity: 0.22, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
     todayBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '900', letterSpacing: 1.1 },
     todayBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: c.warningSoft, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: c.warning },

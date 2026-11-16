@@ -170,7 +170,7 @@ serve(async (req) => {
       going = 0;
     }
   }
-  const cardImage = `${supabaseUrl}/functions/v1/share-card/${planId}?v=8`;
+  const cardImage = `${supabaseUrl}/functions/v1/share-card/${planId}?v=9`;
   const image = cardImage || resolveImageUrl(plan?.imagen_url, supabaseUrl) || BRAND_OG;
   const deepLink = `nexo://plan/${planId}`;
   const storeUrl = isIOS ? APP_STORE_URL : isAndroid ? PLAY_STORE_URL : APP_STORE_URL;

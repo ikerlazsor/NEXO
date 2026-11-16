@@ -1,5 +1,5 @@
 /**
- * Imagen OG del plan: portada, título, burbujas y «Ya somos N».
+ * Imagen OG del plan: solo la portada (sin textos ni avatares).
  * WhatsApp no ejecuta la app: tiene que ser un JPEG público.
  * Deploy: npx supabase functions deploy share-card --project-ref nixeproyzxvqzyrvsxcx --no-verify-jwt
  */
@@ -79,6 +79,10 @@ async function passthrough(url: string | null): Promise<Response | null> {
   }
 }
 
+const BRAND_OG =
+  'https://nixeproyzxvqzyrvsxcx.supabase.co/storage/v1/object/public/imagenes-planes/nexo-og-default.png';
+
+/** Solo la portada del plan, recortada a 1200×630 (sin título, burbujas ni textos). */
 Deno.serve(async (req) => {
   const planId = extractPlanId(req);
   if (!planId) return new Response('not found', { status: 404 });
@@ -93,191 +97,39 @@ Deno.serve(async (req) => {
 
   const { data: plan } = await sb
     .from('planes')
-    .select('titulo, imagen_url')
+    .select('imagen_url')
     .eq('id', planId)
     .maybeSingle();
 
   const cover = resolveImageUrl(plan?.imagen_url as string | null, supabaseUrl);
-  const title = String(plan?.titulo || 'Nexo!').trim().slice(0, 80);
-
-  const { count } = await sb
-    .from('participantes')
-    .select('usuario_id', { count: 'exact', head: true })
-    .eq('plan_id', planId)
-    .eq('estado', 'aceptado');
-
-  const { data: members } = await sb
-    .from('participantes')
-    .select('usuario_id')
-    .eq('plan_id', planId)
-    .eq('estado', 'aceptado')
-    .limit(6);
-
-  const ids = (members ?? []).map((row) => row.usuario_id as string).filter(Boolean);
-  const total = count ?? ids.length;
-  let avatars: string[] = [];
-  if (ids.length) {
-    const { data: profiles } = await sb
-      .from('perfiles')
-      .select('id, avatar_url')
-      .in('id', ids);
-    const byId = new Map((profiles ?? []).map((row) => [row.id as string, row.avatar_url as string | null]));
-    avatars = ids
-      .map((id) => byId.get(id) || '')
-      .map((url) => url.trim())
-      .filter((url) => /^https?:\/\//i.test(url))
-      .slice(0, 5);
+  if (!cover) {
+    return (await passthrough(BRAND_OG)) ?? new Response('unavailable', { status: 404 });
   }
-  const extra = Math.max(0, total - avatars.length);
 
   try {
     await ensureWasm();
     const fontBytes = await font();
-    const bubble = 124;
-    const bubbles = avatars.map((src, index) => ({
-      type: 'img',
-      props: {
-        src,
-        width: bubble,
-        height: bubble,
-        style: {
-          width: bubble,
-          height: bubble,
-          borderRadius: bubble / 2,
-          border: '6px solid #ffffff',
-          marginLeft: index === 0 ? 0 : -34,
-          objectFit: 'cover',
-        },
-      },
-    }));
-    if (extra > 0) {
-      bubbles.push({
-        type: 'div',
-        props: {
-          style: {
-            width: bubble,
-            height: bubble,
-            borderRadius: bubble / 2,
-            marginLeft: avatars.length ? -34 : 0,
-            background: '#2563EB',
-            color: '#fff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 44,
-            border: '6px solid #ffffff',
-          },
-          children: `+${extra}`,
-        },
-      } as never);
-    }
-
+    // Recorte a 1200×630 y JPEG ligero: WhatsApp descarta imágenes muy pesadas.
     const svg = await satori(
       {
-        type: 'div',
+        type: 'img',
         props: {
-          style: {
-            width: 1200,
-            height: 630,
-            display: 'flex',
-            flexDirection: 'column',
-            background: '#0F2A4A',
-            fontFamily: 'Inter',
-          },
-          children: [
-            {
-              type: 'div',
-              props: {
-                style: { display: 'flex', width: 1200, height: 420, position: 'relative' },
-                children: [
-                  cover
-                    ? {
-                      type: 'img',
-                      props: {
-                        src: cover,
-                        width: 1200,
-                        height: 420,
-                        style: { width: 1200, height: 420, objectFit: 'cover' },
-                      },
-                    }
-                    : {
-                      type: 'div',
-                      props: { style: { width: 1200, height: 420, background: '#2563EB' } },
-                    },
-                  {
-                    type: 'div',
-                    props: {
-                      style: {
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        height: 220,
-                        background: 'linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,0.72))',
-                      },
-                    },
-                  },
-                  {
-                    type: 'div',
-                    props: {
-                      style: {
-                        position: 'absolute',
-                        left: 36,
-                        right: 36,
-                        bottom: 28,
-                        display: 'flex',
-                        color: '#fff',
-                        fontSize: 78,
-                        fontWeight: 700,
-                        lineHeight: 1.15,
-                      },
-                      children: title,
-                    },
-                  },
-                ],
-              },
-            },
-            {
-              type: 'div',
-              props: {
-                style: {
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: '32px 40px',
-                  background: '#ffffff',
-                  height: 210,
-                },
-                children: [
-                  { type: 'div', props: { style: { display: 'flex', alignItems: 'center' }, children: bubbles } },
-                  {
-                    type: 'div',
-                    props: {
-                      style: {
-                        marginLeft: 28,
-                        color: '#0F2A4A',
-                        fontSize: 58,
-                        fontWeight: 700,
-                      },
-                      children: total > 0 ? `¡Ya somos ${total}!` : 'Nexo!',
-                    },
-                  },
-                ],
-              },
-            },
-          ],
+          src: cover,
+          width: 1200,
+          height: 630,
+          style: { width: 1200, height: 630, objectFit: 'cover' },
         },
-      },
+      } as never,
       {
         width: 1200,
         height: 630,
         fonts: [{ name: 'Inter', data: fontBytes, weight: 700, style: 'normal' }],
       },
     );
-
     const rendered = new Resvg(svg, { fitTo: { mode: 'width', value: 1200 } }).render();
     const jpg = encodeJpeg(
       { data: rendered.pixels, width: rendered.width, height: rendered.height },
-      62,
+      72,
     );
     rendered.free();
     return new Response(jpg.data, {
@@ -287,7 +139,7 @@ Deno.serve(async (req) => {
       },
     });
   } catch (error) {
-    console.error('share-card compose', error);
+    console.error('share-card cover', error);
     const fallback = await passthrough(cover);
     if (fallback) return fallback;
     return new Response('unavailable', { status: 404 });

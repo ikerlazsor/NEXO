@@ -12,6 +12,7 @@ export function hasConfirmedLocation(event: {
   longitude: number | null;
 }): boolean;
 export function isSocialActivity(title: string, description?: string, subcategory?: string): boolean;
+export function isParticipatoryActivity(title: string, subcategory?: string): boolean;
 export function isPublishableEvent(
   event: {
     title: string;

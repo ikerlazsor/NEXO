@@ -6,7 +6,11 @@ import {
   type FeedTaste,
 } from "../../lib/feedAffinity";
 import type { ExternalEvent, EventInteractionTaste } from "./types";
-import { isPublishableEvent } from "../../lib/externalEventPolicy.cjs";
+import { isParticipatoryActivity, isPublishableEvent } from "../../lib/externalEventPolicy.cjs";
+
+/** Las quedadas participativas (yoga, running, idiomas...) son lo que hace la app
+ * social; van por delante de conciertos o teatro con la misma afinidad. */
+export const PARTICIPATORY_EVENT_BOOST = 18;
 
 export function rankUnifiedFeed<
   T extends { id: string; kind: string; plan?: AffinityPlan; membership?: string },
@@ -38,6 +42,7 @@ export function rankUnifiedFeed<
       const e = row.event;
       return (
         interactionBoost +
+        (isParticipatoryActivity(e.title, e.subcategory ?? "") ? PARTICIPATORY_EVENT_BOOST : 0) +
         scoreFeedPlanRanked(
           {
             id: row.id,

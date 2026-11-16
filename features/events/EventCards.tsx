@@ -253,12 +253,19 @@ export const EventCard = memo(function EventCard({
             {t("events.going", { n: social?.count ?? 0 })}
           </Text>
         </Pressable> : <Pressable onPress={onOpen} accessibilityRole="button" style={s.sourceRow}>
+          {/* Sin apuntados aún: el evento tiene público igualmente; Nexo es para ir
+              acompañado. «Sé el primero» transmitía ir solo y frenaba a unirse. */}
           <View style={[s.firstIcon, { backgroundColor: `${accent}1A` }]}>
-            <Ionicons name="sparkles" size={14} color={accent} />
+            <Ionicons name="people" size={14} color={accent} />
           </View>
-          <Text style={[s.sourceText, { color: colors.textMuted }]} numberOfLines={1}>
-            {t("card.beFirst")}
-          </Text>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[s.openGroupTitle, { color: colors.text }]} numberOfLines={1}>
+              {t("events.openGroup")}
+            </Text>
+            <Text style={[s.sourceText, { color: colors.textMuted }]} numberOfLines={1}>
+              {t("events.openGroupSub")}
+            </Text>
+          </View>
         </Pressable>}
         <PressScale
           onPress={onJoin}
@@ -410,6 +417,7 @@ const s = StyleSheet.create({
     letterSpacing: 0.1,
     marginBottom: 6,
   },
+  openGroupTitle: { fontSize: 13, fontWeight: "800", lineHeight: 17 },
   firstIcon: {
     width: 28,
     height: 28,

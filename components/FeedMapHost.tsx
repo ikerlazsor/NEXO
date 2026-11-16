@@ -16,11 +16,13 @@ import {
     View,
 } from 'react-native';
 import { Marker } from 'react-native-maps';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NexoMapView } from './NexoMapView';
 import { PlanImage } from './PlanImage';
 import { runAfterNavTransition } from '../lib/afterTransition';
+import { peekMapSnapshot, saveMapSnapshot, warmMapSnapshot } from '../lib/mapSnapshot';
 import { ProfileAvatar } from './ProfileAvatar';
 import { createFeedStyles } from '../features/feed/feedStyles';
 import { useThemedStyles } from '../lib/appTheme';
@@ -124,6 +126,24 @@ export function FeedMapHost() {
     const { userId } = useAuthSession();
     const [visible, setVisible] = useState(false);
     const [renderMap, setRenderMap] = useState(false);
+    // Captura del mapa (última apertura) mientras el nativo carga teselas; el mapa
+    // real entra con fundido al cargar, así el panel nunca aparece vacío.
+    const [snapshotUri, setSnapshotUri] = useState<string | null>(() => peekMapSnapshot());
+    const mapOpacity = useSharedValue(0);
+    const mapFadeStyle = useAnimatedStyle(() => ({ opacity: mapOpacity.value }));
+    const snapshotTakenRef = useRef(false);
+    useEffect(() => {
+        void warmMapSnapshot().then(() => setSnapshotUri(peekMapSnapshot()));
+    }, []);
+    const revealMap = useCallback(() => {
+        mapOpacity.value = withTiming(1, { duration: 240 });
+    }, [mapOpacity]);
+    // Si onMapLoaded no llega (p. ej. sin red), mostrar el mapa igualmente.
+    useEffect(() => {
+        if (!renderMap) return;
+        const timer = setTimeout(revealMap, 1500);
+        return () => clearTimeout(timer);
+    }, [renderMap, revealMap]);
     const [viewport, setViewport] = useState(MADRID_REGION);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -301,6 +321,8 @@ export function FeedMapHost() {
         mapEpochRef.current = camera.current!.open();
         const gen = ++loadGenRef.current;
         setRenderMap(false);
+        mapOpacity.value = 0;
+        setSnapshotUri(peekMapSnapshot());
         setTick((n) => n + 1);
         setVisible(true);
         didInitCarousel.current = false;
@@ -597,12 +619,24 @@ export function FeedMapHost() {
             onShow={() => { if (visibleRef.current && !closingRef.current) setRenderMap(true); }}
             onDismiss={finishDismiss}>
             <View style={styles.mapModalContainer}>
-                {/* Fondo siempre presente: el mapa entra con fundido encima, sin parpadeo. */}
-                <View style={[mapHostStyles.map, { backgroundColor: theme.colors.backgroundAlt, alignItems: 'center', justifyContent: 'center', gap: 12 }]}>
-                    {!renderMap && <Ionicons name="map-outline" size={40} color={theme.colors.primary} />}
-                    {!renderMap && <ActivityIndicator color={theme.colors.primary} />}
-                </View>
-                {renderMap && <Animated.View entering={FadeIn.duration(280)} style={mapHostStyles.map}><NexoMapView
+                {/* Fondo siempre presente: captura del mapa (o fondo liso la primera vez).
+                    El mapa real entra con fundido encima cuando ha cargado. */}
+                {snapshotUri ? (
+                    <Image
+                        source={{ uri: snapshotUri }}
+                        style={mapHostStyles.map}
+                        contentFit="cover"
+                        transition={0}
+                        cachePolicy="none"
+                        onError={() => setSnapshotUri(null)}
+                    />
+                ) : (
+                    <View style={[mapHostStyles.map, { backgroundColor: theme.colors.backgroundAlt, alignItems: 'center', justifyContent: 'center', gap: 12 }]}>
+                        <Ionicons name="map-outline" size={40} color={theme.colors.primary} />
+                        <ActivityIndicator color={theme.colors.primary} />
+                    </View>
+                )}
+                {renderMap && <Animated.View style={[mapHostStyles.map, mapFadeStyle]}><NexoMapView
                     ref={mapRef}
                     style={StyleSheet.absoluteFill}
                     loadingEnabled={false}
@@ -618,6 +652,19 @@ export function FeedMapHost() {
                         if (camera.current!.isActive(mapEpoch) && validMapRegion(region)) setViewport(region);
                     }}
                     onMapReady={() => camera.current!.ready(mapEpoch)}
+                    onMapLoaded={() => {
+                        revealMap();
+                        // Una captura por sesión del encuadre inicial, para la próxima apertura.
+                        if (snapshotTakenRef.current || userEngagedRef.current) return;
+                        snapshotTakenRef.current = true;
+                        setTimeout(() => {
+                            if (!visibleRef.current || userEngagedRef.current) return;
+                            mapRef.current
+                                ?.takeSnapshot({ format: 'jpg', quality: 0.7, result: 'file' })
+                                .then((uri: string) => saveMapSnapshot(uri))
+                                .catch(() => undefined);
+                        }, 600);
+                    }}
                 >
                     {pins.map(pin => <Marker
                         key={pin.key}

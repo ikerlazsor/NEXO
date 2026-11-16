@@ -668,6 +668,52 @@ export async function schedulePlanTodayReminder(opts: {
     });
 }
 
+/** Recordatorio el día de un evento de la agenda al que te has unido (como en los planes). */
+export async function scheduleEventTodayReminder(opts: {
+    eventId: string;
+    title: string;
+    startsAt: string | null | undefined;
+    venue?: string | null;
+}): Promise<void> {
+    if (!opts.startsAt) return;
+    const start = new Date(opts.startsAt).getTime();
+    if (!Number.isFinite(start)) return;
+    const day = new Date(start);
+    let whenMs = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0).getTime();
+    if (whenMs >= start - 30 * 60 * 1000) whenMs = start - 2 * 60 * 60 * 1000;
+    if (whenMs <= Date.now()) return;
+    const lang = await getStoredLang();
+    const copy = buildPushCopy({
+        type: 'plan_today',
+        lang,
+        planTitle: opts.title || fallbackPlanTitle(lang),
+        time: day.toLocaleTimeString(localeTag(lang), { hour: '2-digit', minute: '2-digit' }),
+        place: opts.venue?.trim() || undefined,
+        seed: `event_today:${opts.eventId}`,
+    });
+    await scheduleLocalAt({
+        ident: `event-today:${opts.eventId}`,
+        whenMs,
+        title: copy.title,
+        body: copy.body,
+        data: { type: 'event_today', screen: 'event', eventId: opts.eventId, avatarUrl: resolveAvatarUrl(null, 'Nexo!') },
+        channelId: ANDROID_CHANNELS.reminders,
+    });
+}
+
+/** Al unirse a un evento: programa su recordatorio con los datos que ya hay en caché. */
+export async function scheduleEventReminderById(eventId: string): Promise<void> {
+    const { peekEvent } = await import('../features/events/cache');
+    const event = peekEvent(eventId);
+    if (!event) return;
+    await scheduleEventTodayReminder({ eventId, title: event.title, startsAt: event.starts_at, venue: event.venue });
+}
+
+export async function cancelEventTodayReminder(eventId: string): Promise<void> {
+    if (Platform.OS === 'web') return;
+    await Notifications.cancelScheduledNotificationAsync(`event-today:${eventId}`).catch(() => {});
+}
+
 /** Ya no se avisa de la caducidad del chat; cancela recordatorios viejos. */
 export async function scheduleChatExpiringReminder(opts: {
     planId: string;
@@ -901,6 +947,10 @@ export function resolvePushNavigation(raw: Record<string, unknown> | undefined):
             return planId ? { href: `/chat/${planId}` } : { href: '/(tabs)/chats' };
         case 'direct_message':
             return otherUserId ? { href: `/direct-chat/${otherUserId}` } : { href: '/(tabs)/chats' };
+        case 'event_today': {
+            const eventId = data.eventId ? String(data.eventId) : '';
+            return eventId ? { href: `/event/${eventId}` } : { href: '/(tabs)' };
+        }
         case 'event_message': {
             const eventId = data.eventId ? String(data.eventId) : '';
             return eventId ? { href: `/event-chat/${eventId}` } : { href: '/(tabs)/chats' };

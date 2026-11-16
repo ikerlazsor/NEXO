@@ -31,6 +31,7 @@ import { publishEventMembership } from "../../features/events/membershipBus";
 import { hapticError, hapticSuccess } from "../../lib/haptics";
 import { toggleEventSaved, useSavedEventIds } from "../../features/events/savedEvents";
 import { FeedHeartBurstHost } from "../../components/FeedHeartBurstHost";
+import { cancelEventTodayReminder, scheduleEventReminderById } from "../../lib/push";
 import { peekEvent, peekEventSocial } from "../../features/events/cache";
 import { EventDetailContent } from "../../features/events/EventDetailContent";
 import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
@@ -189,6 +190,9 @@ export default function EventDetail() {
     setBusyScope(scope);
     try {
       await setEventMembership(id, !joined);
+      // Recordatorio el día del evento al unirse; se quita al salir.
+      if (!joined) void scheduleEventReminderById(id);
+      else void cancelEventTodayReminder(id);
       if (currentScope.current === scope) {
         setJoined(!joined);
         publishEventMembership({ userId, eventId: id, joined: !joined });

@@ -155,7 +155,7 @@ export function PushBootstrap({ userId, ready = true }: { userId: string | null;
                     // El recordatorio local de valorar se programa como 'rating_ready'; antes solo se
                     // miraba 'plan_rating' y caía en «Social» (se ocultaba con Social apagado).
                     const isReminder =
-                        type === 'plan_today' || type === 'plan_rating' || type === 'rating_ready' || type === 'rate_plan';
+                        type === 'plan_today' || type === 'event_today' || type === 'plan_rating' || type === 'rating_ready' || type === 'rate_plan';
                     const allowed = isMessage
                         ? cats.messages
                         : isReminder

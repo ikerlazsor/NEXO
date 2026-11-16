@@ -53,7 +53,7 @@ function mount(file, exportName, args, api = {}, profiles = async () => [], cach
     '../../lib/profileData': { getPublicProfiles: profiles },
     '../../lib/externalEventPolicy.cjs': require('../lib/externalEventPolicy.cjs'),
     // Avisos push: fuera del alcance de estos tests de estado.
-    '../../lib/push': { maybeAskPushPermission: async () => {}, notifyEventMessage: () => {} },
+    '../../lib/push': { maybeAskPushPermission: async () => {}, notifyEventMessage: () => {}, scheduleEventReminderById: async () => {}, cancelEventTodayReminder: async () => {} },
     './membershipBus': {
       publishEventMembership: change => membershipListeners.forEach(listener => listener(change)),
       subscribeEventMembership: listener => { membershipListeners.add(listener); return () => membershipListeners.delete(listener); },

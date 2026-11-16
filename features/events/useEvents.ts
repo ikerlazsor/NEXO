@@ -1,4 +1,4 @@
-import { maybeAskPushPermission } from "../../lib/push";
+import { cancelEventTodayReminder, maybeAskPushPermission, scheduleEventReminderById } from "../../lib/push";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
@@ -296,6 +296,9 @@ export function useEvents(
         await setEventMembership(id, next);
         // Se acaba de unir a un grupo: ofrecer avisos de su chat.
         if (next) void maybeAskPushPermission();
+        // Recordatorio el día del evento, como en los planes de Nexo.
+        if (next) void scheduleEventReminderById(id);
+        else void cancelEventTodayReminder(id);
         if (currentScope.current === scope)
           publishEventMembership({ userId: scope, eventId: id, joined: next });
         if (joinLock.current === operation && currentScope.current === scope)

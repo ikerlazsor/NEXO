@@ -132,7 +132,7 @@ test("classified events use matching catalogue covers and unknown topics use a n
     };
     const cover = eventCoverSource(event);
     assert.ok(
-      (title.includes("yoga") ? taxonomy.getCoverImages("AIRE_LIBRE", "otro") : title === "Evento por confirmar" ? taxonomy.getCoverImages("VIBES", "otro") : taxonomy.getCoverImages(category, subcategory)).includes(cover),
+      (title.includes("yoga") ? taxonomy.getCoverImages("AIRE_LIBRE", "otro") : title.includes("bachata") ? [taxonomy.getCoverImages("SHOWTIME", "espectaculo")[4], taxonomy.getCoverImages("VIBES", "fiesta")[1]] : title === "Evento por confirmar" ? taxonomy.getCoverImages("VIBES", "otro") : taxonomy.getCoverImages(category, subcategory)).includes(cover),
       title,
     );
     assert.notEqual(cover, taxonomy.PLACEHOLDER_COVER_URI);
@@ -162,7 +162,7 @@ test("all categories use their catalogue, with semantic safety for mixed sports"
       }
       assert.equal(
         selected.size,
-        subcategory === "otro" && category === "DEPORTES" ? 1 : subcategory === "otro" && ["VIBES", "DESCUBRIR"].includes(category) ? 3 : subcategory === "otro" && category === "AIRE_LIBRE" ? 4 : new Set(catalog).size,
+        subcategory === "otro" && category === "DEPORTES" ? 1 : subcategory === "otro" && ["VIBES", "DESCUBRIR"].includes(category) ? 3 : subcategory === "otro" && category === "AIRE_LIBRE" ? 4 : category === "SHOWTIME" && ["cine", "espectaculo", "otro"].includes(subcategory) ? 4 : new Set(catalog).size,
         `${category}/${subcategory}: unused cover`,
       );
     }
@@ -173,7 +173,18 @@ test("all categories use their catalogue, with semantic safety for mixed sports"
  test("yoga and pilates never use combat, climbing or weights even with a legacy coarse label", () => {
   for (const title of ["Yoga al aire libre", "Pilates en grupo"]) for (let i=0; i<100; i++) {
     const event = { category:"DEPORTES",subcategory:"otro",title,provider_id:"madrid",source_id:String(i) };
-    assert.equal(eventCoverSource(event), title.startsWith("Yoga") ? taxonomy.getCoverImages("AIRE_LIBRE", "otro")[4] : taxonomy.getCoverImages("DEPORTES", "otro")[0]);
+    assert.equal(eventCoverSource(event), taxonomy.getCoverImages("AIRE_LIBRE", "otro")[4]);
   }
   assert.equal(eventClassification({ category:"FOODIES",subcategory:"cafe",title:"Café e intercambio de idiomas" }).subcategory,"idiomas");
+});
+
+test("topic covers: a dance event never gets the stadium photo and book clubs get books", () => {
+  const stadium = taxonomy.getCoverImages("SHOWTIME", "espectaculo")[0];
+  for (let i = 0; i < 60; i++) {
+    const base = { provider_id: "madrid", source_id: `t-${i}`, description: null };
+    assert.notEqual(eventCoverSource({ ...base, title: "Danza contemporánea en la biblioteca", category: "SHOWTIME", subcategory: "espectaculo" }), stadium);
+    assert.notEqual(eventCoverSource({ ...base, title: "La magia de la Zarzuela", category: "SHOWTIME", subcategory: "espectaculo" }), stadium);
+    assert.ok(taxonomy.getCoverImages("DESCUBRIR", "estudio").slice(3).includes(eventCoverSource({ ...base, title: "Club de Lectura: Raymond Carver", category: "DESCUBRIR", subcategory: "museo" })));
+    assert.ok(taxonomy.getCoverImages("SHOWTIME", "cine").slice(0, 4).includes(eventCoverSource({ ...base, title: "Película: Duende y misterio del flamenco", category: "SHOWTIME", subcategory: "concierto" })));
+  }
 });

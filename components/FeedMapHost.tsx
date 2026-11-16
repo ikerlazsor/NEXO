@@ -171,6 +171,9 @@ export function FeedMapHost() {
     const closeHandledRef = useRef(false);
     const selectedIdRef = useRef<string | null>(null);
     const jumpingLoopRef = useRef(false);
+    const programmaticTargetRef = useRef<string | null>(null);
+    const programmaticTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastCenteredIdxRef = useRef(-1);
     const didInitCarousel = useRef(false);
     /** Evita auto-seleccionar al abrir. */
     const userEngagedRef = useRef(false);
@@ -324,7 +327,17 @@ export function FeedMapHost() {
         ], userCoords);
     }, [remotePlans, cachedPlans, external.events, external.social, userCoords]);
     const plans = useMemo(() => allPlans.filter(hasMapCoords), [allPlans]);
-    const pins = useMemo(() => discoveryPins(plans, MADRID_REGION, selectedId), [plans, selectedId]);
+    // Los pines NO dependen del plan seleccionado: antes cada selección rehacía todos
+    // los pines y Android los repintaba a la vez (parpadeo). Además se reutiliza la
+    // misma lista mientras no cambien de verdad (ids, posición o color).
+    const pinsRef = useRef<{ sig: string; pins: ReturnType<typeof discoveryPins<MapPlan>> }>({ sig: '', pins: [] });
+    const pins = useMemo(() => {
+        const next = discoveryPins(plans, MADRID_REGION, null);
+        const sig = next.map(p => `${p.key}:${p.latitude.toFixed(5)}:${p.longitude.toFixed(5)}:${p.color}:${p.members.length}`).join('|');
+        if (sig === pinsRef.current.sig) return pinsRef.current.pins;
+        pinsRef.current = { sig, pins: next };
+        return next;
+    }, [plans]);
     // Android pinta las vistas de los pines como imagen: seguir sus cambios un momento
     // al cambiar los pines y luego congelar (rendimiento).
     const [trackPinViews, setTrackPinViews] = useState(true);
@@ -533,12 +546,26 @@ export function FeedMapHost() {
             }
 
             const offset = bestIdx * mapCardInterval;
-            jumpingLoopRef.current = true;
-            carouselRef.current?.scrollToOffset({ offset, animated });
+            const currentIdx = scrollOffsetRef.current / mapCardInterval;
+            // El movimiento lo provoca un pin: al terminar no hay que volver a mover el mapa.
+            programmaticTargetRef.current = animated ? planId : null;
+            lastCenteredIdxRef.current = bestIdx;
+            if (animated && Math.abs(bestIdx - currentIdx) > 2) {
+                // Lejos: saltar sin animación a la tarjeta vecina y deslizar solo la última
+                // (antes recorría decenas de tarjetas a trompicones).
+                const from = bestIdx + (bestIdx > currentIdx ? -1 : 1);
+                carouselRef.current?.scrollToOffset({ offset: from * mapCardInterval, animated: false });
+                requestAnimationFrame(() => {
+                    carouselRef.current?.scrollToOffset({ offset, animated: true });
+                });
+            } else {
+                carouselRef.current?.scrollToOffset({ offset, animated });
+            }
             scrollOffsetRef.current = offset;
-            setTimeout(() => {
-                jumpingLoopRef.current = false;
-            }, animated ? 320 : 0);
+            if (programmaticTimerRef.current) clearTimeout(programmaticTimerRef.current);
+            programmaticTimerRef.current = setTimeout(() => {
+                programmaticTargetRef.current = null;
+            }, 700);
         },
         [plans, middleBlock, mapCardInterval],
     );
@@ -614,8 +641,17 @@ export function FeedMapHost() {
     );
 
     const onCarouselScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-        scrollOffsetRef.current = e.nativeEvent.contentOffset.x;
-    }, []);
+        const x = e.nativeEvent.contentOffset.x;
+        scrollOffsetRef.current = x;
+        // Al deslizar con el dedo el mapa sigue a la tarjeta que queda centrada sin
+        // esperar a que el carrusel se detenga (una sola vez por tarjeta).
+        if (programmaticTargetRef.current || jumpingLoopRef.current || !userEngagedRef.current || plans.length === 0 || mapCardInterval <= 0) return;
+        const idx = Math.round(x / mapCardInterval);
+        if (idx === lastCenteredIdxRef.current) return;
+        lastCenteredIdxRef.current = idx;
+        const plan = plans[((idx % plans.length) + plans.length) % plans.length];
+        if (plan) animateMapToPlan(plan, 320);
+    }, [plans, mapCardInterval, animateMapToPlan]);
 
     const rebalanceLoop = useCallback(
         (offsetX: number) => {
@@ -633,6 +669,7 @@ export function FeedMapHost() {
                 animated: false,
             });
             scrollOffsetRef.current = nextOffset;
+            lastCenteredIdxRef.current = target;
             requestAnimationFrame(() => {
                 jumpingLoopRef.current = false;
             });
@@ -648,17 +685,21 @@ export function FeedMapHost() {
             const snappedIdx = Math.round(offsetX / mapCardInterval);
             const realIdx = ((snappedIdx % plans.length) + plans.length) % plans.length;
             const plan = plans[realIdx];
+            const fromPin = programmaticTargetRef.current;
+            programmaticTargetRef.current = null;
             if (plan) {
                 const planId = String(plan.id);
                 setPeekPlanId(planId);
-                if (userEngagedRef.current) {
+                // Si lo movió un pin, el mapa ya está centrado en él: no repetir el movimiento.
+                if (userEngagedRef.current && fromPin !== planId) {
                     if (selectedIdRef.current !== planId) {
                         selectedIdRef.current = planId;
                         setSelectedId(planId);
                     }
-                    animateMapToPlan(plan, MAP_FOCUS_MS);
+                    if (lastCenteredIdxRef.current !== snappedIdx) animateMapToPlan(plan, MAP_FOCUS_MS);
                 }
             }
+            lastCenteredIdxRef.current = snappedIdx;
             rebalanceLoop(offsetX);
         },
         [plans, mapCardInterval, animateMapToPlan, rebalanceLoop],
@@ -789,6 +830,7 @@ export function FeedMapHost() {
                             })}
                             onScrollBeginDrag={() => {
                                 userEngagedRef.current = true;
+                                programmaticTargetRef.current = null;
                             }}
                             onScroll={onCarouselScroll}
                             scrollEventThrottle={32}

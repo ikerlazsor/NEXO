@@ -53,6 +53,7 @@ import { PersonBubble } from '../../features/plan-detail/PersonBubble';
 import { createPlanDetailStyles, PLAN_DETAIL_HERO_H } from '../../features/plan-detail/planDetailStyles';
 import type { Participant, PlanDetailSnapshot, PlanRow } from '../../features/plan-detail/types';
 import { useScrollViewRestore } from '../../hooks/useScrollViewRestore';
+import { useTransitionReady } from '../../hooks/useTransitionReady';
 import { useAppTheme, useThemedStyles } from '../../lib/appTheme';
 import { getAuthUser } from '../../lib/auth';
 import { clearPendingAuthIntent, peekPendingAuthIntent } from '../../lib/authIntent';
@@ -361,6 +362,11 @@ export default function PlanDetailScreen() {
     });
     const hasLoadedRef = useRef(!!cachedDetail);
     const loadGenRef = useRef(0);
+    // `true` cuando termina el deslizamiento de entrada. Las cargas secundarias
+    // (red, afinidad, invitaciones…) esperan a esto para no trabar la animación.
+    const transitionReady = useTransitionReady();
+    /** Si la carga del plan arrancó antes del fin de la animación (sin caché). */
+    const earlyPlanLoadRef = useRef(false);
 
     /** Early-pick (link) activo / ya resuelto → la sección no abre otro modal. */
     const [earlyPickActive, setEarlyPickActive] = useState(false);
@@ -790,9 +796,20 @@ export default function PlanDetailScreen() {
         useCallback(() => {
             lockTabPager();
             if (planId) dismissPushForPlanDetail(planId);
-            void loadPlan();
+            if (!transitionReady) {
+                // Con datos ya pintados (feed/caché) el refresco espera al fin del
+                // deslizamiento. Sin datos hay que cargar ya, no hay nada que mostrar.
+                if (!hasLoadedRef.current) {
+                    earlyPlanLoadRef.current = true;
+                    void loadPlan();
+                }
+            } else if (earlyPlanLoadRef.current) {
+                earlyPlanLoadRef.current = false;
+            } else {
+                void loadPlan();
+            }
             return () => unlockTabPager();
-        }, [loadPlan, planId]),
+        }, [loadPlan, planId, transitionReady]),
     );
 
     // Desde el detalle casi siempre se toca al creador: su perfil se deja listo
@@ -860,6 +877,7 @@ export default function PlanDetailScreen() {
             setFitPersonalityTags(cached);
             return;
         }
+        if (!transitionReady) return;
         let cancelled = false;
         void fetchFitPersonalityTags()
             .then((tags) => {
@@ -869,7 +887,7 @@ export default function PlanDetailScreen() {
         return () => {
             cancelled = true;
         };
-    }, [currentUserId]);
+    }, [currentUserId, transitionReady]);
 
     useEffect(() => {
         let cancelled = false;
@@ -891,6 +909,9 @@ export default function PlanDetailScreen() {
             setMapPreviewReady(false);
             return;
         }
+        // Montar el mapa nativo mientras la pantalla se desliza es lo que más
+        // la traba: se monta cuando la animación ya terminó.
+        if (!transitionReady) return;
         let cancelled = false;
         const task = InteractionManager.runAfterInteractions(() => {
             if (!cancelled) setMapPreviewReady(true);
@@ -903,7 +924,7 @@ export default function PlanDetailScreen() {
             task.cancel();
             clearTimeout(fallback);
         };
-    }, [plan?.id]);
+    }, [plan?.id, transitionReady]);
 
     useEffect(() => {
         if (!planId) return;
@@ -1057,6 +1078,7 @@ export default function PlanDetailScreen() {
                 return peeked;
             });
         }
+        if (!transitionReady) return;
         let cancelled = false;
         void getUserStats(cid).then((stats) => {
             if (cancelled) return;
@@ -1065,7 +1087,7 @@ export default function PlanDetailScreen() {
         return () => {
             cancelled = true;
         };
-    }, [creator?.id, plan?.creador_id]);
+    }, [creator?.id, plan?.creador_id, transitionReady]);
 
     useEffect(() => {
         if (!currentUserId || isCreator) {
@@ -1074,10 +1096,11 @@ export default function PlanDetailScreen() {
         }
         const peeked = peekViewerAffinityPerson(currentUserId);
         if (peeked) setViewerAffinity(peeked);
+        if (!transitionReady) return;
         void ensureViewerAffinityPerson(currentUserId).then((p) => {
             if (p) setViewerAffinity(p);
         });
-    }, [currentUserId, isCreator]);
+    }, [currentUserId, isCreator, transitionReady]);
 
     useEffect(() => {
         if (!creator?.id || !currentUserId || isCreator || currentUserIsOrganizer || plan?.es_organizador) {
@@ -1092,6 +1115,7 @@ export default function PlanDetailScreen() {
             setCreatorPersonFit(instant);
         }
 
+        if (!transitionReady) return;
         let cancelled = false;
         // Siempre confirmar con el cálculo completo (mismos inputs que el perfil).
         void prefetchPairAffinity(currentUserId, creator.id, { isFriends }).then((result) => {
@@ -1110,6 +1134,7 @@ export default function PlanDetailScreen() {
         currentUserIsOrganizer,
         plan?.es_organizador,
         friendIds,
+        transitionReady,
     ]);
 
     const isFull = plan ? joinedCount >= plan.maximo_participantes : false;
@@ -1139,8 +1164,9 @@ export default function PlanDetailScreen() {
     }, [planId, currentUserId, plan, isPastPlan]);
 
     useEffect(() => {
+        if (!transitionReady) return;
         void loadPendingJoinRequests();
-    }, [loadPendingJoinRequests]);
+    }, [loadPendingJoinRequests, transitionReady]);
 
     const loadInviteState = useCallback(async () => {
         if (!planId || !canInvitePeople) {
@@ -1184,8 +1210,9 @@ export default function PlanDetailScreen() {
     }, [planId, canInvitePeople, currentUserId]);
 
     useEffect(() => {
+        if (!transitionReady) return;
         void loadInviteState();
-    }, [loadInviteState]);
+    }, [loadInviteState, transitionReady]);
 
     const openInviteSheet = () => {
         if (!planId || !canInvitePeople) return;

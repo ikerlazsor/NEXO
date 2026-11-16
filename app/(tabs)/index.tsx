@@ -111,7 +111,7 @@ import { distanceKm, formatDistanceKm, parsePlanCoords } from '../../lib/geo';
 import { fetchGuestFeedPlans } from '../../lib/guestFeed';
 import { hapticError, hapticSave, hapticSelection, hapticSuccess } from '../../lib/haptics';
 import { useT } from '../../lib/i18n';
-import { FLASH_LIST_DRAW_DISTANCE } from '../../lib/listConfig';
+import { FEED_DRAW_DISTANCE } from '../../lib/listConfig';
 import { getUserCoords, peekUserCoords, type UserCoords } from '../../lib/location';
 import { broadcastPlanMembership } from '../../lib/membershipBroadcast';
 import { deletePlanAdmin } from '../../lib/moderation';
@@ -1704,8 +1704,42 @@ export default function HomeScreen() {
         }
     }, [currentUserGenero]);
 
-    const warmFeedPlanRef = useRef(warmFeedPlan);
-    warmFeedPlanRef.current = warmFeedPlan;
+    // Mientras la lista se mueve (arrastre o inercia) no se precalienta nada: FlashList
+    // coloca las celdas en el hilo de JS y las precargas (caché, red, imágenes) le
+    // robaban fotogramas, de ahí los «parones» al deslizar con fuerza. Se encolan y
+    // se hacen al pararse.
+    const feedMovingRef = useRef(false);
+    const pendingWarmRef = useRef<Map<string, FeedRow>>(new Map());
+    const warmIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const flushPendingWarm = useCallback(() => {
+        if (feedMovingRef.current) return;
+        const rows = [...pendingWarmRef.current.values()];
+        pendingWarmRef.current.clear();
+        for (const row of rows) warmFeedPlan(row);
+    }, [warmFeedPlan]);
+    const warmWhenIdle = useCallback((row: FeedRow) => {
+        if (!feedMovingRef.current) {
+            warmFeedPlan(row);
+            return;
+        }
+        pendingWarmRef.current.set(row.id, row);
+    }, [warmFeedPlan]);
+    const onFeedMoveStart = useCallback(() => {
+        feedMovingRef.current = true;
+        if (warmIdleTimerRef.current) clearTimeout(warmIdleTimerRef.current);
+    }, []);
+    const onFeedMoveEnd = useCallback(() => {
+        feedMovingRef.current = false;
+        if (warmIdleTimerRef.current) clearTimeout(warmIdleTimerRef.current);
+        // Pequeño margen: si el dedo vuelve a lanzar la lista enseguida, seguir sin trabajo.
+        warmIdleTimerRef.current = setTimeout(flushPendingWarm, 160);
+    }, [flushPendingWarm]);
+    useEffect(() => () => {
+        if (warmIdleTimerRef.current) clearTimeout(warmIdleTimerRef.current);
+    }, []);
+
+    const warmFeedPlanRef = useRef(warmWhenIdle);
+    warmFeedPlanRef.current = warmWhenIdle;
 
     const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
         const indices = viewableItems
@@ -1903,9 +1937,20 @@ export default function HomeScreen() {
                     onContentSizeChange={onContentSizeChange}
                     onLoad={restoreScroll}
                     onScroll={onScroll}
-                    onScrollBeginDrag={onScrollBeginDrag}
+                    onScrollBeginDrag={(e) => {
+                        onFeedMoveStart();
+                        onScrollBeginDrag();
+                        void e;
+                    }}
+                    onMomentumScrollBegin={onFeedMoveStart}
+                    onMomentumScrollEnd={onFeedMoveEnd}
+                    // Sin inercia (se suelta parado): también es fin de movimiento. Si hay
+                    // inercia, onMomentumScrollBegin llega justo después y lo vuelve a marcar.
+                    onScrollEndDrag={onFeedMoveEnd}
                     scrollEventThrottle={scrollEventThrottle}
-                    drawDistance={FLASH_LIST_DRAW_DISTANCE}
+                    // Tarjetas grandes (~400 px): con 420 px solo había una por delante y en un
+                    // deslizamiento fuerte se montaban justo al entrar en pantalla.
+                    drawDistance={FEED_DRAW_DISTANCE}
                     ListHeaderComponent={
                         <View style={styles.feedChromeHeader}>
                             {external.error&&<Pressable onPress={()=>void external.refresh()} style={{padding:16}} accessibilityRole="button"><Text style={{color:colors.textMuted}}>{t('events.unavailable')} · {t('events.retry')}</Text></Pressable>}
@@ -1982,7 +2027,8 @@ export default function HomeScreen() {
                             }, 650);
                         });
                     }}
-                    onEndReachedThreshold={0.35}
+                    // Pedir la siguiente página con una pantalla de margen: llega antes de tocar el final.
+                    onEndReachedThreshold={1}
                     ListFooterComponent={
                         (loadingMore||external.loading) ? (
                             <View style={styles.loadMoreFooter}>

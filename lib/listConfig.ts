@@ -22,3 +22,9 @@ export const COMPACT_LIST_PROPS = {
  * de virtualización de FlatList. Mantener el contenedor con flex:1.
  */
 export const FLASH_LIST_DRAW_DISTANCE = 420;
+
+/**
+ * Feed: tarjetas altas (~400 px). Pintar ~1,5 pantallas por delante para que en
+ * un deslizamiento con inercia las celdas ya estén montadas al entrar.
+ */
+export const FEED_DRAW_DISTANCE = 1100;

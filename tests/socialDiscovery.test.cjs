@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 const { createLoader } = require('./helpers/loadTs.cjs');
 const policy = require('../lib/externalEventPolicy.cjs');
 
-test('discovery requires an identifiable participatory activity, even if an old import marked a concert social', () => {
+test('discovery requires an identifiable participatory or go-together activity', () => {
   for (const title of ['Senderismo por la sierra', 'Language exchange Madrid', 'Café e intercambio de idiomas', 'Yoga en grupo', 'Pilates', 'Juegos de mesa', 'Club de lectura', 'Taller de cerámica', 'Clase de salsa', 'Pachanga de fútbol', 'Picnic en el Retiro']) assert.equal(policy.isSocialActivity(title), true, title);
-  for (const title of ['Concierto social', 'Festival de yoga', 'Teatro con amigos', 'Una tarde inolvidable', 'Encuentro con un autor', 'Ajedrez escolar', 'Yoga infantil', 'Yoga online', 'Maratón', 'Exposición de fotografía']) {
+  for (const title of ['Festival de yoga', 'Una tarde inolvidable', 'Encuentro con un autor', 'Ajedrez escolar', 'Yoga infantil', 'Yoga online', 'Maratón', 'Exposición de fotografía']) {
     assert.equal(policy.isSocialActivity(title, 'Un meetup social para conocer gente'), false, title);
     assert.equal(policy.isPublishableEvent({ title, status:'active', starts_at:new Date(Date.now()+86400000).toISOString(), venue:'Local confirmado', latitude:40.42, longitude:-3.7, social_eligible:true }),false,title);
   }
@@ -55,7 +55,13 @@ test('adult creative workshops and group walks qualify without admitting childre
   for (const description of ['Público familiar, a partir de 5 años.', 'Dirigido a: chicos y chicas de 8 a 10 años.', 'Debe asistir solo un adulto por inscripción.', 'Taller para niños de 6 a 12 años.']) assert.equal(policy.isSocialActivity('Taller de cerámica', description), false, description);
   assert.equal(policy.isSocialActivity("Taller 'Fanzineitor'", 'Personas de entre 15 y 30 años. El profesor también imparte cómic infantil.'), true);
   assert.equal(policy.isSocialActivity('Paseo ornitológico', 'Dirigido a personas a partir de 9 años. Si el grupo familiar es de más de 4 miembros, puedes apuntar a todos.'), true);
-  assert.equal(policy.isSocialActivity('Concierto de jazz', 'Taller de improvisación para socializar'), false);
+  assert.equal(policy.isSocialActivity('Concierto de jazz', 'Taller de improvisación para socializar'), true);
+});
+
+test('adult go-together events qualify; family shows and children audiences do not', () => {
+  for (const title of ['Duane Eubanks Quartet: concierto', 'Recital Flamenco', 'Masterclass K-Pop Dance', 'Monólogo Punto de fuga y posterior coloquio', 'Charla y recorrido guiado: Madrid verso a verso', 'Visita guiada a la exposición Mauritshuis-Thyssen', 'Salida Medioambiental', 'Teatro: Usted tiene ojos de mujer fatal']) assert.equal(policy.isSocialActivity(title, 'Entrada libre hasta completar aforo.'), true, title);
+  assert.equal(policy.isSocialActivity('Encinar de San Pedro', '', 'senderismo'), true);
+  for (const [title, description] of [['Teatro: El Pirata Malos Pelos', 'Para todos los públicos.'], ['Concierto didáctico', 'Público familiar.'], ['Teatro de títeres', ''], ['Musical Alicia', 'A partir de 4 años.'], ['Concierto escolar', ''], ['Concierto online', '']]) assert.equal(policy.isSocialActivity(title, description), false, title);
   const classify = require('../lib/externalEventClassification.cjs').classifyExternalEvent;
   assert.deepEqual(classify('Taller de ROPE FLOW'), {category:'DEPORTES',subcategory:'otro'});
   assert.deepEqual(classify('Taller de Collage para adultos'), {category:'VIBES',subcategory:'otro'});

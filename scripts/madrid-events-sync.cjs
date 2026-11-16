@@ -196,7 +196,7 @@ async function main({
               ...event,
               social_eligible:
                 event.social_eligible === true ||
-                isSocialActivity(event.title, event.description || ""),
+                isSocialActivity(event.title, event.description || "", event.subcategory || ""),
               venue: event.venue || "pending",
               latitude: 40.42,
               longitude: -3.7,

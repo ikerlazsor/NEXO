@@ -8,7 +8,7 @@ const source='https://organizer.example/activities';
 const event={ '@type':'SocialEvent',name:'Language exchange Madrid',url:'https://organizer.example/event/1',startDate:'2026-11-15T19:00:00+01:00',location:{'@type':'Place',name:'Bar confirmado',address:{streetAddress:'Calle de prueba 1',addressLocality:'Madrid'},geo:{latitude:40.42,longitude:-3.7}} };
 const html=rows=>`<script type="application/ld+json">${JSON.stringify({'@graph':rows})}</script>`;
 test('publisher structured facts retain their own source and go through the same social, location and time policy',async()=>{
- const raw=jsonLdSnapshot(html([event,{...event,name:'Concierto',url:'https://organizer.example/event/2'},{...event,name:'Yoga',url:'https://organizer.example/event/3',location:{name:'Madrid'}}]),source);
+ const raw=jsonLdSnapshot(html([event,{...event,name:'Concierto infantil',url:'https://organizer.example/event/2'},{...event,name:'Yoga',url:'https://organizer.example/event/3',location:{name:'Madrid'}}]),source);
  const ready=await prepareSocialSnapshot(raw,{now});
  assert.equal(ready.events.length,1);
  assert.equal(ready.events[0].starts_at,'2026-11-15T18:00:00.000Z');

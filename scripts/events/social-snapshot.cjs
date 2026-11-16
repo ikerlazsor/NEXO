@@ -16,7 +16,7 @@ async function prepareSocialSnapshot(
     const event = {
       ...row,
       social_eligible:
-        row.social_eligible !== false && isSocialActivity(row.title, row.description || ""),
+        row.social_eligible !== false && isSocialActivity(row.title, row.description || "", row.subcategory || ""),
     };
     if (event.status === "cancelled" || event.status === "stale") {
       events.push(event);

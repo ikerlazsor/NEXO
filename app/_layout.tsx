@@ -554,7 +554,9 @@ function AuthGate({ children }: { children: ReactNode }) {
           userId={session?.user?.id ?? null}
           ready={Boolean(session && onboardingDone === true && !banned)}
         />
-        <ScreenErrorBoundary key={String(rootSegment ?? 'root')}>
+        {/* resetKey, no key: una key por ruta remontaba toda la navegación en cada
+            push (pantallas sin deslizamiento, "bote" y feed recargado). */}
+        <ScreenErrorBoundary resetKey={String(rootSegment ?? 'root')}>
           {children}
         </ScreenErrorBoundary>
         <AuthPromptHost />

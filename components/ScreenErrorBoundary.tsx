@@ -3,7 +3,16 @@ import { Text, TouchableOpacity, View } from 'react-native';
 import { useT } from '../lib/i18n';
 import { useAppTheme } from '../lib/appTheme';
 
-type Props = { children: ReactNode };
+type Props = {
+    children: ReactNode;
+    /**
+     * Si cambia mientras se muestra el error, la barrera se reinicia (p. ej. al
+     * cambiar de pantalla). No usar como `key`: cambiar la key desmonta y vuelve a
+     * montar todo lo que envuelve (la pila de navegación entera y el feed), y las
+     * pantallas aparecen de golpe sin animación.
+     */
+    resetKey?: string;
+};
 type State = { failed: boolean };
 
 class ScreenErrorBoundaryInner extends Component<
@@ -14,6 +23,12 @@ class ScreenErrorBoundaryInner extends Component<
 
     static getDerivedStateFromError(): State {
         return { failed: true };
+    }
+
+    componentDidUpdate(prev: Props) {
+        if (this.state.failed && prev.resetKey !== this.props.resetKey) {
+            this.setState({ failed: false });
+        }
     }
 
     componentDidCatch(error: Error, info: ErrorInfo) {
@@ -58,9 +73,9 @@ function ErrorFallback({ onRetry }: { onRetry: () => void }) {
 }
 
 /** Evita que un fallo de una pantalla tumbe toda la app. */
-export function ScreenErrorBoundary({ children }: Props) {
+export function ScreenErrorBoundary({ children, resetKey }: Props) {
     return (
-        <ScreenErrorBoundaryInner fallback={(retry) => <ErrorFallback onRetry={retry} />}>
+        <ScreenErrorBoundaryInner resetKey={resetKey} fallback={(retry) => <ErrorFallback onRetry={retry} />}>
             {children}
         </ScreenErrorBoundaryInner>
     );

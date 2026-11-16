@@ -20,6 +20,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NexoMapView } from './NexoMapView';
 import { PlanImage } from './PlanImage';
+import { runAfterNavTransition } from '../lib/afterTransition';
 import { ProfileAvatar } from './ProfileAvatar';
 import { createFeedStyles } from '../features/feed/feedStyles';
 import { useThemedStyles } from '../lib/appTheme';
@@ -318,7 +319,11 @@ export function FeedMapHost() {
         if (initial.length > 0) {
             setRemotePlans(null);
             setLoadingPlans(false);
-            refreshPlansInBackground(gen, peeked);
+            // Con planes ya en caché el panel se pinta al instante; la recarga espera
+            // a que termine el deslizamiento para no repintarlo a mitad.
+            runAfterNavTransition(() => {
+                if (gen === loadGenRef.current) refreshPlansInBackground(gen, peeked);
+            }, 420);
             return;
         }
 

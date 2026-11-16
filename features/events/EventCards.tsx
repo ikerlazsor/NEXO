@@ -148,16 +148,9 @@ export const EventCard = memo(function EventCard({
                 style={s.artScrim}
               />
               <View style={s.artBadges} pointerEvents="box-none">
-                <View style={s.badgeLeft} pointerEvents="none">
-                  <View style={s.glassPill}>
-                    <View style={[s.dot, { backgroundColor: accent }]} />
-                    <Text style={s.glassPillText} numberOfLines={1}>
-                      {classification.subcategory === "otro"
-                        ? t(`cat.main.${classification.category}`)
-                        : t(`cat.sub.${classification.subcategory}`)}
-                    </Text>
-                  </View>
-                </View>
+                {/* Sin etiqueta de categoría: la portada ya la sugiere. Hueco para
+                    mantener compartir/guardar a la derecha. */}
+                <View style={s.badgeLeft} pointerEvents="none" />
                 {(onShare || onToggleSave) && !preview ? (
                   <View style={s.topRightGroup}>
                     {onShare ? (

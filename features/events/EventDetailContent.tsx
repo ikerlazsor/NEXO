@@ -57,7 +57,7 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
       setMapVisible(true);
     }
   };
-  const { category, subcategory } = eventClassification(event);
+  const { category } = eventClassification(event);
   const accent = getCategoryColor(category);
   const free = isFreeEvent(event.price_text);
   const start = event.starts_at ? new Date(event.starts_at) : null;
@@ -119,11 +119,7 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
         </PressScale>}
       </View>
       <View style={s.heroPills} pointerEvents="none">
-        <View style={s.pill}>
-          <View style={[s.pillDot, { backgroundColor: accent }]} />
-          <Text style={s.pillText}>{subcategory === "otro" ? t(`cat.main.${category}`) : t(`cat.sub.${subcategory}`)}</Text>
-        </View>
-        {free && <View style={[s.pill, { backgroundColor: "#059669" }]}>
+        {free &&<View style={[s.pill, { backgroundColor: "#059669" }]}>
           <Text style={[s.pillText, { color: "#FFF" }]}>{t("events.free")}</Text>
         </View>}
       </View>

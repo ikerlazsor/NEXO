@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
-    Modal,
+    BackHandler,
     Dimensions,
     FlatList,
     NativeScrollEvent,
@@ -16,7 +16,7 @@ import {
     View,
 } from 'react-native';
 import { Marker } from 'react-native-maps';
-import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NexoMapView } from './NexoMapView';
@@ -51,6 +51,8 @@ import { discoveryPins, validMapCoordinates } from '../lib/mapDiscovery';
 import { createMapCameraLifecycle, validMapRegion } from '../lib/mapCameraLifecycle';
 const INK = theme.colors.text;
 const SCREEN_W = Dimensions.get('window').width;
+/** El panel vive montado fuera de pantalla; abrir = deslizarlo, sin crear el mapa. */
+const SHEET_HIDDEN_Y = Dimensions.get('screen').height + 40;
 
 /** Madrid ciudad + alrededores. */
 const MADRID_REGION = {
@@ -140,10 +142,14 @@ export function FeedMapHost() {
     }, [mapOpacity]);
     // Si onMapLoaded no llega (p. ej. sin red), mostrar el mapa igualmente.
     useEffect(() => {
-        if (!renderMap) return;
-        const timer = setTimeout(revealMap, 1500);
+        const timer = setTimeout(revealMap, 2500);
         return () => clearTimeout(timer);
-    }, [renderMap, revealMap]);
+    }, [revealMap]);
+    // El mapa nativo se monta una vez (oculto bajo la pantalla) y carga sus teselas
+    // en segundo plano: al abrir solo se desliza el panel, ya pintado.
+    const sheetY = useSharedValue(SHEET_HIDDEN_Y);
+    const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: sheetY.value }] }));
+    const mapReadyRef = useRef(false);
     const [viewport, setViewport] = useState(MADRID_REGION);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -152,7 +158,9 @@ export function FeedMapHost() {
     const [tick, setTick] = useState(0);
     const [remotePlans, setRemotePlans] = useState<MapPlan[] | null>(null);
     const [loadingPlans, setLoadingPlans] = useState(false);
-    const external = useEvents({}, userId, visible);
+    // Eventos cargados desde que el panel se monta (no al abrir): los pines ya
+    // están cuando el usuario pulsa el mapa.
+    const external = useEvents({}, userId, true);
     const mapRef = useRef<any>(null);
     const carouselRef = useRef<FlatList>(null);
     const pendingPlanIdRef = useRef<string | null>(null);
@@ -171,7 +179,6 @@ export function FeedMapHost() {
         mapRef.current?.animateToRegion(region, duration);
     });
     const mapEpochRef = useRef(0);
-    const mapEpoch = mapEpochRef.current;
 
     const finishDismiss = useCallback(() => {
         if (closeHandledRef.current || !closingRef.current) return;
@@ -196,14 +203,17 @@ export function FeedMapHost() {
         camera.current!.close();
         loadGenRef.current++;
         setVisible(false);
+        // Al terminar de bajar el panel (y no antes) se abre el detalle, para que
+        // dos transiciones nunca se solapen.
+        sheetY.value = withTiming(
+            SHEET_HIDDEN_Y,
+            { duration: 280, easing: Easing.in(Easing.cubic) },
+            (finished) => { if (finished) runOnJS(finishDismiss)(); },
+        );
+    }, [finishDismiss, sheetY]);
+    const onSheetOpened = useCallback(() => {
+        if (visibleRef.current && !closingRef.current) setRenderMap(true);
     }, []);
-    useEffect(() => {
-        // Android has no onDismiss callback. Let the native slide finish before
-        // pushing a detail screen, so two native transitions never overlap.
-        if (Platform.OS === 'ios' || visible || !closingRef.current) return;
-        const timer = setTimeout(finishDismiss, 350);
-        return () => clearTimeout(timer);
-    }, [visible, finishDismiss]);
     useEffect(() => () => { camera.current?.close(); loadGenRef.current++; }, []);
 
     const refreshPlansInBackground = useCallback(
@@ -291,13 +301,22 @@ export function FeedMapHost() {
         ], userCoords);
     }, [remotePlans, cachedPlans, external.events, external.social, userCoords]);
     const plans = useMemo(() => allPlans.filter(hasMapCoords), [allPlans]);
-    const pins = useMemo(() => discoveryPins(plans, viewport, selectedId), [plans, viewport, selectedId]);
+    const pins = useMemo(() => discoveryPins(plans, MADRID_REGION, selectedId), [plans, selectedId]);
     const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
     useEffect(() => {
-        if (visible && !eventsLoading && !eventsError && moreEvents && external.events.length < 90) {
+        if (!eventsLoading && !eventsError && moreEvents && external.events.length < 90) {
             void loadMoreEvents();
         }
-    }, [visible, eventsLoading, eventsError, moreEvents, external.events.length, loadMoreEvents]);
+    }, [eventsLoading, eventsError, moreEvents, external.events.length, loadMoreEvents]);
+    useEffect(() => {
+        if (!visible) return;
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+            pendingPlanIdRef.current = null;
+            animateSheetClose();
+            return true;
+        });
+        return () => sub.remove();
+    }, [visible, animateSheetClose]);
 
     const loopedPlans = useMemo(() => {
         if (plans.length === 0) return [] as MapPlan[];
@@ -319,12 +338,18 @@ export function FeedMapHost() {
         visibleRef.current = true;
         closeHandledRef.current = false;
         mapEpochRef.current = camera.current!.open();
+        // El mapa sigue montado de la vez anterior: la cámara ya puede moverse.
+        if (mapReadyRef.current) camera.current!.ready(mapEpochRef.current);
         const gen = ++loadGenRef.current;
         setRenderMap(false);
-        mapOpacity.value = 0;
         setSnapshotUri(peekMapSnapshot());
         setTick((n) => n + 1);
         setVisible(true);
+        sheetY.value = withTiming(
+            0,
+            { duration: 340, easing: Easing.out(Easing.cubic) },
+            (finished) => { if (finished) runOnJS(onSheetOpened)(); },
+        );
         didInitCarousel.current = false;
         userEngagedRef.current = false;
         selectedIdRef.current = null;
@@ -407,7 +432,7 @@ export function FeedMapHost() {
                 if (gen === loadGenRef.current) setLoadingPlans(false);
             }
         })();
-    }, [userId, refreshPlansInBackground]);
+    }, [userId, refreshPlansInBackground, onSheetOpened, sheetY]);
 
     useEffect(() => {
         const unsub = subscribeOpenFeedMap(open);
@@ -614,10 +639,11 @@ export function FeedMapHost() {
     }, [animateSheetClose]);
 
     return (
-        <Modal visible={visible} animationType="slide"
-            presentationStyle="fullScreen" onRequestClose={closeMap}
-            onShow={() => { if (visibleRef.current && !closingRef.current) setRenderMap(true); }}
-            onDismiss={finishDismiss}>
+        <Animated.View
+            pointerEvents={visible ? 'auto' : 'none'}
+            importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
+            accessibilityElementsHidden={!visible}
+            style={[StyleSheet.absoluteFill, mapHostStyles.sheet, sheetStyle]}>
             <View style={styles.mapModalContainer}>
                 {/* Fondo siempre presente: captura del mapa (o fondo liso la primera vez).
                     El mapa real entra con fundido encima cuando ha cargado. */}
@@ -636,11 +662,12 @@ export function FeedMapHost() {
                         <ActivityIndicator color={theme.colors.primary} />
                     </View>
                 )}
-                {renderMap && <Animated.View style={[mapHostStyles.map, mapFadeStyle]}><NexoMapView
+                <Animated.View style={[mapHostStyles.map, mapFadeStyle]}><NexoMapView
                     ref={mapRef}
                     style={StyleSheet.absoluteFill}
                     loadingEnabled={false}
-                    showsUserLocation={!!userCoords}
+                    // Oculto no pide GPS (evita la flecha de ubicación y gasto de batería).
+                    showsUserLocation={visible && !!userCoords}
                     moveOnMarkerPress={false}
                     toolbarEnabled={false}
                     pitchEnabled={false}
@@ -649,13 +676,16 @@ export function FeedMapHost() {
                     minZoomLevel={2}
                     maxZoomLevel={19}
                     onRegionChangeComplete={region => {
-                        if (camera.current!.isActive(mapEpoch) && validMapRegion(region)) setViewport(region);
+                        if (camera.current!.isActive(mapEpochRef.current) && validMapRegion(region)) setViewport(region);
                     }}
-                    onMapReady={() => camera.current!.ready(mapEpoch)}
+                    onMapReady={() => {
+                        mapReadyRef.current = true;
+                        camera.current!.ready(mapEpochRef.current);
+                    }}
                     onMapLoaded={() => {
                         revealMap();
-                        // Una captura por sesión del encuadre inicial, para la próxima apertura.
-                        if (snapshotTakenRef.current || userEngagedRef.current) return;
+                        // Una captura por sesión del encuadre inicial (respaldo visual).
+                        if (snapshotTakenRef.current || userEngagedRef.current || !visibleRef.current) return;
                         snapshotTakenRef.current = true;
                         setTimeout(() => {
                             if (!visibleRef.current || userEngagedRef.current) return;
@@ -678,7 +708,7 @@ export function FeedMapHost() {
                             else camera.current!.move({ latitude: pin.latitude, longitude: pin.longitude, latitudeDelta: Math.max(0.001, viewport.latitudeDelta / 3), longitudeDelta: Math.max(0.001, viewport.longitudeDelta / 3) }, 250);
                         }}
                     />)}
-                </NexoMapView></Animated.View>}
+                </NexoMapView></Animated.View>
 
                 <View style={styles.mapModalHeader}>
                     <TouchableOpacity style={styles.mapCloseBtn} onPress={closeMap}>
@@ -862,11 +892,13 @@ export function FeedMapHost() {
                     </Animated.View>
                 )}
             </View>
-        </Modal>
+        </Animated.View>
     );
 }
 
 const mapHostStyles = StyleSheet.create({
+    // Por encima de la cabecera y la barra inferior del chrome (zIndex 30).
+    sheet: { zIndex: 1000, elevation: 1000 },
     map: {
         position: 'absolute',
         left: 0,

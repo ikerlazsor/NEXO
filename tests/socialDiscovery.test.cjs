@@ -41,7 +41,9 @@ test('map ignores invalid coordinates and bounds markers, grouping by category w
   assert.equal(pins.reduce((n,p)=>n+p.members.length,0),1000);
   assert.equal(discoveryPins([...items,{id:'invalid',latitud:NaN,longitud:null}],region).length,2);
   assert.equal(discoveryPins(items,region,'24').find(p=>p.key==='pin:24').members[0].id,'24');
-  assert.ok(discoveryPins(Array.from({length:200},(_,n)=>({id:n,latitud:40.3+n%20*.01,longitud:-3.8+Math.floor(n/20)*.01})),region).length<=36);
+  // Separate venues each keep their own pin from the first frame, up to the bound.
+  assert.equal(discoveryPins(Array.from({length:60},(_,n)=>({id:n,latitud:40.3+n%20*.01,longitud:-3.8+Math.floor(n/20)*.01})),region).length,60);
+  assert.ok(discoveryPins(Array.from({length:200},(_,n)=>({id:n,latitud:40.3+n%20*.01,longitud:-3.8+Math.floor(n/20)*.01})),region).length<=120);
 });
 
 test('location acquisition without a distance filter cannot restart the event query', () => {
@@ -66,4 +68,10 @@ test('adult go-together events qualify; family shows and children audiences do n
   assert.deepEqual(classify('Taller de ROPE FLOW'), {category:'DEPORTES',subcategory:'otro'});
   assert.deepEqual(classify('Taller de Collage para adultos'), {category:'VIBES',subcategory:'otro'});
   assert.deepEqual(classify('Paseo ornitológico'), {category:'AIRE_LIBRE',subcategory:'otro'});
+});
+
+test('participatory meetups are told apart from go-together shows for ranking', () => {
+  for (const title of ['Yoga en grupo', 'Intercambio de idiomas', 'Running club Retiro', 'Taller de cerámica']) assert.equal(policy.isParticipatoryActivity(title), true, title);
+  assert.equal(policy.isParticipatoryActivity('Encinar de San Pedro', 'senderismo'), true);
+  for (const title of ['Concierto de jazz', 'Recital Flamenco', 'Teatro: La mujer sola', 'Yoga infantil']) assert.equal(policy.isParticipatoryActivity(title), false, title);
 });

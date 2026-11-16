@@ -9,22 +9,28 @@ export function validMapCoordinates(value: object): boolean {
     return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(Math.abs(lat) < 0.01 && Math.abs(lon) < 0.01);
 }
 
-/** A bounded set of native markers. Nearby activities of the same category
- * share one marker until zoomed in; the full set stays available in the carousel. */
-export function discoveryPins<T extends MapItem>(items: T[], region: MapViewport, selectedId: string | null = null) {
-    const latStep = Math.max(0.00015, region.latitudeDelta / 7);
-    const lonStep = Math.max(0.00015, region.longitudeDelta / 5);
+/** Rejilla fija de ~40 m: solo comparten pin las actividades del mismo recinto
+ * (y categoría). Antes la rejilla dependía del zoom y a vista de Madrid fundía
+ * todo lo de un barrio en un pin: al abrir faltaban pines que solo aparecían al
+ * acercar con el carrusel. */
+const SAME_SPOT_STEP = 0.0004;
+const MAX_PINS = 120;
+
+/** Un pin por actividad (los del mismo sitio se agrupan), siempre desde la
+ * apertura; el mapa nativo ya descarta lo que queda fuera de pantalla. */
+export function discoveryPins<T extends MapItem>(items: T[], _region: MapViewport, selectedId: string | null = null) {
+    const latStep = SAME_SPOT_STEP;
+    const lonStep = SAME_SPOT_STEP;
     const groups = new Map<string, T[]>();
     for (const item of items) {
         if (!validMapCoordinates(item)) continue;
         const lat = Number(item.latitud), lon = Number(item.longitud);
-        if (Math.abs(lat - region.latitude) > region.latitudeDelta * 0.65 || Math.abs(lon - region.longitude) > region.longitudeDelta * 0.65) continue;
         const color = getCategoryColor(item.categoria, item.tipo_deporte);
         const key = String(item.id) === selectedId ? `selected:${item.id}` : `${color}:${Math.floor(lat / latStep)}:${Math.floor(lon / lonStep)}`;
         const group = groups.get(key) ?? [];
         group.push(item); groups.set(key, group);
     }
-    return [...groups].sort((a,b) => Number(b[1].some(x => String(x.id) === selectedId)) - Number(a[1].some(x => String(x.id) === selectedId))).slice(0, 36).map(([, members]) => ({
+    return [...groups].sort((a,b) => Number(b[1].some(x => String(x.id) === selectedId)) - Number(a[1].some(x => String(x.id) === selectedId))).slice(0, MAX_PINS).map(([, members]) => ({
         // Grid coordinates change on every zoom. Native MapKit annotations keep
         // their identity when a group moves cells or its representative is selected.
         key: `pin:${members.map(item => String(item.id)).sort()[0]}`, members,

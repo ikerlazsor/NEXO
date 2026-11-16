@@ -105,6 +105,7 @@ import { formatProfilePlace, parseProfilePlace, ensureAutoProfilePlace, mergePer
 import { readCoverUrl } from '../lib/profileCover';
 import { theme } from '../theme';
 import { useScrollViewRestore } from '../hooks/useScrollViewRestore';
+import { useTransitionReady } from '../hooks/useTransitionReady';
 import { ScreenKeys } from '../lib/screenState';
 
 const INK = theme.colors.text;
@@ -158,6 +159,9 @@ export default function ProfileScreen() {
     const { scrollRef, onScroll, scrollEventThrottle } = useScrollViewRestore(ScreenKeys.PROFILE, {
         restore: false,
     });
+    // La carga de datos (red + muchos setState) espera a que termine el
+    // deslizamiento de entrada; si no, la animación se ve cortada.
+    const transitionReady = useTransitionReady();
 
     const applyProfileSnapshot = useCallback((snap: ProfileUiSnapshot) => {
         setNombre(snap.nombre);
@@ -566,7 +570,7 @@ export default function ProfileScreen() {
     }, [applyProfileSnapshot]);
 
     useEffect(() => {
-        if (!userId || cachedProfile) return;
+        if (!userId || cachedProfile || !transitionReady) return;
         let alive = true;
         void diskGet<ProfileUiSnapshot>(screenCacheKey.profileUI(userId), 3 * 24 * 60 * 60 * 1000).then((snap) => {
             if (!alive || !snap || snap.userId !== userId) return;
@@ -577,14 +581,17 @@ export default function ProfileScreen() {
         return () => {
             alive = false;
         };
-    }, [userId, cachedProfile, applyProfileSnapshot]);
+    }, [userId, cachedProfile, applyProfileSnapshot, transitionReady]);
 
     useFocusEffect(
         useCallback(() => {
+            // Primera entrada: esperar a que acabe el deslizamiento. Al volver
+            // de otra pantalla `transitionReady` ya es true y carga al instante.
+            if (!transitionReady) return;
             void fetchUserData();
             // Precargar Amigos / Guardados mientras estás en perfil (antes de entrar).
             warmFriendsAndSavedPlans();
-        }, [fetchUserData])
+        }, [fetchUserData, transitionReady])
     );
 
     const quickActions: QuickAction[] = isOrganizer

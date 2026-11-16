@@ -18,6 +18,7 @@ import {
 import Animated, {
     cancelAnimation,
     Easing,
+    FadeIn,
     runOnJS,
     useAnimatedStyle,
     useSharedValue,
@@ -198,6 +199,12 @@ export function FeedMapHost() {
     const styles = useThemedStyles(createFeedStyles);
     const { userId } = useAuthSession();
     const [visible, setVisible] = useState(false);
+    /**
+     * El panel se desliza primero "vacío" (fondo + botón de volver) y el contenido
+     * pesado (mapa nativo, pines, carrusel) se monta al terminar el deslizamiento.
+     * Montarlo durante la animación satura el hilo de JS y la deja cortada.
+     */
+    const [contentMounted, setContentMounted] = useState(false);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
     const [selectedId, setSelectedId] = useState<string | null>(null);
     /** Plan centrado en el carrusel (borde de color aunque no haya selección). */
@@ -227,6 +234,7 @@ export function FeedMapHost() {
 
     const resetAfterClose = useCallback(() => {
         setVisible(false);
+        setContentMounted(false);
         setSelectedId(null);
         setPeekPlanId(null);
         selectedIdRef.current = null;
@@ -241,10 +249,16 @@ export function FeedMapHost() {
         if (sheetOpenedRef.current) return;
         sheetOpenedRef.current = true;
         cancelAnimation(slideY);
-        slideY.value = withTiming(0, {
-            duration: MAP_SLIDE_MS,
-            easing: Easing.out(Easing.cubic),
-        });
+        slideY.value = withTiming(
+            0,
+            {
+                duration: MAP_SLIDE_MS,
+                easing: Easing.out(Easing.cubic),
+            },
+            (finished) => {
+                if (finished) runOnJS(setContentMounted)(true);
+            },
+        );
     }, [slideY]);
 
     const animateSheetClose = useCallback(
@@ -443,7 +457,7 @@ export function FeedMapHost() {
 
     /** Misma distancia (delta) que Madrid; centro = usuario si hay permiso, si no Madrid. */
     useEffect(() => {
-        if (!visible) return;
+        if (!visible || !contentMounted) return;
         const target = userCoords
             ? {
                   latitude: userCoords.latitude,
@@ -452,15 +466,16 @@ export function FeedMapHost() {
                   longitudeDelta: MADRID_REGION.longitudeDelta,
               }
             : MADRID_REGION;
+        // El mapa ya se monta con el deslizamiento terminado; basta una pausa corta.
         const t = setTimeout(() => {
             try {
                 mapRef.current?.animateToRegion(target, 280);
             } catch {
                 /* ignore */
             }
-        }, MAP_SLIDE_MS + 80);
+        }, 120);
         return () => clearTimeout(t);
-    }, [visible, userCoords?.latitude, userCoords?.longitude]);
+    }, [visible, contentMounted, userCoords?.latitude, userCoords?.longitude]);
 
     useEffect(() => {
         if (!visible) return;
@@ -471,9 +486,16 @@ export function FeedMapHost() {
 
     useEffect(() => {
         if (!visible) return;
-        // Si onMapReady tarda, no dejar el sheet colgado fuera de pantalla.
-        const fallback = setTimeout(() => animateSheetOpen(), 220);
-        return () => clearTimeout(fallback);
+        // Deslizar ya, sin esperar a que el mapa nativo esté listo (ya no se monta
+        // hasta que termina la animación).
+        const raf = requestAnimationFrame(() => animateSheetOpen());
+        // Red de seguridad: si el callback de fin de animación no llegara,
+        // montar el contenido igualmente.
+        const safety = setTimeout(() => setContentMounted(true), MAP_SLIDE_MS + 200);
+        return () => {
+            cancelAnimationFrame(raf);
+            clearTimeout(safety);
+        };
     }, [visible, animateSheetOpen]);
 
     useEffect(() => {
@@ -577,7 +599,8 @@ export function FeedMapHost() {
     );
 
     useEffect(() => {
-        if (!visible || plans.length === 0) return;
+        // El carrusel solo existe cuando el contenido está montado.
+        if (!visible || !contentMounted || plans.length === 0) return;
         // Al abrir: sin plan seleccionado, mapa en Madrid; carrusel en el bloque medio.
         if (didInitCarousel.current) return;
         didInitCarousel.current = true;
@@ -594,7 +617,7 @@ export function FeedMapHost() {
                 animated: false,
             });
         });
-    }, [visible, plans, middleBlock, mapCardInterval]);
+    }, [visible, contentMounted, plans, middleBlock, mapCardInterval]);
 
     const openPlan = useCallback((plan: MapPlan) => {
         const planId = String(plan.id);
@@ -693,6 +716,12 @@ export function FeedMapHost() {
                 pointerEvents={visible ? 'auto' : 'none'}
             >
             <View style={styles.mapModalContainer}>
+                {contentMounted ? (
+                <Animated.View
+                    entering={FadeIn.duration(220)}
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="box-none"
+                >
                 <NexoMapView
                     ref={mapRef}
                     style={mapHostStyles.map}
@@ -726,6 +755,8 @@ export function FeedMapHost() {
                         );
                     })}
                 </NexoMapView>
+                </Animated.View>
+                ) : null}
 
                 <View style={styles.mapModalHeader}>
                     <TouchableOpacity style={styles.mapCloseBtn} onPress={closeMap}>
@@ -733,6 +764,12 @@ export function FeedMapHost() {
                     </TouchableOpacity>
                 </View>
 
+                {contentMounted ? (
+                <Animated.View
+                    entering={FadeIn.duration(220)}
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="box-none"
+                >
                 {loadingPlans && plans.length === 0 ? (
                     <View style={styles.mapModalFooter}>
                         <ActivityIndicator color={theme.colors.brand} />
@@ -904,6 +941,8 @@ export function FeedMapHost() {
                         />
                     </View>
                 )}
+                </Animated.View>
+                ) : null}
             </View>
             </Animated.View>
         </View>

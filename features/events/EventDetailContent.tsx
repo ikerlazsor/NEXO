@@ -23,11 +23,17 @@ type Props = {
   onAccount: () => void;
   onMorePeople: () => void;
   renderMap: (visible: boolean) => ReactNode;
+  /** Mismas acciones que un plan de Nexo: compartir, guardar y denunciar. */
+  saved?: boolean;
+  onShare?: () => void;
+  onToggleSave?: () => void;
+  onReport?: () => void;
 };
 
 /** Cached content paints immediately; the offscreen native map is demand mounted. */
 export function EventDetailContent({ event, people, signedIn, morePeople, unavailable, error,
-  onBack, onRetry, onOfficial, onPerson, onAccount, onMorePeople, renderMap }: Props) {
+  onBack, onRetry, onOfficial, onPerson, onAccount, onMorePeople, renderMap,
+  saved = false, onShare, onToggleSave, onReport }: Props) {
   const { colors } = useAppTheme();
   const { t, lang } = useT();
   const [mapVisible, setMapVisible] = useState(false);
@@ -59,6 +65,21 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
         style={[s.back, { backgroundColor: colors.surface }]} hitSlop={8}>
         <Ionicons name="arrow-back" size={23} color={colors.text} />
       </Pressable>
+      <View style={s.heroActions}>
+        {onShare && <Pressable onPress={onShare} accessibilityRole="button" accessibilityLabel={t("card.share")}
+          style={[s.heroBtn, { backgroundColor: colors.surface }]} hitSlop={6}>
+          <Ionicons name="share-outline" size={19} color={colors.text} />
+        </Pressable>}
+        {onToggleSave && <Pressable onPress={onToggleSave} accessibilityRole="button"
+          accessibilityState={{ selected: saved }} accessibilityLabel={t(saved ? "card.unsave" : "card.save")}
+          style={[s.heroBtn, { backgroundColor: colors.surface }]} hitSlop={6}>
+          <Ionicons name={saved ? "heart" : "heart-outline"} size={20} color={saved ? "#E11D48" : colors.text} />
+        </Pressable>}
+        {onReport && <Pressable onPress={onReport} accessibilityRole="button" accessibilityLabel={t("report.planTitle")}
+          style={[s.heroBtn, { backgroundColor: colors.surface }]} hitSlop={6}>
+          <Ionicons name="alert-circle-outline" size={20} color={colors.text} />
+        </Pressable>}
+      </View>
     </View>
     <View style={s.body} onLayout={e => { viewport.current.bodyTop = e.nativeEvent.layout.y; checkMapVisible(); }}>
       <View style={s.categoryRow}>
@@ -137,6 +158,8 @@ const s = StyleSheet.create({
   hero: { height: 238, overflow: "hidden" },
   artwork: { height: "100%", width: "100%" },
   back: { position: "absolute", left: 18, top: 16, width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  heroActions: { position: "absolute", right: 18, top: 16, flexDirection: "row", gap: 10 },
+  heroBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   body: { paddingHorizontal: 22, paddingTop: 22, gap: 20 },
   categoryRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 12 },
   category: { flexDirection: "row", alignItems: "center", gap: 7, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },

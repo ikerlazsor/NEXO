@@ -46,6 +46,9 @@ import { ScreenKeys } from '../lib/screenState';
 import { canJoinPlanByGender } from '../lib/soloChicas';
 import { wasKickedFromPlan } from '../lib/planKicks';
 import { supabase } from '../lib/supabase';
+import { fetchSavedEvents, setEventSaved } from '../features/events/api';
+import { SavedEventRow } from '../features/events/SavedEventRow';
+import type { ExternalEvent } from '../features/events/types';
 import { cacheGetStale, cacheSet } from '../lib/ttlCache';
 
 const PRIMARY = '#4DA6FF';
@@ -189,6 +192,25 @@ export default function SavedPlansScreen() {
             void fetchSavedData();
         }, [fetchSavedData]),
     );
+
+    // Eventos de la agenda guardados (tabla propia; si falla, la lista de planes sigue igual).
+    const [savedEvents, setSavedEvents] = useState<ExternalEvent[]>([]);
+    useFocusEffect(
+        useCallback(() => {
+            if (!sessionUserId) return;
+            let alive = true;
+            void fetchSavedEvents()
+                .then((rows) => { if (alive) setSavedEvents(rows); })
+                .catch(() => undefined);
+            return () => { alive = false; };
+        }, [sessionUserId]),
+    );
+    const removeSavedEvent = (eventId: string) => {
+        setSavedEvents((prev) => prev.filter((e) => e.id !== eventId));
+        void setEventSaved(eventId, false).catch(() => {
+            void fetchSavedEvents().then(setSavedEvents).catch(() => undefined);
+        });
+    };
 
     const joinErrorCopy = (error: { message?: string } | null | undefined) => {
         const msg = String(error?.message || '');
@@ -374,7 +396,7 @@ export default function SavedPlansScreen() {
                     <Ionicons name="chevron-back" size={24} color={INK} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>{t('saved.title')}</Text>
-                <View style={styles.headerRight}><Text style={styles.badgeText}>{savedPlans.length}</Text></View>
+                <View style={styles.headerRight}><Text style={styles.badgeText}>{savedPlans.length + savedEvents.length}</Text></View>
             </View>
 
             <View style={{ flex: 1 }}>
@@ -406,8 +428,22 @@ export default function SavedPlansScreen() {
                         />
                     )}
                     contentContainerStyle={styles.list}
+                    ListHeaderComponent={
+                        savedEvents.length > 0 ? (
+                            <View style={{ marginBottom: savedPlans.length ? 8 : 0 }}>
+                                {savedEvents.map((event) => (
+                                    <SavedEventRow
+                                        key={event.id}
+                                        event={event}
+                                        onOpen={() => router.push({ pathname: '/event/[id]', params: { id: event.id } })}
+                                        onRemove={() => removeSavedEvent(event.id)}
+                                    />
+                                ))}
+                            </View>
+                        ) : null
+                    }
                     ListEmptyComponent={
-                        !loading ? (
+                        !loading && savedEvents.length === 0 ? (
                         <View style={styles.center}>
                             <View style={styles.emptyIconWrap}>
                                 <Ionicons name="bookmark-outline" size={48} color={PRIMARY} />

@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAuthUser } from '../lib/auth';
 import { useT } from '../lib/i18n';
 import { PLAN_REPORT_REASONS, reportPlan, type PlanReportReason } from '../lib/reportPlan';
+import { reportEvent } from '../features/events/api';
 
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
@@ -31,7 +32,8 @@ const DANGER = '#DC2626';
 export default function ReportPlanScreen() {
     const router = useRouter();
     const { t } = useT();
-    const { planId } = useLocalSearchParams<{ planId: string }>();
+    // planId: plan de Nexo. eventId: evento de la agenda (mismos motivos y pantalla).
+    const { planId, eventId } = useLocalSearchParams<{ planId?: string; eventId?: string }>();
     const scrollRef = useRef<ScrollView>(null);
     const [reason, setReason] = useState<PlanReportReason | null>(null);
     const [message, setMessage] = useState('');
@@ -44,7 +46,7 @@ export default function ReportPlanScreen() {
     };
 
     const submit = async () => {
-        if (!planId || !reason) {
+        if ((!planId && !eventId) || !reason) {
             Alert.alert(t('report.notice'), t('report.pickReason'));
             return;
         }
@@ -55,7 +57,18 @@ export default function ReportPlanScreen() {
                 router.replace('/login');
                 return;
             }
-            const { error } = await reportPlan(planId, user.id, reason, message);
+            if (eventId) {
+                try {
+                    await reportEvent(eventId, reason, message);
+                    Alert.alert(t('report.thanksTitle'), t('report.thanksBody'), [
+                        { text: t('common.ok'), onPress: () => router.back() },
+                    ]);
+                } catch {
+                    Alert.alert(t('report.notice'), t('card.reportError'));
+                }
+                return;
+            }
+            const { error } = await reportPlan(planId!, user.id, reason, message);
             if (error === 'already_reported') {
                 Alert.alert(t('report.notice'), t('card.reportAlready'));
             } else if (error === 'plan_report_daily_limit') {

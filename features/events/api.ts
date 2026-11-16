@@ -307,3 +307,40 @@ function withAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
       .finally(() => signal.removeEventListener("abort", abort));
   });
 }
+
+/* Guardar / reportar eventos (tablas external_event_saves / external_event_flags). */
+type LooseClient = {
+  rpc: (fn: string, args?: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }>;
+  from: (table: string) => any;
+};
+const loose = supabase as unknown as LooseClient;
+
+export async function fetchEventSaved(eventId: string, userId: string): Promise<boolean> {
+  const { data, error } = await loose
+    .from("external_event_saves")
+    .select("event_id")
+    .eq("event_id", eventId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  return !!data;
+}
+export async function setEventSaved(eventId: string, save: boolean): Promise<void> {
+  const { error } = await loose.rpc("set_event_saved", { p_event: eventId, p_save: save });
+  if (error) throw error;
+}
+export async function fetchSavedEvents(): Promise<ExternalEvent[]> {
+  const { data, error } = await loose.rpc("get_saved_events");
+  if (error) throw error;
+  const rows = (Array.isArray(data) ? data : []) as ExternalEvent[];
+  rows.forEach((event) => rememberEvent(event));
+  return rows;
+}
+export async function reportEvent(eventId: string, reason: string, details?: string): Promise<void> {
+  const { error } = await loose.rpc("report_external_event", {
+    p_event: eventId,
+    p_reason: reason,
+    p_details: details?.trim() || null,
+  });
+  if (error) throw error;
+}

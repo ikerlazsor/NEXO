@@ -44,6 +44,7 @@ import {
 } from '../../lib/inviteChatGroup';
 import { NexoMapView } from '../../components/NexoMapView';
 import { useScreenTransitionReady } from '../../hooks/useScreenTransitionReady';
+import { fetchEvent } from '../../features/events/api';
 import { useTransitionSettled } from '../../hooks/useTransitionSettled';
 import { DeferredSection } from '../../components/DeferredSection';
 import { validMapCoordinates } from '../../lib/mapDiscovery';
@@ -245,8 +246,10 @@ export default function PlanDetailScreen() {
     const { colors } = useAppTheme();
     const { requireAccount, userId: sessionUserId, isGuest } = useAuthSession();
     const dateLocale = localeTag(lang);
-    const { id, inviteId, inviterId, inviterName, inviterAvatar, inviteTipo, from, team } = useLocalSearchParams<{
+    const { id, inviteId, inviterId, inviterName, inviterAvatar, inviteTipo, from, team, evento } = useLocalSearchParams<{
         id: string | string[];
+        /** Enlace compartido de un evento de la agenda (la web solo publica /plan/*). */
+        evento?: string | string[];
         inviteId?: string | string[];
         inviterId?: string | string[];
         inviterName?: string | string[];
@@ -371,6 +374,26 @@ export default function PlanDetailScreen() {
     });
     const hasLoadedRef = useRef(!!cachedDetail);
     const loadGenRef = useRef(0);
+
+    // Enlaces de eventos de la agenda: appnexo.es/plan/<id>?evento=1 abre su ficha.
+    const isEventLink = (Array.isArray(evento) ? evento[0] : evento) === '1';
+    useEffect(() => {
+        if (isEventLink && planId) router.replace({ pathname: '/event/[id]', params: { id: planId } });
+    }, [isEventLink, planId, router]);
+    // Llegó por la landing web (nexo://plan/<id>, sin el parámetro): si no existe
+    // como plan pero sí como evento, abrir el evento en vez de «no encontrado».
+    useEffect(() => {
+        if (isEventLink || loading || plan || !planId) return;
+        let alive = true;
+        void fetchEvent(planId)
+            .then((event) => {
+                if (alive && event) router.replace({ pathname: '/event/[id]', params: { id: planId } });
+            })
+            .catch(() => undefined);
+        return () => {
+            alive = false;
+        };
+    }, [isEventLink, loading, plan, planId, router]);
 
     /** Early-pick (link) activo / ya resuelto → la sección no abre otro modal. */
     const [earlyPickActive, setEarlyPickActive] = useState(false);

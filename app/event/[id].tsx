@@ -21,19 +21,23 @@ import {
   fetchEvent,
   fetchEventMembership,
   fetchEventPeople,
+  fetchEventSaved,
   setEventMembership,
+  setEventSaved,
   trackEvent,
   eventJoinErrorKey,
 } from "../../features/events/api";
 import type { ExternalEvent, EventPerson } from "../../features/events/types";
 import { EventLocationMap } from "../../features/events/EventLocationMap";
 import { publishEventMembership } from "../../features/events/membershipBus";
-import { hapticError, hapticSuccess } from "../../lib/haptics";
+import { hapticError, hapticLight, hapticSuccess } from "../../lib/haptics";
 import { peekEvent, peekEventSocial } from "../../features/events/cache";
 import { EventDetailContent } from "../../features/events/EventDetailContent";
 import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
 import { PressScale } from "../../components/PressScale";
 import { JOINED_PLAN_COLORS, planCardActionStyles } from "../../components/planCardActions";
+import { eventWhenLabel } from "../../features/events/EventCards";
+import { shareEventLink } from "../../lib/shareEvent";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export default function EventDetail() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -41,7 +45,7 @@ export default function EventDetail() {
   const router = useRouter();
   const { colors, scheme } = useAppTheme();
   const actionStyles = planCardActionStyles(scheme === 'dark');
-  const { t } = useT();
+  const { t, lang } = useT();
   const transitionReady = useScreenTransitionReady();
   const { userId, requireAccount } = useAuthSession();
   const scope = JSON.stringify([id, userId]);
@@ -60,6 +64,52 @@ export default function EventDetail() {
   const morePeople = privateScope === scope && storedMorePeople;
   const joined = privateScope === scope && storedJoined;
   const busy = busyScope === scope;
+  const [savedState, setSavedState] = useState<{ scope: string; saved: boolean } | null>(null);
+  const saved = savedState?.scope === scope && savedState.saved;
+  const saving = useRef(false);
+  useFocusEffect(useCallback(() => {
+    if (!userId || !transitionReady) return;
+    let alive = true;
+    void fetchEventSaved(id, userId)
+      .then((value) => { if (alive) setSavedState({ scope, saved: value }); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [id, userId, scope, transitionReady]));
+  const toggleSave = async () => {
+    if (!userId) {
+      requireAccount({ type: "event", eventId: id });
+      return;
+    }
+    if (saving.current) return;
+    saving.current = true;
+    const next = !saved;
+    setSavedState({ scope, saved: next });
+    hapticLight();
+    try {
+      await setEventSaved(id, next);
+    } catch {
+      setSavedState({ scope, saved: !next });
+      Alert.alert(t("feed.error"), t("events.error"));
+    } finally {
+      saving.current = false;
+    }
+  };
+  const shareEvent = () => {
+    if (!event) return;
+    void shareEventLink({
+      eventId: event.id,
+      title: event.title,
+      when: eventWhenLabel(event, lang),
+      venue: event.venue,
+    });
+  };
+  const reportEvent = () => {
+    if (!userId) {
+      requireAccount({ type: "event", eventId: id });
+      return;
+    }
+    router.push({ pathname: "/report-plan", params: { eventId: id } });
+  };
   const loadedPrivateScope = useRef(scope);
   const personLoading = useRef<object | null>(null),
     mutation = useRef<object | null>(null),
@@ -257,6 +307,10 @@ export default function EventDetail() {
         onAccount={() => requireAccount({ type: "event", eventId: id })}
         onMorePeople={() => void loadPeople()}
         renderMap={visible => <EventLocationMap event={event} enabled={visible && transitionReady} />}
+        saved={saved}
+        onShare={shareEvent}
+        onToggleSave={() => void toggleSave()}
+        onReport={reportEvent}
       /> : <View style={[s.content, { flex: 1 }]}>
         <Pressable accessibilityRole="button" accessibilityLabel={t("common.back")} style={s.back}
           onPress={() => router.canGoBack() ? router.back() : router.replace("/")}>

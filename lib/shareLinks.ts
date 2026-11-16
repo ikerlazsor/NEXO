@@ -47,3 +47,14 @@ export function buildPlanShareMessage(opts: { planId: string }): string {
 export function buildFootballShareMessage(opts: { planId: string }): string {
     return planShareUrl(opts.planId);
 }
+
+/**
+ * Enlace de un evento de la agenda. La web solo publica /plan/* (Universal
+ * Links); `evento=1` hace que la app abra la ficha del evento. Si se abre por
+ * la landing (nexo://plan/<id>), el detalle de plan redirige al evento.
+ */
+export function eventShareUrl(eventId: string): string {
+    if (!eventId) return 'nexo://';
+    if (SHARE_WEB_HOST) return `https://${SHARE_WEB_HOST}/plan/${eventId}?evento=1`;
+    return `nexo://event/${eventId}`;
+}

@@ -84,10 +84,16 @@ export function resolveDeepLinkUrl(url: string | null | undefined): DeepLinkTarg
                 });
             }
             if (!planId) return null;
+            // Enlace compartido de un evento de la agenda (la web solo publica /plan/*).
+            if (q('evento') === '1') return { href: `/event/${planId}` };
             const team = q('team');
             const teamQ =
                 team && /^\d+$/.test(team) ? `?team=${encodeURIComponent(team)}` : '';
             return { href: `/plan/${planId}${teamQ}` };
+        }
+        case 'event': {
+            const eventId = id?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
+            return eventId ? { href: `/event/${eventId}` } : null;
         }
         case 'chat':
             return id ? { href: `/chat/${id}` } : null;

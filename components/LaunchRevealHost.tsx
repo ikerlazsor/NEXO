@@ -6,6 +6,8 @@ import Animated, {
     runOnJS,
     useAnimatedStyle,
     useSharedValue,
+    withDelay,
+    withSequence,
     withTiming,
 } from 'react-native-reanimated';
 import { hideNativeSplashOnce } from '../lib/nativeSplash';
@@ -43,14 +45,20 @@ export function LaunchRevealHost({ booting = false, ready, blocked, children }: 
     );
 
     /** Mantener splash en boot o en el handoff al feed. */
-    const keepSplash = !launchRevealConsumed && (booting || feedEligible || (!ready && !blocked));
+    // El splash JS se mantiene hasta que termina su animación de salida (también en login),
+    // así nunca se ve el corte del splash nativo.
+    const keepSplash = !launchRevealConsumed;
 
     const [overlayDone, setOverlayDone] = useState(launchRevealConsumed);
     const [fading, setFading] = useState(false);
 
     const overlayOpacity = useSharedValue(1);
-    // Feed siempre listo debajo; no animamos su opacity en el reveal.
-    const feedOpacity = useSharedValue(1);
+    // Salida tipo Instagram: el logo "respira" (encoge un poco) y crece mientras se
+    // desvanece; el fondo se aclara y la app entra con un leve zoom (de 1,05 a 1).
+    const bgOpacity = useSharedValue(1);
+    const logoScale = useSharedValue(1);
+    const logoOpacity = useSharedValue(1);
+    const feedScale = useSharedValue(1);
 
     const completeReveal = useCallback(() => {
         launchRevealConsumed = true;
@@ -60,36 +68,47 @@ export function LaunchRevealHost({ booting = false, ready, blocked, children }: 
 
     const beginFadeOut = useCallback(() => {
         setFading(true);
-        const easing = Easing.out(Easing.cubic);
-        overlayOpacity.value = withTiming(
-            0,
-            { duration: LAUNCH_SPLASH_FADE_MS, easing },
-            (finished) => {
-                if (finished) runOnJS(completeReveal)();
-            },
+        const out = Easing.out(Easing.cubic);
+        feedScale.value = 1.05;
+        logoScale.value = withSequence(
+            withTiming(0.9, { duration: 150, easing: Easing.inOut(Easing.quad) }),
+            withTiming(1.6, { duration: 380, easing: Easing.in(Easing.cubic) }),
         );
-    }, [completeReveal, overlayOpacity]);
+        logoOpacity.value = withDelay(260, withTiming(0, { duration: 270, easing: out }));
+        bgOpacity.value = withDelay(170, withTiming(0, { duration: 360, easing: out }));
+        feedScale.value = withDelay(170, withTiming(1, { duration: 520, easing: out }));
+        overlayOpacity.value = withDelay(
+            LAUNCH_SPLASH_FADE_MS + 140,
+            withTiming(0, { duration: 1 }, (finished) => {
+                if (finished) runOnJS(completeReveal)();
+            }),
+        );
+    }, [completeReveal, overlayOpacity, bgOpacity, logoScale, logoOpacity, feedScale]);
 
-    // Login / onboarding / etc.: soltar splash sin hold ni tic de logo.
+    // Login / onboarding / etc.: misma salida suave (antes se cortaba de golpe).
     useEffect(() => {
-        if (launchRevealConsumed || overlayDone || booting) return;
+        if (launchRevealConsumed || overlayDone || booting || fading) return;
         if (!ready) return;
         if (feedEligible) return;
-        overlayOpacity.value = 0;
         void hideNativeSplashOnce();
-        completeReveal();
-    }, [ready, booting, feedEligible, overlayDone, completeReveal, overlayOpacity]);
+        requestAnimationFrame(() => beginFadeOut());
+    }, [ready, booting, feedEligible, overlayDone, fading, beginFadeOut]);
 
-    const showOverlay = !launchRevealConsumed && !overlayDone && keepSplash;
+    const showOverlay = !launchRevealConsumed && !overlayDone && (keepSplash || fading);
     /** El hold/fade al feed solo cuando la app ya está lista en tabs. */
     const appReadyForHold = feedEligible && !fading && !overlayDone;
 
     const feedStyle = useAnimatedStyle(() => ({
-        opacity: feedOpacity.value,
+        transform: [{ scale: feedScale.value }],
     }));
 
     const overlayWrapStyle = useAnimatedStyle(() => ({
         opacity: overlayOpacity.value,
+    }));
+    const bgStyle = useAnimatedStyle(() => ({ opacity: bgOpacity.value }));
+    const logoStyle = useAnimatedStyle(() => ({
+        opacity: logoOpacity.value,
+        transform: [{ scale: logoScale.value }],
     }));
 
     return (
@@ -106,7 +125,12 @@ export function LaunchRevealHost({ booting = false, ready, blocked, children }: 
                     pointerEvents="none"
                     collapsable={false}
                 >
-                    <LaunchSplashOverlay appReady={appReadyForHold} onHoldEnd={beginFadeOut} />
+                    <LaunchSplashOverlay
+                        appReady={appReadyForHold}
+                        onHoldEnd={beginFadeOut}
+                        logoStyle={logoStyle}
+                        backgroundStyle={bgStyle}
+                    />
                 </Animated.View>
             ) : null}
         </View>

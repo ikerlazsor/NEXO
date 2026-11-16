@@ -1,6 +1,7 @@
 import { hideNativeSplashOnce } from '../lib/nativeSplash';
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import { StyleSheet, View, type StyleProp, type ImageStyle, type ViewStyle } from 'react-native';
+import Animated, { type AnimatedStyle } from 'react-native-reanimated';
 
 /** Mismo fondo que expo-splash-screen / app.json */
 export const LAUNCH_SPLASH_BG = '#E2EBF2';
@@ -23,6 +24,10 @@ type Props = {
     /** true cuando la app ya puede mostrar feed (o hay que dejar de esperar). */
     appReady: boolean;
     onHoldEnd: () => void;
+    /** Animación del logo durante la salida (escala). */
+    logoStyle?: StyleProp<AnimatedStyle<StyleProp<ImageStyle>>>;
+    /** Animación solo del fondo (el logo se anima aparte). */
+    backgroundStyle?: StyleProp<AnimatedStyle<StyleProp<ViewStyle>>>;
 };
 
 /**
@@ -30,7 +35,7 @@ type Props = {
  * El nativo solo se oculta cuando el logo JS ya está pintado → sin “tic”.
  * Montado desde el boot para matar el cuadrado nativo lo antes posible.
  */
-export function LaunchSplashOverlay({ appReady, onHoldEnd }: Props) {
+export function LaunchSplashOverlay({ appReady, onHoldEnd, logoStyle, backgroundStyle }: Props) {
     const onHoldEndRef = useRef(onHoldEnd);
     onHoldEndRef.current = onHoldEnd;
 
@@ -82,9 +87,11 @@ export function LaunchSplashOverlay({ appReady, onHoldEnd }: Props) {
 
     return (
         <View style={styles.overlay} pointerEvents="none" collapsable={false}>
-            <Image
+            {/* Fondo y logo por separado: el fondo se desvanece y el logo crece por encima. */}
+            <Animated.View style={[styles.overlayBg, backgroundStyle]} />
+            <Animated.Image
                 source={SPLASH_LOGO}
-                style={styles.splashLogo}
+                style={[styles.splashLogo, logoStyle]}
                 resizeMode="contain"
                 fadeDuration={0}
                 onLoad={markLogoPainted}
@@ -110,11 +117,15 @@ const styles = StyleSheet.create({
     },
     overlay: {
         ...StyleSheet.absoluteFillObject,
-        backgroundColor: LAUNCH_SPLASH_BG,
+        backgroundColor: "transparent",
         alignItems: 'center',
         justifyContent: 'center',
         zIndex: 9999,
         elevation: 9999,
+    },
+    overlayBg: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: LAUNCH_SPLASH_BG,
     },
     splashLogo: {
         width: LAUNCH_SPLASH_IMAGE_WIDTH,

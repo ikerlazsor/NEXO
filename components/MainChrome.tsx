@@ -435,7 +435,7 @@ export function MainChrome({ active: activeProp, children }: Props) {
     useEffect(() => {
         let sheetTimer: ReturnType<typeof setTimeout> | undefined;
         const task = InteractionManager.runAfterInteractions(() => {
-            sheetTimer = setTimeout(() => setMapSheet(true), 1600);
+            sheetTimer = setTimeout(() => setMapSheet(true), 400);
         });
         return () => {
             task.cancel();

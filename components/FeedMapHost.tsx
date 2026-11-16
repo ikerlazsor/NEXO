@@ -9,7 +9,6 @@ import {
     FlatList,
     NativeScrollEvent,
     NativeSyntheticEvent,
-    Platform,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -145,9 +144,11 @@ export function FeedMapHost() {
         const timer = setTimeout(revealMap, 2500);
         return () => clearTimeout(timer);
     }, [revealMap]);
-    // El mapa nativo se monta una vez (oculto bajo la pantalla) y carga sus teselas
-    // en segundo plano: al abrir solo se desliza el panel, ya pintado.
-    const sheetY = useSharedValue(SHEET_HIDDEN_Y);
+    // El mapa nativo se monta una vez y espera aparcado DETRÁS del fondo del feed,
+    // dentro de la pantalla: fuera de ella iOS no descarga teselas y la primera
+    // apertura salía gris. Al abrir se sube por encima (raised) y se desliza.
+    const sheetY = useSharedValue(0);
+    const [raised, setRaised] = useState(false);
     const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: sheetY.value }] }));
     const mapReadyRef = useRef(false);
     const [viewport, setViewport] = useState(MADRID_REGION);
@@ -196,6 +197,10 @@ export function FeedMapHost() {
         else if (planId) router.push({ pathname: '/plan/[id]', params: { id: planId } });
     }, [router]);
 
+    const onSheetClosed = useCallback(() => {
+        setRaised(false);
+        finishDismiss();
+    }, [finishDismiss]);
     const animateSheetClose = useCallback(() => {
         if (!visibleRef.current || closingRef.current) return;
         closingRef.current = true;
@@ -208,12 +213,27 @@ export function FeedMapHost() {
         sheetY.value = withTiming(
             SHEET_HIDDEN_Y,
             { duration: 280, easing: Easing.in(Easing.cubic) },
-            (finished) => { if (finished) runOnJS(finishDismiss)(); },
+            (finished) => { if (finished) runOnJS(onSheetClosed)(); },
         );
-    }, [finishDismiss, sheetY]);
+    }, [sheetY, onSheetClosed]);
     const onSheetOpened = useCallback(() => {
         if (visibleRef.current && !closingRef.current) setRenderMap(true);
     }, []);
+    useEffect(() => {
+        if (raised) {
+            // Ya por encima del feed (y aún fuera de pantalla): deslizar hacia arriba.
+            if (visibleRef.current && !closingRef.current) {
+                sheetY.value = withTiming(
+                    0,
+                    { duration: 340, easing: Easing.out(Easing.cubic) },
+                    (finished) => { if (finished) runOnJS(onSheetOpened)(); },
+                );
+            }
+        } else {
+            // Ya por detrás del fondo: volver a aparcarlo dentro de la pantalla.
+            sheetY.value = 0;
+        }
+    }, [raised, sheetY, onSheetOpened]);
     useEffect(() => () => { camera.current?.close(); loadGenRef.current++; }, []);
 
     const refreshPlansInBackground = useCallback(
@@ -345,11 +365,11 @@ export function FeedMapHost() {
         setSnapshotUri(peekMapSnapshot());
         setTick((n) => n + 1);
         setVisible(true);
-        sheetY.value = withTiming(
-            0,
-            { duration: 340, easing: Easing.out(Easing.cubic) },
-            (finished) => { if (finished) runOnJS(onSheetOpened)(); },
-        );
+        // Primero bajarlo fuera de pantalla (sigue detrás), luego subirlo de capa
+        // y el efecto de `raised` lo desliza. Así nunca asoma de golpe.
+        sheetY.value = withTiming(SHEET_HIDDEN_Y, { duration: 0 }, (finished) => {
+            if (finished) runOnJS(setRaised)(true);
+        });
         didInitCarousel.current = false;
         userEngagedRef.current = false;
         selectedIdRef.current = null;
@@ -432,7 +452,7 @@ export function FeedMapHost() {
                 if (gen === loadGenRef.current) setLoadingPlans(false);
             }
         })();
-    }, [userId, refreshPlansInBackground, onSheetOpened, sheetY]);
+    }, [userId, refreshPlansInBackground, sheetY]);
 
     useEffect(() => {
         const unsub = subscribeOpenFeedMap(open);
@@ -643,7 +663,7 @@ export function FeedMapHost() {
             pointerEvents={visible ? 'auto' : 'none'}
             importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
             accessibilityElementsHidden={!visible}
-            style={[StyleSheet.absoluteFill, mapHostStyles.sheet, sheetStyle]}>
+            style={[StyleSheet.absoluteFill, raised ? mapHostStyles.sheet : mapHostStyles.parked, sheetStyle]}>
             <View style={styles.mapModalContainer}>
                 {/* Fondo siempre presente: captura del mapa (o fondo liso la primera vez).
                     El mapa real entra con fundido encima cuando ha cargado. */}
@@ -702,6 +722,9 @@ export function FeedMapHost() {
                         coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
                         pinColor={pin.color}
                         tracksViewChanges={false}
+                        // iOS: el globo moderno (MKMarkerAnnotationView) se oculta solo al
+                        // solaparse y reaparece con zoom. El pin clásico se ve siempre.
+                        useLegacyPinView
                         title={pin.members.length > 1 ? t('feed.mapGroup', { n: pin.members.length }) : pin.members[0].titulo || ''}
                         onPress={() => {
                             if (pin.members.length === 1) focusPlanId(String(pin.members[0].id), { scroll: true, mapDuration: MAP_FOCUS_MS });
@@ -899,6 +922,9 @@ export function FeedMapHost() {
 const mapHostStyles = StyleSheet.create({
     // Por encima de la cabecera y la barra inferior del chrome (zIndex 30).
     sheet: { zIndex: 1000, elevation: 1000 },
+    // Aparcado: detrás del degradado del chrome (zIndex 0), invisible pero en
+    // pantalla para que el mapa cargue teselas.
+    parked: { zIndex: -1, elevation: 0 },
     map: {
         position: 'absolute',
         left: 0,

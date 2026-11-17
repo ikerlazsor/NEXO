@@ -12,11 +12,11 @@ import Animated, {
     withSequence,
     withSpring,
     withTiming,
-    Easing,
     cancelAnimation,
     useReducedMotion,
 } from 'react-native-reanimated';
 import { hapticSoft } from '../lib/haptics';
+import { DURATION, EASE_OUT } from '../lib/motion';
 import { theme } from '../theme';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -30,7 +30,7 @@ type Props = {
     disabled?: boolean;
     accessibilityLabel?: string;
     accessibilityRole?: 'button' | 'link' | 'none';
-    /** Feedback al empezar a pulsar (default true). */
+    /** Vibración suave al empezar a pulsar (default false). Mejor vibrar en onPress solo para acciones importantes. */
     haptic?: boolean;
     hitSlop?: number | { top?: number; bottom?: number; left?: number; right?: number };
     /** Si cambia a truthy, hace un bounce elástico (p. ej. corazón guardado). */
@@ -42,8 +42,8 @@ type Props = {
 
 const SPRING_OUT = { damping: 18, stiffness: 340 };
 const BOUNCE = { damping: 14, stiffness: 320 };
-const PRESS_IN = { duration: 55, easing: Easing.out(Easing.quad) };
-const PRESS_OUT = { duration: 110, easing: Easing.out(Easing.cubic) };
+const PRESS_IN = { duration: DURATION.pressIn, easing: EASE_OUT };
+const PRESS_OUT = { duration: DURATION.pressOut, easing: EASE_OUT };
 
 /** Micro-escala al pulsar; opcional bounce al cambiar estado. */
 export function PressScale({
@@ -55,7 +55,7 @@ export function PressScale({
     disabled,
     accessibilityLabel,
     accessibilityRole = 'button',
-    haptic = true,
+    haptic = false,
     hitSlop,
     bounceKey,
     minTouch = true,

@@ -1,14 +1,17 @@
 import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-    Animated,
-    PanResponder,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
-} from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, {
+    useAnimatedStyle,
+    useReducedMotion,
+    useSharedValue,
+    withSpring,
+    withTiming,
+} from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { EASE_OUT, SPRING } from '../lib/motion';
 import { hapticMedium } from '../lib/haptics';
 import {
     registerInAppToastDismiss,
@@ -22,6 +25,8 @@ import { useThemedStyles } from '../lib/appTheme';
 import { theme, type ThemeColors } from '../theme';
 
 const SHOW_MS = 4800;
+/** Fuera de pantalla hasta medir la altura real del aviso. */
+const INITIAL_HIDDEN_Y = -200;
 
 type Props = { children: React.ReactNode };
 
@@ -30,22 +35,41 @@ export function InAppToastHost({ children }: Props) {
     const styles = useThemedStyles(createToastStyles);
     const [queue, setQueue] = useState<InAppToast[]>([]);
     const current = queue[0] ?? null;
-    const translateY = useRef(new Animated.Value(-120)).current;
+    const top = Math.max(insets.top, 8) + 6;
+    const reduced = useReducedMotion();
+    const translateY = useSharedValue(INITIAL_HIDDEN_Y);
+    const opacity = useSharedValue(0);
+    const hiddenY = useSharedValue(INITIAL_HIDDEN_Y);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const dismiss = useCallback(() => {
+    const popQueue = useCallback(() => {
+        setQueue((prev) => prev.slice(1));
+    }, []);
+
+    const clearDismissTimer = useCallback(() => {
         if (timerRef.current) {
             clearTimeout(timerRef.current);
             timerRef.current = null;
         }
-        Animated.timing(translateY, {
-            toValue: -120,
-            duration: 180,
-            useNativeDriver: true,
-        }).start(() => {
-            setQueue((prev) => prev.slice(1));
+    }, []);
+
+    const dismiss = useCallback(() => {
+        clearDismissTimer();
+        if (reduced) {
+            opacity.value = withTiming(0, { duration: 200, easing: EASE_OUT }, (finished) => {
+                if (finished) scheduleOnRN(popQueue);
+            });
+            return;
+        }
+        translateY.value = withTiming(hiddenY.value, { duration: 200, easing: EASE_OUT }, (finished) => {
+            if (finished) scheduleOnRN(popQueue);
         });
-    }, [translateY]);
+    }, [clearDismissTimer, reduced, opacity, translateY, hiddenY, popQueue]);
+
+    const restartDismissTimer = useCallback(() => {
+        clearDismissTimer();
+        timerRef.current = setTimeout(dismiss, SHOW_MS);
+    }, [clearDismissTimer, dismiss]);
 
     useEffect(() => {
         registerInAppToastPresenter((toast) => {
@@ -65,18 +89,20 @@ export function InAppToastHost({ children }: Props) {
 
     useEffect(() => {
         if (!current) return;
-        translateY.setValue(-120);
-        Animated.spring(translateY, {
-            toValue: 0,
-            damping: 18,
-            stiffness: 220,
-            useNativeDriver: true,
-        }).start();
+        if (reduced) {
+            translateY.value = 0;
+            opacity.value = 0;
+            opacity.value = withTiming(1, { duration: 200, easing: EASE_OUT });
+        } else {
+            opacity.value = 1;
+            translateY.value = hiddenY.value;
+            translateY.value = withTiming(0, { duration: 300, easing: EASE_OUT });
+        }
         timerRef.current = setTimeout(dismiss, SHOW_MS);
         return () => {
             if (timerRef.current) clearTimeout(timerRef.current);
         };
-    }, [current, dismiss, translateY]);
+    }, [current, dismiss, reduced, opacity, translateY, hiddenY]);
 
     const open = () => {
         if (!current) return;
@@ -88,27 +114,56 @@ export function InAppToastHost({ children }: Props) {
         void warmPushDestination(data);
     };
 
-    const pan = useRef(
-        PanResponder.create({
-            onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 8 && g.dy < 0,
-            onPanResponderRelease: (_, g) => {
-                if (g.dy < -24 || g.vy < -0.6) dismiss();
-            },
-        }),
-    ).current;
+    // Sigue el dedo 1:1 hacia arriba; hacia abajo ofrece resistencia. Se cierra por
+    // distancia o por velocidad (un golpe corto basta). Mientras se sujeta, no se va solo.
+    const pan = useMemo(
+        () =>
+            Gesture.Pan()
+                .activeOffsetY([-8, 8])
+                .onStart(() => {
+                    scheduleOnRN(clearDismissTimer);
+                })
+                .onUpdate((e) => {
+                    const dy = e.translationY;
+                    translateY.value = dy < 0 ? dy : dy * 0.2;
+                })
+                .onEnd((e) => {
+                    if (translateY.value < -24 || e.velocityY < -500) {
+                        translateY.value = withTiming(
+                            hiddenY.value,
+                            { duration: 200, easing: EASE_OUT },
+                            (finished) => {
+                                if (finished) scheduleOnRN(popQueue);
+                            },
+                        );
+                    } else {
+                        translateY.value = withSpring(0, { ...SPRING.snapBack, velocity: e.velocityY });
+                        scheduleOnRN(restartDismissTimer);
+                    }
+                }),
+        [translateY, hiddenY, popQueue, clearDismissTimer, restartDismissTimer],
+    );
+
+    const animatedStyle = useAnimatedStyle(() => ({
+        opacity: opacity.value,
+        transform: [{ translateY: translateY.value }],
+    }));
+
+    const onToastLayout = useCallback(
+        (e: LayoutChangeEvent) => {
+            hiddenY.value = -(e.nativeEvent.layout.height + top + 20);
+        },
+        [hiddenY, top],
+    );
 
     return (
         <>
             {children}
             {current ? (
-                <Animated.View
-                    pointerEvents="box-none"
-                    style={[
-                        styles.wrap,
-                        { top: Math.max(insets.top, 8) + 6, transform: [{ translateY }] },
-                    ]}
-                    {...pan.panHandlers}
-                >
+                // Raíz de gestos propia: este host se pinta fuera del GestureHandlerRootView de la app.
+                <GestureHandlerRootView style={[styles.wrap, { top }]}>
+                <GestureDetector gesture={pan}>
+                <Animated.View style={animatedStyle} onLayout={onToastLayout}>
                     <Pressable onPress={open} style={styles.card} accessibilityRole="button">
                         {current.avatarUrl ? (
                             <ProfileAvatar
@@ -130,6 +185,8 @@ export function InAppToastHost({ children }: Props) {
                         </View>
                     </Pressable>
                 </Animated.View>
+                </GestureDetector>
+                </GestureHandlerRootView>
             ) : null}
         </>
     );

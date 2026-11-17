@@ -5,7 +5,9 @@ import { type ThemeColors } from '../theme';
 import Animated, {
     Easing,
     interpolate,
+    interpolateColor,
     useAnimatedStyle,
+    useReducedMotion,
     useSharedValue,
     withRepeat,
     withTiming,
@@ -23,18 +25,25 @@ function Bone({ width, height, radius = 10, style }: BoneProps) {
     const BASE = colors.surfaceSubtle;
     const HIGHLIGHT = colors.border;
     const t = useSharedValue(0);
+    const reduced = useReducedMotion();
 
     useEffect(() => {
+        // Movimiento reducido: hueso quieto en el punto medio.
+        if (reduced) {
+            t.value = 0.5;
+            return;
+        }
         t.value = withRepeat(
             withTiming(1, { duration: 1100, easing: Easing.inOut(Easing.quad) }),
             -1,
             true,
         );
-    }, [t]);
+    }, [t, reduced]);
 
+    // Color y opacidad cambian juntos y de forma continua (antes el color saltaba a mitad).
     const animStyle = useAnimatedStyle(() => ({
         opacity: interpolate(t.value, [0, 1], [0.55, 1]),
-        backgroundColor: t.value > 0.5 ? HIGHLIGHT : BASE,
+        backgroundColor: interpolateColor(t.value, [0, 1], [BASE, HIGHLIGHT]),
     }));
 
     return (

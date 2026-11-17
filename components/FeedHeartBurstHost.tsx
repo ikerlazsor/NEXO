@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 import Animated, {
     Easing,
     useAnimatedStyle,
+    useReducedMotion,
     useSharedValue,
     withDelay,
     withTiming,
@@ -80,9 +81,12 @@ function BurstLayer({ burst }: { burst: Burst }) {
 /** Overlay a pantalla completa: explosión radial desde el corazón. */
 export function FeedHeartBurstHost() {
     const [bursts, setBursts] = useState<Burst[]>([]);
+    const reduced = useReducedMotion();
 
     useEffect(() => {
         return subscribeHeartBurst((evt) => {
+            // Movimiento reducido: sin explosión.
+            if (reduced) return;
             const id = `${evt.at}`;
             const particles: Particle[] = Array.from({ length: 26 }, (_, i) => {
                 const angle = (i / 26) * Math.PI * 2 + (Math.random() - 0.5) * 0.45;
@@ -104,7 +108,7 @@ export function FeedHeartBurstHost() {
                 setBursts((prev) => prev.filter((b) => b.id !== id));
             }, 1400);
         });
-    }, []);
+    }, [reduced]);
 
     if (!bursts.length) return null;
 

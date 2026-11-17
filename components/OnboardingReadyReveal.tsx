@@ -10,6 +10,7 @@ import Animated, {
     Easing,
     FadeIn,
     useAnimatedStyle,
+    useReducedMotion,
     useSharedValue,
     withRepeat,
     withSequence,
@@ -41,6 +42,7 @@ export function OnboardingReadyReveal({
 }: Props) {
     const [started, setStarted] = useState(false);
     const pulse = useSharedValue(0);
+    const reduced = useReducedMotion();
 
     useEffect(() => {
         setStarted(true);
@@ -50,6 +52,11 @@ export function OnboardingReadyReveal({
     }, []);
 
     useEffect(() => {
+        // Movimiento reducido: sin latido infinito.
+        if (reduced) {
+            pulse.value = 0;
+            return;
+        }
         pulse.value = withRepeat(
             withSequence(
                 withTiming(1, { duration: 900, easing: Easing.inOut(Easing.quad) }),
@@ -58,7 +65,7 @@ export function OnboardingReadyReveal({
             -1,
             false,
         );
-    }, [pulse]);
+    }, [pulse, reduced]);
 
     const avatarPulse = useAnimatedStyle(() => ({
         transform: [{ scale: 1 + pulse.value * 0.03 }],

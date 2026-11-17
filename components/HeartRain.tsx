@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 import Animated, {
     Easing,
     useAnimatedStyle,
+    useReducedMotion,
     useSharedValue,
     withDelay,
     withTiming,
@@ -67,9 +68,11 @@ function HeartParticle({
 /** Lluvia / explosión corta de corazones (detalle de plan). */
 export function HeartRain({ burstKey, color = '#EF4444' }: Props) {
     const [particles, setParticles] = useState<Particle[]>([]);
+    // Movimiento reducido: sin partículas; el corazón relleno ya comunica el cambio.
+    const reduced = useReducedMotion();
 
     useEffect(() => {
-        if (!burstKey) return;
+        if (!burstKey || reduced) return;
         const next: Particle[] = Array.from({ length: 16 }, (_, i) => ({
             id: `${burstKey}-${i}`,
             x: -56 + Math.random() * 112,
@@ -82,7 +85,7 @@ export function HeartRain({ burstKey, color = '#EF4444' }: Props) {
         setParticles(next);
         const clear = setTimeout(() => setParticles([]), 1300);
         return () => clearTimeout(clear);
-    }, [burstKey]);
+    }, [burstKey, reduced]);
 
     const items = useMemo(() => particles, [particles]);
     if (!items.length) return null;

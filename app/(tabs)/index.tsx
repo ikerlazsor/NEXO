@@ -36,11 +36,14 @@ import Animated, {
     Easing,
     Extrapolation,
     interpolate,
-    runOnJS,
     useAnimatedStyle,
+    useReducedMotion,
     useSharedValue,
+    withSpring,
     withTiming,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
+import { EASE_SHEET, SPRING } from '../../lib/motion';
 import {
     Gesture,
     GestureDetector,
@@ -180,6 +183,12 @@ const STICKY_FILTERS_FROM_Y = 64;
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
 
+/** Cuanto más se pasa del borde, menos sigue al dedo (resistencia elástica). */
+function rubberband(overshoot: number, dimension: number, constant = 0.55) {
+    'worklet';
+    return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
+}
+
 export default function HomeScreen() {
     const router = useRouter();
     const { t, lang } = useT();
@@ -220,6 +229,7 @@ export default function HomeScreen() {
     const filtersSheetY = useSharedValue(0);
     const filtersScrollY = useSharedValue(0);
     const filtersClosing = useSharedValue(0);
+    const filtersDragStart = useSharedValue(0);
     const filtersSheetHeight = useMemo(() => Dimensions.get('window').height * 0.72, []);
 
     const finishCloseFiltersModal = useCallback(() => {
@@ -243,9 +253,9 @@ export default function HomeScreen() {
         cancelAnimation(filtersSheetY);
         filtersSheetY.value = withTiming(
             filtersSheetHeight,
-            { duration: 260, easing: Easing.inOut(Easing.cubic) },
+            { duration: 240, easing: EASE_SHEET },
             (finished) => {
-                if (finished) runOnJS(finishCloseFiltersModal)();
+                if (finished) scheduleOnRN(finishCloseFiltersModal);
             },
         );
     }, [
@@ -283,36 +293,35 @@ export default function HomeScreen() {
             Gesture.Pan()
                 .activeOffsetY(8)
                 .failOffsetX([-32, 32])
+                .onStart(() => {
+                    if (filtersClosing.value) return;
+                    // Agarrarlo a medio subir continúa desde donde está, sin saltar.
+                    cancelAnimation(filtersSheetY);
+                    filtersDragStart.value = filtersSheetY.value;
+                })
                 .onUpdate((e) => {
                     if (filtersClosing.value) return;
-                    filtersSheetY.value = Math.max(0, e.translationY);
+                    const next = filtersDragStart.value + e.translationY;
+                    filtersSheetY.value = next >= 0 ? next : rubberband(next, filtersSheetHeight);
                 })
                 .onEnd((e) => {
                     if (filtersClosing.value) return;
                     const dismiss = filtersSheetY.value > 100 || e.velocityY > 900;
+                    // Muelle con la velocidad del dedo: sin frenazo al soltar.
                     if (dismiss) {
                         filtersClosing.value = 1;
-                        const progress = Math.min(
-                            1,
-                            filtersSheetY.value / Math.max(1, filtersSheetHeight),
-                        );
-                        const duration = Math.round(200 + (1 - progress) * 100);
-                        cancelAnimation(filtersSheetY);
-                        filtersSheetY.value = withTiming(
+                        filtersSheetY.value = withSpring(
                             filtersSheetHeight,
-                            { duration, easing: Easing.inOut(Easing.cubic) },
+                            { ...SPRING.sheet, velocity: e.velocityY, overshootClamping: true },
                             (finished) => {
-                                if (finished) runOnJS(finishCloseFiltersModal)();
+                                if (finished) scheduleOnRN(finishCloseFiltersModal);
                             },
                         );
                     } else {
-                        filtersSheetY.value = withTiming(0, {
-                            duration: 240,
-                            easing: Easing.out(Easing.cubic),
-                        });
+                        filtersSheetY.value = withSpring(0, { ...SPRING.sheet, velocity: e.velocityY });
                     }
                 }),
-        [finishCloseFiltersModal, filtersClosing, filtersSheetHeight, filtersSheetY],
+        [finishCloseFiltersModal, filtersClosing, filtersDragStart, filtersSheetHeight, filtersSheetY],
     );
 
     const [nearbyKm, setNearbyKm] = useState<number | null>(null);
@@ -338,6 +347,7 @@ export default function HomeScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshEpoch, setRefreshEpoch] = useState(0);
     const feedFade = useSharedValue(1);
+    const reducedMotion = useReducedMotion();
     useEffect(() => {
         if (!refreshEpoch) return;
         cancelAnimation(feedFade);
@@ -346,7 +356,7 @@ export default function HomeScreen() {
     }, [refreshEpoch, feedFade]);
     const feedFadeStyle = useAnimatedStyle(() => ({
         opacity: interpolate(feedFade.value, [0, 1], [0.5, 1]),
-        transform: [{ translateY: interpolate(feedFade.value, [0, 1], [12, 0]) }],
+        transform: [{ translateY: reducedMotion ? 0 : interpolate(feedFade.value, [0, 1], [12, 0]) }],
     }));
     const [loadError, setLoadError] = useState(false);
     const [joiningPlanId, setJoiningPlanId] = useState<string | null>(null);
@@ -443,7 +453,7 @@ export default function HomeScreen() {
     }, [onScroll, setStickyFiltersShown]);
     const stickyFiltersStyle = useAnimatedStyle(() => ({
         opacity: stickyFilters.value,
-        transform: [{ translateY: interpolate(stickyFilters.value, [0, 1], [-14, 0]) }],
+        transform: [{ translateY: reducedMotion ? 0 : interpolate(stickyFilters.value, [0, 1], [-14, 0]) }],
     }));
     const openExternal = useCallback(
         (id: string) => {

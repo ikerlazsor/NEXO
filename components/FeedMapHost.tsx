@@ -16,7 +16,9 @@ import {
     View,
 } from 'react-native';
 import { Marker } from 'react-native-maps';
-import Animated, { Easing, FadeIn, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
+import { EASE_OUT } from '../lib/motion';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NexoMapView } from './NexoMapView';
@@ -236,8 +238,8 @@ export function FeedMapHost() {
         // dos transiciones nunca se solapen.
         sheetY.value = withTiming(
             SHEET_HIDDEN_Y,
-            { duration: 280, easing: Easing.in(Easing.cubic) },
-            (finished) => { if (finished) runOnJS(onSheetClosed)(); },
+            { duration: 220, easing: EASE_OUT },
+            (finished) => { if (finished) scheduleOnRN(onSheetClosed); },
         );
     }, [sheetY, onSheetClosed]);
     const onSheetOpened = useCallback(() => {
@@ -253,7 +255,7 @@ export function FeedMapHost() {
                 sheetY.value = withTiming(
                     0,
                     { duration: 340, easing: Easing.out(Easing.cubic) },
-                    (finished) => { if (finished) runOnJS(onSheetOpened)(); },
+                    (finished) => { if (finished) scheduleOnRN(onSheetOpened); },
                 );
             }
         } else {
@@ -425,7 +427,7 @@ export function FeedMapHost() {
         // Primero bajarlo fuera de pantalla (sigue detrás), luego subirlo de capa
         // y el efecto de `raised` lo desliza. Así nunca asoma de golpe.
         sheetY.value = withTiming(SHEET_HIDDEN_Y, { duration: 0 }, (finished) => {
-            if (finished) runOnJS(setRaised)(true);
+            if (finished) scheduleOnRN(setRaised, true);
         });
         didInitCarousel.current = false;
         userEngagedRef.current = false;

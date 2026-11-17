@@ -7,18 +7,19 @@ import Animated, {
     Easing,
     Extrapolation,
     interpolate,
-    runOnJS,
     useAnimatedStyle,
+    useReducedMotion,
     useSharedValue,
     withSpring,
     withTiming,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import { MessageReactionChips } from './MessageReactionsBar';
 import { PlanMomentsMessage } from './PlanMomentsMessage';
 import { linkifyParts } from './LinkifiedText';
 import { parseMoments, type MomentItem } from '../lib/planMoments';
 import { ProfileAvatar } from './ProfileAvatar';
-import { hapticMedium, hapticSelection } from '../lib/haptics';
+import { hapticSelection } from '../lib/haptics';
 import { parseReplyContent } from '../lib/chatReply';
 import { parseSystemContent } from '../lib/chatSystem';
 import { parsePlanInviteCard, type PlanInviteCardPayload } from '../lib/chatPlanInviteCard';
@@ -325,8 +326,10 @@ function NormalChatMessageRow({
     if (enterOnce.current === null) {
         enterOnce.current = claimSendEnterAnim(item.clientKey ?? item.id, item.creado_en, isMe);
     }
+    // Movimiento reducido: el mensaje enviado aparece con fundido, sin subir.
+    const reduced = useReducedMotion();
     const enterOpacity = useSharedValue(enterOnce.current ? 0 : 1);
-    const enterY = useSharedValue(enterOnce.current ? 14 : 0);
+    const enterY = useSharedValue(enterOnce.current && !reduced ? 14 : 0);
     const onReplyRef = useRef(onReplyMessage);
     const itemIdRef = useRef(item.id);
     onReplyRef.current = onReplyMessage;
@@ -352,19 +355,21 @@ function NormalChatMessageRow({
     useEffect(() => {
         if (enterOnce.current) {
             enterOpacity.value = withTiming(1, { duration: 220, easing: SEND_ENTER_EASING });
-            enterY.value = withTiming(0, { duration: 260, easing: SEND_ENTER_EASING });
+            if (!reduced) enterY.value = withTiming(0, { duration: 260, easing: SEND_ENTER_EASING });
             return;
         }
         enterOpacity.value = 1;
         enterY.value = 0;
+        // Solo al montar: `reduced` se lee una vez, igual que enterOnce.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [enterOpacity, enterY]);
 
     const fireReply = useCallback(() => {
-        hapticMedium();
         onReplyRef.current(itemIdRef.current);
     }, []);
 
-    // Solo UI-thread mientras deslizas; el JS (haptic + reply) al soltar. Evita el tirón del 1er swipe.
+    // Solo UI-thread mientras deslizas. A JS se llama una vez al cruzar el umbral
+    // (vibración) y otra al soltar (responder), nunca por frame.
     const pan = useMemo(
         () =>
             Gesture.Pan()
@@ -376,8 +381,11 @@ function NormalChatMessageRow({
                 .onUpdate((e) => {
                     const x = Math.max(0, Math.min(e.translationX, MAX_DRAG));
                     translateX.value = x;
-                    if (x >= REPLY_THRESHOLD) {
-                        crossedReplyRef.value = true;
+                    // Armado al pasar el umbral (vibra una vez); volver atrás lo desarma.
+                    const armed = x >= REPLY_THRESHOLD;
+                    if (armed !== crossedReplyRef.value) {
+                        crossedReplyRef.value = armed;
+                        if (armed) scheduleOnRN(hapticSelection);
                     }
                 })
                 .onFinalize(() => {
@@ -385,7 +393,7 @@ function NormalChatMessageRow({
                     crossedReplyRef.value = false;
                     translateX.value = withSpring(0, REPLY_SPRING);
                     if (shouldReply) {
-                        runOnJS(fireReply)();
+                        scheduleOnRN(fireReply);
                     }
                 }),
         [crossedReplyRef, fireReply, translateX],

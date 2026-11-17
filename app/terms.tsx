@@ -3,12 +3,10 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
     LayoutAnimation,
-    Platform,
     ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
-    UIManager,
     View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,9 +16,12 @@ import { LegalWebLink } from '../components/LegalWebLink';
 import { NEXO_TERMS_URL } from '../lib/brand';
 import { useT } from '../lib/i18n';
 
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-    UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+/** Acordeón: 200ms con salida rápida; el texto nuevo entra con fundido. */
+const ACCORDION_ANIM = LayoutAnimation.create(
+    200,
+    LayoutAnimation.Types.easeOut,
+    LayoutAnimation.Properties.opacity,
+);
 
 const INK = '#0F2A4A';
 const MUTED = '#64748B';
@@ -46,7 +47,7 @@ export default function TermsScreen() {
     const [expanded, setExpanded] = useState<string | null>(null);
 
     const toggle = (key: string) => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        LayoutAnimation.configureNext(ACCORDION_ANIM);
         setExpanded((prev) => (prev === key ? null : key));
     };
 

@@ -9,9 +9,7 @@ import { useCallback,
     useState,
     memo } from 'react';
 import {
-    Animated,
     Dimensions,
-    Easing,
     Modal,
     Platform,
     Pressable,
@@ -21,6 +19,8 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import Reanimated, { useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
+import { DURATION, EASE_OUT } from '../lib/motion';
 import { Alert } from '../lib/nexoAlert';
 import { Marker } from 'react-native-maps';
 import { NexoMapView } from './NexoMapView';
@@ -232,8 +232,6 @@ interface PlanCardProps {
     onOpenProfile?: (userId: string) => void;
     onParticipantsChanged?: () => void;
     distanceLabel?: string;
-    /** Animación de entrada en el feed (desactivar mejora scroll). */
-    animateEntrance?: boolean;
     router: any;
 }
 
@@ -259,7 +257,6 @@ function PlanCardInner({
     onParticipantsChanged,
     distanceLabel,
     viewerIsOrganizer = false,
-    animateEntrance = false,
     router,
 }: PlanCardProps) {
     const { t, lang } = useT();
@@ -272,22 +269,9 @@ function PlanCardInner({
     const [invitees, setInvitees] = useState<InviteProfile[]>([]);
     const [invitedGroups, setInvitedGroups] = useState<ChatGroupOption[]>([]);
     const heartHostRef = useRef<View>(null);
-    const entrance = useRef(new Animated.Value(0)).current;
-    const scale = useRef(new Animated.Value(1)).current;
-
-    useEffect(() => {
-        if (!animateEntrance || index > 4) {
-            entrance.setValue(1);
-            return;
-        }
-        Animated.timing(entrance, {
-            toValue: 1,
-            duration: 320,
-            delay: Math.min(index, 4) * 50,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-        }).start();
-    }, [animateEntrance, entrance, index]);
+    const pressScale = useSharedValue(1);
+    const reducedMotion = useReducedMotion();
+    const pressStyle = useAnimatedStyle(() => ({ transform: [{ scale: pressScale.value }] }));
 
     const isCreator = currentUserId && String(item.creador_id) === String(currentUserId);
     const isFull = item.joinedCount >= item.maximo_participantes;
@@ -377,7 +361,7 @@ function PlanCardInner({
         setExpanded(prev => !prev);
     };
     const pressIn = () => {
-        Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
+        if (!reducedMotion) pressScale.value = withTiming(0.98, { duration: DURATION.pressIn, easing: EASE_OUT });
         // Empieza a calentar detalle + torneo mientras baja el dedo.
         const pid = String(item.id);
         prefetchPlanDetail(pid);
@@ -386,7 +370,9 @@ function PlanCardInner({
             prioritizeTournamentPrefetch(pid);
         }
     };
-    const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
+    const pressOut = () => {
+        pressScale.value = reducedMotion ? 1 : withTiming(1, { duration: DURATION.pressOut, easing: EASE_OUT });
+    };
 
     const creator = item.host
         || participants.find((p: { isCreator?: boolean }) => p.isCreator)
@@ -606,7 +592,7 @@ function PlanCardInner({
     };
 
     return (
-        <Animated.View style={{ opacity: entrance, transform: [{ scale }, { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }] }}>
+        <Reanimated.View style={pressStyle}>
             <View style={[
                         styles.card,
                         { backgroundColor: colors.surface },
@@ -1114,7 +1100,7 @@ function PlanCardInner({
                     }}
                 />
             ) : null}
-        </Animated.View>
+        </Reanimated.View>
     );
 }
 

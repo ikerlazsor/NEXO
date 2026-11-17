@@ -3,12 +3,13 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react
 import { StyleSheet, View } from 'react-native';
 import Animated, {
     Easing,
-    runOnJS,
     useAnimatedStyle,
+    useReducedMotion,
     useSharedValue,
     withDelay,
     withTiming,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import { hideNativeSplashOnce } from '../lib/nativeSplash';
 import { LaunchSplashOverlay, LAUNCH_SPLASH_BG, LAUNCH_SPLASH_FADE_MS } from './LaunchMaskReveal';
 
@@ -58,6 +59,8 @@ export function LaunchRevealHost({ booting = false, ready, blocked, children }: 
     const logoScale = useSharedValue(1);
     const logoOpacity = useSharedValue(1);
     const feedScale = useSharedValue(1);
+    // Movimiento reducido: sin escalas; solo se desvanecen logo y fondo.
+    const reduced = useReducedMotion();
 
     const completeReveal = useCallback(() => {
         launchRevealConsumed = true;
@@ -72,18 +75,18 @@ export function LaunchRevealHost({ booting = false, ready, blocked, children }: 
         // reposo, y el overlay se quita cuando ya es invisible.
         const smooth = Easing.bezier(0.33, 0, 0.2, 1);
         const fade = Easing.bezier(0.4, 0, 0.6, 1);
-        feedScale.value = 1.035;
-        logoScale.value = withTiming(1.22, { duration: 560, easing: smooth });
+        feedScale.value = reduced ? 1 : 1.035;
+        if (!reduced) logoScale.value = withTiming(1.22, { duration: 560, easing: smooth });
         logoOpacity.value = withDelay(90, withTiming(0, { duration: 400, easing: fade }));
         bgOpacity.value = withDelay(60, withTiming(0, { duration: 460, easing: fade }));
-        feedScale.value = withDelay(60, withTiming(1, { duration: 560, easing: smooth }));
+        if (!reduced) feedScale.value = withDelay(60, withTiming(1, { duration: 560, easing: smooth }));
         overlayOpacity.value = withDelay(
             LAUNCH_SPLASH_FADE_MS + 220,
             withTiming(0, { duration: 1 }, (finished) => {
-                if (finished) runOnJS(completeReveal)();
+                if (finished) scheduleOnRN(completeReveal);
             }),
         );
-    }, [completeReveal, overlayOpacity, bgOpacity, logoScale, logoOpacity, feedScale]);
+    }, [completeReveal, overlayOpacity, bgOpacity, logoScale, logoOpacity, feedScale, reduced]);
 
     // Login / onboarding / etc.: misma salida suave (antes se cortaba de golpe).
     useEffect(() => {

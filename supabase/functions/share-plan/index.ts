@@ -23,6 +23,14 @@ type PlanRow = {
   fecha_evento: string | null;
 };
 
+type EventRow = {
+  id: string;
+  title: string;
+  starts_at: string | null;
+  start_date: string | null;
+  venue: string | null;
+};
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -62,6 +70,30 @@ function formatWhen(iso: string | null | undefined, lang: string): string {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
+      timeZone: 'Europe/Madrid',
+    }).format(d);
+  } catch {
+    return '';
+  }
+}
+
+/** Solo el día (eventos sin hora concreta). */
+function formatDay(isoDate: string | null | undefined, lang: string): string {
+  if (!isoDate) return '';
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return '';
+  const tag =
+    lang === 'en' ? 'en-GB'
+    : lang === 'fr' ? 'fr-FR'
+    : lang === 'de' ? 'de-DE'
+    : lang === 'pt' ? 'pt-PT'
+    : lang === 'it' ? 'it-IT'
+    : 'es-ES';
+  try {
+    return new Intl.DateTimeFormat(tag, {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
       timeZone: 'Europe/Madrid',
     }).format(d);
   } catch {
@@ -151,10 +183,46 @@ serve(async (req) => {
     }
   }
 
-  const title = (plan?.titulo || 'Nexo!').trim().slice(0, 120);
-  const when = formatWhen(plan?.fecha_evento, lang);
-  const location = (plan?.nombre_ubicacion || '').trim();
+  // Eventos de la agenda: se comparten con /plan/<id>?evento=1 pero viven en external_events.
+  let event: EventRow | null = null;
+  if (!plan && supabaseUrl && serviceKey) {
+    try {
+      const sb = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { data } = await sb
+        .from('external_events')
+        .select('id, title, starts_at, start_date, venue')
+        .eq('id', planId)
+        .maybeSingle();
+      event = (data as EventRow | null) ?? null;
+    } catch {
+      event = null;
+    }
+  }
+
+  const title = (plan?.titulo || event?.title || 'Nexo!').trim().slice(0, 120);
+  const when = plan
+    ? formatWhen(plan.fecha_evento, lang)
+    : event?.starts_at
+      ? formatWhen(event.starts_at, lang)
+      : formatDay(event?.start_date, lang);
+  const location = (plan?.nombre_ubicacion || event?.venue || '').trim();
   let going = 0;
+  if (event && supabaseUrl && serviceKey) {
+    try {
+      const sb = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { count } = await sb
+        .from('external_event_participants')
+        .select('user_id', { count: 'exact', head: true })
+        .eq('event_id', planId);
+      going = count ?? 0;
+    } catch {
+      going = 0;
+    }
+  }
   if (plan && supabaseUrl && serviceKey) {
     try {
       const sb = createClient(supabaseUrl, serviceKey, {
@@ -170,7 +238,12 @@ serve(async (req) => {
       going = 0;
     }
   }
-  const cardImage = `${supabaseUrl}/functions/v1/share-card/${planId}?v=9`;
+  // `c` = clave de portada que manda la app al compartir un evento; share-card la valida.
+  const coverKey = new URL(req.url).searchParams.get('c');
+  const coverQ = coverKey && /^nexo_cover:[A-Z_]+:[a-z_]+:\d+$/.test(coverKey)
+    ? `&c=${encodeURIComponent(coverKey)}`
+    : '';
+  const cardImage = `${supabaseUrl}/functions/v1/share-card/${planId}?v=10${coverQ}`;
   const image = cardImage || resolveImageUrl(plan?.imagen_url, supabaseUrl) || BRAND_OG;
   const deepLink = `nexo://plan/${planId}`;
   const storeUrl = isIOS ? APP_STORE_URL : isAndroid ? PLAY_STORE_URL : APP_STORE_URL;

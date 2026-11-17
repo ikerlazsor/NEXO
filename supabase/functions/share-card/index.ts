@@ -79,8 +79,33 @@ async function passthrough(url: string | null): Promise<Response | null> {
   }
 }
 
-const BRAND_OG =
-  'https://nixeproyzxvqzyrvsxcx.supabase.co/storage/v1/object/public/imagenes-planes/nexo-og-default.png';
+/** Portada genérica (existe en la web). La antigua nexo-og-default.png ya no existe. */
+const FALLBACK_COVER = COVER_URLS['nexo_cover:VIBES:otro:0'];
+
+/**
+ * Portada de un evento de la agenda (tabla external_events, sin columna de imagen).
+ * 1) `c` = clave nexo_cover que manda la app (la misma foto que se ve en la tarjeta);
+ *    solo se acepta si existe en COVER_URLS, así nunca se descarga una URL arbitraria.
+ * 2) Si no viene (versiones antiguas), la primera foto de su categoría/subcategoría.
+ */
+async function eventCover(
+  sb: ReturnType<typeof createClient>,
+  eventId: string,
+  coverKey: string | null,
+): Promise<string | null> {
+  if (coverKey && COVER_URLS[coverKey]) return COVER_URLS[coverKey];
+  const { data: event } = await sb
+    .from('external_events')
+    .select('category, subcategory')
+    .eq('id', eventId)
+    .maybeSingle();
+  if (!event) return null;
+  const category = String(event.category || '');
+  const subcategory = String(event.subcategory || 'otro');
+  return COVER_URLS[`nexo_cover:${category}:${subcategory}:0`]
+    ?? COVER_URLS[`nexo_cover:${category}:otro:0`]
+    ?? null;
+}
 
 /** Solo la portada del plan, recortada a 1200×630 (sin título, burbujas ni textos). */
 Deno.serve(async (req) => {
@@ -101,9 +126,13 @@ Deno.serve(async (req) => {
     .eq('id', planId)
     .maybeSingle();
 
-  const cover = resolveImageUrl(plan?.imagen_url as string | null, supabaseUrl);
+  // Si no es un plan, puede ser un evento de la agenda compartido con /plan/<id>?evento=1.
+  const coverKey = new URL(req.url).searchParams.get('c');
+  const cover = plan
+    ? resolveImageUrl(plan.imagen_url as string | null, supabaseUrl)
+    : await eventCover(sb, planId, coverKey);
   if (!cover) {
-    return (await passthrough(BRAND_OG)) ?? new Response('unavailable', { status: 404 });
+    return (await passthrough(FALLBACK_COVER)) ?? new Response('unavailable', { status: 404 });
   }
 
   try {

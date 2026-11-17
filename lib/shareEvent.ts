@@ -8,11 +8,13 @@ export async function shareEventLink(opts: {
     title: string;
     when?: string;
     venue?: string | null;
+    /** Clave `nexo_cover:…` de la portada (ver eventCoverKey) para la vista previa. */
+    coverKey?: string | null;
 }): Promise<void> {
     const lines = [opts.title.trim()];
     const detail = [opts.when, opts.venue?.trim()].filter(Boolean).join(' · ');
     if (detail) lines.push(detail);
-    lines.push(eventShareUrl(opts.eventId));
+    lines.push(eventShareUrl(opts.eventId, opts.coverKey));
     const message = lines.join('\n');
     try {
         await withShareTouchGuard(async () => {

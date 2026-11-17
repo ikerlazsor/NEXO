@@ -49,7 +49,8 @@ export default {
       const isPreviewBot = /whatsapp|facebookexternalhit|facebot|twitterbot|linkedinbot|slackbot|discordbot|telegrambot|embedly|pinterest|googlebot|bingpreview|applebot|previewbot/i
         .test(ua);
       if (/^[0-9a-f-]{36}$/i.test(id) && isPreviewBot) {
-        const cardPage = `https://nixeproyzxvqzyrvsxcx.supabase.co/functions/v1/share-plan/${id}`;
+        // Se reenvía la query: `evento=1` y `c` (portada del evento) llegan a la vista previa.
+        const cardPage = `https://nixeproyzxvqzyrvsxcx.supabase.co/functions/v1/share-plan/${id}${url.search}`;
         const upstream = await fetch(cardPage, { headers: { 'user-agent': ua, 'accept-language': request.headers.get('accept-language') || 'es' } });
         const html = await upstream.text();
         return new Response(html, {

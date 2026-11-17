@@ -53,8 +53,10 @@ export function buildFootballShareMessage(opts: { planId: string }): string {
  * Links); `evento=1` hace que la app abra la ficha del evento. Si se abre por
  * la landing (nexo://plan/<id>), el detalle de plan redirige al evento.
  */
-export function eventShareUrl(eventId: string): string {
+export function eventShareUrl(eventId: string, coverKey?: string | null): string {
     if (!eventId) return 'nexo://';
-    if (SHARE_WEB_HOST) return `https://${SHARE_WEB_HOST}/plan/${eventId}?evento=1`;
+    // `c` = portada de la tarjeta, para que la vista previa (WhatsApp) muestre la misma foto.
+    const coverQ = coverKey ? `&c=${encodeURIComponent(coverKey)}` : '';
+    if (SHARE_WEB_HOST) return `https://${SHARE_WEB_HOST}/plan/${eventId}?evento=1${coverQ}`;
     return `nexo://event/${eventId}`;
 }

@@ -1,5 +1,6 @@
 import { classifyExternalEvent } from "../../lib/externalEventClassification.cjs";
 import {
+  COVER_IMAGE_LOOKUP,
   getCoverImages,
   PLACEHOLDER_COVER_URI,
   SUBCATEGORIES,
@@ -116,4 +117,24 @@ export function eventCoverSource(
     hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;
   }
   return candidates[hash % candidates.length];
+}
+
+/** Foto → clave `nexo_cover:MAIN:sub:i` (la primera que la usa). */
+let coverKeyBySource: Map<CoverSource, string> | null = null;
+
+/**
+ * Clave de la portada que se ve en la tarjeta del evento, para que la vista
+ * previa del enlace (WhatsApp) muestre la misma foto. Null si no hay foto real.
+ */
+export function eventCoverKey(
+  event: Parameters<typeof eventCoverSource>[0],
+): string | null {
+  if (!coverKeyBySource) {
+    coverKeyBySource = new Map();
+    for (const [key, source] of Object.entries(COVER_IMAGE_LOOKUP)) {
+      if (source === PLACEHOLDER_COVER_URI || coverKeyBySource.has(source)) continue;
+      coverKeyBySource.set(source, key);
+    }
+  }
+  return coverKeyBySource.get(eventCoverSource(event)) ?? null;
 }

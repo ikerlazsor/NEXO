@@ -168,6 +168,7 @@ import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileC
 import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
 import { EventCard, eventWhenLabel } from '../../features/events/EventCards';
+import { eventCoverKey } from '../../features/events/covers';
 import { toggleEventSaved, useSavedEventIds } from '../../features/events/savedEvents';
 import { shareEventLink } from '../../lib/shareEvent';
 import { useEvents } from '../../features/events/useEvents';
@@ -496,6 +497,7 @@ export default function HomeScreen() {
                 title: event.title,
                 when: eventWhenLabel(event, lang),
                 venue: event.venue,
+                coverKey: eventCoverKey(event),
             });
         },
         [lang],

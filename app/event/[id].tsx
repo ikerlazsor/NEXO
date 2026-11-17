@@ -25,6 +25,7 @@ import {
   trackEvent,
   eventJoinErrorKey,
 } from "../../features/events/api";
+import { eventCoverKey } from "../../features/events/covers";
 import type { ExternalEvent, EventPerson } from "../../features/events/types";
 import { EventLocationMap } from "../../features/events/EventLocationMap";
 import { publishEventMembership } from "../../features/events/membershipBus";
@@ -83,6 +84,7 @@ export default function EventDetail() {
       title: event.title,
       when: eventWhenLabel(event, lang),
       venue: event.venue,
+      coverKey: eventCoverKey(event),
     });
   };
   const reportEvent = () => {

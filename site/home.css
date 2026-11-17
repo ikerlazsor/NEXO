@@ -309,6 +309,10 @@ section { position: relative; }
 .foot-col a:hover { color: #fff; }
 .foot-base { max-width: var(--max); margin: 0 auto; padding: 20px 24px 30px; border-top: 1px solid rgba(255, 255, 255, 0.1); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.85rem; color: rgba(255, 255, 255, 0.45); }
 
+.langs { display: inline-flex; gap: 4px; padding: 3px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); }
+.langs a { padding: 4px 12px; border-radius: 999px; color: rgba(255, 255, 255, 0.6); text-decoration: none; font-weight: 700; }
+.langs a.on { background: #fff; color: var(--ink); }
+
 /* Botón flotante (móvil) */
 .dock { display: none; }
 

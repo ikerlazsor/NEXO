@@ -309,9 +309,12 @@ section { position: relative; }
 .foot-col a:hover { color: #fff; }
 .foot-base { max-width: var(--max); margin: 0 auto; padding: 20px 24px 30px; border-top: 1px solid rgba(255, 255, 255, 0.1); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.85rem; color: rgba(255, 255, 255, 0.45); }
 
-.langs { display: inline-flex; gap: 4px; padding: 3px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); }
-.langs a { padding: 4px 12px; border-radius: 999px; color: rgba(255, 255, 255, 0.6); text-decoration: none; font-weight: 700; }
-.langs a.on { background: #fff; color: var(--ink); }
+/* Selector de idioma (arriba) */
+.langs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: rgba(15, 42, 74, 0.07); flex: none; }
+.langs a { min-width: 38px; padding: 6px 10px; border-radius: 999px; text-align: center; color: var(--ink-2); text-decoration: none; font-weight: 800; font-size: 0.78rem; letter-spacing: 0.04em; transition: background 0.2s, color 0.2s; }
+.langs a:hover { color: var(--ink); }
+.langs a.on { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(15, 42, 74, 0.14); }
+.nav-in .langs { margin-left: -6px; }
 
 /* Botón flotante (móvil) */
 .dock { display: none; }
@@ -344,7 +347,9 @@ section { position: relative; }
 }
 @media (max-width: 760px) {
   .links, .nav-cta { display: none; }
-  .burger { display: flex; }
+  .burger { display: flex; margin-left: 8px; }
+  .nav-in { gap: 8px; }
+  .nav-in .langs { margin-left: auto; }
   .sheet { position: absolute; top: 68px; left: 12px; right: 12px; flex-direction: column; gap: 4px; padding: 10px; border-radius: 22px; background: #fff; box-shadow: var(--shadow-lg); }
   .sheet.open { display: flex; }
   .sheet a { padding: 14px 16px; border-radius: 14px; color: var(--ink); text-decoration: none; font-weight: 700; }

@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://appnexo.es/</loc></url>
-  <url><loc>https://appnexo.es/privacidad</loc></url>
-  <url><loc>https://appnexo.es/privacy</loc></url>
-  <url><loc>https://appnexo.es/terminos</loc></url>
-  <url><loc>https://appnexo.es/normas</loc></url>
-  <url><loc>https://appnexo.es/eliminar-cuenta</loc></url>
-  <url><loc>https://appnexo.es/soporte</loc></url>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://appnexo.es/</loc>
+    <lastmod>2026-11-17</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+    <xhtml:link rel="alternate" hreflang="es" href="https://appnexo.es/?lang=es" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://appnexo.es/?lang=en" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://appnexo.es/" />
+  </url>
+  <url><loc>https://appnexo.es/soporte</loc><lastmod>2026-11-17</lastmod><priority>0.5</priority></url>
+  <url><loc>https://appnexo.es/normas</loc><lastmod>2026-11-17</lastmod><priority>0.4</priority></url>
+  <url><loc>https://appnexo.es/privacidad</loc><lastmod>2026-11-17</lastmod><priority>0.3</priority></url>
+  <url><loc>https://appnexo.es/privacy</loc><lastmod>2026-11-17</lastmod><priority>0.3</priority></url>
+  <url><loc>https://appnexo.es/terminos</loc><lastmod>2026-11-17</lastmod><priority>0.3</priority></url>
+  <url><loc>https://appnexo.es/eliminar-cuenta</loc><lastmod>2026-11-17</lastmod><priority>0.2</priority></url>
 </urlset>

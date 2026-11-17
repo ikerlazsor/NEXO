@@ -106,7 +106,7 @@ const DANGER = '#EF4444';
 const SOLO_PINK = '#DB2777';
 const SOLO_PINK_LIGHT = '#FDF2F8';
 
-const MAX_PEOPLE = 200;
+const MAX_PEOPLE = 400;
 const MAX_PEOPLE_ORGANIZER = 800;
 const MIN_PEOPLE = 2;
 /** No se puede crear un plan con menos de 30 minutos de margen. */
@@ -170,6 +170,8 @@ export default function CreatePlanScreen() {
     const [isOrganizer, setIsOrganizer] = useState(false);
     const [customCovers, setCustomCovers] = useState<string[]>([]);
     const [coverMode, setCoverMode] = useState<'preset' | 'custom'>('preset');
+    const [coverUpload, setCoverUpload] = useState<{ done: number; total: number } | null>(null);
+    const pickingCoverRef = useRef(false);
     const holdDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const holdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const holdingPeopleRef = useRef(false);
@@ -671,23 +673,40 @@ export default function CreatePlanScreen() {
     const getCoverImageKey = () => encodeCoverImageKey(category, subcategory, coverIndex);
 
     const addCustomCover = async () => {
-        if (customCovers.length >= MAX_ORGANIZER_COVERS) return;
+        if (customCovers.length >= MAX_ORGANIZER_COVERS || pickingCoverRef.current) return;
         hapticMedium();
-        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permission.granted) {
-            // Sin Alert nativo: encima de este modal puede congelar al volver al feed.
+        pickingCoverRef.current = true;
+        try {
+            // El selector de fotos del sistema no necesita permiso de galería (iOS 14+ y
+            // Android 13+); pedirlo antes fallaba con "acceso limitado" y bloqueaba la portada.
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                quality: 0.8,
+                allowsMultipleSelection: true,
+                selectionLimit: MAX_ORGANIZER_COVERS - customCovers.length,
+                orderedSelection: true,
+            });
+            if (result.canceled) return;
+            const next = result.assets.map((a) => a.uri).filter(Boolean);
+            if (next.length) hapticSelection();
+            setCustomCovers((prev) => {
+                const seen = new Set(prev);
+                return [...prev, ...next.filter((uri) => !seen.has(uri))].slice(0, MAX_ORGANIZER_COVERS);
+            });
+        } catch {
             showFormError(t('createplan.galleryPermission'));
-            return;
+        } finally {
+            pickingCoverRef.current = false;
         }
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images'],
-            quality: 0.7,
-            allowsMultipleSelection: true,
-            selectionLimit: MAX_ORGANIZER_COVERS - customCovers.length,
+    };
+
+    /** Tocar una foto la convierte en la portada principal (la primera). */
+    const makeMainCover = (uri: string) => {
+        setCustomCovers((prev) => {
+            if (prev[0] === uri) return prev;
+            hapticSelection();
+            return [uri, ...prev.filter((item) => item !== uri)];
         });
-        if (result.canceled) return;
-        const next = result.assets.map((a) => a.uri).filter(Boolean);
-        setCustomCovers((prev) => [...prev, ...next].slice(0, MAX_ORGANIZER_COVERS));
     };
 
     const removeCustomCover = (uri: string) => {
@@ -813,7 +832,7 @@ export default function CreatePlanScreen() {
             showFormError(t('createplan.needInvite'));
             return;
         }
-        if (isOrganizer && coverMode === 'custom' && customCovers.length < 1) {
+        if (coverMode === 'custom' && customCovers.length < 1) {
             showFormError(t('createplan.coverNeedPhoto'));
             return;
         }
@@ -862,16 +881,24 @@ export default function CreatePlanScreen() {
 
             let imageKey = getCoverImageKey();
             let uploadedCovers: string[] = [];
-            if (isOrganizer && coverMode === 'custom' && customCovers.length > 0) {
+            if (coverMode === 'custom' && customCovers.length > 0) {
                 const selected = customCovers.slice(0, MAX_ORGANIZER_COVERS);
-                for (const uri of selected) {
-                    if (uri.startsWith('http')) {
-                        uploadedCovers.push(uri);
-                        continue;
-                    }
-                    const url = await uploadOrganizerCover(user.id, uri);
-                    if (url) uploadedCovers.push(url);
-                }
+                const pending = selected.filter((uri) => !uri.startsWith('http')).length;
+                let done = 0;
+                if (pending > 0) setCoverUpload({ done: 0, total: pending });
+                // En paralelo (antes una a una) y manteniendo el orden elegido.
+                const results = await Promise.all(
+                    selected.map(async (uri) => {
+                        if (uri.startsWith('http')) return uri;
+                        const url = await uploadOrganizerCover(user.id, uri);
+                        done += 1;
+                        if (mountedRef.current) setCoverUpload({ done, total: pending });
+                        return url;
+                    }),
+                );
+                if (!mountedRef.current) return;
+                setCoverUpload(null);
+                uploadedCovers = results.filter((url): url is string => !!url);
                 if (uploadedCovers.length === 0) {
                     showFormError(t('createplan.uploadError'));
                     return;
@@ -905,7 +932,7 @@ export default function CreatePlanScreen() {
                 nombre_ubicacion: placeFinal,
                 maximo_participantes: maxPeople,
                 imagen_url: imageKey,
-                imagenes_url: isOrganizer && coverMode === 'custom' ? uploadedCovers : [],
+                imagenes_url: coverMode === 'custom' ? uploadedCovers : [],
                 fecha_evento: fechaFinal,
                 latitud: latFinal,
                 longitud: lonFinal,
@@ -1002,7 +1029,7 @@ export default function CreatePlanScreen() {
                     descripcion: description.trim(),
                     imagen_url: imageKey,
                     imagenes_url:
-                        isOrganizer && coverMode === 'custom' && uploadedCovers.length > 0
+                        coverMode === 'custom' && uploadedCovers.length > 0
                             ? uploadedCovers
                             : [],
                     categoria: editedCategory,
@@ -1079,7 +1106,7 @@ export default function CreatePlanScreen() {
             const createdPlace = placeFinal;
             const createdImage = imageKey;
             const createdCovers =
-                isOrganizer && coverMode === 'custom' && uploadedCovers.length > 0
+                coverMode === 'custom' && uploadedCovers.length > 0
                     ? uploadedCovers
                     : [];
             const createdMax = maxPeople;
@@ -1196,7 +1223,10 @@ export default function CreatePlanScreen() {
         } finally {
             releaseUpdateHold();
             publishingRef.current = false;
-            if (mountedRef.current && !leavingRef.current) setLoading(false);
+            if (mountedRef.current && !leavingRef.current) {
+                setLoading(false);
+                setCoverUpload(null);
+            }
         }
     };
 
@@ -1477,38 +1507,38 @@ export default function CreatePlanScreen() {
                         </View>
                     )}
 
-                    {isOrganizer ? (
-                        <View style={styles.coverModeWrap}>
-                            <View style={styles.coverModeRow}>
-                                <TouchableOpacity
-                                    style={[styles.coverModeBtn, coverMode === 'preset' && styles.coverModeBtnOn]}
-                                    onPress={() => {
-                                        hapticMedium();
-                                        setCoverMode('preset');
-                                    }}
-                                    activeOpacity={0.85}
-                                >
-                                    <Text style={[styles.coverModeText, coverMode === 'preset' && styles.coverModeTextOn]}>
-                                        {t('createplan.coverModePick')}
-                                    </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.coverModeBtn, coverMode === 'custom' && styles.coverModeBtnOn]}
-                                    onPress={() => {
-                                        hapticMedium();
-                                        setCoverMode('custom');
-                                    }}
-                                    activeOpacity={0.85}
-                                >
-                                    <Text style={[styles.coverModeText, coverMode === 'custom' && styles.coverModeTextOn]}>
-                                        {t('createplan.coverModeUpload')}
-                                    </Text>
-                                </TouchableOpacity>
-                            </View>
+                    {/* Portada: de la galería de Nexo o fotos propias (todas las cuentas). */}
+                    <View style={styles.coverModeWrap}>
+                        <View style={styles.coverModeRow}>
+                            <TouchableOpacity
+                                style={[styles.coverModeBtn, coverMode === 'preset' && styles.coverModeBtnOn]}
+                                onPress={() => {
+                                    hapticMedium();
+                                    setCoverMode('preset');
+                                }}
+                                activeOpacity={0.85}
+                            >
+                                <Text style={[styles.coverModeText, coverMode === 'preset' && styles.coverModeTextOn]}>
+                                    {t('createplan.coverModePick')}
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.coverModeBtn, coverMode === 'custom' && styles.coverModeBtnOn]}
+                                onPress={() => {
+                                    hapticMedium();
+                                    setCoverMode('custom');
+                                    if (customCovers.length === 0) void addCustomCover();
+                                }}
+                                activeOpacity={0.85}
+                            >
+                                <Text style={[styles.coverModeText, coverMode === 'custom' && styles.coverModeTextOn]}>
+                                    {t('createplan.coverModeUpload')}
+                                </Text>
+                            </TouchableOpacity>
                         </View>
-                    ) : null}
+                    </View>
 
-                    {!isOrganizer || coverMode === 'preset' ? (
+                    {coverMode === 'preset' ? (
                     <PlanCoverPicker
                         category={category}
                         coverKey={`${category}-${subcategory}`}
@@ -1516,28 +1546,55 @@ export default function CreatePlanScreen() {
                         images={categoryImages}
                         selectedIndex={coverIndex}
                         onSelectIndex={setCoverIndex}
-                        hideTitle={isOrganizer}
+                        hideTitle
                     />
                     ) : (
                         <View style={styles.orgCoverSection}>
-                            {customCovers.length > 0 ? (
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.orgCoverRow}>
-                                    {customCovers.map((uri, i) => (
-                                        <View key={`${uri}-${i}`} style={styles.orgCoverThumbWrap}>
-                                            <Image source={{ uri }} style={styles.orgCoverThumb} />
-                                            <Pressable style={styles.orgCoverRemove} onPress={() => removeCustomCover(uri)}>
-                                                <Ionicons name="close" size={14} color="#FFF" />
-                                            </Pressable>
-                                        </View>
-                                    ))}
-                                </ScrollView>
-                            ) : null}
-                            {customCovers.length < MAX_ORGANIZER_COVERS ? (
-                                <Pressable style={styles.orgCoverGalleryBtn} onPress={() => void addCustomCover()}>
-                                    <Ionicons name="images" size={22} color={PRIMARY_DARK} />
-                                    <Text style={styles.orgCoverGalleryText}>{t('createplan.coverGallery')}</Text>
-                                </Pressable>
-                            ) : null}
+                            <Text style={styles.orgCoverHint}>
+                                {t('createplan.coverHint', { max: MAX_ORGANIZER_COVERS })}
+                            </Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.orgCoverRow}>
+                                {customCovers.map((uri, i) => (
+                                    <Pressable
+                                        key={uri}
+                                        style={[styles.orgCoverThumbWrap, i === 0 && styles.orgCoverThumbMain]}
+                                        onPress={() => makeMainCover(uri)}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={i === 0 ? t('createplan.coverMain') : t('createplan.coverMakeMain')}
+                                    >
+                                        <Image source={{ uri }} style={styles.orgCoverThumb} resizeMode="cover" />
+                                        {i === 0 ? (
+                                            <View style={styles.orgCoverFirst}>
+                                                <Text style={styles.orgCoverFirstText}>{t('createplan.coverMain')}</Text>
+                                            </View>
+                                        ) : null}
+                                        <Pressable
+                                            style={styles.orgCoverRemove}
+                                            onPress={() => removeCustomCover(uri)}
+                                            hitSlop={8}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={t('createplan.coverRemove')}
+                                        >
+                                            <Ionicons name="close" size={14} color="#FFF" />
+                                        </Pressable>
+                                    </Pressable>
+                                ))}
+                                {customCovers.length < MAX_ORGANIZER_COVERS ? (
+                                    <Pressable
+                                        style={styles.orgCoverAdd}
+                                        onPress={() => void addCustomCover()}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={t('createplan.coverGallery')}
+                                    >
+                                        <Ionicons name={customCovers.length ? 'add' : 'images'} size={24} color={PRIMARY_DARK} />
+                                        <Text style={styles.orgCoverAddText}>
+                                            {customCovers.length
+                                                ? `${customCovers.length}/${MAX_ORGANIZER_COVERS}`
+                                                : t('createplan.coverGallery')}
+                                        </Text>
+                                    </Pressable>
+                                ) : null}
+                            </ScrollView>
                         </View>
                     )}
 
@@ -2022,7 +2079,14 @@ export default function CreatePlanScreen() {
                         onPress={handleCreatePlan}
                         disabled={loading || limitBlocked || limitChecking}
                     >
-                        {loading || limitChecking ? (
+                        {coverUpload ? (
+                            <View style={styles.uploadingRow}>
+                                <ActivityIndicator color="#fff" />
+                                <Text style={styles.createBtnText} numberOfLines={1}>
+                                    {t('createplan.uploadingCovers', { done: coverUpload.done, total: coverUpload.total })}
+                                </Text>
+                            </View>
+                        ) : loading || limitChecking ? (
                             <ActivityIndicator color="#fff" />
                         ) : (
                             <Text style={styles.createBtnText} numberOfLines={1}>
@@ -2602,11 +2666,13 @@ function createPlanFormStyles(c: ThemeColors) {
     orgCoverLabel: { fontSize: 14, fontWeight: '800', color: '#1E293B' },
     orgCoverHint: { fontSize: 12, fontWeight: '600', color: '#64748B', lineHeight: 17, marginTop: -2 },
     orgCoverRow: { gap: 10, paddingVertical: 2, paddingRight: 8 },
-    orgCoverThumbWrap: { width: 112, height: 148, borderRadius: 18, overflow: 'hidden', backgroundColor: '#E2E8F0' },
+    // Apaisadas como en las tarjetas del feed: se ve el recorte real.
+    orgCoverThumbWrap: { width: 156, height: 104, borderRadius: 16, overflow: 'hidden', backgroundColor: '#E2E8F0' },
+    orgCoverThumbMain: { borderWidth: 2, borderColor: PRIMARY_DARK },
     orgCoverAdd: {
-        width: 112,
-        height: 148,
-        borderRadius: 18,
+        width: 104,
+        height: 104,
+        borderRadius: 16,
         borderWidth: 1.5,
         borderColor: '#93C5FD',
         borderStyle: 'dashed',
@@ -2617,6 +2683,7 @@ function createPlanFormStyles(c: ThemeColors) {
         paddingHorizontal: 10,
     },
     orgCoverThumb: { width: '100%', height: '100%' },
+    uploadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     orgCoverFirst: {
         position: 'absolute',
         left: 6,

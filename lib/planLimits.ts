@@ -1,8 +1,8 @@
 import { supabase } from './supabase';
 import { isPlanActiveForFeed } from './planLifecycle';
 
-export const MAX_ACTIVE_PLANS = 5;
-export const MAX_ACTIVE_PLANS_PLUS = 5;
+export const MAX_ACTIVE_PLANS = 10;
+export const MAX_ACTIVE_PLANS_PLUS = 10;
 export const MAX_ACTIVE_PLANS_ORGANIZER = 10;
 
 export function maxActivePlansFor(isOrganizer: boolean): number {

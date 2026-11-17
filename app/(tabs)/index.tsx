@@ -27,6 +27,8 @@ import {
     TouchableOpacity,
     View,
     type AppStateStatus,
+    type NativeScrollEvent,
+    type NativeSyntheticEvent,
     type ViewToken
 } from 'react-native';
 import Animated, {
@@ -173,6 +175,8 @@ import { eventJoinErrorKey } from '../../features/events/api';
 type FeedRow = SocialFeedRow | {kind:'event';id:string;event:ExternalEvent};
 /** Tiempo mínimo del spinner de recarga para que no parpadee. */
 const MIN_REFRESH_MS = 650;
+/** A partir de aquí la fila de filtros de la lista ya no se ve (cabecera ~62 px). */
+const STICKY_FILTERS_FROM_Y = 64;
 const PRIMARY_DARK = theme.colors.primary;
 const INK = theme.colors.text;
 
@@ -404,6 +408,43 @@ export default function HomeScreen() {
             indexOfKey: (key) => feedRowsRef.current.findIndex(row => row.id === key),
         },
     );
+    // Filtros flotantes: al bajar por el feed se esconden con la cabecera; en cuanto
+    // se desliza un poco hacia arriba vuelven a aparecer arriba (y se van al bajar).
+    const stickyFilters = useSharedValue(0);
+    const stickyShownRef = useRef(false);
+    const [stickyTouchable, setStickyTouchable] = useState(false);
+    const lastFeedYRef = useRef(0);
+    const feedDirAccumRef = useRef(0);
+    const setStickyFiltersShown = useCallback((show: boolean) => {
+        if (stickyShownRef.current === show) return;
+        stickyShownRef.current = show;
+        setStickyTouchable(show);
+        stickyFilters.value = withTiming(show ? 1 : 0, {
+            duration: show ? 220 : 170,
+            easing: Easing.out(Easing.cubic),
+        });
+    }, [stickyFilters]);
+    const onFeedScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+        onScroll(e);
+        const y = e.nativeEvent.contentOffset.y;
+        const dy = y - lastFeedYRef.current;
+        lastFeedYRef.current = y;
+        // Arriba del todo ya se ve la fila de filtros normal de la lista.
+        if (y < STICKY_FILTERS_FROM_Y) {
+            feedDirAccumRef.current = 0;
+            setStickyFiltersShown(false);
+            return;
+        }
+        if (dy === 0) return;
+        if (dy > 0 !== feedDirAccumRef.current > 0) feedDirAccumRef.current = 0;
+        feedDirAccumRef.current += dy;
+        if (feedDirAccumRef.current < -12) setStickyFiltersShown(true);
+        else if (feedDirAccumRef.current > 8) setStickyFiltersShown(false);
+    }, [onScroll, setStickyFiltersShown]);
+    const stickyFiltersStyle = useAnimatedStyle(() => ({
+        opacity: stickyFilters.value,
+        transform: [{ translateY: interpolate(stickyFilters.value, [0, 1], [-14, 0]) }],
+    }));
     const openExternal = useCallback(
         (id: string) => {
             const event = external.events.find(row => row.id === id);
@@ -1888,6 +1929,34 @@ export default function HomeScreen() {
         setNearbyKm(null);
     };
 
+    const filtersPill = (
+        <PressScale
+            style={[
+                styles.quickFilterPill,
+                styles.quickFilterBox,
+                hasSheetFilters ? styles.quickFilterActive : null,
+            ]}
+            onPress={openFiltersModal}
+            pressedScale={0.96}
+            haptic={false}
+        >
+            <Ionicons
+                name="options"
+                size={15}
+                color={hasSheetFilters ? theme.colors.surface : PRIMARY_DARK}
+            />
+            <Text
+                style={[
+                    styles.quickFilterText,
+                    hasSheetFilters ? { color: theme.colors.surface } : null,
+                ]}
+                numberOfLines={1}
+            >
+                {t('feed.filters')}
+            </Text>
+        </PressScale>
+    );
+
     return (
             <View style={{ flex: 1, backgroundColor: colors.backgroundAlt }}>
             <View style={styles.container}>
@@ -1988,7 +2057,7 @@ export default function HomeScreen() {
                     onLayout={onListLayout}
                     onContentSizeChange={onContentSizeChange}
                     onLoad={restoreScroll}
-                    onScroll={onScroll}
+                    onScroll={onFeedScroll}
                     onScrollBeginDrag={(e) => {
                         onFeedMoveStart();
                         onScrollBeginDrag();
@@ -2007,31 +2076,7 @@ export default function HomeScreen() {
                         <View style={styles.feedChromeHeader}>
                             {external.error&&<Pressable onPress={()=>void external.refresh()} style={{padding:16}} accessibilityRole="button"><Text style={{color:colors.textMuted}}>{t('events.unavailable')} · {t('events.retry')}</Text></Pressable>}
                             <View style={styles.quickFiltersRow}>
-                                <PressScale
-                                    style={[
-                                        styles.quickFilterPill,
-                                        styles.quickFilterBox,
-                                        hasSheetFilters ? styles.quickFilterActive : null,
-                                    ]}
-                                    onPress={openFiltersModal}
-                                    pressedScale={0.96}
-                                    haptic={false}
-                                >
-                                    <Ionicons
-                                        name="options"
-                                        size={15}
-                                        color={hasSheetFilters ? theme.colors.surface : PRIMARY_DARK}
-                                    />
-                                    <Text
-                                        style={[
-                                            styles.quickFilterText,
-                                            hasSheetFilters ? { color: theme.colors.surface } : null,
-                                        ]}
-                                        numberOfLines={1}
-                                    >
-                                        {t('feed.filters')}
-                                    </Text>
-                                </PressScale>
+                                {filtersPill}
                             </View>
                         </View>
                     }
@@ -2093,6 +2138,12 @@ export default function HomeScreen() {
                         )
                     }
                 />
+                </Animated.View>
+                <Animated.View
+                    pointerEvents={stickyTouchable ? 'box-none' : 'none'}
+                    style={[styles.stickyFilters, stickyFiltersStyle]}
+                >
+                    <View style={styles.quickFiltersRow}>{filtersPill}</View>
                 </Animated.View>
                 {showFeedSkeleton && !refreshing && !feedRowsUi.length ? (
                     <View style={styles.listLoadingOverlay} pointerEvents="none">

@@ -7,7 +7,6 @@ import Animated, {
     useAnimatedStyle,
     useSharedValue,
     withDelay,
-    withSequence,
     withTiming,
 } from 'react-native-reanimated';
 import { hideNativeSplashOnce } from '../lib/nativeSplash';
@@ -68,17 +67,18 @@ export function LaunchRevealHost({ booting = false, ready, blocked, children }: 
 
     const beginFadeOut = useCallback(() => {
         setFading(true);
-        const out = Easing.out(Easing.cubic);
-        feedScale.value = 1.05;
-        logoScale.value = withSequence(
-            withTiming(0.9, { duration: 150, easing: Easing.inOut(Easing.quad) }),
-            withTiming(1.6, { duration: 380, easing: Easing.in(Easing.cubic) }),
-        );
-        logoOpacity.value = withDelay(260, withTiming(0, { duration: 270, easing: out }));
-        bgOpacity.value = withDelay(170, withTiming(0, { duration: 360, easing: out }));
-        feedScale.value = withDelay(170, withTiming(1, { duration: 520, easing: out }));
+        // Un único movimiento continuo (antes el logo encogía y luego crecía acelerando
+        // hasta cortarse: se notaba un salto). Todo usa curvas suaves y termina en
+        // reposo, y el overlay se quita cuando ya es invisible.
+        const smooth = Easing.bezier(0.33, 0, 0.2, 1);
+        const fade = Easing.bezier(0.4, 0, 0.6, 1);
+        feedScale.value = 1.035;
+        logoScale.value = withTiming(1.22, { duration: 560, easing: smooth });
+        logoOpacity.value = withDelay(90, withTiming(0, { duration: 400, easing: fade }));
+        bgOpacity.value = withDelay(60, withTiming(0, { duration: 460, easing: fade }));
+        feedScale.value = withDelay(60, withTiming(1, { duration: 560, easing: smooth }));
         overlayOpacity.value = withDelay(
-            LAUNCH_SPLASH_FADE_MS + 140,
+            LAUNCH_SPLASH_FADE_MS + 220,
             withTiming(0, { duration: 1 }, (finished) => {
                 if (finished) runOnJS(completeReveal)();
             }),

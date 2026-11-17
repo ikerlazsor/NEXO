@@ -7,6 +7,7 @@ import {
     BackHandler,
     Dimensions,
     FlatList,
+    InteractionManager,
     NativeScrollEvent,
     NativeSyntheticEvent,
     StyleSheet,
@@ -133,6 +134,22 @@ export function FeedMapHost() {
     // Captura del mapa (última apertura) mientras el nativo carga teselas; el mapa
     // real entra con fundido al cargar, así el panel nunca aparece vacío.
     const [snapshotUri, setSnapshotUri] = useState<string | null>(() => peekMapSnapshot());
+    // El mapa nativo no se crea en el arranque: si se pulsa el mapa nada más abrir la
+    // app, crear el MapView + cientos de pines a la vez que el panel se desliza y el
+    // feed carga bloqueaba la app (y en Android podía cerrarla). Se monta cuando la
+    // app está libre o, como tarde, al terminar de abrirse el panel.
+    const [mapMounted, setMapMounted] = useState(false);
+    const [mapReady, setMapReady] = useState(false);
+    useEffect(() => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const task = InteractionManager.runAfterInteractions(() => {
+            timer = setTimeout(() => setMapMounted(true), 600);
+        });
+        return () => {
+            task.cancel();
+            if (timer) clearTimeout(timer);
+        };
+    }, []);
     const mapOpacity = useSharedValue(0);
     const mapFadeStyle = useAnimatedStyle(() => ({ opacity: mapOpacity.value }));
     const snapshotTakenRef = useRef(false);
@@ -144,9 +161,10 @@ export function FeedMapHost() {
     }, [mapOpacity]);
     // Si onMapLoaded no llega (p. ej. sin red), mostrar el mapa igualmente.
     useEffect(() => {
+        if (!mapMounted) return;
         const timer = setTimeout(revealMap, 2500);
         return () => clearTimeout(timer);
-    }, [revealMap]);
+    }, [revealMap, mapMounted]);
     // El mapa nativo se monta una vez y espera aparcado DETRÁS del fondo del feed,
     // dentro de la pantalla: fuera de ella iOS no descarga teselas y la primera
     // apertura salía gris. Al abrir se sube por encima (raised) y se desliza.
@@ -223,7 +241,10 @@ export function FeedMapHost() {
         );
     }, [sheetY, onSheetClosed]);
     const onSheetOpened = useCallback(() => {
-        if (visibleRef.current && !closingRef.current) setRenderMap(true);
+        if (visibleRef.current && !closingRef.current) {
+            setMapMounted(true);
+            setRenderMap(true);
+        }
     }, []);
     useEffect(() => {
         if (raised) {
@@ -338,6 +359,18 @@ export function FeedMapHost() {
         pinsRef.current = { sig, pins: next };
         return next;
     }, [plans]);
+    // Los eventos llegan por páginas: agrupar los cambios para no rehacer cientos de
+    // pines (bitmaps en Android) en cada página.
+    const [shownPins, setShownPins] = useState(pins);
+    useEffect(() => {
+        if (shownPins.length === 0 && pins.length > 0) {
+            setShownPins(pins);
+            return;
+        }
+        const timer = setTimeout(() => setShownPins(pins), 700);
+        return () => clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pins]);
     // Android pinta las vistas de los pines como imagen: seguir sus cambios un momento
     // al cambiar los pines y luego congelar (rendimiento).
     const [trackPinViews, setTrackPinViews] = useState(true);
@@ -345,7 +378,7 @@ export function FeedMapHost() {
         setTrackPinViews(true);
         const timer = setTimeout(() => setTrackPinViews(false), 900);
         return () => clearTimeout(timer);
-    }, [pins]);
+    }, [shownPins, mapReady]);
     const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
     useEffect(() => {
         if (!eventsLoading && !eventsError && moreEvents && external.events.length < 400) {
@@ -734,7 +767,7 @@ export function FeedMapHost() {
                         <ActivityIndicator color={theme.colors.primary} />
                     </View>
                 )}
-                <Animated.View style={[mapHostStyles.map, mapFadeStyle]}><NexoMapView
+                {mapMounted ? <Animated.View style={[mapHostStyles.map, mapFadeStyle]}><NexoMapView
                     ref={mapRef}
                     style={StyleSheet.absoluteFill}
                     loadingEnabled={false}
@@ -752,6 +785,7 @@ export function FeedMapHost() {
                     }}
                     onMapReady={() => {
                         mapReadyRef.current = true;
+                        setMapReady(true);
                         camera.current!.ready(mapEpochRef.current);
                     }}
                     onMapLoaded={() => {
@@ -768,7 +802,7 @@ export function FeedMapHost() {
                         }, 600);
                     }}
                 >
-                    {pins.map(pin => <Marker
+                    {mapReady && shownPins.map(pin => <Marker
                         key={pin.key}
                         identifier={pin.key}
                         coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
@@ -786,7 +820,7 @@ export function FeedMapHost() {
                             <Ionicons name="location" size={25} color={pin.color} />
                         </View>
                     </Marker>)}
-                </NexoMapView></Animated.View>
+                </NexoMapView></Animated.View> : null}
 
                 <View style={styles.mapModalHeader}>
                     <TouchableOpacity style={styles.mapCloseBtn} onPress={closeMap}>

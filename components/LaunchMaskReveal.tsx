@@ -14,8 +14,10 @@ export const LAUNCH_SPLASH_IMAGE_WIDTH = 300;
 
 const SPLASH_LOGO = require('../assets/images/nexo-splash-logo.png');
 
-/** Logo quieto tras appReady, antes del fade (solo esto acorta “hasta que entra”). */
-const HOLD_MS = 50;
+/** Logo quieto tras appReady, antes del fade. Un poco de margen para que el feed
+ * termine su primer pintado bajo el splash: si no, el fundido arrancaba mientras
+ * se montaban las tarjetas y se perdían frames (el "salto"). */
+const HOLD_MS = 160;
 
 /** Fade splash → feed suave (solo overlay; el feed ya está debajo). No tocar. */
 export const LAUNCH_SPLASH_FADE_MS = 420;

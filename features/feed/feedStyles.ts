@@ -55,6 +55,18 @@ export function createFeedStyles(c: ThemeColors) {
     overflow: "hidden",
   },
   listWrap: { flex: 1, position: "relative" },
+  stickyFilters: {
+    position: "absolute",
+    top: 6,
+    left: 20,
+    right: 20,
+    zIndex: 5,
+    elevation: 5,
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
   refreshBannerOverlay: {
     position: "absolute",
     top: 6,

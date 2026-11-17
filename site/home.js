@@ -28,7 +28,7 @@
     'Partidas en cafés': 'Games in cafés', 'Cenas': 'Dinners', 'Con gente nueva': 'With new people',
     'Pádel y deporte': 'Padel and sports', 'Pachangas y partidos': 'Pick-up games and matches', 'Cultura': 'Culture',
     'Museos y exposiciones': 'Museums and exhibitions',
-    'De "no tengo plan" a quedar, en tres pasos': 'From “no plans” to meeting up, in three steps',
+    'De “no tengo plan” a quedar, en tres pasos': 'From “no plans” to meeting up, in three steps',
     'Encuentra tu plan': 'Find your plan',
     'Mira el feed o el mapa, filtra por lo que te apetece y por cuándo, y mira quién va antes de apuntarte.': 'Browse the feed or the map, filter by what you fancy and when, and see who’s going before you join.',
     'Únete y habla con el grupo': 'Join and chat with the group',
@@ -146,21 +146,6 @@
       a.setAttribute('href', storeUrl);
       a.setAttribute('rel', 'noopener');
     });
-  }
-
-  var items = document.querySelectorAll('.reveal');
-  if ('IntersectionObserver' in window) {
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (entry) {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('on');
-          io.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' });
-    items.forEach(function (el) { io.observe(el); });
-  } else {
-    items.forEach(function (el) { el.classList.add('on'); });
   }
 
   var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;

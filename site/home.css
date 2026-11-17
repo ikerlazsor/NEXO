@@ -87,7 +87,8 @@ p { margin: 0; }
 .pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: #fff; box-shadow: var(--shadow); font-weight: 700; font-size: 0.82rem; color: var(--ink-2); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 4px rgba(43, 182, 115, 0.18); animation: pulse 2.4s ease-in-out infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(43, 182, 115, 0.05); } }
-.hero h1 { position: relative; z-index: 0; margin: 22px 0 20px; font-size: clamp(2.8rem, 6.4vw, 5.2rem); font-weight: 800; letter-spacing: -0.045em; line-height: 0.96; }
+.nw { white-space: nowrap; }
+.hero h1 { position: relative; z-index: 0; margin: 12px 0 22px; font-size: clamp(2.4rem, 5.4vw, 4.7rem); font-weight: 800; letter-spacing: -0.045em; line-height: 0.96; }
 .hl { position: relative; white-space: nowrap; color: var(--ink); }
 .hl::after { content: ""; position: absolute; left: -2%; right: -2%; bottom: 0.06em; height: 0.32em; background: var(--sun); border-radius: 8px; z-index: -1; transform: rotate(-1deg); }
 .lead { font-size: 1.15rem; color: var(--muted); max-width: 33rem; font-weight: 500; margin-bottom: 30px; }
@@ -157,12 +158,45 @@ section { position: relative; }
 .kicker { font-weight: 800; font-size: 0.78rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--coral); margin-bottom: 12px; }
 .kicker.light { color: var(--sun); }
 
+/* Palabra que cambia en el titular */
+.rot { display: inline-block; transition: opacity 0.35s var(--ease), transform 0.35s var(--ease), filter 0.35s; }
+.rot.out { opacity: 0; transform: translateY(0.25em); filter: blur(4px); }
+
+/* Esta semana (planes reales) */
+.live { padding: 70px 0 0; }
+.live-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
+.live .kicker { display: inline-flex; align-items: center; gap: 8px; color: var(--mint); }
+.live-arrows { display: flex; gap: 8px; flex: none; }
+.arrow { width: 46px; height: 46px; border-radius: 50%; border: 0; background: #fff; box-shadow: var(--shadow); font-size: 1.1rem; font-weight: 800; color: var(--ink); cursor: pointer; transition: transform 0.2s var(--ease), background 0.2s; }
+.arrow:hover { transform: translateY(-2px); background: var(--ink); color: #fff; }
+.live-rail { grid-auto-columns: 280px; padding-bottom: 30px; }
+.ev { display: flex; flex-direction: column; scroll-snap-align: start; background: #fff; border-radius: 26px; overflow: hidden; box-shadow: var(--shadow); text-decoration: none; color: var(--ink); transition: transform 0.25s var(--ease), box-shadow 0.25s; }
+.ev:hover { transform: translateY(-4px); box-shadow: 0 1px 2px rgba(15, 42, 74, 0.06), 0 22px 44px rgba(15, 42, 74, 0.14); }
+.ev-img { position: relative; height: 150px; background: #E2E8F0 center / cover; }
+.ev-img .chip { left: 12px; top: 12px; font-size: 0.7rem; padding: 5px 10px; }
+.ev-day { position: absolute; right: 12px; top: 12px; min-width: 50px; padding: 6px 8px; border-radius: 14px; background: #fff; text-align: center; line-height: 1.05; box-shadow: 0 4px 12px rgba(15, 42, 74, 0.15); }
+.ev-day b { display: block; font-family: var(--display); font-size: 1.25rem; }
+.ev-day small { font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.ev-body { padding: 14px 16px 16px; display: grid; gap: 3px; flex: 1; }
+.ev-body b { font-size: 0.98rem; line-height: 1.3; max-height: 2.6em; letter-spacing: -0.01em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ev-when { font-weight: 800; font-size: 0.82rem; color: var(--c); }
+.ev-where { font-size: 0.82rem; color: var(--muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-people { margin-top: 8px; display: flex; align-items: center; gap: 8px; font-size: 0.78rem; font-weight: 700; color: var(--ink-2); }
+.ev-people .faces i { width: 20px; height: 20px; font-size: 0.5rem; }
+.ev.sk { height: 300px; background: linear-gradient(100deg, #fff 30%, #F1EEE6 50%, #fff 70%) 0 0 / 300% 100%; animation: shimmer 1.4s linear infinite; }
+@keyframes shimmer { to { background-position: -150% 0; } }
+.live-more { scroll-snap-align: start; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 26px; border-radius: 26px; background: var(--ink); color: #fff; text-decoration: none; }
+.live-more b { font-family: var(--display); font-size: 1.6rem; line-height: 1.1; letter-spacing: -0.02em; }
+.live-more span { color: var(--sun); font-weight: 800; }
+
 /* Tipos de plan */
 .types { padding: 80px 0 20px; }
 .rail {
   display: grid; grid-auto-flow: column; grid-auto-columns: 250px; gap: 16px;
   overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
   padding: 6px max(24px, calc((100vw - var(--max)) / 2 + 24px)) 26px;
+  /* Sin esto, el "snap" pega la primera tarjeta al borde y se come el margen. */
+  scroll-padding-inline: max(24px, calc((100vw - var(--max)) / 2 + 24px));
 }
 .rail::-webkit-scrollbar { display: none; }
 .tile { position: relative; margin: 0; height: 330px; border-radius: var(--r-lg); overflow: hidden; scroll-snap-align: start; box-shadow: var(--shadow); }
@@ -314,7 +348,9 @@ section { position: relative; }
   .sheet .btn { margin-top: 6px; color: #fff; }
   .hero { padding-top: 12px; }
   .hero h1 { font-size: clamp(2.5rem, 11vw, 3.4rem); }
-  .hl { white-space: normal; }
+  .hl, .nw { white-space: normal; }
+  /* La palabra que rota puede ocupar 1 o 2 líneas: se reserva el hueco para que no salte. */
+  .hero h1 { min-height: 2.95em; }
   .lead { font-size: 1.04rem; }
   .stores .store { flex: 1 1 150px; min-width: 0; justify-content: center; }
   .hero-art { min-height: 520px; margin-top: 10px; }
@@ -329,6 +365,9 @@ section { position: relative; }
   .f2 { right: 0; top: 64%; }
   .f3 { right: 0; top: 4%; }
   .types, .how, .who { padding-top: 64px; }
+  .live-arrows { display: none; }
+  .live { padding-top: 56px; }
+  .live-rail { grid-auto-columns: 78%; }
   .rail { grid-auto-columns: 74%; padding-left: 16px; padding-right: 16px; scroll-padding: 16px; }
   .tile { height: 300px; }
   .head, .steps, .bento, .who-in, .qs { padding-left: 16px; padding-right: 16px; }

@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/home.css?v=20261117" />
+  <link rel="stylesheet" href="/home.css?v=20261117b" />
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"MobileApplication","name":"Nexo","operatingSystem":"iOS, Android","applicationCategory":"SocialNetworkingApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"EUR"},"url":"https://appnexo.es/"}
   </script>
@@ -49,8 +49,7 @@
     <section class="hero">
       <div class="hero-in">
         <div class="hero-copy">
-          <p class="pill"><span class="dot"></span> Madrid · iPhone y Android · Gratis</p>
-          <h1>Planes en Madrid<br /><span class="hl">para conocer gente.</span></h1>
+          <h1><span class="nw">Planes en Madrid</span><br /><span class="nw">para <span class="hl"><span class="rot" id="rot">conocer gente.</span></span></span></h1>
           <p class="lead">Tardeos, intercambios de idiomas, rutas por la sierra, clubes de lectura, pádel… Apúntate a un plan, habla con el grupo antes de ir y llega sabiendo a quién vas a ver.</p>
           <div class="stores">
             <a class="store" data-store="ios" href="https://apps.apple.com/es/app/id6804630497" rel="noopener">
@@ -105,6 +104,24 @@
           <div class="float f2"><span class="fi" style="background:#E0F2FE">💬</span><div><b>Chat del plan</b><small>“¡Nos vemos en la puerta!”</small></div></div>
           <div class="float f3"><span class="fi" style="background:#DCFCE7">✓</span><div><b>Te has unido</b><small>Te avisamos el día del plan</small></div></div>
         </div>
+      </div>
+    </section>
+
+    <!-- ESTA SEMANA (planes reales, se cargan de la base de datos) -->
+    <section class="live" id="estasemana" hidden>
+      <div class="head live-head">
+        <div>
+          <p class="kicker"><span class="dot"></span> En directo</p>
+          <h2>Esta semana en Madrid</h2>
+          <p>Algunos de los planes que hay ahora mismo en Nexo. Ábrelos en la app para ver quién va y apuntarte.</p>
+        </div>
+        <div class="live-arrows" aria-hidden="true">
+          <button type="button" class="arrow" data-dir="-1">←</button>
+          <button type="button" class="arrow" data-dir="1">→</button>
+        </div>
+      </div>
+      <div class="rail live-rail" id="liveRail" tabindex="0" aria-label="Planes de esta semana">
+        <div class="ev sk"></div><div class="ev sk"></div><div class="ev sk"></div><div class="ev sk"></div>
       </div>
     </section>
 
@@ -311,6 +328,6 @@
   </footer>
 
   <a class="dock" href="#descargar" id="dock">Descargar Nexo gratis</a>
-  <script src="/home.js?v=20261117" defer></script>
+  <script src="/home.js?v=20261117b" defer></script>
 </body>
 </html>

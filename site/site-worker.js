@@ -13,6 +13,10 @@ const REDIRECTS = {
   '/contacto': '/soporte',
 };
 
+const APP_PATHS = new Set(['/app', '/descargar', '/download']);
+const APP_STORE_URL = 'https://apps.apple.com/es/app/id6804630497';
+const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.ikerlazsor.nexo';
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -21,6 +25,26 @@ export default {
     const dest = REDIRECTS[path] || REDIRECTS[url.pathname];
     if (dest) {
       return Response.redirect(new URL(dest, url.origin).toString(), 301);
+    }
+
+    // Enlace único de descarga (bio de Instagram/TikTok, historias…): lleva a la tienda
+    // según el móvil. ?src=ig|tt|… llega a Google Play como utm_source para medir el origen.
+    if (APP_PATHS.has(path)) {
+      const ua = request.headers.get('user-agent') || '';
+      const src = (url.searchParams.get('src') || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 32);
+      let target;
+      if (/iPhone|iPad|iPod/i.test(ua)) {
+        target = APP_STORE_URL;
+      } else if (/Android/i.test(ua)) {
+        const referrer = `utm_source=${src || 'link'}&utm_medium=social&utm_campaign=app_link`;
+        target = `${PLAY_STORE_URL}&referrer=${encodeURIComponent(referrer)}`;
+      } else {
+        target = new URL('/', url.origin).toString();
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { Location: target, 'Cache-Control': 'no-store', Vary: 'User-Agent' },
+      });
     }
 
     if (

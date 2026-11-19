@@ -1,9 +1,11 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-type="software">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#F4F1EA" />
+  <meta name="page-type" content="software" />
+  <meta name="site-kind" content="software" />
+  <meta name="theme-color" content="#F7F7F5" />
   <title>Nexo — Planes en Madrid para conocer gente</title>
   <meta name="description" content="Nexo es la app para encontrar planes en Madrid y conocer gente: tardeos, intercambios de idiomas, rutas, clubes de lectura, deporte y mucho más. Gratis para iPhone y Android." />
   <link rel="canonical" href="https://appnexo.es/" />
@@ -12,25 +14,28 @@
   <meta property="og:url" content="https://appnexo.es/" />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="https://appnexo.es/covers/IDIOMAS_1.jpg" />
+  <meta name="twitter:card" content="summary_large_image" />
   <link rel="icon" href="/favicon.png" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/home.css?v=20261117e" />
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400..700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/home.css?v=20261117i" />
   <link rel="alternate" hreflang="es" href="https://appnexo.es/?lang=es" />
   <link rel="alternate" hreflang="en" href="https://appnexo.es/?lang=en" />
   <link rel="alternate" hreflang="x-default" href="https://appnexo.es/" />
   <style>.i18n-pending body { visibility: hidden; }</style>
-  <script src="/home-i18n.js?v=20261117e"></script>
+  <script src="/home-i18n.js?v=20261117i"></script>
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"MobileApplication","name":"Nexo","operatingSystem":"iOS, Android","applicationCategory":"SocialNetworkingApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"EUR"},"url":"https://appnexo.es/"}
   </script>
 </head>
 <body>
+  <!-- Rediseño 2026-11: software (app social) · colores de la app: azul #2563EB sobre blanco roto, bandas tinta · Onest · hero collage (foto + teléfono + una tarjeta) · momento: la tarjeta del hero cuenta sus tres pasos -->
+  <a class="skip" href="#main">Saltar al contenido</a>
   <header class="nav" id="nav">
-    <div class="nav-in">
-      <a class="logo" href="/" aria-label="Nexo, inicio"><img src="/logo.png" alt="" width="36" height="36" /><span>Nexo</span></a>
+    <div class="wrap nav-in">
+      <a class="logo" href="/" aria-label="Nexo, inicio"><img src="/logo.png" alt="" width="32" height="32" /><span>Nexo</span></a>
       <nav class="links" aria-label="Principal">
         <a href="#planes">Planes</a>
         <a href="#como">Cómo funciona</a>
@@ -38,7 +43,7 @@
         <a href="#faq">Preguntas</a>
       </nav>
       <span class="langs" aria-label="Idioma"><a href="?lang=es" data-lang="es" hreflang="es" lang="es">ES</a><a href="?lang=en" data-lang="en" hreflang="en" lang="en">EN</a></span>
-      <a class="btn btn-ink btn-sm nav-cta" href="#descargar">Descargar gratis</a>
+      <a class="btn btn-primary btn-sm nav-cta" href="#descargar">Descargar gratis</a>
       <button class="burger" id="burger" type="button" aria-label="Abrir menú" aria-expanded="false" aria-controls="sheet"><span></span><span></span></button>
     </div>
     <nav class="sheet" id="sheet" aria-label="Menú">
@@ -46,16 +51,16 @@
       <a href="#como">Cómo funciona</a>
       <a href="#organizadores">Organizadores</a>
       <a href="#faq">Preguntas</a>
-      <a class="btn btn-ink" href="#descargar">Descargar gratis</a>
+      <a class="btn btn-primary" href="#descargar">Descargar gratis</a>
     </nav>
   </header>
 
-  <main>
+  <main id="main">
     <!-- HERO -->
-    <section class="hero">
-      <div class="hero-in">
+    <section class="hero" data-enter aria-labelledby="hero-h">
+      <div class="wrap hero-grid">
         <div class="hero-copy">
-          <h1><span class="nw">Planes en Madrid</span><br /><span class="nw">para <span class="hl"><span class="rot" id="rot">conocer gente.</span></span></span></h1>
+          <h1 id="hero-h"><span class="nw">Planes en Madrid</span> <span class="nw">para <span class="rot" id="rot">conocer gente.</span></span></h1>
           <p class="lead">Tardeos, intercambios de idiomas, rutas por la sierra, clubes de lectura, pádel… Apúntate a un plan, habla con el grupo antes de ir y llega sabiendo a quién vas a ver.</p>
           <div class="stores">
             <a class="store" data-store="ios" href="https://apps.apple.com/es/app/id6804630497" rel="noopener">
@@ -67,23 +72,18 @@
               <span><small>Disponible en</small>Google Play</span>
             </a>
           </div>
-          <ul class="proof">
-            <li><b>Planes nuevos</b> cada semana</li>
-            <li><b>Chat de grupo</b> en cada plan</li>
-            <li><b>Solo +18</b> y perfiles con valoraciones</li>
-          </ul>
+          <p class="proof">Gratis · Solo +18 · Chat de grupo en cada plan</p>
         </div>
 
-        <div class="hero-art" aria-hidden="true">
-          <div class="backdrop"></div>
-          <div class="phone">
+        <div class="hero-art" role="img" aria-label="La app Nexo con planes de Madrid sobre una foto de una terraza llena de gente">
+          <div class="phone" aria-hidden="true">
             <div class="screen">
               <div class="s-status"><span>9:41</span><span class="s-icons"><i></i><i></i><i></i></span></div>
               <div class="s-top">
                 <div class="s-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>Buscar planes</div>
                 <div class="s-me"></div>
               </div>
-              <div class="s-filter"><svg viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></svg>Filtros</div>
+              <div class="s-chips"><span class="on">Esta semana</span><span>Idiomas</span><span>Aire libre</span></div>
               <div class="s-feed">
                 <article class="s-card">
                   <div class="s-img" style="background-image:url('/covers/IDIOMAS_1.jpg')"><span class="chip" style="--c:#0EA5E9">Idiomas</span><span class="cnt">14/30</span></div>
@@ -91,7 +91,7 @@
                     <b>Intercambio de idiomas en Malasaña</b>
                     <span class="when" style="--c:#0EA5E9">Jue 20 · 20:00</span>
                     <span class="where">Maniquí Bar · 1,2 km</span>
-                    <div class="s-foot"><div class="faces"><i style="background:#F97316">L</i><i style="background:#8B5CF6">A</i><i style="background:#10B981">M</i><i style="background:#0EA5E9">J</i></div><span class="join" style="--c:#0EA5E9">Unirme</span></div>
+                    <div class="s-foot"><div class="faces"><i style="background:#F97316">L</i><i style="background:#0F766E">A</i><i style="background:#10B981">M</i><i style="background:#0EA5E9">J</i></div><span class="join" style="--c:#0EA5E9">Unirme</span></div>
                   </div>
                 </article>
                 <article class="s-card">
@@ -103,27 +103,25 @@
                   </div>
                 </article>
               </div>
-              <div class="s-tabs"><span class="on">Feed</span><span>Mapa</span><span>Chats</span><span class="plus">+</span></div>
             </div>
           </div>
-          <div class="float f1"><span class="fi" style="background:#FFEDD5">🍻</span><div><b>Tardeo en una terraza</b><small>Hoy · 18:30 · 23 apuntados</small></div></div>
-          <div class="float f2"><span class="fi" style="background:#E0F2FE">💬</span><div><b>Chat del plan</b><small>“¡Nos vemos en la puerta!”</small></div></div>
-          <div class="float f3"><span class="fi" style="background:#DCFCE7">✓</span><div><b>Te has unido</b><small>Te avisamos el día del plan</small></div></div>
+          <div class="note" id="note" aria-hidden="true">
+            <div class="note-head"><span class="note-img" style="background-image:url('/covers/FIESTA_2.jpg')"></span><div><b>Tardeo en una terraza</b><small>Hoy · 18:30 · 23 apuntados</small></div></div>
+            <div class="note-line" data-step><i class="ok">✓</i><span>Te has unido</span></div>
+            <div class="note-line" data-step><i class="msg">💬</i><span>“¡Nos vemos en la puerta!”</span></div>
+            <div class="note-line" data-step><i class="bell">⏰</i><span>Te avisamos el día del plan</span></div>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- ESTA SEMANA (planes reales, se cargan de la base de datos) -->
-    <section class="live" id="estasemana" hidden>
-      <div class="head live-head">
-        <div>
-          <p class="kicker"><span class="dot"></span> En directo</p>
-          <h2>Esta semana en Madrid</h2>
-          <p>Algunos de los planes que hay ahora mismo en Nexo. Ábrelos en la app para ver quién va y apuntarte.</p>
-        </div>
-        <div class="live-arrows" aria-hidden="true">
-          <button type="button" class="arrow" data-dir="-1">←</button>
-          <button type="button" class="arrow" data-dir="1">→</button>
+    <section class="sec live" id="estasemana" hidden aria-labelledby="live-h">
+      <div class="wrap sec-head row-head">
+        <h2 id="live-h"><span class="live-dot" aria-hidden="true"></span>Esta semana en Madrid. <span class="muted">Algunos de los planes que hay ahora mismo en Nexo.</span></h2>
+        <div class="live-arrows">
+          <button type="button" class="arrow" data-dir="-1" aria-label="Anteriores">←</button>
+          <button type="button" class="arrow" data-dir="1" aria-label="Siguientes">→</button>
         </div>
       </div>
       <div class="rail live-rail" id="liveRail" tabindex="0" aria-label="Planes de esta semana">
@@ -132,94 +130,79 @@
     </section>
 
     <!-- TIPOS DE PLAN -->
-    <section class="types" id="planes">
-      <div class="head">
-        <h2>Algo para cada día de la semana</h2>
-        <p>Planes de la gente de Nexo y quedadas de grupos y organizadores de Madrid, todos en el mismo feed y en el mapa.</p>
-      </div>
-      <div class="rail" tabindex="0" aria-label="Tipos de planes">
-        <figure class="tile"><img src="/covers/FIESTA_2.jpg" alt="" loading="lazy" /><figcaption><b>Tardeos</b><span>Terrazas y afterworks</span></figcaption></figure>
-        <figure class="tile"><img src="/covers/IDIOMAS_2.jpg" alt="" loading="lazy" /><figcaption><b>Intercambios de idiomas</b><span>Inglés, francés, italiano…</span></figcaption></figure>
-        <figure class="tile"><img src="/covers/SENDERISMO_1.jpg" alt="" loading="lazy" /><figcaption><b>Senderismo</b><span>Rutas por la sierra</span></figcaption></figure>
-        <figure class="tile"><img src="/covers/ESTUDIO_4.jpg" alt="" loading="lazy" /><figcaption><b>Clubes de lectura</b><span>Un libro, una charla</span></figcaption></figure>
-        <figure class="tile"><img src="/covers/RUNNING_1.jpg" alt="" loading="lazy" /><figcaption><b>Running</b><span>Por el Retiro y Madrid Río</span></figcaption></figure>
-        <figure class="tile"><img src="/covers/JUEGOS_DE_MESA_1.jpg" alt="" loading="lazy" /><figcaption><b>Juegos de mesa</b><span>Partidas en cafés</span></figcaption></figure>
-        <figure class="tile"><img src="/covers/CENAR_2.jpg" alt="" loading="lazy" /><figcaption><b>Cenas</b><span>Con gente nueva</span></figcaption></figure>
-        <figure class="tile"><img src="/covers/PADEL_1.jpg" alt="" loading="lazy" /><figcaption><b>Pádel y deporte</b><span>Pachangas y partidos</span></figcaption></figure>
-        <figure class="tile"><img src="/covers/MUSEO_1.jpg" alt="" loading="lazy" /><figcaption><b>Cultura</b><span>Museos y exposiciones</span></figcaption></figure>
+    <section class="sec types" id="planes" aria-labelledby="types-h">
+      <div class="wrap">
+        <div class="sec-head">
+          <h2 id="types-h">Algo para cada día de la semana. <span class="muted">Todo en el mismo feed.</span></h2>
+        </div>
+        <div class="tiles">
+          <div class="tile t-big"><img src="/covers/FIESTA_3.jpg" alt="Gente brindando en un tardeo" loading="lazy" /><b>Tardeos</b></div>
+          <div class="tile"><img src="/covers/IDIOMAS_2.jpg" alt="Intercambio de idiomas en un bar" loading="lazy" /><b>Intercambios de idiomas</b></div>
+          <div class="tile"><img src="/covers/SENDERISMO_1.jpg" alt="Ruta de senderismo por la sierra" loading="lazy" /><b>Senderismo</b></div>
+          <div class="tile"><img src="/covers/ESTUDIO_4.jpg" alt="Libros sobre una mesa" loading="lazy" /><b>Clubes de lectura</b></div>
+          <div class="tile"><img src="/covers/RUNNING_1.jpg" alt="Grupo corriendo" loading="lazy" /><b>Running</b></div>
+          <div class="tile"><img src="/covers/JUEGOS_DE_MESA_1.jpg" alt="Partida de juegos de mesa" loading="lazy" /><b>Juegos de mesa</b></div>
+          <div class="tile"><img src="/covers/CENAR_4.jpg" alt="Cena en grupo en una terraza" loading="lazy" /><b>Cenas</b></div>
+        </div>
       </div>
     </section>
 
     <!-- CÓMO FUNCIONA -->
-    <section class="how" id="como">
-      <div class="head">
-        <h2>De “no tengo plan” a quedar, en tres pasos</h2>
-      </div>
-      <ol class="steps">
-        <li class="step">
-          <span class="n">1</span>
-          <h3>Encuentra tu plan</h3>
-          <p>Mira el feed o el mapa, filtra por lo que te apetece y por cuándo, y mira quién va antes de apuntarte.</p>
-        </li>
-        <li class="step">
-          <span class="n">2</span>
-          <h3>Únete y habla con el grupo</h3>
-          <p>Con un toque estás dentro del chat del plan: saludas, preguntas dudas y quedáis en el sitio exacto.</p>
-        </li>
-        <li class="step">
-          <span class="n">3</span>
-          <h3>Queda y conoce gente</h3>
-          <p>Te recordamos el plan ese día. Después puedes valorar la experiencia y seguir en contacto con la gente.</p>
-        </li>
-      </ol>
-    </section>
-
-    <!-- FUNCIONES -->
-    <section class="feats">
-      <div class="bento">
-        <article class="cell big">
-          <div class="txt">
-            <h3>Todo lo que pasa en Madrid, cerca de ti</h3>
-            <p>Planes de la comunidad y quedadas de grupos de la ciudad. En el mapa ves qué hay en tu barrio esta semana.</p>
-          </div>
-          <div class="map" aria-hidden="true">
-            <span class="pin" style="--c:#0EA5E9;left:22%;top:36%"></span>
-            <span class="pin" style="--c:#F97316;left:48%;top:22%"></span>
-            <span class="pin" style="--c:#16A34A;left:66%;top:54%"></span>
-            <span class="pin" style="--c:#8B5CF6;left:36%;top:64%"></span>
-            <span class="pin" style="--c:#E11D48;left:78%;top:30%"></span>
-            <span class="you" style="left:52%;top:46%"></span>
-          </div>
-        </article>
-        <article class="cell">
-          <div class="ico" style="background:#E0F2FE">💬</div>
-          <h3>Chat de grupo en cada plan</h3>
-          <p>Habla con los apuntados antes de ir. Así no llegas sin conocer a nadie.</p>
-        </article>
-        <article class="cell">
-          <div class="ico" style="background:#FEF3C7">⏰</div>
-          <h3>Recordatorios</h3>
-          <p>Te avisamos el día del plan para que no se te pase.</p>
-        </article>
-        <article class="cell">
-          <div class="ico" style="background:#DCFCE7">🛡️</div>
-          <h3>Comunidad cuidada</h3>
-          <p>Solo mayores de 18, valoraciones después de cada plan y opción de reportar o bloquear.</p>
-        </article>
-        <article class="cell">
-          <div class="ico" style="background:#FCE7F3">👭</div>
-          <h3>Planes solo para chicas</h3>
-          <p>Quien organiza puede hacer que su plan lo vean solo mujeres.</p>
-        </article>
+    <section class="sec how" id="como" aria-labelledby="how-h">
+      <div class="wrap">
+        <div class="sec-head">
+          <h2 id="how-h">De “no tengo plan” a quedar, en tres pasos.</h2>
+        </div>
+        <ol class="steps">
+          <li class="step">
+            <div class="panel" aria-hidden="true">
+              <div class="ui-map">
+                <span class="pin" style="--c:#0EA5E9;left:22%;top:38%"></span>
+                <span class="pin" style="--c:#F97316;left:58%;top:34%"></span>
+                <span class="pin" style="--c:#16A34A;left:70%;top:56%"></span>
+                <span class="pin" style="--c:#E11D48;left:34%;top:70%"></span>
+                <span class="you" style="left:54%;top:48%"></span>
+                <div class="ui-chips"><span class="on">Hoy</span><span>Idiomas</span><span>Deporte</span></div>
+              </div>
+            </div>
+            <span class="n">1</span>
+            <h3>Encuentra tu plan</h3>
+            <p>Mira el feed o el mapa, filtra por lo que te apetece y por cuándo, y mira quién va antes de apuntarte.</p>
+          </li>
+          <li class="step">
+            <div class="panel" aria-hidden="true">
+              <div class="ui-chat">
+                <div class="ui-chat-head"><b>Ruta a La Pedriza</b><small>9 apuntados</small></div>
+                <p class="bub them"><i style="background:#F97316">L</i><span>¿Alguien sale desde Moncloa?</span></p>
+                <p class="bub them"><i style="background:#10B981">M</i><span>¡Yo! Bus de las 8:15</span></p>
+                <p class="bub me"><span>Me apunto, nos vemos ahí 👋</span></p>
+              </div>
+            </div>
+            <span class="n">2</span>
+            <h3>Únete y habla con el grupo</h3>
+            <p>Con un toque estás dentro del chat del plan: saludas, preguntas dudas y quedáis en el sitio exacto.</p>
+          </li>
+          <li class="step">
+            <div class="panel" aria-hidden="true">
+              <div class="ui-push">
+                <div class="push"><span class="push-ico"><img src="/logo.png" alt="" /></span><div><b>Hoy es el plan</b><small>Intercambio de idiomas · 20:00, Maniquí Bar</small></div></div>
+                <div class="rate"><b>¿Qué tal fue?</b><span class="stars">★★★★★</span></div>
+              </div>
+            </div>
+            <span class="n">3</span>
+            <h3>Queda y conoce gente</h3>
+            <p>Te recordamos el plan ese día. Después puedes valorar la experiencia y seguir en contacto con la gente.</p>
+          </li>
+        </ol>
       </div>
     </section>
 
     <!-- PARA QUIÉN -->
-    <section class="who">
-      <div class="who-in">
+    <section class="sec who" aria-labelledby="who-h">
+      <div class="wrap who-grid">
         <div class="who-img"><img src="/covers/VIBES_OTRO.jpg" alt="Grupo de amigos riéndose en Madrid" loading="lazy" /></div>
         <div class="who-copy">
-          <h2>Para cualquiera que quiera hacer más planes en Madrid</h2>
+          <h2 id="who-h">Para cualquiera que quiera hacer más planes en Madrid</h2>
           <ul class="who-list">
             <li><b>Te acabas de mudar.</b> Conoce gente desde la primera semana.</li>
             <li><b>Estás de Erasmus o eres expat.</b> Practica el idioma y haz amigos locales.</li>
@@ -230,83 +213,92 @@
       </div>
     </section>
 
+    <!-- COMUNIDAD -->
+    <section class="sec safe" aria-labelledby="safe-h">
+      <div class="wrap">
+        <div class="sec-head">
+          <h2 id="safe-h">Una comunidad cuidada. <span class="muted">Gente real que queda en persona, con normas claras.</span></h2>
+        </div>
+        <div class="safe-grid">
+          <div class="safe-item"><span class="ico" aria-hidden="true">🔞</span><h3>Solo mayores de 18</h3><p>Nexo es solo para adultos, en la app y en cada plan.</p></div>
+          <div class="safe-item"><span class="ico" aria-hidden="true">⭐</span><h3>Valoraciones</h3><p>Después de cada plan valoras la experiencia, y cada perfil muestra las suyas.</p></div>
+          <div class="safe-item"><span class="ico" aria-hidden="true">🛡️</span><h3>Reportar o bloquear</h3><p>Puedes reportar o bloquear a quien quieras.</p></div>
+          <div class="safe-item"><span class="ico" aria-hidden="true">👭</span><h3>Planes solo para chicas</h3><p>Quien organiza puede hacer que su plan lo vean solo mujeres.</p></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ORGANIZADORES -->
-    <section class="org" id="organizadores">
-      <div class="org-in">
+    <section class="sec org" id="organizadores" aria-labelledby="org-h">
+      <div class="wrap org-grid">
         <div class="org-copy">
-          <p class="kicker light">Para grupos y organizadores</p>
-          <h2>¿Organizas quedadas? Publícalas gratis en Nexo</h2>
+          <h2 id="org-h">¿Organizas quedadas? Publícalas gratis en Nexo</h2>
           <p>Intercambios, rutas, tardeos, clubes, deporte… Crea tu cuenta y sube tus planes en dos minutos. Sin aprobaciones ni comisiones.</p>
           <ul class="org-list">
             <li>Gente nueva que todavía no te conoce</li>
             <li>Tus propias fotos de portada</li>
             <li>Chat de grupo con los apuntados</li>
-            <li>Recordatorios automáticos</li>
             <li>Un enlace con portada para compartir en Instagram o WhatsApp</li>
           </ul>
           <div class="org-cta">
-            <a class="btn btn-white" href="#descargar">Publicar mis planes</a>
-            <a class="btn btn-ghost" href="mailto:hola@appnexo.es?subject=Organizar%20planes%20en%20Nexo">Escríbenos</a>
+            <a class="btn btn-primary" href="#descargar">Publicar mis planes</a>
+            <a class="btn btn-quiet" href="mailto:hola@appnexo.es?subject=Organizar%20planes%20en%20Nexo">Escríbenos</a>
           </div>
         </div>
-        <div class="org-card" aria-hidden="true">
-          <div class="oc-img" style="background-image:url('/covers/IDIOMAS_3.jpg')"><span class="chip" style="--c:#0EA5E9">Idiomas</span></div>
-          <div class="oc-body">
-            <b>Language Exchange · cada jueves</b>
-            <span class="when" style="--c:#0EA5E9">Jue 20 · 20:00</span>
-            <div class="oc-stats"><span><b>48</b> apuntados</span><span><b>12</b> nuevos</span></div>
-            <div class="oc-msg">“¡Bienvenidos! Estaremos en la mesa del fondo 👋”</div>
+        <div class="org-art" aria-hidden="true">
+          <img class="org-photo" src="/covers/IDIOMAS_3.jpg" alt="" loading="lazy" />
+          <div class="org-card">
+            <div class="oc-body">
+              <span class="chip-inline" style="--c:#0EA5E9">Idiomas</span>
+              <b>Language Exchange · cada jueves</b>
+              <span class="when" style="--c:#0EA5E9">Jue 20 · 20:00</span>
+              <div class="oc-stats"><span><b>48</b> apuntados</span><span><b>12</b> nuevos</span></div>
+              <div class="oc-msg">“¡Bienvenidos! Estaremos en la mesa del fondo 👋”</div>
+            </div>
           </div>
         </div>
       </div>
     </section>
 
     <!-- FAQ -->
-    <section class="faq" id="faq">
-      <div class="head">
-        <h2>Lo que suele preguntar la gente</h2>
-      </div>
-      <div class="qs">
-        <details open><summary>¿Nexo es gratis?</summary><p>Sí. Crear la cuenta, ver planes, apuntarte, hablar en los chats y publicar tus propios planes es gratis.</p></details>
-        <details><summary>¿Tengo que ir con alguien?</summary><p>No. La mayoría de la gente va sola: para eso está el chat del plan, para saludar antes y llegar sabiendo a quién vas a ver.</p></details>
-        <details><summary>¿En qué ciudades funciona?</summary><p>Ahora mismo en Madrid y alrededores. Pronto llegaremos a más ciudades.</p></details>
-        <details><summary>¿Es seguro?</summary><p>Solo pueden usarla mayores de 18. Cada perfil tiene valoraciones de otros planes y puedes reportar o bloquear a quien quieras. Lee nuestras <a href="/normas">normas de la comunidad</a>.</p></details>
-        <details><summary>Organizo quedadas, ¿cómo las publico?</summary><p>Descarga Nexo, crea tu cuenta y publica tus planes con tus propias fotos. Si tienes dudas, escríbenos a <a href="mailto:hola@appnexo.es">hola@appnexo.es</a>.</p></details>
-        <details><summary>¿Puedo borrar mi cuenta?</summary><p>Sí, desde Ajustes en la app o en <a href="/eliminar-cuenta">appnexo.es/eliminar-cuenta</a>. Tus datos se tratan según nuestra <a href="/privacidad">política de privacidad</a>.</p></details>
+    <section class="sec faq" id="faq" aria-labelledby="faq-h">
+      <div class="wrap faq-grid">
+        <h2 id="faq-h">Lo que suele preguntar la gente</h2>
+        <div class="qs">
+          <details open><summary>¿Nexo es gratis?</summary><p>Sí. Crear la cuenta, ver planes, apuntarte, hablar en los chats y publicar tus propios planes es gratis.</p></details>
+          <details><summary>¿Tengo que ir con alguien?</summary><p>No. La mayoría de la gente va sola: para eso está el chat del plan, para saludar antes y llegar sabiendo a quién vas a ver.</p></details>
+          <details><summary>¿En qué ciudades funciona?</summary><p>Ahora mismo en Madrid y alrededores. Pronto llegaremos a más ciudades.</p></details>
+          <details><summary>¿Es seguro?</summary><p>Solo pueden usarla mayores de 18. Cada perfil tiene valoraciones de otros planes y puedes reportar o bloquear a quien quieras. Lee nuestras <a href="/normas">normas de la comunidad</a>.</p></details>
+          <details><summary>Organizo quedadas, ¿cómo las publico?</summary><p>Descarga Nexo, crea tu cuenta y publica tus planes con tus propias fotos. Si tienes dudas, escríbenos a <a href="mailto:hola@appnexo.es">hola@appnexo.es</a>.</p></details>
+          <details><summary>¿Puedo borrar mi cuenta?</summary><p>Sí, desde Ajustes en la app o en <a href="/eliminar-cuenta">appnexo.es/eliminar-cuenta</a>. Tus datos se tratan según nuestra <a href="/privacidad">política de privacidad</a>.</p></details>
+        </div>
       </div>
     </section>
 
-    <!-- CTA FINAL -->
-    <section class="final" id="descargar">
-      <div class="final-in">
-        <div class="mosaic" aria-hidden="true">
-          <img src="/covers/TAPAS_1.jpg" alt="" loading="lazy" />
-          <img src="/covers/PICNIC_1.jpg" alt="" loading="lazy" />
-          <img src="/covers/CAFE_1.jpg" alt="" loading="lazy" />
-          <img src="/covers/MIRADOR_1.jpg" alt="" loading="lazy" />
-        </div>
-        <div class="final-copy">
-          <h2>Tu próximo plan<br />está en Nexo</h2>
-          <p>Descárgala gratis y apúntate a algo esta semana.</p>
-          <div class="stores">
-            <a class="store light" data-store="ios" href="https://apps.apple.com/es/app/id6804630497" rel="noopener">
-              <svg viewBox="0 0 18 22" aria-hidden="true"><path fill="currentColor" d="M14.7 11.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.2-2.8.9-3.5.9s-1.8-1-3-.9c-1.5.1-2.9.9-3.7 2.2-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.2 1.2 0 1.6-.7 3-.7s1.8.7 3 .7 2-.1 2.9-2.3c.7-1 1-2 1-2.1-.1 0-2.3-.9-2.3-3.7zM12.2 4.7c.6-.8 1.1-1.9.9-3-.9.1-2 .6-2.6 1.4-.6.7-1.1 1.8-.9 2.9 1 .1 2-.5 2.6-1.3z"/></svg>
-              <span><small>Descárgala en</small>App Store</span>
-            </a>
-            <a class="store light" data-store="android" href="https://play.google.com/store/apps/details?id=com.ikerlazsor.nexo" rel="noopener">
-              <svg viewBox="0 0 18 20" aria-hidden="true"><path fill="#EA4335" d="M1 1.2 10.2 10 1 18.8V1.2z"/><path fill="#FBBC04" d="M1 18.8 10.2 10l3.3 3.2L3.2 19.6c-.8.5-1.8.1-2.2-.8z"/><path fill="#4285F4" d="M16.4 8.2 13.5 6.6 10.2 10l3.3 3.2 2.9-1.6c.8-.5.8-1.8 0-2.4z"/><path fill="#34A853" d="M1 1.2C1.4.3 2.4-.1 3.2.4l10.3 5.8L10.2 10 1 1.2z"/></svg>
-              <span><small>Disponible en</small>Google Play</span>
-            </a>
-          </div>
+    <!-- CIERRE -->
+    <section class="final" id="descargar" aria-labelledby="final-h">
+      <img class="final-bg" src="/covers/PICNIC_3.jpg" alt="" loading="lazy" />
+      <div class="wrap final-in">
+        <h2 id="final-h">Tu próximo plan está en Nexo</h2>
+        <p>Descárgala gratis y apúntate a algo esta semana.</p>
+        <div class="stores">
+          <a class="store light" data-store="ios" href="https://apps.apple.com/es/app/id6804630497" rel="noopener">
+            <svg viewBox="0 0 18 22" aria-hidden="true"><path fill="currentColor" d="M14.7 11.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.2-2.8.9-3.5.9s-1.8-1-3-.9c-1.5.1-2.9.9-3.7 2.2-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.2 1.2 0 1.6-.7 3-.7s1.8.7 3 .7 2-.1 2.9-2.3c.7-1 1-2 1-2.1-.1 0-2.3-.9-2.3-3.7zM12.2 4.7c.6-.8 1.1-1.9.9-3-.9.1-2 .6-2.6 1.4-.6.7-1.1 1.8-.9 2.9 1 .1 2-.5 2.6-1.3z"/></svg>
+            <span><small>Descárgala en</small>App Store</span>
+          </a>
+          <a class="store light" data-store="android" href="https://play.google.com/store/apps/details?id=com.ikerlazsor.nexo" rel="noopener">
+            <svg viewBox="0 0 18 20" aria-hidden="true"><path fill="#EA4335" d="M1 1.2 10.2 10 1 18.8V1.2z"/><path fill="#FBBC04" d="M1 18.8 10.2 10l3.3 3.2L3.2 19.6c-.8.5-1.8.1-2.2-.8z"/><path fill="#4285F4" d="M16.4 8.2 13.5 6.6 10.2 10l3.3 3.2 2.9-1.6c.8-.5.8-1.8 0-2.4z"/><path fill="#34A853" d="M1 1.2C1.4.3 2.4-.1 3.2.4l10.3 5.8L10.2 10 1 1.2z"/></svg>
+            <span><small>Disponible en</small>Google Play</span>
+          </a>
         </div>
       </div>
     </section>
   </main>
 
   <footer class="foot">
-    <div class="foot-in">
+    <div class="wrap foot-in">
       <div class="foot-brand">
-        <a class="logo" href="/"><img src="/logo.png" alt="" width="36" height="36" /><span>Nexo</span></a>
+        <a class="logo" href="/"><img src="/logo.png" alt="" width="32" height="32" /><span>Nexo</span></a>
         <p>Planes en Madrid para conocer gente. Solo mayores de 18.</p>
       </div>
       <div class="foot-col">
@@ -325,10 +317,10 @@
         <a href="/privacy">Privacy (EN)</a>
       </div>
     </div>
-    <div class="foot-base"><span>© 2026 Nexo · Hecho en Madrid</span><span>appnexo.es</span></div>
+    <div class="wrap foot-base"><span>© 2026 Nexo · Hecho en Madrid</span><span>appnexo.es</span></div>
   </footer>
 
   <a class="dock" href="#descargar" id="dock">Descargar Nexo gratis</a>
-  <script src="/home.js?v=20261117e" defer></script>
+  <script src="/home.js?v=20261117i" defer></script>
 </body>
 </html>

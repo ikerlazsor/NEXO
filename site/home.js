@@ -71,6 +71,25 @@
     'Nexo, inicio': 'Nexo, home', 'Principal': 'Main', 'Abrir menú': 'Open menu', 'Cerrar menú': 'Close menu', 'Menú': 'Menu',
     'Planes de esta semana': 'Plans this week', 'Tipos de planes': 'Kinds of plans', 'Grupo de amigos riéndose en Madrid': 'Friends laughing together in Madrid',
     'Idioma': 'Language',
+    'Saltar al contenido': 'Skip to content', 'Gratis · Solo +18 · Chat de grupo en cada plan': 'Free · 18+ only · A group chat for every plan',
+    'Esta semana': 'This week', 'Aire libre': 'Outdoors', 'Hoy': 'Today', 'Deporte': 'Sports',
+    'La app Nexo con planes de Madrid sobre una foto de una terraza llena de gente': 'The Nexo app with plans in Madrid, over a photo of a busy terrace',
+    'Esta semana en Madrid.': 'This week in Madrid.', 'Algunos de los planes que hay ahora mismo en Nexo.': 'Some of the plans on Nexo right now.',
+    'Anteriores': 'Previous', 'Siguientes': 'Next',
+    'Algo para cada día de la semana.': 'Something for every day of the week.',
+    'Planes de la gente de Nexo y quedadas de grupos de Madrid, en el mismo feed.': 'Plans from Nexo users and meetups from Madrid groups, in one feed.',
+    'Gente brindando en un tardeo': 'People raising a glass at afternoon drinks', 'Intercambio de idiomas en un bar': 'A language exchange in a bar',
+    'Ruta de senderismo por la sierra': 'A hike in the mountains', 'Libros sobre una mesa': 'Books on a table', 'Grupo corriendo': 'A group out running',
+    'Partida de juegos de mesa': 'A board game night', 'Cena en grupo en una terraza': 'A group dinner on a terrace',
+    'De “no tengo plan” a quedar, en tres pasos.': 'From “no plans” to meeting up, in three steps.',
+    '9 apuntados': '9 going', '¿Alguien sale desde Moncloa?': 'Anyone leaving from Moncloa?', '¡Yo! Bus de las 8:15': 'Me! The 8:15 bus',
+    'Me apunto, nos vemos ahí 👋': 'I’m in, see you there 👋', 'Hoy es el plan': 'Your plan is today',
+    'Intercambio de idiomas · 20:00, Maniquí Bar': 'Language exchange · 20:00, Maniquí Bar', '¿Qué tal fue?': 'How was it?',
+    'Una comunidad cuidada.': 'A community that looks out for you.', 'Gente real que queda en persona, con normas claras.': 'Real people meeting in person, with clear rules.',
+    'Solo mayores de 18': '18+ only', 'Nexo es solo para adultos, en la app y en cada plan.': 'Nexo is for adults only, in the app and at every plan.',
+    'Valoraciones': 'Reviews', 'Después de cada plan valoras la experiencia, y cada perfil muestra las suyas.': 'After every plan you review it, and every profile shows its reviews.',
+    'Reportar o bloquear': 'Report or block', 'Puedes reportar o bloquear a quien quieras.': 'You can report or block anyone.',
+    'Tu próximo plan está en Nexo': 'Your next plan is on Nexo', 'Todo en el mismo feed.': 'All in one feed.',
   };
   function tr(s) { return EN && T[s] != null ? T[s] : s; }
   if (EN) {
@@ -158,15 +177,31 @@
       : ['conocer gente.', 'hacer amigos.', 'salir más.', 'no aburrirte.'];
     if (EN) rot.textContent = words[0];
     var w = 0;
-    setInterval(function () {
+    var spin = setInterval(function () {
       if (document.hidden) return;
       rot.classList.add('out');
       setTimeout(function () {
         w = (w + 1) % words.length;
         rot.textContent = words[w];
         rot.classList.remove('out');
-      }, 350);
+        if (w === 0) clearInterval(spin);
+      }, 300);
     }, 2600);
+  }
+
+  var note = document.getElementById('note');
+  var art = note && note.parentNode;
+  if (note && !reduceMotion) {
+    var lines = note.querySelectorAll('.note-line');
+    var timers = [];
+    var play = function () {
+      timers.forEach(clearTimeout); timers = [];
+      note.classList.add('playing');
+      lines.forEach(function (l) { l.classList.remove('on'); });
+      lines.forEach(function (l, i) { timers.push(setTimeout(function () { l.classList.add('on'); }, 450 + i * 700)); });
+    };
+    setTimeout(play, 700);
+    art.addEventListener('pointerenter', play);
   }
 
   // ── Esta semana en Madrid: planes reales de Nexo ──

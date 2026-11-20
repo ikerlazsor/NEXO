@@ -6,7 +6,7 @@
  * {
  *   type: 'friend_request' | 'friend_accepted' | 'plan_join_request' | 'plan_joined'
  *       | 'plan_invite' | 'plan_message' | 'direct_message' | 'compliment' | 'spark'
- *       | 'plan_cancelled' | 'plan_updated' | 'event_message',
+ *       | 'plan_cancelled' | 'plan_updated' | 'event_message' | 'event_joined',
  *   // aceptación se gestiona desde el outbox; rechazo y "te han valorado" no se envían
  *   ...campos según tipo
  * }
@@ -615,6 +615,40 @@ serve(async (req) => {
           changedPlace,
         };
       }
+    } else if (type === 'event_joined') {
+      // Alguien se une al grupo de Nexo de un evento. Solo se avisa mientras el
+      // grupo es pequeño (2–5): es el momento de «ya no vas solo», sin spam después.
+      const eventId = readUuid(body.eventId, 'eventId');
+      const { data: membership } = await admin
+        .from('external_event_participants')
+        .select('joined_at')
+        .eq('event_id', eventId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const joinedAt = membership?.joined_at ? Date.parse(String(membership.joined_at)) : 0;
+      if (!joinedAt || Date.now() - joinedAt > 5 * 60_000) throw new Error('not_allowed');
+
+      const { data: members } = await admin
+        .from('external_event_participants')
+        .select('user_id')
+        .eq('event_id', eventId);
+      const memberIds = (members ?? []).map((m) => m.user_id as string);
+      targetIds = memberIds.length >= 2 && memberIds.length <= 5
+        ? memberIds.filter((id) => id !== user.id)
+        : [];
+      const { data: event } = await admin
+        .from('external_events')
+        .select('title')
+        .eq('id', eventId)
+        .maybeSingle();
+      data = { type, screen: 'event', eventId, avatarUrl, senderName };
+      category = 'social';
+      collapseId = `event-join:${eventId}`;
+      copyCtx = {
+        type: 'plan_joined',
+        senderName,
+        planTitle: (event?.title as string) || undefined,
+      };
     } else if (type === 'event_message') {
       // Chat de grupo de un evento de la agenda (external_events). Mismo aviso que
       // un chat de plan; el mensaje se identifica por el client_id del emisor.

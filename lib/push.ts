@@ -428,7 +428,8 @@ export type PushNotifyType =
     | 'spark'
     | 'plan_cancelled'
     | 'plan_updated'
-    | 'event_message';
+    | 'event_message'
+    | 'event_joined';
 
 /** Dispara la Edge Function send-push (fire-and-forget, 1 reintento). */
 export function notifyPush(payload: Record<string, unknown> & { type: PushNotifyType }): void {
@@ -479,6 +480,11 @@ export function notifyPlanInvite(planId: string, toUserId: string) {
 
 export function notifyPlanMessage(planId: string, messageId: string) {
     notifyPush({ type: 'plan_message', planId, messageId });
+}
+
+/** Te has unido a un evento: avisa al resto del grupo de Nexo mientras es pequeño. */
+export function notifyEventJoined(eventId: string) {
+    notifyPush({ type: 'event_joined', eventId });
 }
 
 /** Mensaje en el chat de grupo de un evento de la agenda. */
@@ -947,6 +953,7 @@ export function resolvePushNavigation(raw: Record<string, unknown> | undefined):
             return planId ? { href: `/chat/${planId}` } : { href: '/(tabs)/chats' };
         case 'direct_message':
             return otherUserId ? { href: `/direct-chat/${otherUserId}` } : { href: '/(tabs)/chats' };
+        case 'event_joined':
         case 'event_today': {
             const eventId = data.eventId ? String(data.eventId) : '';
             return eventId ? { href: `/event/${eventId}` } : { href: '/(tabs)' };

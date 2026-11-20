@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useT } from "../../lib/i18n";
+import { nexoGroupLabel } from "./nexoGroup";
 import { useAppTheme } from "../../lib/appTheme";
 import { eventClassification, eventCoverSource } from "./covers";
 import type { ExternalEvent, EventSection, EventSocialSummary } from "./types";
@@ -121,6 +122,7 @@ export const EventCard = memo(function EventCard({
   const dark = scheme === "dark";
   const when = eventWhenLabel(event, lang);
   const attendance = attendanceLabelCount(event.attendance_hint);
+  const nexoCount = social?.count ?? 0;
   const madridDay = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Europe/Madrid" });
   const isToday = !!event.starts_at && madridDay(new Date(event.starts_at)) === madridDay(new Date());
   return (
@@ -266,57 +268,57 @@ export const EventCard = memo(function EventCard({
         </View>
       </Pressable>
       <View style={[s.actions, compact && s.compactActions, !compact && { borderTopColor: dark ? colors.borderStrong : "rgba(15,23,42,0.06)" }]}>
-        {(social?.count ?? 0) > 0 ? <Pressable
-          onPress={onOpen}
-          accessibilityRole="button"
-          accessibilityLabel={t("events.going", { n: social?.count ?? 0 })}
-          style={s.sourceRow}
-        >
-          <View style={{ flexDirection: "row", paddingRight: 4 }}>
-            {(social?.people || []).slice(0, 3).map((person, index) => (
-              <View
-                key={person.user_id}
-                style={{
-                  marginLeft: index ? -9 : 0,
-                  borderRadius: 18,
-                  borderWidth: 2,
-                  borderColor: colors.surface,
-                }}
+        {/* Asistentes del evento original (redondeado a la baja) SIEMPRE visibles;
+            la gente de Nexo se suma debajo como «tu grupo», nunca los sustituye.
+            Sin numberOfLines: el texto parte en dos líneas antes que cortarse con «…». */}
+        <Pressable onPress={onOpen} accessibilityRole="button" style={s.sourceRow}>
+          {nexoCount > 0 ? (
+            <View style={{ flexDirection: "row", flexShrink: 0 }}>
+              {(social?.people || []).slice(0, 3).map((person, index) => (
+                <View
+                  key={person.user_id}
+                  style={{
+                    marginLeft: index ? -9 : 0,
+                    borderRadius: 18,
+                    borderWidth: 2,
+                    borderColor: colors.surface,
+                  }}
+                >
+                  <ProfileAvatar uri={person.avatar_url} name={person.nombre} size={28} />
+                </View>
+              ))}
+              {!social?.people.length && (
+                <View style={[s.firstIcon, { backgroundColor: `${accent}1A` }]}>
+                  <Ionicons name="people" size={14} color={accent} />
+                </View>
+              )}
+            </View>
+          ) : (
+            <View style={[s.firstIcon, { backgroundColor: `${accent}1A` }]}>
+              <Ionicons name="people" size={14} color={accent} />
+            </View>
+          )}
+          <View style={s.socialText}>
+            {attendance ? (
+              <Text style={[s.openGroupTitle, { color: colors.text }]}>
+                {t(attendance.exact ? "events.attendeesExact" : "events.attendees", { n: attendance.n })}
+              </Text>
+            ) : null}
+            {nexoCount > 0 ? (
+              <Text
+                style={
+                  attendance
+                    ? [s.sourceTextLine, { color: colors.textMuted }]
+                    : [s.openGroupTitle, { color: colors.text }]
+                }
               >
-                <ProfileAvatar
-                  uri={person.avatar_url}
-                  name={person.nombre}
-                  size={28}
-                />
-              </View>
-            ))}
-            {!social?.people.length && (
-              <Ionicons
-                name="people-outline"
-                size={20}
-                color={colors.primary}
-              />
-            )}
+                {nexoGroupLabel(t, nexoCount, joined)}
+              </Text>
+            ) : !attendance ? (
+              <Text style={[s.openGroupTitle, { color: colors.text }]}>{t("events.openGroup")}</Text>
+            ) : null}
           </View>
-          <Text
-            style={[s.sourceText, { color: colors.textMuted }]}
-            numberOfLines={2}
-          >
-            {t("events.going", { n: social?.count ?? 0 })}
-          </Text>
-        </Pressable> : <Pressable onPress={onOpen} accessibilityRole="button" style={s.sourceRow}>
-          {/* Sin apuntados aún: el evento tiene público igualmente; Nexo es para ir
-              acompañado. «Sé el primero» transmitía ir solo y frenaba a unirse. */}
-          <View style={[s.firstIcon, { backgroundColor: `${accent}1A` }]}>
-            <Ionicons name="people" size={14} color={accent} />
-          </View>
-          <Text style={[s.openGroupTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>
-            {/* Asistentes del evento original (redondeado a la baja), no usuarios de Nexo. */}
-            {attendance
-              ? t(attendance.exact ? "events.attendeesExact" : "events.attendees", { n: attendance.n })
-              : t("events.openGroup")}
-          </Text>
-        </Pressable>}
+        </Pressable>
         <PressScale
           onPress={onJoin}
           disabled={busy || preview}
@@ -549,6 +551,8 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  socialText: { flex: 1, minWidth: 0, gap: 1 },
+  sourceTextLine: { fontSize: 12, lineHeight: 16, fontWeight: "600" },
   sourceText: {
     fontSize: 12,
     lineHeight: 17,

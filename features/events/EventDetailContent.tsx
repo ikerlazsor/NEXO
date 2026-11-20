@@ -12,12 +12,16 @@ import { BounceHeart } from "../../components/BounceHeart";
 import { PressScale } from "../../components/PressScale";
 import { EventArtwork, isFreeEvent } from "./EventCards";
 import { eventClassification } from "./covers";
+import { nexoGroupHint, nexoGroupLabel } from "./nexoGroup";
+import { attendanceLabelCount } from "../../lib/externalEventPolicy.cjs";
 import type { ExternalEvent, EventPerson } from "./types";
 
 type Props = {
   event: ExternalEvent;
   people: EventPerson[];
   signedIn: boolean;
+  /** El usuario ya va: cambia «1 de Nexo va» por «Vas tú desde Nexo». */
+  joined?: boolean;
   morePeople: boolean;
   unavailable: boolean;
   error: boolean;
@@ -39,7 +43,7 @@ const HERO_H = Math.round(Dimensions.get("window").height * 0.42);
 const SHEET_OVERLAP = 26;
 
 /** Cached content paints immediately; the offscreen native map is demand mounted. */
-export function EventDetailContent({ event, people, signedIn, morePeople, unavailable, error,
+export function EventDetailContent({ event, people, signedIn, joined = false, morePeople, unavailable, error,
   onBack, onRetry, onOfficial, onPerson, onAccount, onMorePeople, renderMap,
   saved = false, onShare, onToggleSave, onReport }: Props) {
   const { colors, scheme } = useAppTheme();
@@ -60,6 +64,7 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
   const { category } = eventClassification(event);
   const accent = getCategoryColor(category);
   const free = isFreeEvent(event.price_text);
+  const attendance = attendanceLabelCount(event.attendance_hint);
   const start = event.starts_at ? new Date(event.starts_at) : null;
   const dateRaw = (start || new Date(`${event.start_date}T12:00:00Z`)).toLocaleDateString(lang, {
     weekday: "long", day: "numeric", month: "long", timeZone: "Europe/Madrid",
@@ -168,11 +173,29 @@ export function EventDetailContent({ event, people, signedIn, morePeople, unavai
         </Pressable>}
       </View>}
 
+      {/* Los asistentes del evento original se quedan siempre; el grupo de Nexo va aparte. */}
+      {attendance && <View style={[s.openGroup, { backgroundColor: `${accent}12` }]}>
+        <View style={[s.openGroupIcon, { backgroundColor: `${accent}22` }]}>
+          <Ionicons name="people" size={18} color={accent} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[s.inEventLabel, { color: colors.textMuted }]}>{t("events.inEvent")}</Text>
+          <Text style={[s.openGroupText, { color: colors.text }]}>
+            {t(attendance.exact ? "events.attendeesExact" : "events.attendees", { n: attendance.n })}
+          </Text>
+        </View>
+      </View>}
+
       <View style={s.section}>
         <View style={s.sectionHead}>
-          <Text accessibilityRole="header" style={sectionTitle}>{t("events.people")}</Text>
-          {signedIn && people.length > 0 && <Text style={[s.count, { color: colors.textMuted }]}>{t("events.going", { n: people.length })}</Text>}
+          <Text accessibilityRole="header" style={[sectionTitle, { flexShrink: 1 }]}>{t("events.nexoGroup")}</Text>
+          {signedIn && people.length > 0 && <Text style={[s.count, { color: colors.textMuted, flexShrink: 1, textAlign: "right" }]}>
+            {morePeople ? t("events.nexoMany", { n: `${people.length}+` }) : nexoGroupLabel(t, people.length, joined)}
+          </Text>}
         </View>
+        {signedIn && !morePeople && nexoGroupHint(t, people.length, joined) ? (
+          <Text style={[s.nexoHint, { color: colors.textMuted }]}>{nexoGroupHint(t, people.length, joined)}</Text>
+        ) : null}
         {!signedIn ? <Pressable onPress={onAccount} accessibilityRole="button">
           <Text style={[s.link, { color: colors.primary }]}>{t("events.seePeople")}</Text>
         </Pressable> : people.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.people}>
@@ -263,6 +286,8 @@ const s = StyleSheet.create({
   sectionHead: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 },
   sectionTitle: { fontSize: 19, lineHeight: 24, fontWeight: "800", letterSpacing: -0.3 },
   count: { fontSize: 13, fontWeight: "700" },
+  inEventLabel: { fontSize: 12, lineHeight: 16, fontWeight: "600" },
+  nexoHint: { fontSize: 13, lineHeight: 18, marginTop: -4 },
   paragraph: { fontSize: 15, lineHeight: 24, marginTop: 6 },
   aboutCard: { borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14 },
   aboutTitle: { fontSize: 16, fontWeight: "800", marginBottom: 2 },

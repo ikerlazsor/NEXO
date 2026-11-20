@@ -85,6 +85,8 @@ export async function setEventMembership(eventId: string, join: boolean) {
       .rpc("set_event_membership", { p_event: eventId, p_join: join })
       .abortSignal(deadline),
   );
+  // Aviso al grupo de Nexo («ya no vas solo»); import diferido para no cargar push aquí.
+  if (join) void import("../../lib/push").then(({ notifyEventJoined }) => notifyEventJoined(eventId)).catch(() => {});
 }
 export async function fetchEventSocialSummaries(
   ids: string[],

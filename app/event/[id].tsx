@@ -277,6 +277,7 @@ export default function EventDetail() {
         event={event}
         people={people}
         signedIn={!!userId}
+        joined={joined}
         morePeople={morePeople}
         unavailable={unavailable}
         error={error}

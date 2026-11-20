@@ -123,6 +123,7 @@ export const EventCard = memo(function EventCard({
   const when = eventWhenLabel(event, lang);
   const attendance = attendanceLabelCount(event.attendance_hint);
   const nexoCount = social?.count ?? 0;
+  const nexoLabel = nexoCount > 0 ? nexoGroupLabel(t, nexoCount, joined) : null;
   const madridDay = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Europe/Madrid" });
   const isToday = !!event.starts_at && madridDay(new Date(event.starts_at)) === madridDay(new Date());
   return (
@@ -304,7 +305,7 @@ export const EventCard = memo(function EventCard({
                 {t(attendance.exact ? "events.attendeesExact" : "events.attendees", { n: attendance.n })}
               </Text>
             ) : null}
-            {nexoCount > 0 ? (
+            {nexoLabel ? (
               <Text
                 style={
                   attendance
@@ -312,7 +313,7 @@ export const EventCard = memo(function EventCard({
                     : [s.openGroupTitle, { color: colors.text }]
                 }
               >
-                {nexoGroupLabel(t, nexoCount, joined)}
+                {nexoLabel}
               </Text>
             ) : !attendance ? (
               <Text style={[s.openGroupTitle, { color: colors.text }]}>{t("events.openGroup")}</Text>

@@ -5,10 +5,11 @@ type T = (key: string, params?: Record<string, string | number>) => string;
  * del evento original («+80 asistentes · 1 de Nexo va»), nunca los sustituye:
  * un «Ya vamos 1» a secas se leía como ir solo.
  */
-export function nexoGroupLabel(t: T, count: number, joined: boolean): string {
+export function nexoGroupLabel(t: T, count: number, joined: boolean): string | null {
     if (count <= 0) return t('events.openGroup');
     if (joined) {
-        return count === 1 ? t('events.nexoYouOnly') : t('events.nexoYouAnd', { n: count - 1 });
+        // Solo tú: no se dice nada (ya lo indica el botón «Te has unido»).
+        return count === 1 ? null : t('events.nexoYouAnd', { n: count - 1 });
     }
     return count === 1 ? t('events.nexoOne') : t('events.nexoMany', { n: count });
 }

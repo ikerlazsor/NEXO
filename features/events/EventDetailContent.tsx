@@ -189,7 +189,7 @@ export function EventDetailContent({ event, people, signedIn, joined = false, mo
       <View style={s.section}>
         <View style={s.sectionHead}>
           <Text accessibilityRole="header" style={[sectionTitle, { flexShrink: 1 }]}>{t("events.nexoGroup")}</Text>
-          {signedIn && people.length > 0 && <Text style={[s.count, { color: colors.textMuted, flexShrink: 1, textAlign: "right" }]}>
+          {signedIn && people.length > 0 && (morePeople || nexoGroupLabel(t, people.length, joined)) && <Text style={[s.count, { color: colors.textMuted, flexShrink: 1, textAlign: "right" }]}>
             {morePeople ? t("events.nexoMany", { n: `${people.length}+` }) : nexoGroupLabel(t, people.length, joined)}
           </Text>}
         </View>

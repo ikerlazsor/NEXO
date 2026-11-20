@@ -7,6 +7,7 @@ import {
     BackHandler,
     Dimensions,
     FlatList,
+    Platform,
     InteractionManager,
     NativeScrollEvent,
     NativeSyntheticEvent,
@@ -16,7 +17,16 @@ import {
     View,
 } from 'react-native';
 import { Marker } from 'react-native-maps';
-import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, {
+    Easing,
+    Extrapolation,
+    FadeIn,
+    interpolate,
+    useAnimatedStyle,
+    useReducedMotion,
+    useSharedValue,
+    withTiming,
+} from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import { EASE_OUT } from '../lib/motion';
 import { Image } from 'expo-image';
@@ -66,8 +76,10 @@ const MADRID_REGION = {
 
 /** Más zoom al seleccionar (delta más bajo = más cerca). */
 const SELECT_DELTA = 0.052;
-/** Zoom inicial cuando conocemos la posición del usuario (~6 km alrededor). */
-const USER_DELTA = 0.06;
+/** Zoom inicial cuando conocemos la posición del usuario (~6,5 km alrededor). */
+const USER_DELTA = 0.065;
+/** Tu posición queda algo por encima del centro: el carrusel de abajo no la tapa. */
+const USER_CENTER_LAT_SHIFT = 0.16;
 /** Al abrir el mapa solo se usa una posición así de reciente; si no, se pide otra. */
 const RECENT_COORDS_MS = 10 * 60 * 1000;
 /** Si la posición nueva está más cerca que esto del encuadre actual, no se mueve el mapa. */
@@ -81,6 +93,14 @@ const SELECT_CENTER_LAT_SHIFT = 0.18;
 /** Copias del carrusel para loop infinito (impar → el bloque del medio es el “real”). */
 const CAROUSEL_LOOPS = 3;
 const MAP_FOCUS_MS = 280;
+/** Curva de las hojas de iOS: arranca decidida y frena muy suave. */
+const EASE_SHEET = Easing.bezier(0.32, 0.72, 0, 1);
+const SHEET_OPEN_MS = 380;
+const SHEET_CLOSE_MS = 340;
+/** Botón y carrusel se van antes que la hoja: el cierre se lee como un solo gesto. */
+const CHROME_FADE_MS = 120;
+const SHEET_RADIUS = 24;
+const BACKDROP_OPACITY = 0.28;
 
 type MapPlan = Record<string, unknown> & {
     id: string | number;
@@ -184,7 +204,25 @@ export function FeedMapHost() {
     // apertura salía gris. Al abrir se sube por encima (raised) y se desliza.
     const sheetY = useSharedValue(0);
     const [raised, setRaised] = useState(false);
-    const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: sheetY.value }] }));
+    const reduceMotion = useReducedMotion();
+    /** Con “reducir movimiento”: la hoja se funde en vez de deslizarse. */
+    const sheetFade = useSharedValue(1);
+    const chromeOpacity = useSharedValue(1);
+    const sheetStyle = useAnimatedStyle(() => {
+        // Esquinas redondeadas en cuanto se separa del borde: se lee como una hoja.
+        const radius = interpolate(sheetY.value, [0, 60], [0, SHEET_RADIUS], Extrapolation.CLAMP);
+        return {
+            transform: [{ translateY: sheetY.value }],
+            opacity: sheetFade.value,
+            borderTopLeftRadius: radius,
+            borderTopRightRadius: radius,
+        };
+    });
+    const chromeStyle = useAnimatedStyle(() => ({ opacity: chromeOpacity.value }));
+    const backdropStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(sheetY.value, [0, SHEET_HIDDEN_Y], [BACKDROP_OPACITY, 0], Extrapolation.CLAMP)
+            * sheetFade.value,
+    }));
     const mapReadyRef = useRef(false);
     const [viewport, setViewport] = useState(MADRID_REGION);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekRecentUserCoords(RECENT_COORDS_MS));
@@ -243,8 +281,11 @@ export function FeedMapHost() {
 
     const onSheetClosed = useCallback(() => {
         setRaised(false);
+        // Aparcado otra vez detrás del feed: opaco y con su botón para la próxima vez.
+        sheetFade.value = 1;
+        chromeOpacity.value = 1;
         finishDismiss();
-    }, [finishDismiss]);
+    }, [finishDismiss, sheetFade, chromeOpacity]);
     const animateSheetClose = useCallback(() => {
         if (!visibleRef.current || closingRef.current) return;
         closingRef.current = true;
@@ -252,14 +293,23 @@ export function FeedMapHost() {
         camera.current!.close();
         loadGenRef.current++;
         setVisible(false);
+        chromeOpacity.value = withTiming(0, { duration: CHROME_FADE_MS, easing: EASE_OUT });
         // Al terminar de bajar el panel (y no antes) se abre el detalle, para que
         // dos transiciones nunca se solapen.
+        if (reduceMotion) {
+            sheetFade.value = withTiming(0, { duration: 200, easing: EASE_OUT }, (finished) => {
+                if (!finished) return;
+                sheetY.value = SHEET_HIDDEN_Y;
+                scheduleOnRN(onSheetClosed);
+            });
+            return;
+        }
         sheetY.value = withTiming(
             SHEET_HIDDEN_Y,
-            { duration: 220, easing: EASE_OUT },
+            { duration: SHEET_CLOSE_MS, easing: EASE_SHEET },
             (finished) => { if (finished) scheduleOnRN(onSheetClosed); },
         );
-    }, [sheetY, onSheetClosed]);
+    }, [sheetY, sheetFade, chromeOpacity, reduceMotion, onSheetClosed]);
     const onSheetOpened = useCallback(() => {
         if (visibleRef.current && !closingRef.current) {
             setMapMounted(true);
@@ -272,7 +322,7 @@ export function FeedMapHost() {
             if (visibleRef.current && !closingRef.current) {
                 sheetY.value = withTiming(
                     0,
-                    { duration: 340, easing: Easing.out(Easing.cubic) },
+                    { duration: reduceMotion ? 0 : SHEET_OPEN_MS, easing: EASE_SHEET },
                     (finished) => { if (finished) scheduleOnRN(onSheetOpened); },
                 );
             }
@@ -280,7 +330,7 @@ export function FeedMapHost() {
             // Ya por detrás del fondo: volver a aparcarlo dentro de la pantalla.
             sheetY.value = 0;
         }
-    }, [raised, sheetY, onSheetOpened]);
+    }, [raised, sheetY, onSheetOpened, reduceMotion]);
     useEffect(() => () => { camera.current?.close(); loadGenRef.current++; }, []);
 
     const refreshPlansInBackground = useCallback(
@@ -401,6 +451,9 @@ export function FeedMapHost() {
         const timer = setTimeout(() => setTrackPinViews(false), 1500);
         return () => clearTimeout(timer);
     }, [shownPins, mapReady, visible]);
+    // iOS (Apple Maps): pines añadidos con el mapa aparcado detrás del feed a veces
+    // no se dibujaban hasta mover el mapa. Allí se añaden ya con el mapa a la vista.
+    const pinsLive = mapReady && (Platform.OS !== 'ios' || renderMap);
     const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
     useEffect(() => {
         if (!eventsLoading && !eventsError && moreEvents && external.events.length < 400) {
@@ -564,7 +617,8 @@ export function FeedMapHost() {
         }
         const target = latitude != null && longitude != null
             ? {
-                  latitude,
+                  // Centro un poco al sur → tu punto sale más arriba en pantalla.
+                  latitude: latitude - USER_DELTA * USER_CENTER_LAT_SHIFT,
                   longitude,
                   latitudeDelta: USER_DELTA,
                   longitudeDelta: USER_DELTA,
@@ -779,6 +833,14 @@ export function FeedMapHost() {
     }, [animateSheetClose]);
 
     return (
+        <>
+        {/* Velo sobre el feed mientras la hoja sube o baja: da profundidad al cierre. */}
+        {raised ? (
+            <Animated.View
+                pointerEvents="none"
+                style={[StyleSheet.absoluteFill, mapHostStyles.backdrop, backdropStyle]}
+            />
+        ) : null}
         <Animated.View
             pointerEvents={visible ? 'auto' : 'none'}
             importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
@@ -838,7 +900,7 @@ export function FeedMapHost() {
                         }, 600);
                     }}
                 >
-                    {mapReady && shownPins.map(pin => <Marker
+                    {pinsLive && shownPins.map(pin => <Marker
                         key={pin.key}
                         identifier={pin.key}
                         coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
@@ -858,11 +920,11 @@ export function FeedMapHost() {
                     </Marker>)}
                 </NexoMapView></Animated.View> : null}
 
-                <View style={styles.mapModalHeader}>
+                <Animated.View style={[styles.mapModalHeader, chromeStyle]}>
                     <TouchableOpacity style={styles.mapCloseBtn} onPress={closeMap}>
                         <Ionicons name="chevron-back" size={24} color={INK} />
                     </TouchableOpacity>
-                </View>
+                </Animated.View>
 
                 {loadingPlans && plans.length === 0 ? (
                     <View style={styles.mapModalFooter}>
@@ -876,7 +938,7 @@ export function FeedMapHost() {
                 ) : !renderMap ? null : (
                     <Animated.View
                         entering={FadeIn.duration(260)}
-                        style={[styles.mapCarouselWrap, { bottom: Math.max(insets.bottom, 8) + 10 }]}
+                        style={[styles.mapCarouselWrap, { bottom: Math.max(insets.bottom, 8) + 10 }, chromeStyle]}
                         pointerEvents="box-none"
                     >
                         <FlatList
@@ -1042,12 +1104,14 @@ export function FeedMapHost() {
                 )}
             </View>
         </Animated.View>
+        </>
     );
 }
 
 const mapHostStyles = StyleSheet.create({
     // Por encima de la cabecera y la barra inferior del chrome (zIndex 30).
-    sheet: { zIndex: 1000, elevation: 1000 },
+    sheet: { zIndex: 1000, elevation: 1000, overflow: 'hidden' },
+    backdrop: { zIndex: 999, elevation: 999, backgroundColor: '#000' },
     pinWrap: { width: 29, height: 31, alignItems: "center", justifyContent: "flex-end" },
     pinBack: { position: "absolute", bottom: -1.5 },
     // Aparcado: detrás del degradado del chrome (zIndex 0), invisible pero en

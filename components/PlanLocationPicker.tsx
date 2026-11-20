@@ -70,6 +70,11 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         [onLocationChange, mapRef]
     );
 
+    // Coordenadas para el sesgo en una ref: que el mapa se mueva (al elegir un
+    // sitio) no debe relanzar la búsqueda ni reabrir la lista.
+    const biasRef = useRef({ lat: location.latitude, lon: location.longitude });
+    biasRef.current = { lat: location.latitude, lon: location.longitude };
+
     useEffect(() => {
         const q = searchText.trim();
         if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -97,15 +102,10 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
             const requestId = ++requestIdRef.current;
             try {
                 // Sesgo al punto del mapa (donde estás o el sitio ya elegido).
+                const { lat, lon } = biasRef.current;
                 const hasCoords =
-                    Number.isFinite(location.latitude) &&
-                    Number.isFinite(location.longitude) &&
-                    (location.latitude !== 0 || location.longitude !== 0);
-                const items = await searchPlaces(
-                    q,
-                    hasCoords ? { lat: location.latitude, lon: location.longitude } : null,
-                    lang,
-                );
+                    Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0);
+                const items = await searchPlaces(q, hasCoords ? { lat, lon } : null, lang);
                 if (requestId !== requestIdRef.current) return;
                 setResults(items);
             } catch {
@@ -119,7 +119,8 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         return () => {
             if (debounceRef.current) clearTimeout(debounceRef.current);
         };
-    }, [searchText, location.latitude, location.longitude, lang]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al escribir
+    }, [searchText]);
 
     const onMapPress = async (lat: number, lon: number) => {
         requestIdRef.current += 1;
@@ -145,7 +146,8 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         if (debounceRef.current) clearTimeout(debounceRef.current);
         requestIdRef.current += 1;
         const pickId = ++pickIdRef.current;
-        suppressSearchRef.current = true;
+        // Solo si el texto cambia habrá un efecto que consuma la marca.
+        suppressSearchRef.current = item.label !== searchText;
         setShowSuggestions(false);
         setResults([]);
         setSearching(false);

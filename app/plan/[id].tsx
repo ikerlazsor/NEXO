@@ -144,7 +144,7 @@ import { renderRatingStars } from '../../lib/profileRating';
 import { getPendingRatingForPlan, subscribeRatingSession, type PendingRatingPlan } from '../../lib/ratings';
 import { ScreenKeys } from '../../lib/screenState';
 import { screenCacheKey } from '../../lib/screenCaches';
-import { sharePlanLink } from '../../lib/sharePlan';
+import { openShareChooser, planShareTarget } from '../../lib/shareChooser';
 import { tryShareTournamentPitch } from '../../lib/shareTournamentPitch';
 import { canJoinPlanByGender } from '../../lib/soloChicas';
 import { wasKickedFromPlan } from '../../lib/planKicks';
@@ -1388,7 +1388,7 @@ export default function PlanDetailScreen() {
     const handleShare = async () => {
         if (!plan) return;
         if (await tryShareTournamentPitch()) return;
-        await sharePlanLink(plan.id, plan.titulo);
+        openShareChooser(planShareTarget(String(plan.id), plan.titulo), t);
     };
 
     const handleToggleSave = async () => {

@@ -168,10 +168,10 @@ import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { prefetchUserProfile, seedUserProfilePeek } from '../../lib/userProfileCache';
 import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
-import { EventCard, eventWhenLabel } from '../../features/events/EventCards';
+import { EventCard } from '../../features/events/EventCards';
 import { eventCoverKey } from '../../features/events/covers';
 import { toggleEventSaved, useSavedEventIds } from '../../features/events/savedEvents';
-import { shareEventLink } from '../../lib/shareEvent';
+import { eventShareTarget, openShareChooser } from '../../lib/shareChooser';
 import { useEvents } from '../../features/events/useEvents';
 import { rankUnifiedFeed, retainFeedOrder } from '../../features/events/ranking';
 import { rememberEvent } from '../../features/events/cache';
@@ -495,15 +495,9 @@ export default function HomeScreen() {
     );
     const shareExternal = useCallback(
         (event: ExternalEvent) => {
-            void shareEventLink({
-                eventId: event.id,
-                title: event.title,
-                when: eventWhenLabel(event, lang),
-                venue: event.venue,
-                coverKey: eventCoverKey(event),
-            });
+            openShareChooser(eventShareTarget(event.id, event.title, eventCoverKey(event)), t);
         },
-        [lang],
+        [t],
     );
 
     const endReachedLockRef = useRef(false);

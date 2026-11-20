@@ -34,7 +34,7 @@ import { emitHeartBurst } from '../lib/heartBurst';
 import { useAuthSession } from '../lib/authSession';
 import { useT } from '../lib/i18n';
 import { localeTag } from '../lib/locale';
-import { sharePlanLink } from '../lib/sharePlan';
+import { openShareChooser, planShareTarget } from '../lib/shareChooser';
 import { fetchTournamentConfig } from '../lib/footballTournament';
 import { requestTournamentShare } from '../lib/shareTournamentPitch';
 import { getCategoryColor, resolvePlanSport } from '../lib/categories';
@@ -395,7 +395,7 @@ function PlanCardInner({
                 requestTournamentShare(planId);
                 return;
             }
-            await sharePlanLink(planId, item.titulo);
+            openShareChooser(planShareTarget(planId, item.titulo), t);
         })();
     };
 

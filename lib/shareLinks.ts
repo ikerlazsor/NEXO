@@ -56,7 +56,9 @@ export function buildFootballShareMessage(opts: { planId: string }): string {
 export function eventShareUrl(eventId: string, coverKey?: string | null): string {
     if (!eventId) return 'nexo://';
     // `c` = portada de la tarjeta, para que la vista previa (WhatsApp) muestre la misma foto.
-    const coverQ = coverKey ? `&c=${encodeURIComponent(coverKey)}` : '';
+    // Forma corta (`SHOWTIME:cine:2`, sin prefijo ni %3A): el enlace queda más corto.
+    const shortCover = coverKey?.replace(/^nexo_cover:/, '');
+    const coverQ = shortCover && /^[A-Z_]+:[a-z_]+:\d+$/.test(shortCover) ? `&c=${shortCover}` : '';
     if (SHARE_WEB_HOST) return `https://${SHARE_WEB_HOST}/plan/${eventId}?evento=1${coverQ}`;
     return `nexo://event/${eventId}`;
 }

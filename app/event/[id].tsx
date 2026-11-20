@@ -38,8 +38,7 @@ import { EventDetailContent } from "../../features/events/EventDetailContent";
 import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
 import { PressScale } from "../../components/PressScale";
 import { JOINED_PLAN_COLORS, planCardActionStyles } from "../../components/planCardActions";
-import { eventWhenLabel } from "../../features/events/EventCards";
-import { shareEventLink } from "../../lib/shareEvent";
+import { eventShareTarget, openShareChooser } from "../../lib/shareChooser";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export default function EventDetail() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -47,7 +46,7 @@ export default function EventDetail() {
   const router = useRouter();
   const { colors, scheme } = useAppTheme();
   const actionStyles = planCardActionStyles(scheme === 'dark');
-  const { t, lang } = useT();
+  const { t } = useT();
   const transitionReady = useScreenTransitionReady();
   const { userId, requireAccount } = useAuthSession();
   const scope = JSON.stringify([id, userId]);
@@ -79,13 +78,7 @@ export default function EventDetail() {
   };
   const shareEvent = () => {
     if (!event) return;
-    void shareEventLink({
-      eventId: event.id,
-      title: event.title,
-      when: eventWhenLabel(event, lang),
-      venue: event.venue,
-      coverKey: eventCoverKey(event),
-    });
+    openShareChooser(eventShareTarget(event.id, event.title, eventCoverKey(event)), t);
   };
   const reportEvent = () => {
     if (!userId) {

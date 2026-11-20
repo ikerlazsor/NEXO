@@ -94,7 +94,7 @@ import {
     isPlanChatAlive,
     runPlanLifecycleMaintenance,
 } from '../../lib/planLifecycle';
-import { sharePlanLink } from '../../lib/sharePlan';
+import { openShareChooser, planShareTarget } from '../../lib/shareChooser';
 import { resolvePlanImageSource } from '../../lib/sports';
 import { getAuthUser } from '../../lib/auth';
 import { useAuthSession } from '../../lib/authSession';
@@ -1467,12 +1467,7 @@ export default function ChatScreen() {
 
     const handleSharePlan = useCallback(() => {
         if (!planId) return;
-        const title = planName.trim() || 'Plan';
-        Alert.alert(t('card.share'), `"${title}"`, [
-            { text: t('card.shareWhats'), onPress: () => void sharePlanLink(planId, title) },
-            { text: t('card.shareOther'), onPress: () => void sharePlanLink(planId, title) },
-            { text: t('common.cancel'), style: 'cancel' },
-        ]);
+        openShareChooser(planShareTarget(planId, planName.trim() || 'Plan'), t);
     }, [planId, planName, t]);
 
     const relationFor = useCallback(

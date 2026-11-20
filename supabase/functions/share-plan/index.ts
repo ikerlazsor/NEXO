@@ -208,38 +208,9 @@ serve(async (req) => {
       ? formatWhen(event.starts_at, lang)
       : formatDay(event?.start_date, lang);
   const location = (plan?.nombre_ubicacion || event?.venue || '').trim();
-  let going = 0;
-  if (event && supabaseUrl && serviceKey) {
-    try {
-      const sb = createClient(supabaseUrl, serviceKey, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
-      const { count } = await sb
-        .from('external_event_participants')
-        .select('user_id', { count: 'exact', head: true })
-        .eq('event_id', planId);
-      going = count ?? 0;
-    } catch {
-      going = 0;
-    }
-  }
-  if (plan && supabaseUrl && serviceKey) {
-    try {
-      const sb = createClient(supabaseUrl, serviceKey, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
-      const { count } = await sb
-        .from('participantes')
-        .select('usuario_id', { count: 'exact', head: true })
-        .eq('plan_id', planId)
-        .eq('estado', 'aceptado');
-      going = count ?? 0;
-    } catch {
-      going = 0;
-    }
-  }
-  // `c` = clave de portada que manda la app al compartir un evento; share-card la valida.
-  const coverKey = new URL(req.url).searchParams.get('c');
+  // Admite la forma corta `FOODIES:tapas:2` (enlaces nuevos, más cortos).
+  const rawCover = new URL(req.url).searchParams.get('c');
+  const coverKey = rawCover && !rawCover.startsWith('nexo_cover:') ? `nexo_cover:${rawCover}` : rawCover;
   const coverQ = coverKey && /^nexo_cover:[A-Z_]+:[a-z_]+:\d+$/.test(coverKey)
     ? `&c=${encodeURIComponent(coverKey)}`
     : '';
@@ -251,7 +222,8 @@ serve(async (req) => {
     `intent://plan/${planId}#Intent;scheme=nexo;package=${ANDROID_PACKAGE};` +
     `S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_URL)};end`;
   const primary = isIOS ? deepLink : intent;
-  const pageUrl = `${supabaseUrl}/functions/v1/share-plan/${planId}`;
+  // La dirección pública del plan: la vista previa enseña appnexo.es.
+  const pageUrl = `https://appnexo.es/plan/${planId}`;
   const shareUi = {
     es: {
       open: 'Abrir en Nexo!',
@@ -303,8 +275,8 @@ serve(async (req) => {
     desc: 'Open this plan in Nexo!',
   };
 
-  const goingLine = going > 0 ? `¡Ya somos ${going}!` : '';
-  const description = [goingLine, when, location].filter(Boolean).join(' · ') || shareUi.desc;
+  // Debajo del título: solo cuándo y dónde (como pide la tarjeta de WhatsApp).
+  const description = [when, location].filter(Boolean).join(' · ') || shareUi.desc;
   const safeTitle = escapeHtml(title);
   const safeDesc = escapeHtml(description);
   const safeImage = escapeHtml(image);

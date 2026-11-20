@@ -60,6 +60,7 @@ import { supabase } from '../lib/supabase';
 import { ensureStartupAppUpdateCheck, markAuthTransitionGrace, setAppUpdateReloadBlocked, startAppUpdateListener } from '../lib/appUpdates';
 import { ShareTouchGuardHost } from '../lib/shareTouchGuard';
 import { TournamentShareHost } from '../components/TournamentShareHost';
+import { ShareStoryHost } from '../components/ShareStoryHost';
 import { AppThemeProvider, useAppTheme } from '../lib/appTheme';
 import { theme } from '../theme';
 
@@ -601,6 +602,7 @@ function RootLayout() {
             </AuthGate>
             <ShareTouchGuardHost />
             <TournamentShareHost />
+            <ShareStoryHost />
           </ThemedNavigation>
           </InAppToastHost>
         </NexoAlertHost>

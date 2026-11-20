@@ -131,7 +131,8 @@ Deno.serve(async (req) => {
     .maybeSingle();
 
   // Si no es un plan, puede ser un evento de la agenda compartido con /plan/<id>?evento=1.
-  const coverKey = new URL(req.url).searchParams.get('c');
+  const rawCover = new URL(req.url).searchParams.get('c');
+  const coverKey = rawCover && !rawCover.startsWith('nexo_cover:') ? `nexo_cover:${rawCover}` : rawCover;
   const cover = plan
     ? resolveImageUrl(plan.imagen_url as string | null, supabaseUrl)
     : await eventCover(sb, planId, coverKey);

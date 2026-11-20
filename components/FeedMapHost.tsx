@@ -24,7 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NexoMapView } from './NexoMapView';
 import { PlanImage } from './PlanImage';
 import { runAfterNavTransition } from '../lib/afterTransition';
-import { peekMapSnapshot, saveMapSnapshot, warmMapSnapshot } from '../lib/mapSnapshot';
+import { peekMapSnapshot, saveMapSnapshot, warmMapSnapshot, type MapSnapshotFrame } from '../lib/mapSnapshot';
 import { ProfileAvatar } from './ProfileAvatar';
 import { createFeedStyles } from '../features/feed/feedStyles';
 import { useThemedStyles } from '../lib/appTheme';
@@ -36,7 +36,7 @@ import { attachFeedPlanPeople, fetchUpcomingFeedPlanRows } from '../lib/feedQuer
 import { fetchGuestFeedPlans } from '../lib/guestFeed';
 import { distanceKm } from '../lib/geo';
 import { useT } from '../lib/i18n';
-import { getUserCoords, peekUserCoords, type UserCoords } from '../lib/location';
+import { getUserCoords, peekRecentUserCoords, type UserCoords } from '../lib/location';
 import { hydrateFeedFromDisk } from '../lib/prefetchHome';
 import { prefetchPlanDetail, seedPlanDetailFromFeed } from '../lib/planDetailCache';
 import { formatProfilePlanWhen } from '../lib/profileSocial';
@@ -66,8 +66,16 @@ const MADRID_REGION = {
 
 /** Más zoom al seleccionar (delta más bajo = más cerca). */
 const SELECT_DELTA = 0.052;
-/** Zoom inicial cuando conocemos la posición del usuario (~4-5 km alrededor). */
-const USER_DELTA = 0.045;
+/** Zoom inicial cuando conocemos la posición del usuario (~6 km alrededor). */
+const USER_DELTA = 0.06;
+/** Al abrir el mapa solo se usa una posición así de reciente; si no, se pide otra. */
+const RECENT_COORDS_MS = 10 * 60 * 1000;
+/** Si la posición nueva está más cerca que esto del encuadre actual, no se mueve el mapa. */
+const RECENTER_MIN_KM = 0.3;
+
+function snapshotFrame(coords: UserCoords | null): MapSnapshotFrame {
+    return coords ? { latitude: coords.latitude, longitude: coords.longitude, delta: USER_DELTA } : null;
+}
 /** Fracción del delta que desplaza el centro al sur → el pin queda más arriba en pantalla. */
 const SELECT_CENTER_LAT_SHIFT = 0.18;
 /** Copias del carrusel para loop infinito (impar → el bloque del medio es el “real”). */
@@ -135,7 +143,9 @@ export function FeedMapHost() {
     const [renderMap, setRenderMap] = useState(false);
     // Captura del mapa (última apertura) mientras el nativo carga teselas; el mapa
     // real entra con fundido al cargar, así el panel nunca aparece vacío.
-    const [snapshotUri, setSnapshotUri] = useState<string | null>(() => peekMapSnapshot());
+    const [snapshotUri, setSnapshotUri] = useState<string | null>(() =>
+        peekMapSnapshot(snapshotFrame(peekRecentUserCoords(RECENT_COORDS_MS))),
+    );
     // El mapa nativo no se crea en el arranque: si se pulsa el mapa nada más abrir la
     // app, crear el MapView + cientos de pines a la vez que el panel se desliza y el
     // feed carga bloqueaba la app (y en Android podía cerrarla). Se monta cuando la
@@ -156,7 +166,9 @@ export function FeedMapHost() {
     const mapFadeStyle = useAnimatedStyle(() => ({ opacity: mapOpacity.value }));
     const snapshotTakenRef = useRef(false);
     useEffect(() => {
-        void warmMapSnapshot().then(() => setSnapshotUri(peekMapSnapshot()));
+        void warmMapSnapshot().then(() =>
+            setSnapshotUri(peekMapSnapshot(snapshotFrame(peekRecentUserCoords(RECENT_COORDS_MS)))),
+        );
     }, []);
     const revealMap = useCallback(() => {
         mapOpacity.value = withTiming(1, { duration: 240 });
@@ -175,7 +187,13 @@ export function FeedMapHost() {
     const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: sheetY.value }] }));
     const mapReadyRef = useRef(false);
     const [viewport, setViewport] = useState(MADRID_REGION);
-    const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
+    const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekRecentUserCoords(RECENT_COORDS_MS));
+    const userCoordsRef = useRef<UserCoords | null>(userCoords);
+    userCoordsRef.current = userCoords;
+    /** Último sitio al que la cámara se centró sola (evita saltos por el GPS). */
+    const autoCenterRef = useRef<UserCoords | null>(null);
+    /** El usuario ya ha arrastrado el mapa en esta apertura. */
+    const mapTouchedRef = useRef(false);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     /** Plan centrado en el carrusel (borde de color aunque no haya selección). */
     const [peekPlanId, setPeekPlanId] = useState<string | null>(null);
@@ -376,11 +394,13 @@ export function FeedMapHost() {
     // Android pinta las vistas de los pines como imagen: seguir sus cambios un momento
     // al cambiar los pines y luego congelar (rendimiento).
     const [trackPinViews, setTrackPinViews] = useState(true);
+    // También al abrir: si se congelan antes de pintarse (mapa aún aparcado) en
+    // Android quedan pines vacíos, invisibles.
     useEffect(() => {
         setTrackPinViews(true);
-        const timer = setTimeout(() => setTrackPinViews(false), 900);
+        const timer = setTimeout(() => setTrackPinViews(false), 1500);
         return () => clearTimeout(timer);
-    }, [shownPins, mapReady]);
+    }, [shownPins, mapReady, visible]);
     const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
     useEffect(() => {
         if (!eventsLoading && !eventsError && moreEvents && external.events.length < 400) {
@@ -417,11 +437,14 @@ export function FeedMapHost() {
         visibleRef.current = true;
         closeHandledRef.current = false;
         mapEpochRef.current = camera.current!.open();
+        autoCenterRef.current = null;
+        mapTouchedRef.current = false;
         // El mapa sigue montado de la vez anterior: la cámara ya puede moverse.
         if (mapReadyRef.current) camera.current!.ready(mapEpochRef.current);
         const gen = ++loadGenRef.current;
         setRenderMap(false);
-        setSnapshotUri(peekMapSnapshot());
+        const peeked = peekRecentUserCoords(RECENT_COORDS_MS);
+        setSnapshotUri(peekMapSnapshot(snapshotFrame(peeked)));
         setTick((n) => n + 1);
         setVisible(true);
         // Primero bajarlo fuera de pantalla (sigue detrás), luego subirlo de capa
@@ -437,9 +460,12 @@ export function FeedMapHost() {
         scrollOffsetRef.current = 0;
         consumePendingOpenFeedMap();
 
-        const peeked = peekUserCoords();
-        if (peeked) setUserCoords(peeked);
-        else setUserCoords(null);
+        setUserCoords(peeked);
+        // Posición de ahora mismo (no la de la última vez): al llegar, el mapa se
+        // centra ahí si el usuario aún no lo ha movido.
+        void getUserCoords({ requestPermission: false, force: true }).then((fresh) => {
+            if (fresh && gen === loadGenRef.current) setUserCoords(fresh);
+        });
 
         const initial = readMapPlans(peeked);
         if (initial.length > 0) {
@@ -529,6 +555,13 @@ export function FeedMapHost() {
     const latitude = userCoords?.latitude, longitude = userCoords?.longitude;
     useEffect(() => {
         if (!visible) return;
+        if (latitude != null && longitude != null) {
+            // Ya movido por el usuario, o el GPS solo ha bailado unos metros: no tocar.
+            if (userEngagedRef.current || mapTouchedRef.current) return;
+            const last = autoCenterRef.current;
+            if (last && distanceKm(last.latitude, last.longitude, latitude, longitude) < RECENTER_MIN_KM) return;
+            autoCenterRef.current = { latitude, longitude };
+        }
         const target = latitude != null && longitude != null
             ? {
                   latitude,
@@ -780,6 +813,7 @@ export function FeedMapHost() {
                     pitchEnabled={false}
                     rotateEnabled={false}
                     initialRegion={MADRID_REGION}
+                    onPanDrag={() => { mapTouchedRef.current = true; }}
                     minZoomLevel={2}
                     maxZoomLevel={19}
                     onRegionChangeComplete={region => {
@@ -799,7 +833,7 @@ export function FeedMapHost() {
                             if (!visibleRef.current || userEngagedRef.current) return;
                             mapRef.current
                                 ?.takeSnapshot({ format: 'jpg', quality: 0.7, result: 'file' })
-                                .then((uri: string) => saveMapSnapshot(uri))
+                                .then((uri: string) => saveMapSnapshot(uri, snapshotFrame(userCoordsRef.current)))
                                 .catch(() => undefined);
                         }, 600);
                     }}

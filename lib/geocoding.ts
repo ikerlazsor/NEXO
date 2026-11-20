@@ -1,4 +1,6 @@
+import * as Crypto from 'expo-crypto';
 import { Platform } from 'react-native';
+import { supabase } from './supabase';
 
 export type GeocodeResult = {
     id: string;
@@ -6,6 +8,8 @@ export type GeocodeResult = {
     longitude: number;
     label: string;
     subtitle: string;
+    /** Resultado de Google Places: las coordenadas se piden al elegirlo (resolvePlace). */
+    placeId?: string;
 };
 
 export type CitySearchResult = {
@@ -172,13 +176,106 @@ async function searchNominatimCities(query: string): Promise<CitySearchResult[]>
     return out;
 }
 
-/** Busca lugares en todo el mundo (Photon + Nominatim). El bias acerca resultados al mapa actual. */
+// Sesión de Google: todas las sugerencias hasta elegir un sitio cuentan como una.
+let placesSession: string | null = null;
+function placesSessionToken(): string {
+    if (!placesSession) placesSession = Crypto.randomUUID();
+    return placesSession;
+}
+
+const GOOGLE_TIMEOUT_MS = 5000;
+
+async function invokePlaces<T>(body: Record<string, unknown>): Promise<T | null> {
+    try {
+        const call = supabase.functions.invoke('places-search', { body });
+        const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), GOOGLE_TIMEOUT_MS));
+        const res = await Promise.race([call, timeout]);
+        if (!res || res.error || !res.data) return null;
+        return res.data as T;
+    } catch {
+        return null;
+    }
+}
+
+const COUNTRY_SUFFIX = /,\s*(España|Spain|Espagne|Spanien|Espanha|Spagna)$/i;
+
+function trimCountry(text: string): string {
+    return text.replace(COUNTRY_SUFFIX, '').trim();
+}
+
+async function searchGoogle(
+    query: string,
+    bias: { lat: number; lon: number } | null,
+    lang: string,
+): Promise<GeocodeResult[] | null> {
+    const data = await invokePlaces<{
+        results?: Array<{ placeId: string; main: string; secondary: string }>;
+    }>({
+        action: 'autocomplete',
+        input: query,
+        lat: bias?.lat,
+        lon: bias?.lon,
+        sessionToken: placesSessionToken(),
+        lang,
+    });
+    if (!data || !Array.isArray(data.results)) return null;
+    return data.results
+        .filter((r) => r.placeId && r.main)
+        .map((r) => ({
+            id: `g-${r.placeId}`,
+            placeId: r.placeId,
+            latitude: Number.NaN,
+            longitude: Number.NaN,
+            label: r.main,
+            subtitle: trimCountry(r.secondary),
+        }));
+}
+
+/**
+ * Coordenadas y dirección del sitio elegido. Para Google cierra la sesión
+ * (las sugerencias previas quedan incluidas). null si no se pudo resolver.
+ */
+export async function resolvePlace(
+    item: GeocodeResult,
+    lang = 'es',
+): Promise<{ latitude: number; longitude: number; address: string } | null> {
+    if (!item.placeId) {
+        return { latitude: item.latitude, longitude: item.longitude, address: item.subtitle || item.label };
+    }
+    const sessionToken = placesSession;
+    placesSession = null;
+    const data = await invokePlaces<{ latitude?: number; longitude?: number; address?: string }>({
+        action: 'details',
+        placeId: item.placeId,
+        sessionToken,
+        lang,
+    });
+    if (!data || typeof data.latitude !== 'number' || typeof data.longitude !== 'number') return null;
+    const street = trimCountry(String(data.address ?? '')) || item.subtitle;
+    // "Nombre del sitio, dirección" salvo que el nombre ya sea la propia dirección.
+    const address =
+        street && !street.toLowerCase().startsWith(item.label.toLowerCase())
+            ? `${item.label}, ${street}`
+            : street || item.label;
+    return { latitude: data.latitude, longitude: data.longitude, address };
+}
+
+/**
+ * Busca lugares: Google Places (bares, restaurantes, locales…) y, si Google no
+ * responde o se agota la cuota del día, Photon/Nominatim como antes.
+ */
 export async function searchPlaces(
     query: string,
     bias?: { lat: number; lon: number } | null,
+    lang = 'es',
 ): Promise<GeocodeResult[]> {
     const trimmed = query.trim();
     if (trimmed.length < 2) return [];
+
+    if (trimmed.length >= 3) {
+        const google = await searchGoogle(trimmed, bias ?? null, lang);
+        if (google && google.length > 0) return google;
+    }
 
     const photon = await searchPhoton(trimmed, bias ?? undefined);
     if (photon.length > 0) return photon.slice(0, 8);

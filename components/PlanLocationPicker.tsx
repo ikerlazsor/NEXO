@@ -14,14 +14,15 @@ import {
 import type MapView from 'react-native-maps';
 import { Marker } from 'react-native-maps';
 import { NexoMapView } from './NexoMapView';
-import { reverseGeocodePlace, searchPlaces, type GeocodeResult } from '../lib/geocoding';
+import { resolvePlace, reverseGeocodePlace, searchPlaces, type GeocodeResult } from '../lib/geocoding';
 import { isNativeMapsAvailable } from '../lib/mapsConfig';
 import { useT } from '../lib/i18n';
 
 const PRIMARY_DARK = '#2563EB';
 const INK = '#0F2A4A';
 const PLACEHOLDER = '#94A3B8';
-const SEARCH_DEBOUNCE_MS = 280;
+// Algo más de pausa: cada búsqueda en Google cuenta para la cuota gratuita.
+const SEARCH_DEBOUNCE_MS = 350;
 
 export type PlanLocation = {
     latitude: number;
@@ -38,7 +39,7 @@ interface Props {
 }
 
 export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props) {
-    const { t } = useT();
+    const { t, lang } = useT();
     const [searchText, setSearchText] = useState('');
     const [searching, setSearching] = useState(false);
     const [results, setResults] = useState<SearchResult[]>([]);
@@ -93,11 +94,15 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         debounceRef.current = setTimeout(async () => {
             const requestId = ++requestIdRef.current;
             try {
+                // Sesgo al punto del mapa (donde estás o el sitio ya elegido).
+                const hasCoords =
+                    Number.isFinite(location.latitude) &&
+                    Number.isFinite(location.longitude) &&
+                    (location.latitude !== 0 || location.longitude !== 0);
                 const items = await searchPlaces(
                     q,
-                    hasAddress
-                        ? { lat: location.latitude, lon: location.longitude }
-                        : null,
+                    hasCoords ? { lat: location.latitude, lon: location.longitude } : null,
+                    lang,
                 );
                 if (requestId !== requestIdRef.current) return;
                 setResults(items);
@@ -112,7 +117,7 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         return () => {
             if (debounceRef.current) clearTimeout(debounceRef.current);
         };
-    }, [searchText, location.latitude, location.longitude, hasAddress]);
+    }, [searchText, location.latitude, location.longitude, lang]);
 
     const onMapPress = async (lat: number, lon: number) => {
         requestIdRef.current += 1;
@@ -133,17 +138,39 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         setResolvingPin(false);
     };
 
-    const pickResult = (item: SearchResult) => {
+    const pickResult = async (item: SearchResult) => {
         if (debounceRef.current) clearTimeout(debounceRef.current);
-        requestIdRef.current += 1;
+        const requestId = ++requestIdRef.current;
         suppressSearchRef.current = true;
         setShowSuggestions(false);
         setResults([]);
         setSearching(false);
-        applyLocation(item.latitude, item.longitude, item.subtitle || item.label);
         setSearchText(item.label);
         Keyboard.dismiss();
         searchInputRef.current?.blur();
+        if (!item.placeId) {
+            applyLocation(item.latitude, item.longitude, item.subtitle || item.label);
+            return;
+        }
+        setResolvingPin(true);
+        const place = await resolvePlace(item, lang);
+        if (requestId !== requestIdRef.current) return;
+        if (place) {
+            setResolvingPin(false);
+            applyLocation(place.latitude, place.longitude, place.address);
+            return;
+        }
+        // Google no respondió: buscar ese mismo sitio por la vía gratuita.
+        const fallback = await searchPlaces(`${item.label} ${item.subtitle}`.trim(), null, lang).catch(
+            () => [] as SearchResult[],
+        );
+        if (requestId !== requestIdRef.current) return;
+        setResolvingPin(false);
+        const hit = fallback.find((r) => !r.placeId && Number.isFinite(r.latitude));
+        if (hit) {
+            const label = item.subtitle ? `${item.label}, ${item.subtitle}` : item.label;
+            applyLocation(hit.latitude, hit.longitude, label);
+        }
     };
 
     const clearSearch = () => {

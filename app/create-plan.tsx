@@ -95,7 +95,7 @@ import { planShareUrl } from '../lib/shareLinks';
 import { withShareTouchGuard } from '../lib/shareTouchGuard';
 import { runWhenIdle } from '../lib/runWhenIdle';
 import { supabase } from '../lib/supabase';
-import { moderatePlanTitle, type TitleModerationReason } from '../lib/titleModeration';
+import { checkPlanContent, isContentBlockedError, type PlanBlockReason } from '../lib/planModeration';
 import { cacheInvalidate } from '../lib/ttlCache';
 import { type ThemeColors } from '../theme';
 
@@ -293,13 +293,12 @@ export default function CreatePlanScreen() {
     }, [isOrganizer]);
 
     const [title, setTitle] = useState('');
-    /** Resultado de moderación del título (mientras rellena el resto del formulario). */
-    const [titleCheck, setTitleCheck] = useState<{
+    /** Texto que el servidor rechazó al publicar (se marca hasta que lo cambie). */
+    const [blockedContent, setBlockedContent] = useState<{
         title: string;
-        status: 'idle' | 'checking' | 'ok' | 'bad';
-        reason: TitleModerationReason | null;
-    }>({ title: '', status: 'idle', reason: null });
-    const titleCheckGen = useRef(0);
+        description: string;
+        reason: PlanBlockReason | null;
+    } | null>(null);
     const [category, setCategory] = useState<MainCategoryId>(DEFAULT_CREATE_CATEGORY);
     const [subcategory, setSubcategory] = useState<string>(SUBCATEGORIES[DEFAULT_CREATE_CATEGORY][0]);
     /** Fútbol: partido clásico (2 equipos) o torneo multi-equipo. */
@@ -553,42 +552,6 @@ export default function CreatePlanScreen() {
         editId,
     ]);
 
-    // Revisar título 3 s después de dejar de escribir (nunca al instante)
-    const TITLE_CHECK_DELAY_MS = 3000;
-    useEffect(() => {
-        if (nearStartLock) return;
-
-        const trimmed = title.trim();
-        if (!trimmed) {
-            setTitleCheck({ title: '', status: 'idle', reason: null });
-            return;
-        }
-
-        const gen = ++titleCheckGen.current;
-        // Al escribir: quitar aviso anterior y esperar el delay completo
-        setTitleCheck({ title: trimmed, status: 'idle', reason: null });
-
-        const timer = setTimeout(() => {
-            if (titleCheckGen.current !== gen) return;
-            setTitleCheck({ title: trimmed, status: 'checking', reason: null });
-            void moderatePlanTitle(trimmed)
-                .then((result) => {
-                    if (titleCheckGen.current !== gen) return;
-                    setTitleCheck({
-                        title: trimmed,
-                        status: result.ok ? 'ok' : 'bad',
-                        reason: result.reason,
-                    });
-                })
-                .catch(() => {
-                    if (titleCheckGen.current !== gen) return;
-                    setTitleCheck({ title: trimmed, status: 'ok', reason: null });
-                });
-        }, TITLE_CHECK_DELAY_MS);
-
-        return () => clearTimeout(timer);
-    }, [title, nearStartLock]);
-
     const selectMainCategory = (main: MainCategoryId) => {
         if (nearStartLock) return;
         const sub = SUBCATEGORIES[main][0];
@@ -740,6 +703,17 @@ export default function CreatePlanScreen() {
         // No Alert.alert: create-plan es modal nativo y un Modal encima congela al volver al feed.
     };
 
+    const blockedMessage = (reason: PlanBlockReason | null) =>
+        t('createplan.contentBlocked', {
+            reason: t(`createplan.blockReason.${reason ?? 'generic'}`),
+        });
+
+    // El aviso se quita en cuanto cambia el título o la descripción rechazados.
+    const contentStillBlocked =
+        !!blockedContent &&
+        blockedContent.title === title.trim() &&
+        blockedContent.description === description.trim();
+
     const dismissCreatePlanChrome = () => {
         Keyboard.dismiss();
         setPickerVisible(false);
@@ -857,18 +831,6 @@ export default function CreatePlanScreen() {
             return;
         }
 
-        // Solo bloquea si la revisión ya terminó y marcó el título actual como malo.
-        // Si aún está "checking", se deja pasar (fail-open).
-        const trimmedTitle = title.trim();
-        if (
-            !nearStartLock &&
-            titleCheck.status === 'bad' &&
-            titleCheck.title === trimmedTitle
-        ) {
-            showFormError(t('createplan.titleBadMsg'));
-            return;
-        }
-
         publishingRef.current = true;
         setLoading(true);
         setFormBanner(null);
@@ -933,6 +895,24 @@ export default function CreatePlanScreen() {
                     return;
                 }
                 imageKey = uploadedCovers[0];
+            }
+
+            // Moderación en servidor (título, descripción y portadas subidas).
+            // Si el servicio no responde se publica y la base de datos lo revisa después.
+            const moderation = await checkPlanContent({
+                title: title.trim(),
+                description: description.trim(),
+                images: coverMode === 'custom' ? uploadedCovers : [],
+            });
+            if (!mountedRef.current) return;
+            if (moderation.verdict === 'block') {
+                setBlockedContent({
+                    title: title.trim(),
+                    description: description.trim(),
+                    reason: moderation.reason,
+                });
+                showFormError(blockedMessage(moderation.reason));
+                return;
             }
 
             const visibilityForSave = isOrganizer ? 'public' : visibility;
@@ -1239,6 +1219,11 @@ export default function CreatePlanScreen() {
         } catch (error: unknown) {
             if (__DEV__) console.error(error);
             if (!mountedRef.current || leavingRef.current) return;
+            if (isContentBlockedError(error)) {
+                setBlockedContent({ title: title.trim(), description: description.trim(), reason: null });
+                showFormError(blockedMessage(null));
+                return;
+            }
             showFormError(t('createplan.saveError'));
         } finally {
             releaseUpdateHold();
@@ -1638,9 +1623,7 @@ export default function CreatePlanScreen() {
                                 styles.titleInput,
                                 !title.trim() && styles.titleInputEmpty,
                                 title.length >= PLAN_TITLE_MAX && styles.inputError,
-                                titleCheck.status === 'bad' &&
-                                    titleCheck.title === title.trim() &&
-                                    styles.inputError,
+                                contentStillBlocked && styles.inputError,
                             ]} 
                             value={title}
                             onChangeText={(text) => setTitle(text.slice(0, PLAN_TITLE_MAX))}
@@ -1663,10 +1646,8 @@ export default function CreatePlanScreen() {
                             }}
                         />
                         )}
-                        {!nearStartLock &&
-                        titleCheck.status === 'bad' &&
-                        titleCheck.title === title.trim() ? (
-                            <Text style={styles.titleBadHint}>{t('createplan.titleBadHint')}</Text>
+                        {contentStillBlocked ? (
+                            <Text style={styles.titleBadHint}>{t('createplan.contentBadHint')}</Text>
                         ) : null}
                         </View>
 

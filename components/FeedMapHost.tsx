@@ -56,7 +56,7 @@ import { theme } from '../theme';
 import { cacheGetStale } from '../lib/ttlCache';
 import { lockTabPager, unlockTabPager } from '../lib/tabPagerScroll';
 
-import { useEvents } from '../features/events/useEvents';
+import { peekMapEvents, preloadMapEvents, subscribeMapEvents } from '../features/events/mapEvents';
 import { eventClassification, eventCoverSource } from '../features/events/covers';
 import type { ExternalEvent } from '../features/events/types';
 import { discoveryPins, validMapCoordinates } from '../lib/mapDiscovery';
@@ -97,6 +97,10 @@ const MAP_FOCUS_MS = 280;
 const EASE_SHEET = Easing.bezier(0.32, 0.72, 0, 1);
 const SHEET_OPEN_MS = 380;
 const SHEET_CLOSE_MS = 340;
+/** iOS: el mapa se aleja (se encoge y se funde) en vez de bajar la pantalla entera. */
+const SHEET_ZOOM_CLOSE_MS = 280;
+const SHEET_ZOOM_CLOSE_SCALE = 0.9;
+const SHEET_ZOOM_CLOSE_DROP = 36;
 /** Botón y carrusel se van antes que la hoja: el cierre se lee como un solo gesto. */
 const CHROME_FADE_MS = 120;
 const SHEET_RADIUS = 24;
@@ -208,11 +212,12 @@ export function FeedMapHost() {
     /** Con “reducir movimiento”: la hoja se funde en vez de deslizarse. */
     const sheetFade = useSharedValue(1);
     const chromeOpacity = useSharedValue(1);
+    const sheetScale = useSharedValue(1);
     const sheetStyle = useAnimatedStyle(() => {
         // Esquinas redondeadas en cuanto se separa del borde: se lee como una hoja.
         const radius = interpolate(sheetY.value, [0, 60], [0, SHEET_RADIUS], Extrapolation.CLAMP);
         return {
-            transform: [{ translateY: sheetY.value }],
+            transform: [{ translateY: sheetY.value }, { scale: sheetScale.value }],
             opacity: sheetFade.value,
             borderTopLeftRadius: radius,
             borderTopRightRadius: radius,
@@ -240,7 +245,16 @@ export function FeedMapHost() {
     const [loadingPlans, setLoadingPlans] = useState(false);
     // Eventos cargados desde que el panel se monta (no al abrir): los pines ya
     // están cuando el usuario pulsa el mapa.
-    const external = useEvents({}, userId, true);
+    // Todos los eventos se cargan en segundo plano desde el arranque (con
+    // reintentos): al abrir el mapa los pines ya están.
+    const [external, setExternal] = useState(() => peekMapEvents());
+    useEffect(() => {
+        const unsub = subscribeMapEvents(() => setExternal(peekMapEvents()));
+        void preloadMapEvents(true);
+        return unsub;
+    }, [userId]);
+    /** Cuándo se trajeron los planes de Nexo completos (no solo los del feed). */
+    const plansFetchedAtRef = useRef(0);
     const mapRef = useRef<any>(null);
     const carouselRef = useRef<FlatList>(null);
     const pendingPlanIdRef = useRef<string | null>(null);
@@ -283,9 +297,10 @@ export function FeedMapHost() {
         setRaised(false);
         // Aparcado otra vez detrás del feed: opaco y con su botón para la próxima vez.
         sheetFade.value = 1;
+        sheetScale.value = 1;
         chromeOpacity.value = 1;
         finishDismiss();
-    }, [finishDismiss, sheetFade, chromeOpacity]);
+    }, [finishDismiss, sheetFade, sheetScale, chromeOpacity]);
     const animateSheetClose = useCallback(() => {
         if (!visibleRef.current || closingRef.current) return;
         closingRef.current = true;
@@ -296,12 +311,24 @@ export function FeedMapHost() {
         chromeOpacity.value = withTiming(0, { duration: CHROME_FADE_MS, easing: EASE_OUT });
         // Al terminar de bajar el panel (y no antes) se abre el detalle, para que
         // dos transiciones nunca se solapen.
+        const afterFade = (finished?: boolean) => {
+            'worklet';
+            if (!finished) return;
+            sheetY.value = SHEET_HIDDEN_Y;
+            scheduleOnRN(onSheetClosed);
+        };
         if (reduceMotion) {
-            sheetFade.value = withTiming(0, { duration: 200, easing: EASE_OUT }, (finished) => {
-                if (!finished) return;
-                sheetY.value = SHEET_HIDDEN_Y;
-                scheduleOnRN(onSheetClosed);
-            });
+            sheetFade.value = withTiming(0, { duration: 200, easing: EASE_OUT }, afterFade);
+            return;
+        }
+        // iOS: se aleja hacia el feed — encoge, baja un poco y se funde, con el
+        // velo aclarándose a la vez. En Android el mapa de Google es una capa
+        // nativa que no siempre se funde bien: allí baja con la curva de hoja.
+        if (Platform.OS === 'ios') {
+            const zoomOut = { duration: SHEET_ZOOM_CLOSE_MS, easing: EASE_OUT };
+            sheetScale.value = withTiming(SHEET_ZOOM_CLOSE_SCALE, zoomOut);
+            sheetY.value = withTiming(SHEET_ZOOM_CLOSE_DROP, zoomOut);
+            sheetFade.value = withTiming(0, zoomOut, afterFade);
             return;
         }
         sheetY.value = withTiming(
@@ -309,7 +336,7 @@ export function FeedMapHost() {
             { duration: SHEET_CLOSE_MS, easing: EASE_SHEET },
             (finished) => { if (finished) scheduleOnRN(onSheetClosed); },
         );
-    }, [sheetY, sheetFade, chromeOpacity, reduceMotion, onSheetClosed]);
+    }, [sheetY, sheetFade, sheetScale, chromeOpacity, reduceMotion, onSheetClosed]);
     const onSheetOpened = useCallback(() => {
         if (visibleRef.current && !closingRef.current) {
             setMapMounted(true);
@@ -341,14 +368,14 @@ export function FeedMapHost() {
                     if (gen !== loadGenRef.current) return;
                     if (coords) setUserCoords(coords);
 
-                    const cached = readMapPlans(coords);
-                    if (cached.length > 0) return;
-
-                    await hydrateFeedFromDisk(userId);
-                    if (gen !== loadGenRef.current) return;
-                    setTick((n) => n + 1);
-                    const fromDisk = readMapPlans(coords);
-                    if (fromDisk.length > 0) return;
+                    // El feed solo tiene los planes ya cargados en pantalla: se piden
+                    // todos los próximos para que ningún plan se quede sin pin.
+                    if (Date.now() - plansFetchedAtRef.current < 60_000) return;
+                    if (readMapPlans(coords).length === 0) {
+                        await hydrateFeedFromDisk(userId);
+                        if (gen !== loadGenRef.current) return;
+                        setTick((n) => n + 1);
+                    }
 
                     const nowIso = new Date().toISOString();
                     const fallbackCoords = coords ?? {
@@ -375,6 +402,7 @@ export function FeedMapHost() {
                         }
                     }
                     if (gen !== loadGenRef.current) return;
+                    plansFetchedAtRef.current = Date.now();
                     const sorted = sortMapPlans(enriched.filter((row) => hasMapCoords(row)) as MapPlan[], coords);
                     if (sorted.length > 0) setRemotePlans(sorted);
                 } catch (e) {
@@ -393,7 +421,11 @@ export function FeedMapHost() {
     const cachedPlans = useMemo(() => readMapPlans(userCoords), [userCoords, tick, visible]);
     // Keep both kinds represented even when the cached Nexo list fills the cap.
     const allPlans = useMemo(() => {
-        const local = sortMapPlans(remotePlans ?? cachedPlans, userCoords);
+        // Los del feed (más al día) y, además, los que el feed aún no había cargado.
+        const merged = [...cachedPlans];
+        const seenIds = new Set(cachedPlans.map((p) => String(p.id)));
+        for (const p of remotePlans ?? []) if (!seenIds.has(String(p.id))) merged.push(p);
+        const local = sortMapPlans(merged, userCoords);
         const events: MapPlan[] = external.events.map(event => ({
             id: `event:${event.id}`,
             externalEvent: event,
@@ -429,18 +461,28 @@ export function FeedMapHost() {
         pinsRef.current = { sig, pins: next };
         return next;
     }, [plans]);
-    // Los eventos llegan por páginas: agrupar los cambios para no rehacer cientos de
-    // pines (bitmaps en Android) en cada página.
+    // Los eventos llegan por páginas: agrupar los cambios (como mucho uno cada
+    // 700 ms) para no rehacer cientos de pines en cada página. Antes cada página
+    // reiniciaba la espera y los pines no se actualizaban hasta acabar de cargar.
     const [shownPins, setShownPins] = useState(pins);
+    const latestPinsRef = useRef(pins);
+    latestPinsRef.current = pins;
+    const pinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => {
         if (shownPins.length === 0 && pins.length > 0) {
             setShownPins(pins);
             return;
         }
-        const timer = setTimeout(() => setShownPins(pins), 700);
-        return () => clearTimeout(timer);
+        if (pinTimerRef.current) return;
+        pinTimerRef.current = setTimeout(() => {
+            pinTimerRef.current = null;
+            setShownPins(latestPinsRef.current);
+        }, 700);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pins]);
+    useEffect(() => () => {
+        if (pinTimerRef.current) clearTimeout(pinTimerRef.current);
+    }, []);
     // Android pinta las vistas de los pines como imagen: seguir sus cambios un momento
     // al cambiar los pines y luego congelar (rendimiento).
     const [trackPinViews, setTrackPinViews] = useState(true);
@@ -451,15 +493,13 @@ export function FeedMapHost() {
         const timer = setTimeout(() => setTrackPinViews(false), 1500);
         return () => clearTimeout(timer);
     }, [shownPins, mapReady, visible]);
-    // iOS (Apple Maps): pines añadidos con el mapa aparcado detrás del feed a veces
-    // no se dibujaban hasta mover el mapa. Allí se añaden ya con el mapa a la vista.
-    const pinsLive = mapReady && (Platform.OS !== 'ios' || renderMap);
-    const { loading: eventsLoading, error: eventsError, hasMore: moreEvents, loadMore: loadMoreEvents } = external;
+    // Pines preparados desde que el mapa está listo (aparcado), también en iOS.
+    const pinsLive = mapReady;
+    // Planes de Nexo completos en segundo plano en cuanto el mapa existe.
     useEffect(() => {
-        if (!eventsLoading && !eventsError && moreEvents && external.events.length < 400) {
-            void loadMoreEvents();
-        }
-    }, [eventsLoading, eventsError, moreEvents, external.events.length, loadMoreEvents]);
+        if (!mapMounted) return;
+        refreshPlansInBackground(loadGenRef.current, peekRecentUserCoords(RECENT_COORDS_MS));
+    }, [mapMounted, refreshPlansInBackground]);
     useEffect(() => {
         if (!visible) return;
         const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -512,6 +552,7 @@ export function FeedMapHost() {
         setPeekPlanId(null);
         scrollOffsetRef.current = 0;
         consumePendingOpenFeedMap();
+        void preloadMapEvents();
 
         setUserCoords(peeked);
         // Posición de ahora mismo (no la de la última vez): al llegar, el mapa se

@@ -126,20 +126,24 @@ export const EventCard = memo(function EventCard({
   const nexoLabel = nexoCount > 0 ? nexoGroupLabel(t, nexoCount, joined) : null;
   const madridDay = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Europe/Madrid" });
   const isToday = !!event.starts_at && madridDay(new Date(event.starts_at)) === madridDay(new Date());
+  // Contorno en degradado del color de la categoría (naranja si es hoy).
+  const edge = isToday ? "#D97706" : accent;
   return (
     <View
       style={[
         s.card,
-        { marginHorizontal: horizontalInset },
-        {
-          backgroundColor: colors.surface,
-          // Borde fino del color de la categoría (naranja si es hoy), como las tarjetas de planes.
-          borderColor: isToday ? "#D97706" : `${accent}${dark ? "AA" : "8C"}`,
-          shadowColor: dark ? "#000" : "#0F172A",
-        },
+        { marginHorizontal: horizontalInset, shadowColor: dark ? "#000" : edge },
         compact && s.compact,
       ]}
     >
+      <LinearGradient
+        pointerEvents="none"
+        colors={[edge, `${edge}${dark ? "66" : "4D"}`, `${edge}E6`]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[s.cardEdge, compact && s.compact]}
+      />
+      <View style={[s.cardInner, { backgroundColor: colors.surface }, compact && s.compactInner]}>
       <Pressable
         onPress={onOpen}
         accessibilityRole="button"
@@ -350,6 +354,7 @@ export const EventCard = memo(function EventCard({
           </Text>
         </PressScale>
       </View>
+      </View>
     </View>
   );
 });
@@ -428,16 +433,19 @@ function safeStyles() {
   });
 }
 const s = StyleSheet.create({
+  // Capa exterior: sombra (sin overflow hidden, que en iOS la recortaba) y contorno.
   card: {
     marginBottom: 20,
     borderRadius: 22,
-    overflow: "hidden",
-    borderWidth: 1.5,
-    elevation: 3,
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
+    padding: 2.25,
+    elevation: 8,
+    shadowOpacity: 0.2,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
   },
+  cardEdge: { ...StyleSheet.absoluteFillObject, borderRadius: 22 },
+  cardInner: { borderRadius: 19.75, overflow: "hidden" },
+  compactInner: { borderRadius: 21.75 },
   pressed: { opacity: 0.94 },
   todayBadge: { position: "absolute", top: 14, alignSelf: "center", backgroundColor: "#D97706", paddingHorizontal: 13, paddingVertical: 5, borderRadius: 18, zIndex: 5, elevation: 4 },
   todayBadgeText: { color: "#FFF", fontSize: 11, fontWeight: "900", letterSpacing: 1.1 },

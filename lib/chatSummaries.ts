@@ -84,19 +84,36 @@ async function readStoredCursors(userId: string): Promise<ChatReadIndex> {
     return migrateReadIndex(userId);
 }
 
-export async function rememberChatReadCursor(
+// Escrituras del índice en cola por usuario: dos chats marcados a la vez no
+// se pisan (leer-modificar-escribir) y la consulta espera a que acaben.
+const cursorWrites = new Map<string, Promise<void>>();
+
+export function rememberChatReadCursor(
     userId: string,
     kind: 'plan' | 'direct',
     id: string,
     at: string,
 ): Promise<void> {
-    const index = await readStoredCursors(userId);
-    if (kind === 'plan') index.plans[id] = at;
-    else index.directs[id] = at;
-    await AsyncStorage.setItem(readIndexKey(userId), JSON.stringify(index));
+    const prev = cursorWrites.get(userId) ?? Promise.resolve();
+    const next = prev
+        .catch(() => undefined)
+        .then(async () => {
+            const index = await readStoredCursors(userId);
+            const map = kind === 'plan' ? index.plans : index.directs;
+            // Nunca retroceder un cursor.
+            if (map[id] && map[id] >= at) return;
+            map[id] = at;
+            await AsyncStorage.setItem(readIndexKey(userId), JSON.stringify(index));
+        });
+    cursorWrites.set(userId, next);
+    void next.finally(() => {
+        if (cursorWrites.get(userId) === next) cursorWrites.delete(userId);
+    });
+    return next;
 }
 
 async function fetchChatSummaries(userId: string): Promise<ChatSummary[]> {
+    await cursorWrites.get(userId)?.catch(() => undefined);
     const cursors = await readStoredCursors(userId);
     const { data, error } = await supabase.rpc('get_chat_summaries', {
         p_plan_read_at: cursors.plans,

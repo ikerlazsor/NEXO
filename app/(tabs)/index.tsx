@@ -171,7 +171,7 @@ import { theme } from '../../theme';
 import { EventCard } from '../../features/events/EventCards';
 import { eventCoverKey } from '../../features/events/covers';
 import { toggleEventSaved, useSavedEventIds } from '../../features/events/savedEvents';
-import { eventShareTarget, openShareChooser } from '../../lib/shareChooser';
+import { eventShareTarget, shareTarget } from '../../lib/shareChooser';
 import { useEvents } from '../../features/events/useEvents';
 import { rankUnifiedFeed, retainFeedOrder } from '../../features/events/ranking';
 import { rememberEvent } from '../../features/events/cache';
@@ -495,9 +495,9 @@ export default function HomeScreen() {
     );
     const shareExternal = useCallback(
         (event: ExternalEvent) => {
-            openShareChooser(eventShareTarget(event.id, event.title, eventCoverKey(event)), t);
+            void shareTarget(eventShareTarget(event.id, event.title, eventCoverKey(event)));
         },
-        [t],
+        [],
     );
 
     const endReachedLockRef = useRef(false);

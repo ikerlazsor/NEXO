@@ -31,6 +31,10 @@ function notifyChatUnreadChanged() {
     listeners.forEach((listener) => listener());
 }
 
+// Sube cada vez que se marca un chat como leído: una consulta que empezó antes
+// trae cursores viejos y se repite en vez de devolver el contador antiguo.
+const markEpoch = new Map<string, number>();
+
 function invalidateUnread(userId: string) {
     invalidateChatSummaries(userId);
     cacheInvalidate(unreadMapKey(userId));
@@ -57,7 +61,8 @@ export async function markPlanChatRead(userId: string, planId: string): Promise<
     }
     const at = new Date().toISOString();
     await AsyncStorage.setItem(planKey(userId, planId), at);
-    void rememberChatReadCursor(userId, 'plan', planId, at);
+    markEpoch.set(userId, (markEpoch.get(userId) ?? 0) + 1);
+    await rememberChatReadCursor(userId, 'plan', planId, at);
     invalidateUnread(userId);
     notifyChatUnreadChanged();
 }
@@ -83,7 +88,8 @@ export async function markDirectChatRead(userId: string, peerId: string): Promis
     }
     const at = new Date().toISOString();
     await AsyncStorage.setItem(directKey(userId, peerId), at);
-    void rememberChatReadCursor(userId, 'direct', peerId, at);
+    markEpoch.set(userId, (markEpoch.get(userId) ?? 0) + 1);
+    await rememberChatReadCursor(userId, 'direct', peerId, at);
     invalidateUnread(userId);
     notifyChatUnreadChanged();
 }
@@ -99,8 +105,8 @@ export type ChatUnreadMap = {
  * El teléfono recibe una fila por conversación, nunca lotes globales de mensajes.
  */
 async function fetchChatUnreadMap(userId: string): Promise<ChatUnreadMap> {
-    try {
-        const summaries = await getChatSummaries(userId);
+    const summaries = await getChatSummaries(userId);
+    {
         const plans: Record<string, number> = {};
         const directs: Record<string, number> = {};
         let total = 0;
@@ -128,8 +134,6 @@ async function fetchChatUnreadMap(userId: string): Promise<ChatUnreadMap> {
         }
 
         return { plans, directs, total };
-    } catch {
-        return { plans: {}, directs: {}, total: 0 };
     }
 }
 
@@ -144,9 +148,23 @@ export async function getChatUnreadMap(
     if (opts?.force) invalidateChatSummaries(userId);
     // getChatSummaries ya deduplica y cachea la consulta costosa. Derivar el mapa
     // en memoria evita mantener una segunda caché que pueda quedar desfasada.
-    const map = await fetchChatUnreadMap(userId);
-    cacheSet(unreadMapKey(userId), map, UNREAD_TTL_MS);
-    return map;
+    for (let attempt = 0; ; attempt++) {
+        const epoch = markEpoch.get(userId) ?? 0;
+        let map: ChatUnreadMap;
+        try {
+            map = await fetchChatUnreadMap(userId);
+        } catch {
+            // Sin red: mantener lo último conocido en vez de poner el contador a 0.
+            return peekChatUnreadMap(userId) ?? { plans: {}, directs: {}, total: 0 };
+        }
+        if ((markEpoch.get(userId) ?? 0) !== epoch && attempt < 2) {
+            // Se leyó un chat mientras tanto: el resultado puede incluirlo aún.
+            invalidateChatSummaries(userId);
+            continue;
+        }
+        cacheSet(unreadMapKey(userId), map, UNREAD_TTL_MS);
+        return map;
+    }
 }
 
 export async function getUnreadChatCount(userId: string, opts?: { force?: boolean }): Promise<number> {

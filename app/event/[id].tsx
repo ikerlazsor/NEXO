@@ -38,7 +38,7 @@ import { EventDetailContent } from "../../features/events/EventDetailContent";
 import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
 import { PressScale } from "../../components/PressScale";
 import { JOINED_PLAN_COLORS, planCardActionStyles } from "../../components/planCardActions";
-import { eventShareTarget, openShareChooser } from "../../lib/shareChooser";
+import { eventShareTarget, shareTarget } from "../../lib/shareChooser";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export default function EventDetail() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -78,7 +78,7 @@ export default function EventDetail() {
   };
   const shareEvent = () => {
     if (!event) return;
-    openShareChooser(eventShareTarget(event.id, event.title, eventCoverKey(event)), t);
+    void shareTarget(eventShareTarget(event.id, event.title, eventCoverKey(event)));
   };
   const reportEvent = () => {
     if (!userId) {

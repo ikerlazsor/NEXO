@@ -3,8 +3,8 @@ import { localeTag } from './locale';
 import { parseOrganizerGallery, type OrganizerMedia } from './organizer';
 
 export const MAX_PROFILE_GALLERY = 20;
-export const PLAN_DESCRIPTION_MAX = 400;
-export const PLAN_TITLE_MAX = 30;
+export const PLAN_DESCRIPTION_MAX = 3000;
+export const PLAN_TITLE_MAX = 60;
 
 export function parseProfileGallery(raw: unknown): OrganizerMedia[] {
     return parseOrganizerGallery(raw).slice(0, MAX_PROFILE_GALLERY);

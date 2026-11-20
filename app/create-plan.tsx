@@ -619,8 +619,12 @@ export default function CreatePlanScreen() {
 
     const applyPeopleDelta = (dir: 1 | -1, step = 1) => {
         setMaxPeople((n) => {
-            if (dir === 1) return Math.min(peopleCap, n + step);
-            return Math.max(minEditableMax, n - step);
+            // Con pasos grandes se cae en números redondos (10, 15, 20…), no en 13, 18…
+            const raw = n + dir * step;
+            const next = step > 1 ? (dir === 1 ? Math.floor(raw / step) * step : Math.ceil(raw / step) * step) : raw;
+            const target = next === n ? raw : next;
+            if (dir === 1) return Math.min(peopleCap, target);
+            return Math.max(minEditableMax, target);
         });
     };
 
@@ -643,14 +647,17 @@ export default function CreatePlanScreen() {
         holdingPeopleRef.current = true;
         hapticSelection();
         applyPeopleDelta(dir);
+        // Mantener pulsado acelera: de 1 en 1, luego de 2, de 5 y de 10.
         holdDelayRef.current = setTimeout(() => {
             if (!holdingPeopleRef.current) return;
             let ticks = 0;
             holdTimerRef.current = setInterval(() => {
                 ticks += 1;
-                applyPeopleDelta(dir, ticks > 10 ? 2 : 1);
-            }, 170);
-        }, 480);
+                const step = ticks > 28 ? 10 : ticks > 16 ? 5 : ticks > 6 ? 2 : 1;
+                applyPeopleDelta(dir, step);
+                if (ticks === 7 || ticks === 17 || ticks === 29) hapticSelection();
+            }, 90);
+        }, 320);
     };
 
     const spotsHint = t('createplan.spotsHintMax', { max: maxPeople });

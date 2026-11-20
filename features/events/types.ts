@@ -24,6 +24,8 @@ export type ExternalEvent = {
   price_text: string | null;
   /** Asistentes conocidos del evento original (no son usuarios de Nexo). */
   attendance_hint?: number | null;
+  /** Portada propia (https, Supabase Storage). Sin ella se usa la galería de la app. */
+  cover_url?: string | null;
   status: "active" | "cancelled" | "expired" | "stale";
   last_seen_at: string;
 };

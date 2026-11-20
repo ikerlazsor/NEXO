@@ -91,6 +91,7 @@ import {
     type FeedSnapshot,
 } from '../../lib/feedCache';
 import { emptyGuestFeedSnapshot, fetchSignedInFeedSnapshot } from '../../lib/feedLoad';
+import { feedScoreKey, fetchFeedScores, type FeedScores } from '../../lib/feedScores';
 import { attachFeedPlanPeople, fetchMoreFeedPlanRows, fetchSearchFeedPlans, type FeedMoreCursor } from '../../lib/feedQuery';
 import {
     applyStickyInviteClears,
@@ -375,6 +376,8 @@ export default function HomeScreen() {
     const [feedTaste, setFeedTaste] = useState<FeedTaste>(
         () => cachedFeed?.feedTaste ?? emptyFeedTaste(),
     );
+    /** Orden del servidor (get_feed_scores); null = ranking local. */
+    const [feedScores, setFeedScores] = useState<FeedScores | null>(() => cachedFeed?.feedScores ?? null);
     const [loadingMore, setLoadingMore] = useState(false);
     const [hasMoreFeed, setHasMoreFeed] = useState(true);
     const feedCursorRef = useRef<FeedMoreCursor | null>(null);
@@ -622,8 +625,10 @@ export default function HomeScreen() {
             let formattedPlans: any[];
             const coords = peekUserCoords() || userCoords;
 
+            let guestScores: FeedScores | null = null;
             if (!userId) {
                 formattedPlans = await withRetry(() => fetchGuestFeedPlans(coords));
+                guestScores = await fetchFeedScores(coords, formattedPlans.map((p) => String(p.id)), 1500);
             } else {
                 const snap = await withRetry(() => fetchSignedInFeedSnapshot(userId, coords));
                 formattedPlans = snap.plans;
@@ -637,6 +642,7 @@ export default function HomeScreen() {
                 setMembershipMap(mergeStickyMembershipMap(snap.membershipMap));
                 setSavedPlans(snap.savedPlans);
                 setFeedTaste(snap.feedTaste);
+                setFeedScores(snap.feedScores ?? null);
                 const visiblePlans = mergeStickyCreatedPlan(applyStickyPlanDeletes(formattedPlans));
                 setPlans(visiblePlans);
                 feedCursorRef.current = null;
@@ -658,7 +664,8 @@ export default function HomeScreen() {
             setHasMoreFeed(false); // invitado: un solo lote vía RPC
             setLoading(false);
 
-            const guestSnap: FeedSnapshot = emptyGuestFeedSnapshot(applyStickyPlanDeletes(formattedPlans));
+            const guestSnap: FeedSnapshot = emptyGuestFeedSnapshot(applyStickyPlanDeletes(formattedPlans), guestScores);
+            setFeedScores(guestScores);
             setIsOrganizerAccount(false);
             rememberViewerIsOrganizer(false);
             setMembershipMap({});
@@ -743,7 +750,22 @@ export default function HomeScreen() {
             await new Promise<void>((resolve) => {
                 requestAnimationFrame(() => resolve());
             });
-            const withPeople = await attachFeedPlanPeople(extraRaw);
+            const [withPeople, extraScores] = await Promise.all([
+                attachFeedPlanPeople(extraRaw),
+                fetchFeedScores(peekUserCoords() || userCoords, extraRaw.map((row) => String(row.id))),
+            ]);
+            // Solo los planes nuevos: lo ya pintado no cambia de sitio.
+            if (extraScores) {
+                setFeedScores((prev) => {
+                    if (!prev) return prev;
+                    const next = { ...prev };
+                    for (const row of extraRaw) {
+                        const key = feedScoreKey('plan', String(row.id));
+                        if (extraScores[key]) next[key] = extraScores[key];
+                    }
+                    return next;
+                });
+            }
             if (withPeople.length === 0) {
                 setHasMoreFeed(hasMore);
                 return;
@@ -770,6 +792,7 @@ export default function HomeScreen() {
         search,
         selectedCategories.length,
         selectedSubcategories.length,
+        userCoords,
     ]);
 
     const requestFeedLoad = useCallback((opts?: { refresh?: boolean; skipScrollJump?: boolean; quiet?: boolean; animate?: boolean }) => {
@@ -1501,6 +1524,8 @@ export default function HomeScreen() {
             coords: userCoords,
             currentUserId,
             eventHistory: external.history,
+            eventSocial: external.social,
+            serverScores: feedScores,
             joinedEvents: external.joined,
         });
         // Keep the reading order across background taste/membership updates.
@@ -1513,7 +1538,7 @@ export default function HomeScreen() {
         const ordered = retainFeedOrder(unifiedOrderRef.current.key === key ? unifiedOrderRef.current.ids : [], ranked);
         unifiedOrderRef.current = { key, ids: ordered.map(row => row.id) };
         return ordered;
-    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel, external.events, external.history, external.joined, external.loading, refreshing, feedTaste, friendIds, coincidedIds, userCoords, currentUserId, loading, plans.length, selectedCategories, selectedSubcategories, search, dateFilter, nearbyKm, sessionUserId]);
+    }, [feedRows, membershipMap, savedPlanIds, joiningPlanId, planDistanceLabel, external.events, external.history, external.joined, external.social, feedScores, external.loading, refreshing, feedTaste, friendIds, coincidedIds, userCoords, currentUserId, loading, plans.length, selectedCategories, selectedSubcategories, search, dateFilter, nearbyKm, sessionUserId]);
 
     const feedRowsRef = useRef(feedRowsUi);
     feedRowsRef.current = feedRowsUi;

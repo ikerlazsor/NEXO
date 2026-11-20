@@ -5,6 +5,7 @@ import {
     MAIN_CATEGORY_IDS,
     PLACEHOLDER_COVER_URI,
     SUBCATEGORIES,
+    getCoverChoices,
     getCoverImages,
     type MainCategoryId,
 } from './categories';
@@ -49,7 +50,7 @@ export function scheduleCoverPrefetch(): void {
 
 /** Precarga inmediata las portadas de una categoría/subcategoría (crear plan). */
 export function warmCoverImages(main: MainCategoryId, sub: string): void {
-    const images = getCoverImages(main, sub);
+    const images = getCoverChoices(main, sub);
     const modules: number[] = [];
     const remote: string[] = [];
     for (const src of images) {

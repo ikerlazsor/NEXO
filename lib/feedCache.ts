@@ -7,6 +7,8 @@ import { screenCacheKey, ScreenCacheTTL } from './screenCaches';
 export const FEED_CACHE_KEY = screenCacheKey.feedSnapshot;
 export const FEED_CACHE_TTL_MS = ScreenCacheTTL.feedSnapshot;
 
+import type { FeedScores } from './feedScores';
+
 export type FeedSnapshot = {
     plans: any[];
     membershipMap: Record<string, Membership>;
@@ -19,6 +21,8 @@ export type FeedSnapshot = {
     feedTaste: FeedTaste;
     notifBreakdown: { friendRequests: number; planRequests: number; planInvites: number };
     isOrganizer?: boolean;
+    /** Orden calculado en el servidor (get_feed_scores); ausente = ranking local. */
+    feedScores?: FeedScores | null;
 };
 
 export const FEED_PLAN_COLUMNS =

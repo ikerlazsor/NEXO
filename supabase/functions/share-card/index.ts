@@ -86,7 +86,8 @@ const FALLBACK_COVER = COVER_URLS['nexo_cover:VIBES:otro:0'];
  * Portada de un evento de la agenda (tabla external_events, sin columna de imagen).
  * 1) `c` = clave nexo_cover que manda la app (la misma foto que se ve en la tarjeta);
  *    solo se acepta si existe en COVER_URLS, así nunca se descarga una URL arbitraria.
- * 2) Si no viene (versiones antiguas), la primera foto de su categoría/subcategoría.
+ * 2) Si el evento tiene portada propia (cover_url) en el Storage de Nexo, esa.
+ * 3) Si no, la primera foto de su categoría/subcategoría.
  */
 async function eventCover(
   sb: ReturnType<typeof createClient>,
@@ -96,10 +97,13 @@ async function eventCover(
   if (coverKey && COVER_URLS[coverKey]) return COVER_URLS[coverKey];
   const { data: event } = await sb
     .from('external_events')
-    .select('category, subcategory')
+    .select('category, subcategory, cover_url')
     .eq('id', eventId)
     .maybeSingle();
   if (!event) return null;
+  const own = String(event.cover_url || '');
+  const storage = `${Deno.env.get('SUPABASE_URL') ?? ''}/storage/v1/object/public/`;
+  if (own && storage.length > 30 && own.startsWith(storage)) return own;
   const category = String(event.category || '');
   const subcategory = String(event.subcategory || 'otro');
   return COVER_URLS[`nexo_cover:${category}:${subcategory}:0`]

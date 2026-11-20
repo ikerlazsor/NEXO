@@ -5,6 +5,7 @@ import { prefetchUserProfile } from './userProfileCache';
 import { rememberFriendsSet } from './friendStatusPeek';
 import { AppState, InteractionManager, type AppStateStatus } from 'react-native';
 import { getAuthUser } from './auth';
+import { fetchFeedScores } from './feedScores';
 import { fetchGuestFeedPlans } from './guestFeed';
 import { getUserBadges } from './badges';
 import { getBadgeStats } from './badgeStats';
@@ -478,7 +479,8 @@ async function prefetchFeed(userId: string | null): Promise<void> {
 
     if (!userId) {
         const formattedPlans = await withRetry(() => fetchGuestFeedPlans(coords));
-        const snapshot = emptyGuestFeedSnapshot(formattedPlans);
+        const scores = await fetchFeedScores(coords, formattedPlans.map((p) => String(p.id)), 1500);
+        const snapshot = emptyGuestFeedSnapshot(formattedPlans, scores);
         cacheSet(FEED_CACHE_KEY, snapshot, FEED_CACHE_TTL_MS);
         void diskSet(FEED_CACHE_KEY, snapshot);
         warmFeedImages(snapshot);

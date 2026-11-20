@@ -7,6 +7,7 @@ import {
 } from './feedAffinity';
 import type { FeedSnapshot } from './feedCache';
 import { attachFeedPlanPeople, fetchUpcomingFeedPlanRows } from './feedQuery';
+import { fetchFeedScores } from './feedScores';
 import { getFriends } from './friends';
 import type { UserCoords } from './location';
 import { mapEstadoToMembership } from './participants';
@@ -133,7 +134,11 @@ async function loadSignedInFeedSnapshot(
         seen.add(id);
         mergedRows.push(row);
     }
-    const formattedPlans = await attachFeedPlanPeople(mergedRows);
+    // Personas y orden del servidor a la vez: el orden no espera a los avatares.
+    const [formattedPlans, feedScores] = await Promise.all([
+        attachFeedPlanPeople(mergedRows),
+        fetchFeedScores(coords, mergedRows.map((row) => String(row.id))),
+    ]);
 
     const membershipMap: FeedSnapshot['membershipMap'] = {};
     (participantsRes.data || []).forEach((p: { plan_id: string; estado?: string | null }) => {
@@ -193,6 +198,7 @@ async function loadSignedInFeedSnapshot(
         ),
         notifBreakdown: { friendRequests: 0, planRequests: 0, planInvites: 0 },
         isOrganizer: organizer,
+        feedScores,
     };
 }
 
@@ -249,7 +255,7 @@ export async function fetchFeedTasteForUser(userId: string): Promise<FeedTaste> 
     );
 }
 
-export function emptyGuestFeedSnapshot(plans: unknown[]): FeedSnapshot {
+export function emptyGuestFeedSnapshot(plans: unknown[], feedScores: FeedSnapshot['feedScores'] = null): FeedSnapshot {
     return {
         plans: plans as FeedSnapshot['plans'],
         membershipMap: {},
@@ -262,5 +268,6 @@ export function emptyGuestFeedSnapshot(plans: unknown[]): FeedSnapshot {
         feedTaste: emptyFeedTaste(),
         notifBreakdown: { friendRequests: 0, planRequests: 0, planInvites: 0 },
         isOrganizer: false,
+        feedScores,
     };
 }

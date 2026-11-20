@@ -56,7 +56,7 @@ import {
     SUBCATEGORY_ICONS,
     defaultMaxParticipants,
     encodeCoverImageKey,
-    getCoverImages,
+    getCoverChoices,
     getPlanCategoryDisplay,
     resolvePlanCategories,
     type MainCategoryId,
@@ -105,6 +105,9 @@ const PLACEHOLDER_COLOR = '#94A3B8';
 const DANGER = '#EF4444';
 const SOLO_PINK = '#DB2777';
 const SOLO_PINK_LIGHT = '#FDF2F8';
+
+/** Pastilla elegida al abrir «Crear plan»: Ocio. */
+const DEFAULT_CREATE_CATEGORY: MainCategoryId = 'VIBES';
 
 const MAX_PEOPLE = 400;
 const MAX_PEOPLE_ORGANIZER = 800;
@@ -297,8 +300,8 @@ export default function CreatePlanScreen() {
         reason: TitleModerationReason | null;
     }>({ title: '', status: 'idle', reason: null });
     const titleCheckGen = useRef(0);
-    const [category, setCategory] = useState<MainCategoryId>(MAIN_CATEGORIES[0]);
-    const [subcategory, setSubcategory] = useState<string>(SUBCATEGORIES[MAIN_CATEGORIES[0]][0]);
+    const [category, setCategory] = useState<MainCategoryId>(DEFAULT_CREATE_CATEGORY);
+    const [subcategory, setSubcategory] = useState<string>(SUBCATEGORIES[DEFAULT_CREATE_CATEGORY][0]);
     /** Fútbol: partido clásico (2 equipos) o torneo multi-equipo. */
     const [footballMode, setFootballMode] = useState<'partido' | 'torneo'>('partido');
     const [tournamentFormat, setTournamentFormat] = useState<FootballFormat>('7v7');
@@ -313,7 +316,7 @@ export default function CreatePlanScreen() {
     const tournamentAllowsTbd =
         category === 'DEPORTES' && subcategory === 'futbol' && footballMode === 'torneo';
     const [coverIndex, setCoverIndex] = useState(() => Math.floor(Math.random() * COVERS_PER_SUB));
-    const categoryImages = getCoverImages(category, subcategory);
+    const categoryImages = getCoverChoices(category, subcategory);
     const [maxPeople, setMaxPeople] = useState(() =>
         defaultMaxParticipants(MAIN_CATEGORIES[0], SUBCATEGORIES[MAIN_CATEGORIES[0]][0]),
     );
@@ -490,6 +493,10 @@ export default function CreatePlanScreen() {
                 if (img.startsWith('nexo_cover:')) {
                     const idx = parseInt(img.split(':')[3] || '0', 10);
                     setCoverIndex(Number.isFinite(idx) ? idx : 0);
+                } else if (img.startsWith('https://')) {
+                    const { main, sub } = resolvePlanCategories(data);
+                    const idx = main && sub ? getCoverChoices(main, sub).indexOf(img) : -1;
+                    if (idx >= 0) setCoverIndex(idx);
                 }
                 const custom = extras.filter((u) => u.startsWith('http'));
                 if (custom.length > 0) {
@@ -589,7 +596,7 @@ export default function CreatePlanScreen() {
         setSubcategory(sub);
         requestAnimationFrame(() => {
             if (!editId && !isDuplicate) {
-                const covers = getCoverImages(main, sub);
+                const covers = getCoverChoices(main, sub);
                 setCoverIndex(Math.floor(Math.random() * Math.max(1, covers.length)));
             }
             warmCoverImages(main, sub);
@@ -601,7 +608,7 @@ export default function CreatePlanScreen() {
         setSubcategory(sub);
         requestAnimationFrame(() => {
             if (!editId && !isDuplicate) {
-                const covers = getCoverImages(category, sub);
+                const covers = getCoverChoices(category, sub);
                 setCoverIndex(Math.floor(Math.random() * Math.max(1, covers.length)));
             }
             warmCoverImages(category, sub);
@@ -670,7 +677,13 @@ export default function CreatePlanScreen() {
     };
 
     // Guardar clave estable del asset (no URI local)
-    const getCoverImageKey = () => encodeCoverImageKey(category, subcategory, coverIndex);
+    // (las fotos de Madrid van como URL https: se ven también en versiones antiguas)
+    const getCoverImageKey = () => {
+        const choice = categoryImages[coverIndex];
+        return typeof choice === 'string' && choice.startsWith('https://')
+            ? choice
+            : encodeCoverImageKey(category, subcategory, coverIndex);
+    };
 
     const addCustomCover = async () => {
         if (customCovers.length >= MAX_ORGANIZER_COVERS || pickingCoverRef.current) return;

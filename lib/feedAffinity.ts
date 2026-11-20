@@ -19,8 +19,8 @@ const BASE = {
     personalityTime: 18,
     soon: 10,
     /** Cuánta gente hay apuntada (no si el plan está lleno). */
-    popularity: 58,
-    popularityCap: 62,
+    popularity: 70,
+    popularityCap: 80,
     almostFull1: 14,
     almostFull2: 8,
     /** Media de cuánto se acerca la edad de la gente del plan a la tuya. */
@@ -590,11 +590,10 @@ function planDistanceKm(
 
 const FAR_KM = 20;
 
+/** Curva plana cerca (0,5 km ≈ 118; 3 km ≈ 90; 10 km ≈ 37). Igual que get_feed_scores. */
 function distanceBoost(km: number | null): number {
     if (km == null || !Number.isFinite(km)) return -30;
-    const walk = 95 * Math.exp(-km / 0.85);
-    const area = 55 * Math.exp(-km / 7.5);
-    const near = walk + area;
+    const near = 120 / (1 + Math.pow(km / 6, 1.6));
     if (km <= FAR_KM) return near;
     return Math.max(-180, near - (km - FAR_KM) * 4);
 }

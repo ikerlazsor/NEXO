@@ -76,8 +76,10 @@ export function eventCoverSource(
     | "description"
     | "provider_id"
     | "source_id"
-  >,
+  > & { cover_url?: string | null },
 ): CoverSource {
+  // Portada propia del evento (Supabase Storage): se cambia sin actualizar la app.
+  if (event.cover_url && /^https:\/\//.test(event.cover_url)) return event.cover_url;
   const { category, subcategory } = eventClassification(event);
   const photos = getCoverImages(category, subcategory).filter(
     (source) => source !== PLACEHOLDER_COVER_URI,
@@ -136,5 +138,6 @@ export function eventCoverKey(
       coverKeyBySource.set(source, key);
     }
   }
-  return coverKeyBySource.get(eventCoverSource(event)) ?? null;
+  const source = eventCoverSource(event);
+  return typeof source === "string" && source.startsWith("https://") ? null : coverKeyBySource.get(source) ?? null;
 }

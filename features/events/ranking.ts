@@ -6,26 +6,48 @@ import {
   type FeedTaste,
 } from "../../lib/feedAffinity";
 import type { ExternalEvent, EventInteractionTaste } from "./types";
+import type { FeedScores } from "../../lib/feedScores";
+
+const feedScoreKey = (kind: "plan" | "event", id: string) => `${kind}:${id}`;
 import { isParticipatoryActivity, isPublishableEvent } from "../../lib/externalEventPolicy.cjs";
 
 /** Las quedadas participativas (yoga, running, idiomas...) son lo que hace la app
  * social; van por delante de conciertos o teatro con la misma afinidad. */
 export const PARTICIPATORY_EVENT_BOOST = 18;
+/** Extra por ser un plan creado por un usuario de Nexo (no scrapeado). */
+export const USER_PLAN_BONUS = 70;
+const FRIEND_JOINED = 42;
+const FRIEND_JOINED_CAP = 120;
 
-/** Cuánta gente va: sube rápido con los primeros y se limita a 18 para que la
- * afinidad siga mandando (1 → 5, 3 → 10, 7 → 15, 15+ → 18). */
+/** Asistentes conocidos fuera de Nexo (attendance_hint): pesan poco, máx. 8. */
 export function popularityBoost(count: unknown): number {
   const n = Number(count);
   if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(18, 5 * Math.log2(1 + n));
+  return Math.min(8, 2.5 * Math.log2(1 + n));
 }
+
+/** Gente de Nexo apuntada: mismo peso en planes y eventos (igual que feedAffinity). */
+export function nexoPeopleBoost(count: unknown): number {
+  const n = Number(count);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(80, (70 * Math.log2(1 + n)) / Math.log2(17));
+}
+
+type EventSocial = Record<string, { count?: number; people?: { user_id?: string }[] } | undefined>;
 
 export function rankUnifiedFeed<
   T extends { id: string; kind: string; plan?: AffinityPlan; membership?: string },
 >(
   social: T[],
   events: ExternalEvent[],
-  context: RankContext & { eventHistory?: EventInteractionTaste; joinedEvents?: Set<string> },
+  context: RankContext & {
+    eventHistory?: EventInteractionTaste;
+    joinedEvents?: Set<string>;
+    /** Nexo: cuántos van a cada evento y quiénes (get_event_social_summaries). */
+    eventSocial?: EventSocial;
+    /** Orden del servidor (get_feed_scores). Si hay, manda sobre el local. */
+    serverScores?: FeedScores | null;
+  },
 ) {
   const rows: (T | { kind: "event"; id: string; event: ExternalEvent })[] = [
     ...social.filter((row) => row.kind === "plan"),
@@ -37,7 +59,12 @@ export function rankUnifiedFeed<
         event,
       })),
   ];
-  const score = (row: (typeof rows)[number]) => {
+  const server = context.serverScores || null;
+  const serverOf = (row: (typeof rows)[number]) =>
+    server?.[row.kind === "event" && "event" in row ? feedScoreKey("event", row.event.id) : feedScoreKey("plan", row.id)];
+  const friendsInEvent = (eventId: string) =>
+    (context.eventSocial?.[eventId]?.people || []).filter((p) => !!p.user_id && context.friendIds.has(p.user_id)).length;
+  const localScore = (row: (typeof rows)[number]) => {
     const category =
       row.kind === "event" && "event" in row
         ? row.event.category
@@ -48,10 +75,13 @@ export function rankUnifiedFeed<
       Math.max(1, ...Object.values(history));
     if (row.kind === "event" && "event" in row) {
       const e = row.event;
+      const friends = friendsInEvent(e.id);
       return (
         interactionBoost +
         (isParticipatoryActivity(e.title, e.subcategory ?? "") ? PARTICIPATORY_EVENT_BOOST : 0) +
         popularityBoost(e.attendance_hint) +
+        nexoPeopleBoost(context.eventSocial?.[e.id]?.count) +
+        (friends > 0 ? Math.min(FRIEND_JOINED_CAP, (FRIEND_JOINED * (1 - 0.7 ** friends)) / 0.3) : 0) +
         scoreFeedPlanRanked(
           {
             id: row.id,
@@ -65,22 +95,24 @@ export function rankUnifiedFeed<
         )
       );
     }
-    return (
-      scoreFeedPlanRanked((row as T).plan || {}, context) +
-      popularityBoost((row as T).plan?.joinedCount) +
-      24 +
-      interactionBoost
-    );
+    // La gente apuntada ya cuenta dentro de scoreFeedPlanRanked.
+    return scoreFeedPlanRanked((row as T).plan || {}, context) + USER_PLAN_BONUS + interactionBoost;
   };
-  const scores = new Map(rows.map((row) => [row.id, score(row)]));
-  const priority = (row: (typeof rows)[number]) => {
-    if (row.kind === "event" && "event" in row) return context.joinedEvents?.has(row.event.id) ? 0 : 2;
+  const scores = new Map(rows.map((row) => [row.id, serverOf(row)?.s ?? localScore(row)]));
+  const localPriority = (row: (typeof rows)[number]) => {
+    if (row.kind === "event" && "event" in row) {
+      if (context.joinedEvents?.has(row.event.id)) return 0;
+      return friendsInEvent(row.event.id) > 0 ? 1 : 2;
+    }
     const socialRow = row as T;
     const plan = socialRow.plan;
     if (context.currentUserId && (plan?.creador_id === context.currentUserId || socialRow.membership === "joined")) return 0;
     if ((plan?.creador_id && context.friendIds.has(plan.creador_id)) || plan?.participantsList?.some(p => !!p.id && context.friendIds.has(p.id))) return 1;
     return 2;
   };
+  // Lo local refleja al momento lo que acabas de hacer (unirte, salir); el servidor
+  // aporta lo que la app no ve (amigos en eventos). Gana el grupo más alto.
+  const priority = (row: (typeof rows)[number]) => Math.min(localPriority(row), serverOf(row)?.t ?? 2);
   return rows.sort(
     (a, b) => priority(a) - priority(b) || scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id),
   );

@@ -1467,6 +1467,10 @@ export type Database = {
         Returns: Json
       }
       get_feed_plan_people: { Args: { p_plan_ids: string[] }; Returns: Json }
+      get_feed_scores: {
+        Args: { p_lat?: number | null; p_lon?: number | null; p_plan_ids?: string[] }
+        Returns: { kind: string; id: string; score: number; tier: number }[]
+      }
       search_feed_plans: { Args: { p_query: string }; Returns: Json }
       get_user_public_stats: { Args: { p_user_id: string }; Returns: Json }
       guardar_valoracion: {

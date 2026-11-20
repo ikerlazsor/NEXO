@@ -389,6 +389,43 @@ export function getCoverImages(main: MainCategoryId, sub: string): CoverSource[]
     return Array.from({ length: COVERS_PER_SUB }, () => PLACEHOLDER_COVER_URI);
 }
 
+/** Fotos de Madrid (Storage) que se suman a la galería al crear un plan. */
+const MADRID_COVER_BASE =
+    'https://nixeproyzxvqzyrvsxcx.supabase.co/storage/v1/object/public/event-covers/v1/';
+const MADRID_COVERS: Partial<Record<string, string[]>> = {
+    'FOODIES:cafe': ['madrid-cafe-neon', 'madrid-plaza-mayor-terraza'],
+    'FOODIES:comer': ['madrid-tostas', 'madrid-terraza-calle'],
+    'FOODIES:cenar': ['cena-velas', 'cena-mesa'],
+    'FOODIES:tapas': ['madrid-mercado-tapas', 'madrid-croquetas-neon', 'madrid-vermut-croquetas'],
+    'FOODIES:otro': ['brindis-vino', 'madrid-terraza-mural'],
+    'DEPORTES:running': ['madrid-running-paseo', 'madrid-carrera-granvia'],
+    'DEPORTES:otro': ['calistenia', 'madrid-yoga-parque-1', 'madrid-yoga-parque-2'],
+    'AIRE_LIBRE:senderismo': ['sierra-pinar-1', 'sierra-pinar-2', 'senderismo-grupo-1', 'sierra-cascada'],
+    'AIRE_LIBRE:mirador': ['madrid-templo-debod', 'madrid-granvia-atardecer', 'segovia-acueducto'],
+    'AIRE_LIBRE:picnic': ['madrid-retiro-estanque', 'madrid-parque-otono'],
+    'AIRE_LIBRE:otro': ['madrid-retiro-barcas', 'escorial-monasterio', 'sierra-bosque'],
+    'SHOWTIME:concierto': ['musica-directo'],
+    'SHOWTIME:espectaculo': ['karaoke-micro'],
+    'DESCUBRIR:museo': ['madrid-prado', 'madrid-museo-salas'],
+    'DESCUBRIR:estudio': ['club-lectura-1', 'club-lectura-2', 'networking-evento'],
+    'DESCUBRIR:idiomas': ['bar-grupo', 'pub-barra'],
+    'DESCUBRIR:viajes': ['segovia-acueducto', 'escorial-monasterio', 'madrid-plaza-mayor'],
+    'DESCUBRIR:otro': ['madrid-plaza-mayor', 'madrid-granvia-atardecer'],
+    'VIBES:fiesta': ['madrid-bar-noche', 'bar-copas', 'madrid-calle-noche-1', 'baile-salon'],
+    'VIBES:juegos_mesa': ['juegos-mesa-1', 'juegos-mesa-2'],
+    'VIBES:otro': ['bar-grupo', 'madrid-calle-noche-2', 'madrid-terraza-calle', 'baile-plaza'],
+};
+
+/**
+ * Portadas para elegir al crear un plan: las de la app y, detrás, fotos de
+ * Madrid. Las de Madrid se guardan como URL https (no como clave), así se ven
+ * igual en versiones antiguas de la app y en la vista previa de WhatsApp.
+ */
+export function getCoverChoices(main: MainCategoryId, sub: string): CoverSource[] {
+    const madrid = (MADRID_COVERS[`${main}:${sub}`] ?? []).map((name) => `${MADRID_COVER_BASE}${name}.jpg`);
+    return [...getCoverImages(main, sub), ...madrid];
+}
+
 export function encodeCoverImageKey(main: MainCategoryId, sub: string, index: number): string {
     return `nexo_cover:${main}:${sub}:${index}`;
 }

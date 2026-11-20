@@ -47,6 +47,8 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
     const [resolvingPin, setResolvingPin] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const requestIdRef = useRef(0);
+    /** Elección en curso (aparte de requestIdRef, que se mueve al rellenar el buscador). */
+    const pickIdRef = useRef(0);
     const searchInputRef = useRef<TextInput>(null);
     /** Evita que al rellenar el input tras elegir un resultado se vuelva a abrir el desplegable. */
     const suppressSearchRef = useRef(false);
@@ -121,6 +123,7 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
 
     const onMapPress = async (lat: number, lon: number) => {
         requestIdRef.current += 1;
+        pickIdRef.current += 1;
         setResolvingPin(true);
         setShowSuggestions(false);
         setResults([]);
@@ -140,7 +143,8 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
 
     const pickResult = async (item: SearchResult) => {
         if (debounceRef.current) clearTimeout(debounceRef.current);
-        const requestId = ++requestIdRef.current;
+        requestIdRef.current += 1;
+        const pickId = ++pickIdRef.current;
         suppressSearchRef.current = true;
         setShowSuggestions(false);
         setResults([]);
@@ -154,7 +158,7 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         }
         setResolvingPin(true);
         const place = await resolvePlace(item, lang);
-        if (requestId !== requestIdRef.current) return;
+        if (pickId !== pickIdRef.current) return;
         if (place) {
             setResolvingPin(false);
             applyLocation(place.latitude, place.longitude, place.address);
@@ -164,7 +168,7 @@ export function PlanLocationPicker({ location, onLocationChange, mapRef }: Props
         const fallback = await searchPlaces(`${item.label} ${item.subtitle}`.trim(), null, lang).catch(
             () => [] as SearchResult[],
         );
-        if (requestId !== requestIdRef.current) return;
+        if (pickId !== pickIdRef.current) return;
         setResolvingPin(false);
         const hit = fallback.find((r) => !r.placeId && Number.isFinite(r.latitude));
         if (hit) {

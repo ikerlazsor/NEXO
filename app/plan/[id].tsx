@@ -24,6 +24,7 @@ import {
     ScrollView,
     StatusBar,
     Text,
+    Pressable,
     TouchableOpacity,
     View,
 } from 'react-native';
@@ -2379,17 +2380,50 @@ export default function PlanDetailScreen() {
                         )
                     ) : null}
 
-                    <View style={styles.dateRow}>
-                        <Ionicons name="calendar-outline" size={18} color={PRIMARY_DARK} />
-                        <Text style={styles.dateValue}>{dateString}</Text>
-                        {timeString ? (
-                            <>
-                                <View style={styles.dateDot} />
-                                <Ionicons name="time-outline" size={17} color={PRIMARY_DARK} />
-                                <Text style={styles.dateTimeValue}>{timeString}</Text>
-                            </>
-                        ) : null}
-                    </View>
+                    {/* Fecha y lugar en tarjeta, como en los eventos del scraping. */}
+                    {(() => {
+                        const accent = getCategoryColor(plan.categoria, plan.tipo_deporte);
+                        const place = plan.nombre_ubicacion?.trim() || '';
+                        const comma = place.indexOf(',');
+                        const placeMain = place ? (comma > 0 ? place.slice(0, comma) : place) : t('createplan.tbd');
+                        const placeSub = comma > 0 ? place.slice(comma + 1).trim() : '';
+                        const dateLabel = dateString.charAt(0).toUpperCase() + dateString.slice(1);
+                        const openPlaceInMaps = () => {
+                            const url = hasCoordinates
+                                ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+                                : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place || 'Madrid')}`;
+                            void Linking.openURL(url).catch(() => {});
+                        };
+                        return (
+                            <View style={styles.facts}>
+                                <View style={styles.factRow}>
+                                    <View style={[styles.factIcon, { backgroundColor: `${accent}18` }]}>
+                                        <Ionicons name="calendar" size={20} color={accent} />
+                                    </View>
+                                    <View style={styles.factText}>
+                                        <Text style={styles.factMain}>{dateLabel}</Text>
+                                        {timeString ? <Text style={styles.factSecondary}>{timeString}</Text> : null}
+                                    </View>
+                                </View>
+                                <View style={styles.factDivider} />
+                                <Pressable
+                                    onPress={place ? openPlaceInMaps : undefined}
+                                    disabled={!place}
+                                    accessibilityRole={place ? 'link' : undefined}
+                                    style={({ pressed }) => [styles.factRow, pressed && { opacity: 0.7 }]}
+                                >
+                                    <View style={[styles.factIcon, { backgroundColor: `${accent}18` }]}>
+                                        <Ionicons name="location" size={20} color={accent} />
+                                    </View>
+                                    <View style={styles.factText}>
+                                        <Text style={styles.factMain}>{placeMain}</Text>
+                                        {placeSub ? <Text style={styles.factSecondary}>{placeSub}</Text> : null}
+                                    </View>
+                                    {place ? <Ionicons name="navigate-outline" size={18} color={PRIMARY_DARK} /> : null}
+                                </Pressable>
+                            </View>
+                        );
+                    })()}
 
                     {/* Alineación / torneo: sin placeholder vacío (el fetch ya va en paralelo). */}
                     {sportPlan?.tipo === 'futbol' &&
@@ -2557,6 +2591,18 @@ export default function PlanDetailScreen() {
                         </View>
                     )}
 
+                    {/* Un poco sobre el plan, antes de quiénes vamos. */}
+                    <View style={styles.section}>
+                        <View style={styles.aboutCard}>
+                            <Text style={styles.aboutCardTitle}>{t('planDetail.about')}</Text>
+                            <TranslatedText
+                                text={plan.descripcion?.trim() || null}
+                                empty={t('card.noDescription')}
+                                style={styles.description}
+                            />
+                        </View>
+                    </View>
+
                     {isCreator && !isPastPlan && pendingJoinRequests.length > 0 ? (
                         <View style={styles.section}>
                             <Text style={styles.sectionTitle}>{t('planDetail.joinRequests')}</Text>
@@ -2657,25 +2703,12 @@ export default function PlanDetailScreen() {
                     </View>
 
                     <DeferredSection ready={lowerSectionsReady}>
-                    <View style={styles.section}>
-                        <View style={styles.aboutCard}>
-                            <Text style={styles.aboutCardTitle}>{t('planDetail.about')}</Text>
-                            <TranslatedText
-                                text={plan.descripcion?.trim() || null}
-                                empty={t('card.noDescription')}
-                                style={styles.description}
-                            />
-                        </View>
-                    </View>
 
                     <View style={styles.section}>
                         <View style={styles.sectionHeader}>
                             <Ionicons name="location" size={18} color={PRIMARY_DARK} />
                             <Text style={styles.sectionTitle}>{t('planDetail.location')}</Text>
                         </View>
-                        <Text style={styles.locationName}>
-                            {plan.nombre_ubicacion?.trim() || t('createplan.tbd')}
-                        </Text>
                         <TouchableOpacity
                             style={styles.mapCard}
                             activeOpacity={0.92}

@@ -21,21 +21,33 @@ type Reason = 'minors' | 'sexual' | 'hate' | 'harassment' | 'violence' | 'illici
 type Scores = Record<string, number>;
 
 // [categoría, revisar desde, bloquear desde, motivo]
-const RULES: Array<[string, number, number, Reason]> = [
+// Calibrado con textos reales de planes: lo normal (boxeo, paintball, "matar el
+// tiempo", "porra del Madrid") puntúa < 0,12; "Matar a gente" 0,77.
+const TEXT_RULES: Array<[string, number, number, Reason]> = [
   ['sexual/minors', 0.1, 0.3, 'minors'],
-  ['sexual', 0.7, 0.85, 'sexual'],
-  ['hate/threatening', 0.3, 0.5, 'hate'],
-  ['hate', 0.5, 0.8, 'hate'],
-  ['harassment/threatening', 0.5, 0.75, 'harassment'],
-  ['harassment', 0.8, 0.97, 'harassment'],
-  ['illicit/violent', 0.4, 0.7, 'illicit'],
-  ['illicit', 0.6, 0.9, 'illicit'],
-  ['self-harm/instructions', 0.3, 0.6, 'self_harm'],
+  ['sexual', 0.4, 0.7, 'sexual'],
+  ['hate/threatening', 0.2, 0.4, 'hate'],
+  ['hate', 0.3, 0.6, 'hate'],
+  ['harassment/threatening', 0.25, 0.4, 'harassment'],
+  ['harassment', 0.4, 0.7, 'harassment'],
+  ['illicit/violent', 0.3, 0.6, 'illicit'],
+  ['illicit', 0.15, 0.25, 'illicit'],
+  ['self-harm/instructions', 0.3, 0.5, 'self_harm'],
+  ['self-harm/intent', 0.3, 0.5, 'self_harm'],
+  ['self-harm', 0.3, 0.5, 'self_harm'],
+  ['violence/graphic', 0.4, 0.7, 'violence'],
+  ['violence', 0.3, 0.6, 'violence'],
+];
+
+// Fotos: más margen (deporte de contacto, disfraces, conciertos…).
+const IMAGE_RULES: Array<[string, number, number, Reason]> = [
+  ['sexual/minors', 0.1, 0.3, 'minors'],
+  ['sexual', 0.5, 0.8, 'sexual'],
+  ['self-harm', 0.5, 0.8, 'self_harm'],
   ['self-harm/intent', 0.5, 0.8, 'self_harm'],
-  ['self-harm', 0.7, 0.95, 'self_harm'],
-  ['violence/graphic', 0.6, 0.85, 'violence'],
-  // "violencia" a secas salta con boxeo, paintball, airsoft…: solo a revisión.
-  ['violence', 0.9, 2, 'violence'],
+  ['self-harm/instructions', 0.5, 0.8, 'self_harm'],
+  ['violence/graphic', 0.5, 0.8, 'violence'],
+  ['violence', 0.8, 0.95, 'violence'],
 ];
 
 const MAX_IMAGES = 6;
@@ -79,9 +91,12 @@ async function moderateInput(input: unknown): Promise<Scores> {
   return merged;
 }
 
-function judge(scores: Scores): { verdict: Verdict; reason: Reason | null } {
+function judge(
+  scores: Scores,
+  rules: Array<[string, number, number, Reason]>,
+): { verdict: Verdict; reason: Reason | null } {
   let review: Reason | null = null;
-  for (const [cat, reviewAt, blockAt, reason] of RULES) {
+  for (const [cat, reviewAt, blockAt, reason] of rules) {
     const s = scores[cat] ?? 0;
     if (s >= blockAt) return { verdict: 'block', reason };
     if (s >= reviewAt && !review) review = reason;
@@ -89,27 +104,33 @@ function judge(scores: Scores): { verdict: Verdict; reason: Reason | null } {
   return review ? { verdict: 'review', reason: review } : { verdict: 'ok', reason: null };
 }
 
+function maxScores(list: Scores[]): Scores {
+  const out: Scores = {};
+  for (const s of list) {
+    for (const [k, v] of Object.entries(s)) out[k] = Math.max(out[k] ?? 0, v);
+  }
+  return out;
+}
+
 async function moderateContent(
   title: string,
   description: string,
   images: string[],
 ): Promise<{ verdict: Verdict; reason: Reason | null; scores: Scores }> {
-  const text = `${title}\n\n${description}`.trim().slice(0, MAX_TEXT);
-  const jobs: Promise<Scores>[] = [];
-  if (text) jobs.push(moderateInput(text));
-  for (const url of images.filter(isUserImage).slice(0, MAX_IMAGES)) {
-    // Imagen junto al título: algunas categorías solo puntúan con texto al lado.
-    jobs.push(moderateInput([
-      { type: 'text', text: title || 'Portada de un plan' },
-      { type: 'image_url', image_url: { url } },
-    ]));
-  }
-  const all = await Promise.all(jobs);
-  const scores: Scores = {};
-  for (const s of all) {
-    for (const [k, v] of Object.entries(s)) scores[k] = Math.max(scores[k] ?? 0, v);
-  }
-  return { ...judge(scores), scores };
+  const full = [title, description].map((x) => x.trim()).filter(Boolean).join('\n\n').slice(0, MAX_TEXT);
+  // El título también por separado: una descripción larga no lo "diluye".
+  const texts = Array.from(new Set([title.trim(), full].filter(Boolean)));
+  const textJob = texts.length ? moderateInput(texts) : Promise.resolve({} as Scores);
+  const imageJobs = images.filter(isUserImage).slice(0, MAX_IMAGES).map((url) =>
+    moderateInput([{ type: 'image_url', image_url: { url } }])
+  );
+  const [textScores, ...imageScoreList] = await Promise.all([textJob, ...imageJobs]);
+  const imageScores = maxScores(imageScoreList);
+  const byText = judge(textScores, TEXT_RULES);
+  const byImage = judge(imageScores, IMAGE_RULES);
+  const rank = { ok: 0, review: 1, block: 2 } as const;
+  const worst = rank[byImage.verdict] > rank[byText.verdict] ? byImage : byText;
+  return { ...worst, scores: maxScores([textScores, imageScores]) };
 }
 
 function adminClient() {
@@ -223,7 +244,18 @@ serve(async (req: Request) => {
     const hook = req.headers.get('x-nexo-moderation-secret');
     if (hook) {
       if (hook !== env('MODERATION_WEBHOOK_SECRET')) return jsonResponse(403, { error: 'forbidden' });
-      const body = await req.json().catch(() => ({})) as { plan_id?: unknown };
+      const body = await req.json().catch(() => ({})) as { plan_id?: unknown; score_texts?: unknown };
+      // Calibración (solo con el secreto): puntuaciones y veredicto de varios textos.
+      if (Array.isArray(body.score_texts)) {
+        const texts = body.score_texts.filter((x): x is string => typeof x === 'string').slice(0, 40);
+        const out = await Promise.all(texts.map(async (text) => {
+          const r = await moderateContent(text, '', []);
+          const top = Object.entries(r.scores).sort((a, b) => b[1] - a[1]).slice(0, 3)
+            .map(([k, v]) => `${k}=${v.toFixed(3)}`).join(' ');
+          return { text, verdict: r.verdict, top };
+        }));
+        return jsonResponse(200, { results: out });
+      }
       const planId = typeof body.plan_id === 'string' ? body.plan_id : '';
       if (!UUID_RE.test(planId)) return jsonResponse(400, { error: 'invalid_plan' });
       return await handleWebhook(planId);

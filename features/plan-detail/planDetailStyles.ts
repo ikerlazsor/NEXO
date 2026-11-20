@@ -253,6 +253,28 @@ export function createPlanDetailStyles(c: ThemeColors) {
   },
   dateTimeValue: { fontSize: 16, fontWeight: "800", color: INK, letterSpacing: -0.2 },
 
+  // Fecha y lugar en tarjeta, igual que el detalle de los eventos del scraping.
+  facts: {
+    marginTop: 4,
+    marginBottom: 10,
+    padding: 14,
+    borderRadius: 22,
+    gap: 12,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    backgroundColor: SURFACE,
+    borderColor: isDark ? c.borderStrong : "rgba(15,23,42,0.06)",
+  },
+  factRow: { flexDirection: "row", gap: 12, alignItems: "center" },
+  factIcon: { width: 42, height: 42, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  factText: { flex: 1, gap: 2 },
+  factMain: { fontSize: 15, lineHeight: 20, fontWeight: "700", color: INK },
+  factSecondary: { fontSize: 13, lineHeight: 18, color: MUTED },
+  factDivider: {
+    height: StyleSheet.hairlineWidth * 2,
+    marginLeft: 54,
+    backgroundColor: isDark ? c.borderStrong : "rgba(15,23,42,0.07)",
+  },
+
   section: { marginTop: 28 },
   sectionAfterFit: { marginTop: 14 },
   sectionHeader: {

@@ -109,7 +109,7 @@ import {
     takeFeedPlanDeletes,
     takeOptimisticFeedPlan,
 } from '../../lib/feedReload';
-import { expandSearchQuery, planMatchesSearch } from '../../lib/feedSearch';
+import { expandSearchQuery, planMatchesSearch, searchSynonymTerms } from '../../lib/feedSearch';
 import { buildFeedRows, type FeedRow as SocialFeedRow } from '../../lib/feedSections';
 import { consumeFirstRunPending } from '../../lib/firstRun';
 import { rememberFriendsSet } from '../../lib/friendStatusPeek';
@@ -328,6 +328,9 @@ export default function HomeScreen() {
 
     const [nearbyKm, setNearbyKm] = useState<number | null>(null);
     const [userCoords, setUserCoords] = useState<UserCoords | null>(() => peekUserCoords());
+    /** Para la búsqueda: usa la última ubicación sin relanzarla cada vez que cambia. */
+    const userCoordsRef = useRef<UserCoords | null>(userCoords);
+    userCoordsRef.current = userCoords;
     const [showFirstRun, setShowFirstRun] = useState(false);
 
     const [plans, setPlans] = useState<any[]>(() => cachedFeed?.plans ?? []);
@@ -565,7 +568,10 @@ export default function HomeScreen() {
             void expandSearchQuery(q).then((terms) => {
                 if (!cancelled) setSearchExpanded(terms);
             });
-            void fetchSearchFeedPlans(q)
+            void fetchSearchFeedPlans(q, {
+                terms: searchSynonymTerms(q),
+                coords: userCoordsRef.current,
+            })
                 .then((hits) => {
                     if (!cancelled) setSearchHits(hits);
                 })

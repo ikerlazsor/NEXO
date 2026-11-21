@@ -88,12 +88,12 @@ select ok(
 select ok(
   has_function_privilege(
     'anon',
-    'public.search_feed_plans(text)',
+    'public.search_feed_plans(text,text[],double precision,double precision)',
     'execute'
   )
   and has_function_privilege(
     'authenticated',
-    'public.search_feed_plans(text)',
+    'public.search_feed_plans(text,text[],double precision,double precision)',
     'execute'
   ),
   'feed search RPC is callable from the app'

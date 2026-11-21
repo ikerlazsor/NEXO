@@ -38,7 +38,6 @@ const CONCEPT_GROUPS: string[][] = [
         'futbol', 'fútbol', 'football', 'soccer', 'partido', 'pachanga', 'futbol 7',
         'futbol 5', 'futbol 11', 'futsal', 'sala', 'indoor football', 'balon', 'balón',
         'porteria', 'portería', 'gol', 'goles', 'equipo', 'liga', 'champions',
-        'fifa', 'ea fc', 'pes', 'efootball',
     ],
 
     // —— Baloncesto ——
@@ -386,10 +385,6 @@ const CONCEPT_GROUPS: string[][] = [
         'cañas', 'canas', 'cervezas', 'birras',
     ],
     [
-        'finde', 'fin de semana', 'weekend', 'sabado', 'sábado', 'domingo', 'sunday',
-        'saturday', 'viernes', 'friday', 'noche de viernes',
-    ],
-    [
         'cumple', 'cumpleaños', 'birthday', 'celebracion', 'celebración', 'fiesta de cumple',
         'despedida', 'despedida de soltero', 'despedida de soltera', 'bachelor',
     ],
@@ -434,15 +429,8 @@ const CONCEPT_GROUPS: string[][] = [
         'dnd', 'dungeons and dragons', 'rol en vivo', 'larp',
     ],
 
-    // —— Ciudad / planes urbanos ——
-    [
-        'madrid', 'barcelona', 'valencia', 'sevilla', 'bilbao', 'malaga', 'málaga',
-        'zaragoza', 'granada', 'alicante', 'murcia', 'palma', 'las palmas',
-    ],
-    [
-        'centro', 'casco antiguo', 'barrio', 'malasaña', 'malasana', 'chueca',
-        'latina', 'retiro', 'gracia', 'born', 'eixample', 'triball',
-    ],
+    // —— Planes urbanos ——
+    // (Sin grupos de ciudades ni barrios: buscar «Madrid» no debe sacar planes de Barcelona.)
     [
         'terraza', 'rooftop', 'azotea', 'mirador urbano', 'skyline', 'vistas ciudad',
     ],
@@ -456,38 +444,17 @@ const CONCEPT_GROUPS: string[][] = [
     ],
 ];
 
-const CATEGORY_KEYWORDS: Record<MainCategoryId, string[]> = {
-    FOODIES: [
-        'foodies', 'picoteo', 'comida', 'food', 'gastro', 'comer', 'cenar', 'tapas', 'cafe',
-        'café', 'restaurant', 'restaurante', 'brunch', 'cena', 'almuerzo', 'pintxos',
-        'gastronomia', 'gastronomía', 'cocina', 'foodie', 'pizza', 'burger', 'sushi',
-        'paella', 'vermut', 'cerveza', 'vino',
-    ],
-    DEPORTES: [
-        'deportes', 'sport', 'sports', 'deporte', 'sportif', 'esporte', 'entrenamiento',
-        'partido', 'equipo', 'competicion', 'competición', 'fitness', 'gym', 'padel',
-        'futbol', 'running', 'yoga', 'crossfit', 'natacion', 'natación',
-    ],
-    AIRE_LIBRE: [
-        'aire libre', 'outdoor', 'outdoors', 'naturaleza', 'nature', 'plein air',
-        'montaña', 'montana', 'senderismo', 'playa', 'picnic', 'excursión', 'excursion',
-        'hiking', 'surf', 'kayak', 'camping', 'parque',
-    ],
-    SHOWTIME: [
-        'showtime', 'espectaculo', 'espectáculo', 'show', 'culture', 'cultura',
-        'cine', 'teatro', 'concierto', 'musica', 'música', 'festival', 'comedia',
-        'standup', 'musical', 'opera', 'ópera',
-    ],
-    DESCUBRIR: [
-        'descubrir', 'discover', 'explorar', 'explore', 'cultura', 'aprender',
-        'museo', 'idiomas', 'viajes', 'turismo', 'city', 'taller', 'workshop',
-        'exposicion', 'exposición', 'mercado',
-    ],
-    VIBES: [
-        'vibes', 'ocio', 'fiesta', 'party', 'social', 'gaming', 'juegos', 'noche', 'copas',
-        'terraceo', 'compras', 'ocio', 'afterwork', 'tardeo', 'quedada', 'karaoke',
-        'bolera', 'escape room',
-    ],
+/**
+ * Palabras que nombran una categoría entera. Solo estas expanden a «toda la
+ * categoría»: buscar «teatro» no debe sacar cualquier plan de SHOWTIME.
+ */
+const CATEGORY_NAMES: Record<MainCategoryId, string[]> = {
+    FOODIES: ['foodies', 'foodie', 'comida', 'food', 'gastro', 'gastronomia', 'gastronomía'],
+    DEPORTES: ['deportes', 'deporte', 'sport', 'sports', 'esporte', 'esportes', 'sportif'],
+    AIRE_LIBRE: ['aire libre', 'outdoor', 'outdoors', 'naturaleza', 'nature', 'plein air'],
+    SHOWTIME: ['showtime', 'espectaculo', 'espectáculo', 'espectaculos', 'espectáculos', 'show', 'shows'],
+    DESCUBRIR: ['descubrir', 'discover', 'explorar', 'explore', 'cultura', 'culture'],
+    VIBES: ['vibes', 'ocio'],
 };
 
 const SUB_KEYWORDS: Record<string, string[]> = {
@@ -529,12 +496,11 @@ const SUB_KEYWORDS: Record<string, string[]> = {
 const SEARCH_STOPWORDS = new Set([
     'plan', 'planes', 'mesa', 'foto', 'fotos',
     'the', 'and', 'con', 'para', 'una', 'uno', 'del', 'las', 'los', 'por', 'que',
+    'de', 'el', 'la', 'en', 'al', 'un',
 ]);
 
-const EXPAND_MIN_LEN = 3;
-
 function stripAccents(s: string): string {
-    return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
 export function normalizeSearchText(s: string): string {
@@ -547,110 +513,161 @@ function tokenize(s: string): string[] {
         .filter((t) => t.length >= 2);
 }
 
-/** ¿El texto contiene el término (frase o tokens)? */
-function textHasTerm(text: string, term: string): boolean {
-    if (!term || !text) return false;
-    if (term.length < EXPAND_MIN_LEN) {
-        return tokenize(text).some((t) => t === term || t.startsWith(term));
-    }
-    if (text.includes(term)) return true;
-    const tokens = tokenize(term);
-    if (tokens.length >= 2) return tokens.every((t) => text.includes(t));
-    return false;
+function wordsKey(term: string): string {
+    return tokenize(term).join(' ');
+}
+
+/**
+ * Palabras que están en los grupos pero significan otras cosas en el día a día
+ * («series» de Netflix, «clase» de inglés, «noche» de cualquier plan…).
+ * Ni activan un grupo ni se usan como sinónimo; si se escriben tal cual, se
+ * siguen encontrando por coincidencia literal.
+ */
+const AMBIGUOUS_TERMS = new Set([
+    'set', 'live', 'online', 'ring', 'art', 'mar', 'sea', 'run', 'roll', 'rolls', 'rolling', 'gi',
+    'sala', 'series', 'obra', 'clase', 'curso', 'centro', 'barrio', 'ciudad', 'ruta', 'paseo',
+    'salir', 'salida', 'noche', 'night', 'club', 'equipo', 'liga', 'partido', 'partida', 'partidas',
+    'juegos', 'games', 'magic', 'role', 'rol', 'cartas', 'after', 'amigos', 'friends', 'social',
+    'thai', 'paddle', 'pes', 'cod', 'lol', 'rust', 'ark', 'apex', 'switch', 'mando', 'consola',
+    'console', 'controller', 'trabajo', 'estudio', 'ayuda', 'comunidad', 'animal', 'car', 'drive',
+    'coche', 'tienda', 'moda', 'ropa', 'arena', 'sand', 'costa', 'coast', 'fuego', 'directo', 'banda',
+    'band', 'pop', 'rock', 'drama', 'terror', 'horror', 'comedia', 'musical', 'pintura', 'cocina',
+    'chef', 'menu', 'menudo', 'carne', 'pollo', 'healthy', 'saludable', 'dulce', 'tarta', 'cake',
+    'sprint', 'intervalos', 'carrera', 'sierra', 'pico', 'vistas', 'views', 'instagram', 'barras',
+    'bloque', 'bloc', 'raid', 'cana', 'canas', 'vela', 'remo', 'barco', 'boat', 'nieve', 'snow',
+    'combate', 'fight', 'guantes', 'sacos', 'saco', 'gol', 'goles', 'balon', 'triple', 'triples',
+    'guardia', 'guard', 'despedida', 'padres', 'parents', 'familia', 'family', 'kids', 'expo',
+    'salon', 'mercado', 'market', 'feria', 'escape', 'rutina', 'quedamos', 'nos vemos', 'hablar',
+    'conversation', 'conversacion', 'marvel', 'disney', 'netflix', 'pista', 'bowl', 'bowls',
+    'chocolate', 'merienda', 'hamaca', 'olas', 'waves', 'kite', 'sup', 'ufc', 'premiere',
+    'estreno', 'indie', 'trivial', 'mtb', 'carretera', 'gravel', 'apuntarse', 'campus',
+].map(wordsKey));
+
+const EXPAND_MIN_LEN = 3;
+/** Mínimo de letras para tratar lo escrito como el inicio de un sinónimo («senderi» → senderismo). */
+const PREFIX_EXPAND_MIN_LEN = 5;
+
+/** Texto como lista de palabras con espacios a los lados: « pachanga de futbol ». */
+function padded(...parts: (string | null | undefined)[]): string {
+    return ` ${tokenize(parts.filter(Boolean).join(' ')).join(' ')} `;
 }
 
 function isStopword(term: string): boolean {
     return SEARCH_STOPWORDS.has(term);
 }
 
-/** Índices de grupos que toca un texto. */
-function matchingGroupIndexes(text: string): number[] {
-    const n = normalizeSearchText(text);
-    if (!n || n.length < EXPAND_MIN_LEN || isStopword(n)) return [];
-    const tokens = tokenize(n).filter((t) => t.length >= EXPAND_MIN_LEN && !isStopword(t));
+function isUsableTerm(term: string): boolean {
+    return !!term && term.length >= 2 && !isStopword(term) && !AMBIGUOUS_TERMS.has(term);
+}
+
+/** ¿Aparece el término como palabra o frase completa? Admite plural (-s / -es). */
+function hasWholeTerm(text: string, term: string): boolean {
+    const t = wordsKey(term);
+    if (!t) return false;
+    return text.includes(` ${t} `) || text.includes(` ${t}s `) || text.includes(` ${t}es `);
+}
+
+/** ¿Alguna palabra empieza por lo escrito? («pad» → «padel», pero «mar» no casa con «tomar»). */
+function hasWordPrefix(text: string, query: string): boolean {
+    const t = wordsKey(query);
+    return !!t && text.includes(` ${t}`);
+}
+
+const NORM_GROUPS: string[][] = CONCEPT_GROUPS.map((group) =>
+    Array.from(new Set(group.map(wordsKey).filter(isUsableTerm))),
+);
+const CONCEPT_PHRASES = new Set(NORM_GROUPS.flat());
+const NORM_CATEGORY_NAMES = (Object.entries(CATEGORY_NAMES) as [MainCategoryId, string[]][])
+    .map(([cat, names]) => [cat, names.map(wordsKey).filter(Boolean)] as const);
+const NORM_SUB_KEYWORDS = Object.entries(SUB_KEYWORDS)
+    .map(([sub, words]) => [sub, words.map(wordsKey).filter(isUsableTerm)] as const);
+
+/** Grupos de sinónimos que nombra lo que ha escrito el usuario. */
+function queryGroupIndexes(query: string): number[] {
+    const text = padded(query);
+    const tokens = tokenize(query).filter((t) => t.length >= PREFIX_EXPAND_MIN_LEN && isUsableTerm(t));
     const hits: number[] = [];
-    for (let i = 0; i < CONCEPT_GROUPS.length; i++) {
-        const norms = CONCEPT_GROUPS[i].map(normalizeSearchText);
-        const hit = norms.some((term) => {
-            if (!term) return false;
-            if (term === n || n === term) return true;
-            if (n.length >= EXPAND_MIN_LEN && (n.includes(term) || term.includes(n))) return true;
-            return tokens.some((t) => term === t || (t.length >= 4 && (term.includes(t) || t.includes(term))));
-        });
+    NORM_GROUPS.forEach((group, i) => {
+        const hit = group.some((term) =>
+            hasWholeTerm(text, term)
+            || tokens.some((t) => term.startsWith(t)),
+        );
         if (hit) hits.push(i);
-    }
+    });
     return hits;
 }
 
-/** Expande una query con sinónimos locales (sin red). */
+/**
+ * Expande una búsqueda con sinónimos locales (sin red). Incluye la propia
+ * búsqueda y sus palabras; los sinónimos se comparan siempre como palabra completa.
+ */
 export function expandQueryLocally(query: string): string[] {
-    const q = normalizeSearchText(query);
+    const q = wordsKey(query);
     if (!q) return [];
 
-    const out = new Set<string>([q, ...tokenize(query).filter((t) => !isStopword(t))]);
+    const out = new Set<string>([q, ...tokenize(q).filter((t) => !isStopword(t))]);
     if (q.length < EXPAND_MIN_LEN || isStopword(q)) {
-        return Array.from(out).filter(Boolean);
+        return Array.from(out);
     }
+    const text = padded(q);
 
-    for (const idx of matchingGroupIndexes(q)) {
-        for (const term of CONCEPT_GROUPS[idx]) {
-            const n = normalizeSearchText(term);
-            if (n && !isStopword(n)) out.add(n);
+    for (const idx of queryGroupIndexes(q)) {
+        for (const term of NORM_GROUPS[idx]) out.add(term);
+    }
+    for (const [cat, names] of NORM_CATEGORY_NAMES) {
+        if (names.some((n) => hasWholeTerm(text, n))) out.add(wordsKey(cat));
+    }
+    for (const [sub, words] of NORM_SUB_KEYWORDS) {
+        if (hasWholeTerm(text, sub) || words.some((w) => hasWholeTerm(text, w))) {
+            out.add(wordsKey(sub));
+            for (const w of words) out.add(w);
         }
-    }
-
-    for (const [cat, words] of Object.entries(CATEGORY_KEYWORDS) as [MainCategoryId, string[]][]) {
-        if (words.some((w) => q.includes(normalizeSearchText(w)))) {
-            out.add(normalizeSearchText(cat));
-            for (const w of words) {
-                const n = normalizeSearchText(w);
-                if (n && !isStopword(n)) out.add(n);
-            }
-        }
-    }
-
-    for (const [sub, words] of Object.entries(SUB_KEYWORDS)) {
-        if (words.some((w) => q.includes(normalizeSearchText(w))) || q.includes(sub)) {
-            out.add(sub);
-            for (const w of words) {
-                const n = normalizeSearchText(w);
-                if (n && !isStopword(n)) out.add(n);
-            }
-        }
-    }
-
-    return Array.from(out).filter(Boolean);
-}
-
-/**
- * Expande el texto del plan (título + descripción) con conceptos relacionados.
- * Así "vamos a hacer rolls" en la descripción enlaza con bjj / open mat.
- */
-function expandPlanConcepts(title: string, description: string): string[] {
-    const blob = `${title} ${description}`;
-    const out = new Set<string>();
-    for (const idx of matchingGroupIndexes(blob)) {
-        for (const term of CONCEPT_GROUPS[idx]) out.add(normalizeSearchText(term));
     }
     return Array.from(out);
 }
 
 const expandCache = new Map<string, string[]>();
 
-export async function expandSearchQuery(query: string): Promise<string[]> {
-    const key = normalizeSearchText(query);
+function expandCached(query: string): string[] {
+    const key = wordsKey(query);
     if (!key) return [];
     const cached = expandCache.get(key);
     if (cached) return cached;
-
-    // Expansión local determinista: sin claves en cliente, cuotas ni servicios de pago.
-    const merged = Array.from(new Set(expandQueryLocally(query)));
-    expandCache.set(key, merged);
-    if (expandCache.size > 80) {
+    const terms = expandQueryLocally(key);
+    expandCache.set(key, terms);
+    if (expandCache.size > 120) {
         const first = expandCache.keys().next().value;
         if (first) expandCache.delete(first);
     }
-    return merged;
+    return terms;
+}
+
+export async function expandSearchQuery(query: string): Promise<string[]> {
+    // Expansión local determinista: sin claves en cliente, cuotas ni servicios de pago.
+    return expandCached(query);
+}
+
+/** Palabras de la búsqueda que cuentan (sin «de», «con», «plan»…). */
+function queryTokens(query: string): string[] {
+    return tokenize(query).filter((t) => !isStopword(t));
+}
+
+/** Una sola idea («padel», «open mat», «juegos de mesa»), no varias palabras sueltas. */
+function isSingleConcept(query: string): boolean {
+    return queryTokens(query).length <= 1 || CONCEPT_PHRASES.has(wordsKey(query));
+}
+
+/**
+ * Sinónimos que se mandan al servidor para que también encuentre planes que
+ * aún no están cargados. Vacío si la búsqueda son varias ideas («padel madrid»):
+ * ahí el servidor exige que estén todas las palabras.
+ */
+export function searchSynonymTerms(query: string, max = 40): string[] {
+    const q = wordsKey(query);
+    if (!q || !isSingleConcept(q)) return [];
+    return expandCached(q)
+        .filter((t) => t !== q && t.length >= EXPAND_MIN_LEN && isUsableTerm(t))
+        .slice(0, max);
 }
 
 export type SearchablePlan = {
@@ -660,6 +677,8 @@ export type SearchablePlan = {
     tipo_deporte?: string | null;
     nombre_ubicacion?: string | null;
     host?: { nombre?: string | null; nombre_usuario?: string | null } | null;
+    /** Puntuación que da el servidor (`search_feed_plans`), si el plan viene de ahí. */
+    search_score?: number | null;
 };
 
 function hostSearchText(plan: SearchablePlan): string {
@@ -668,91 +687,80 @@ function hostSearchText(plan: SearchablePlan): string {
     return [host.nombre, host.nombre_usuario].filter(Boolean).join(' ');
 }
 
-function planHaystack(plan: SearchablePlan): string {
+type PlanFields = {
+    title: string;
+    desc: string;
+    loc: string;
+    host: string;
+    cat: string;
+    /** Todo lo literal: título, descripción, sitio, anfitrión y categoría. */
+    all: string;
+    /** Donde se buscan sinónimos: título, descripción y categoría (no el sitio ni el anfitrión). */
+    semantic: string;
+};
+
+function planFields(plan: SearchablePlan): PlanFields {
     const main = normalizeMainCategory(plan.categoria);
-    const title = plan.titulo || '';
-    const desc = plan.descripcion || '';
-    const parts = [
-        title,
-        desc,
-        plan.categoria,
-        plan.tipo_deporte,
-        plan.nombre_ubicacion,
-        hostSearchText(plan),
-        main || '',
-        ...(main ? CATEGORY_KEYWORDS[main] || [] : []),
-        ...(plan.tipo_deporte ? SUB_KEYWORDS[String(plan.tipo_deporte)] || [] : []),
-        ...expandPlanConcepts(title, desc),
-    ];
-    return normalizeSearchText(parts.filter(Boolean).join(' '));
+    const hostText = hostSearchText(plan);
+    return {
+        title: padded(plan.titulo),
+        desc: padded(plan.descripcion),
+        loc: padded(plan.nombre_ubicacion),
+        host: padded(hostText),
+        cat: padded(plan.categoria, plan.tipo_deporte, main),
+        semantic: padded(plan.titulo, plan.descripcion, plan.categoria, plan.tipo_deporte, main),
+        all: padded(
+            plan.titulo, plan.descripcion, plan.nombre_ubicacion, hostText,
+            plan.categoria, plan.tipo_deporte, main,
+        ),
+    };
 }
 
-/** Más alto = más relevante (título exacto > parcial > sitio > anfitrión > sinónimo). */
+function synonymHit(part: string, semantic: string, expanded?: string[]): boolean {
+    const key = wordsKey(part);
+    // Las palabras sueltas de lo escrito no son sinónimos («open» no basta para «open mat»).
+    const own = new Set([key, ...tokenize(key)]);
+    const terms = expanded?.length ? expanded : expandCached(part);
+    return terms.some((term) => !own.has(term) && isUsableTerm(term) && hasWholeTerm(semantic, term));
+}
+
+/** Más alto = más relevante (título exacto > parcial > sitio > anfitrión > categoría > descripción > sinónimo). */
 export function searchRelevanceScore(plan: SearchablePlan, query: string): number {
-    const q = normalizeSearchText(query);
+    const q = wordsKey(query);
     if (!q) return 0;
-    const title = normalizeSearchText(plan.titulo || '');
-    const loc = normalizeSearchText(plan.nombre_ubicacion || '');
-    const host = normalizeSearchText(hostSearchText(plan));
-    if (title && title === q) return 100;
-    if (title && title.startsWith(q)) return 80;
-    if (title && textHasTerm(title, q)) return 60;
-    if (loc && textHasTerm(loc, q)) return 45;
-    if (host && textHasTerm(host, q)) return 40;
-    if (textHasTerm(normalizeSearchText(plan.categoria || ''), q)) return 25;
-    if (textHasTerm(normalizeSearchText(plan.tipo_deporte || ''), q)) return 25;
-    if (planMatchesSearch(plan, query)) return 10;
-    return 0;
+    const server = Number(plan.search_score) || 0;
+    const f = planFields(plan);
+    const tokens = queryTokens(q);
+    let local = 0;
+    if (f.title.trim() === q) local = 100;
+    else if (f.title.startsWith(` ${q}`)) local = 80;
+    else if (hasWordPrefix(f.title, q)) local = 60;
+    else if (tokens.length >= 2 && tokens.every((t) => hasWordPrefix(f.title, t))) local = 55;
+    else if (hasWordPrefix(f.loc, q)) local = 45;
+    else if (hasWordPrefix(f.host, q)) local = 40;
+    else if (tokens.length >= 2 && tokens.every((t) => hasWordPrefix(f.all, t))) local = 30;
+    else if (hasWordPrefix(f.cat, q)) local = 25;
+    else if (hasWordPrefix(f.desc, q)) local = 20;
+    else if (planMatchesSearch(plan, query)) local = 10;
+    return Math.max(local, server);
 }
 
-/** ¿El plan encaja con la búsqueda (título + descripción + semántica)? */
+/** ¿El plan encaja con la búsqueda (literal + sinónimos)? */
 export function planMatchesSearch(
     plan: SearchablePlan,
     query: string,
     expandedTerms?: string[],
 ): boolean {
-    const q = normalizeSearchText(query);
+    const q = wordsKey(query);
     if (!q) return true;
+    const f = planFields(plan);
 
-    const title = normalizeSearchText(plan.titulo || '');
-    const desc = normalizeSearchText(plan.descripcion || '');
-    const host = normalizeSearchText(hostSearchText(plan));
-    const hay = planHaystack(plan);
+    // 1) Lo escrito, como inicio de palabra, en cualquier campo.
+    if (hasWordPrefix(f.all, q)) return true;
 
-    // 1) Coincidencia literal en título, descripción, anfitrión o texto ampliado
-    if (
-        textHasTerm(title, q)
-        || textHasTerm(desc, q)
-        || textHasTerm(host, q)
-        || textHasTerm(hay, q)
-    ) return true;
+    // 2) Una sola idea: vale un sinónimo como palabra completa.
+    if (isSingleConcept(q)) return synonymHit(q, f.semantic, expandedTerms);
 
-    const terms = expandedTerms?.length ? expandedTerms : expandQueryLocally(query);
-
-    // 2) Algún término expandido aparece en título o descripción (prioridad)
-    for (const term of terms) {
-        if (term.length < 2) continue;
-        if (textHasTerm(title, term) || textHasTerm(desc, term) || textHasTerm(hay, term)) {
-            return true;
-        }
-    }
-
-    // 3) Tokens de la query repartidos por título/descripción
-    const qTokens = tokenize(query).filter((t) => t.length >= 3);
-    if (qTokens.length >= 2) {
-        const hits = qTokens.filter((t) => title.includes(t) || desc.includes(t) || host.includes(t) || hay.includes(t));
-        if (hits.length >= Math.ceil(qTokens.length * 0.6)) return true;
-    } else if (qTokens.length === 1) {
-        const t = qTokens[0];
-        if (title.includes(t) || desc.includes(t) || host.includes(t)) return true;
-    }
-
-    // 4) Mismo grupo conceptual: query ↔ título o descripción
-    const qGroups = new Set(matchingGroupIndexes(q));
-    if (qGroups.size > 0) {
-        const planGroups = matchingGroupIndexes(`${title} ${desc}`);
-        if (planGroups.some((g) => qGroups.has(g))) return true;
-    }
-
-    return false;
+    // 3) Varias ideas («padel madrid»): tienen que estar todas, en el campo que sea.
+    return queryTokens(q).every((t) => hasWordPrefix(f.all, t) || synonymHit(t, f.semantic));
 }

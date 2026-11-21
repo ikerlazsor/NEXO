@@ -17,7 +17,7 @@ select ok(not has_function_privilege('authenticated','public.get_login_email_by_
 select ok(has_function_privilege('authenticated','public.create_meetup_plan(jsonb)','execute'),'normal plan creation remains available');
 select ok(has_function_privilege('authenticated','public.get_my_profile()','execute'),'own-profile RPC stays available');
 select ok(has_function_privilege('anon','public.get_guest_feed(double precision,double precision,integer)','execute'),'guest feed remains available');
-select ok(has_function_privilege('anon','public.search_feed_plans(text)','execute'),'guest search remains available');
+select ok(has_function_privilege('anon','public.search_feed_plans(text,text[],double precision,double precision)','execute'),'guest search remains available');
 select ok(has_function_privilege('anon','public.get_guest_plan(uuid)','execute'),'shared guest plan read remains available');
 select ok(not has_column_privilege('authenticated','public.perfiles','rol','update'),'role column cannot be updated directly');
 select ok(not has_column_privilege('authenticated','public.perfiles','baneado','update'),'ban column cannot be updated directly');

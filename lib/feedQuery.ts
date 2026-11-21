@@ -356,24 +356,47 @@ function asJsonRows(data: unknown): FeedPlanRow[] {
 const searchCache = new Map<string, { at: number; rows: any[] }>();
 const SEARCH_CACHE_MS = 45_000;
 
-/** Planes que no están en el lote del feed (título, sitio, categoría, anfitrión). */
-export async function fetchSearchFeedPlans(query: string): Promise<any[]> {
+export type SearchFeedOptions = {
+    /** Sinónimos (`searchSynonymTerms`) para encontrar planes que aún no están cargados. */
+    terms?: string[];
+    /** Ubicación del usuario: a igual relevancia, primero lo cercano. */
+    coords?: { latitude: number; longitude: number } | null;
+};
+
+/** Planes que no están en el lote del feed (título, descripción, sitio, categoría, anfitrión, sinónimos). */
+export async function fetchSearchFeedPlans(query: string, options: SearchFeedOptions = {}): Promise<any[]> {
     const q = query.trim().slice(0, 80);
     if (q.length < 2) return [];
-    const cached = searchCache.get(q);
+    const terms = (options.terms ?? []).slice(0, 40);
+    const coords = options.coords ?? null;
+    // Coordenadas redondeadas (~1 km) para que moverse un poco no invalide la caché.
+    const cacheKey = JSON.stringify([
+        q,
+        terms,
+        coords ? [Math.round(coords.latitude * 100) / 100, Math.round(coords.longitude * 100) / 100] : null,
+    ]);
+    const cached = searchCache.get(cacheKey);
     if (cached && Date.now() - cached.at < SEARCH_CACHE_MS) return cached.rows;
-    const { data, error } = await supabase.rpc('search_feed_plans', { p_query: q });
+    let { data, error } = await supabase.rpc('search_feed_plans', {
+        p_query: q,
+        ...(terms.length ? { p_terms: terms } : {}),
+        ...(coords ? { p_lat: coords.latitude, p_lng: coords.longitude } : {}),
+    });
+    if (error && error.code === 'PGRST202' && (terms.length || coords)) {
+        // Servidor aún con la versión antigua (solo p_query): búsqueda básica.
+        ({ data, error } = await supabase.rpc('search_feed_plans', { p_query: q }));
+    }
     if (error) throw error;
     const raw = asJsonRows(data);
     if (raw.length === 0) {
-        searchCache.set(q, { at: Date.now(), rows: [] });
+        searchCache.set(cacheKey, { at: Date.now(), rows: [] });
         return [];
     }
     const user = await getAuthUser();
     if (user) {
         try {
             const withPeople = await attachFeedPlanPeople(raw);
-            searchCache.set(q, { at: Date.now(), rows: withPeople });
+            searchCache.set(cacheKey, { at: Date.now(), rows: withPeople });
             return withPeople;
         } catch {
             /* fallback al payload del RPC */
@@ -386,6 +409,6 @@ export async function fetchSearchFeedPlans(query: string): Promise<any[]> {
         host: row.host ?? null,
         es_organizador: row.es_organizador === true,
     }));
-    searchCache.set(q, { at: Date.now(), rows: plain });
+    searchCache.set(cacheKey, { at: Date.now(), rows: plain });
     return plain;
 }

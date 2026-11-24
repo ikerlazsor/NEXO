@@ -10,6 +10,7 @@ import { hapticLight } from "../../lib/haptics";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { BounceHeart } from "../../components/BounceHeart";
 import { PressScale } from "../../components/PressScale";
+import { FitMatchBanner } from "../../components/FitMatchBanner";
 import { EventArtwork, isFreeEvent } from "./EventCards";
 import { eventClassification } from "./covers";
 import { nexoGroupHint, nexoGroupLabel } from "./nexoGroup";
@@ -37,6 +38,8 @@ type Props = {
   onShare?: () => void;
   onToggleSave?: () => void;
   onReport?: () => void;
+  /** Encaje personal, como en el detalle de un plan de Nexo. */
+  fitPct?: number | null;
 };
 
 const HERO_H = Math.round(Dimensions.get("window").height * 0.42);
@@ -45,7 +48,7 @@ const SHEET_OVERLAP = 26;
 /** Cached content paints immediately; the offscreen native map is demand mounted. */
 export function EventDetailContent({ event, people, signedIn, joined = false, morePeople, unavailable, error,
   onBack, onRetry, onOfficial, onPerson, onAccount, onMorePeople, renderMap,
-  saved = false, onShare, onToggleSave, onReport }: Props) {
+  saved = false, onShare, onToggleSave, onReport, fitPct = null }: Props) {
   const { colors, scheme } = useAppTheme();
   const { t, lang } = useT();
   const dark = scheme === "dark";
@@ -157,6 +160,9 @@ export function EventDetailContent({ event, people, signedIn, joined = false, mo
         </Pressable>
       </View>
 
+      {fitPct != null ? (
+        <FitMatchBanner pct={fitPct} label={t("card.fitMatch", { pct: fitPct })} detail />
+      ) : null}
 
       {/* Como en el detalle de un plan de Nexo: la descripción dentro de un recuadro. */}
       {!!event.description && <View style={[s.aboutCard, { backgroundColor: dark ? colors.surfaceSubtle : "#F1F5F9" }]}>

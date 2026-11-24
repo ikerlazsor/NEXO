@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
@@ -39,6 +39,9 @@ import { useScreenTransitionReady } from "../../hooks/useScreenTransitionReady";
 import { PressScale } from "../../components/PressScale";
 import { JOINED_PLAN_COLORS, planCardActionStyles } from "../../components/planCardActions";
 import { eventShareTarget, shareTarget } from "../../lib/shareChooser";
+import { eventFitPercent } from "../../features/events/eventFit";
+import { FEED_CACHE_KEY, type FeedSnapshot } from "../../lib/feedCache";
+import { cacheGetStale } from "../../lib/ttlCache";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export default function EventDetail() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -65,6 +68,11 @@ export default function EventDetail() {
   const morePeople = privateScope === scope && storedMorePeople;
   const joined = privateScope === scope && storedJoined;
   const busy = busyScope === scope;
+  // Mismo % que la tarjeta del feed: gustos del último feed cargado.
+  const fitPct = useMemo(() => {
+    if (!event || !userId) return null;
+    return eventFitPercent(event, cacheGetStale<FeedSnapshot>(FEED_CACHE_KEY)?.feedTaste);
+  }, [event, userId]);
   // Mismo estado que la tarjeta del feed (guardar en uno se ve en el otro).
   const savedIds = useSavedEventIds(userId ?? null);
   const saved = !!userId && savedIds.has(id);
@@ -292,6 +300,7 @@ export default function EventDetail() {
         onShare={shareEvent}
         onToggleSave={() => void toggleSave()}
         onReport={reportEvent}
+        fitPct={fitPct}
       /> : <View style={[s.content, { flex: 1 }]}>
         <Pressable accessibilityRole="button" accessibilityLabel={t("common.back")} style={s.back}
           onPress={() => router.canGoBack() ? router.back() : router.replace("/")}>

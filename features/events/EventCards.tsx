@@ -19,6 +19,7 @@ import type { ExternalEvent, EventSection, EventSocialSummary } from "./types";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { PressScale } from "../../components/PressScale";
 import { BounceHeart } from "../../components/BounceHeart";
+import { FitMatchBanner } from "../../components/FitMatchBanner";
 import { emitHeartBurst } from "../../lib/heartBurst";
 import { hapticLight } from "../../lib/haptics";
 import { getCategoryColor } from "../../lib/categories";
@@ -94,6 +95,7 @@ export const EventCard = memo(function EventCard({
   canBurst = true,
   onToggleSave,
   onShare,
+  fitPct = null,
 }: {
   event: ExternalEvent;
   variant: "compact" | "editorial";
@@ -110,6 +112,8 @@ export const EventCard = memo(function EventCard({
   canBurst?: boolean;
   onToggleSave?: () => void;
   onShare?: () => void;
+  /** Encaje personal (igual que en las tarjetas de planes de Nexo). */
+  fitPct?: number | null;
 }) {
   const heartHostRef = useRef<View>(null);
   const { t, lang } = useT();
@@ -241,6 +245,9 @@ export const EventCard = memo(function EventCard({
           >
             {event.title}
           </Text>
+          {fitPct != null ? (
+            <FitMatchBanner pct={fitPct} label={t("card.fitMatch", { pct: fitPct })} compact />
+          ) : null}
           {compact ? <View style={[s.meta, s.dateMeta]}>
             <Ionicons
               name="calendar-outline"

@@ -170,6 +170,7 @@ import { prefetchPairAffinity } from '../../lib/pairAffinityCache';
 import { theme } from '../../theme';
 import { EventCard } from '../../features/events/EventCards';
 import { eventCoverKey } from '../../features/events/covers';
+import { eventFitPercent } from '../../features/events/eventFit';
 import { toggleEventSaved, useSavedEventIds } from '../../features/events/savedEvents';
 import { eventShareTarget, shareTarget } from '../../lib/shareChooser';
 import { useEvents } from '../../features/events/useEvents';
@@ -1586,7 +1587,6 @@ export default function HomeScreen() {
                         isSaved: savedPlanIds.has(mid),
                         fitPct:
                             currentUserId &&
-                            !found.es_organizador &&
                             String(found.creador_id || found.host?.id || '') !== String(currentUserId)
                                 ? feedFitPercent(
                                       {
@@ -1695,6 +1695,7 @@ export default function HomeScreen() {
                     canBurst={!!sessionUserId}
                     onToggleSave={() => toggleSaveExternal(item.event.id)}
                     onShare={() => shareExternal(item.event)}
+                    fitPct={sessionUserId ? eventFitPercent(item.event, feedTaste) : null}
                 />;
             }
             if (item.kind === 'header') {

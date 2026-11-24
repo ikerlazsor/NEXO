@@ -313,7 +313,7 @@ function PlanCardInner({
                   t,
               });
     const fitPct =
-        !viewerIsOrganizer && !isCreator && !socialJoined && feedTaste && currentUserId
+        !viewerIsOrganizer && !isCreator && feedTaste && currentUserId
             ? feedFitPercent(
                   {
                       categoria: item.categoria,
@@ -810,7 +810,8 @@ function PlanCardInner({
                                     </>
                                 )}
                             </Text>
-                        ) : fitPct != null ? (
+                        ) : null}
+                        {fitPct != null ? (
                             <FitMatchBanner
                                 pct={fitPct}
                                 label={t('card.fitMatch', { pct: fitPct })}

@@ -356,7 +356,6 @@ export type FitPlan = Pick<
     'categoria' | 'tipo_deporte' | 'fecha_evento' | 'solo_chicas'
 >;
 
-const FIT_SHOW_MIN = 63;
 const FIT_PCT_MIN = 62;
 const FIT_PCT_MAX = 97;
 
@@ -484,7 +483,7 @@ export function feedFitPercent(
     if (isSoloChicasPlan(plan) && viewer.viewerGenero !== 'femenino') return null;
 
     const tags = (viewer.personalityTags || []).map((t) => String(t).trim()).filter(Boolean);
-    if (tags.length === 0) return null;
+    // Sin etiquetas de personalidad también se calcula (valores neutros): todos los planes muestran encaje.
 
     const category = normalizeMainCategory(plan.categoria);
     const categoryScore = fitCategoryRatio(tags, category);
@@ -504,10 +503,8 @@ export function feedFitPercent(
 
     const basePct = 58 + raw01 * 30;
     const spread = fitPlanSpread(planId, plan);
-    let pct = Math.round(basePct + spread);
-    pct = Math.max(FIT_PCT_MIN, Math.min(FIT_PCT_MAX, pct));
-    if (pct < FIT_SHOW_MIN) return null;
-    return pct;
+    const pct = Math.round(basePct + spread);
+    return Math.max(FIT_PCT_MIN, Math.min(FIT_PCT_MAX, pct));
 }
 
 /** @deprecated El encaje final ya viene de feedFitPercent; se mantiene por compatibilidad. */

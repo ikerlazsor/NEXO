@@ -503,7 +503,7 @@ export function feedFitPercent(
 
     const basePct = 58 + raw01 * 30;
     const spread = fitPlanSpread(planId, plan);
-    let pct = Math.round(basePct + spread);
+    const pct = Math.round(basePct + spread);
     return Math.max(FIT_PCT_MIN, Math.min(FIT_PCT_MAX, pct));
 }
 

@@ -28,6 +28,8 @@ import {
   planCardActionStyles,
   JOINED_PLAN_COLORS,
 } from "../../components/planCardActions";
+/** Azul del pin de ubicación en las tarjetas de planes. */
+const PLAN_META_BLUE = "#2563EB";
 export function eventDateLabel(
   event: Pick<ExternalEvent, "start_date">,
   lang: string,
@@ -96,6 +98,7 @@ export const EventCard = memo(function EventCard({
   onToggleSave,
   onShare,
   fitPct = null,
+  distanceLabel,
 }: {
   event: ExternalEvent;
   variant: "compact" | "editorial";
@@ -114,6 +117,8 @@ export const EventCard = memo(function EventCard({
   onShare?: () => void;
   /** Encaje personal (igual que en las tarjetas de planes de Nexo). */
   fitPct?: number | null;
+  /** «A x km» desde tu ubicación, igual que en las tarjetas de planes. */
+  distanceLabel?: string;
 }) {
   const heartHostRef = useRef<View>(null);
   const { t, lang } = useT();
@@ -234,11 +239,6 @@ export const EventCard = memo(function EventCard({
               {t(`cat.sub.${classification.subcategory}`)}
             </Text>
           </View> : null}
-          {!compact ? (
-            <Text style={[s.whenText, { color: accent }]} numberOfLines={1}>
-              {when}
-            </Text>
-          ) : null}
           <Text
             numberOfLines={compact ? 2 : 2}
             style={[s.title, { color: colors.text }, compact && s.compactTitle]}
@@ -264,7 +264,7 @@ export const EventCard = memo(function EventCard({
                 : ""}
             </Text>
           </View> : null}
-          <View style={s.meta}>
+          {compact ? <View style={s.meta}>
             <Ionicons
               name="location-outline"
               size={14}
@@ -276,7 +276,23 @@ export const EventCard = memo(function EventCard({
             >
               {event.venue || t("events.venueUnknown")}
             </Text>
-          </View>
+          </View> : (
+            /* Misma fila que las tarjetas de planes: fecha y hora a la izquierda, distancia a la derecha. */
+            <View style={s.planMetaRow}>
+              <View style={[s.planMetaItem, s.planMetaDate]}>
+                <Ionicons name="calendar-outline" size={15} color={isToday ? "#B45309" : accent} />
+                <Text style={[s.planMetaText, { color: isToday ? "#B45309" : accent, fontWeight: "800" }]} numberOfLines={1}>
+                  {when}
+                </Text>
+              </View>
+              <View style={[s.planMetaItem, s.planMetaLoc]}>
+                <Ionicons name="location-outline" size={15} color={PLAN_META_BLUE} />
+                <Text style={[s.planMetaText, s.planMetaTextLoc, { color: colors.textMuted }]} numberOfLines={1} ellipsizeMode="tail">
+                  {distanceLabel || event.venue || t("events.venueUnknown")}
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
       </Pressable>
       <View style={[s.actions, compact && s.compactActions, !compact && { borderTopColor: dark ? colors.borderStrong : "rgba(15,23,42,0.06)" }]}>
@@ -543,6 +559,13 @@ const s = StyleSheet.create({
   meta: { flexDirection: "row", gap: 5, alignItems: "center" },
   metaText: { fontSize: 14, fontWeight: "600", flex: 1 },
   dateMeta: { marginBottom: 8 },
+  // Copia de la fila de meta de PlanCard para que todas las tarjetas del feed sean iguales.
+  planMetaRow: { flexDirection: "row", alignItems: "center", gap: 14, marginTop: 6 },
+  planMetaItem: { flexDirection: "row", alignItems: "center" },
+  planMetaDate: { flexShrink: 1, minWidth: 0 },
+  planMetaLoc: { flexShrink: 1, flexGrow: 1, minWidth: 0, maxWidth: "48%" },
+  planMetaText: { marginLeft: 7, fontSize: 14, fontWeight: "600", flexShrink: 1 },
+  planMetaTextLoc: { marginLeft: 4, flexShrink: 1, minWidth: 0 },
   actions: {
     flexDirection: "row",
     gap: 12,

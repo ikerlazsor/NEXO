@@ -1696,6 +1696,7 @@ export default function HomeScreen() {
                     onToggleSave={() => toggleSaveExternal(item.event.id)}
                     onShare={() => shareExternal(item.event)}
                     fitPct={sessionUserId ? eventFitPercent(item.event, feedTaste) : null}
+                    distanceLabel={planDistanceLabel({ latitud: item.event.latitude, longitud: item.event.longitude })}
                 />;
             }
             if (item.kind === 'header') {
@@ -1732,7 +1733,7 @@ export default function HomeScreen() {
         [
             t,
             styles.feedSectionTitle, external.social, external.joined, external.busy, openExternal, joinExternal,
-            savedEventIds, sessionUserId, toggleSaveExternal, shareExternal,
+            savedEventIds, sessionUserId, toggleSaveExternal, shareExternal, planDistanceLabel,
             currentUserId,
             currentUserGenero,
             friendIds,

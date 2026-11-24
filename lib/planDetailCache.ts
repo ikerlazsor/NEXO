@@ -154,12 +154,11 @@ export function seedPlanDetailFromFeed(
         if (existing?.fitPct != null) return existing.fitPct;
         const uid = opts?.currentUserId ?? existing?.currentUserId ?? null;
         const genero = opts?.currentUserGenero ?? existing?.currentUserGenero ?? null;
-        if (!uid || !genero) return null;
+        if (!uid) return null;
         const feedTaste = cacheGetStale<{ feedTaste?: { personalityTags?: string[]; viewerAge?: number | null } }>(
             FEED_CACHE_KEY,
         )?.feedTaste;
-        const tags = feedTaste?.personalityTags;
-        if (!tags?.length) return null;
+        const tags = feedTaste?.personalityTags ?? [];
         try {
             return feedFitPercent(
                 {

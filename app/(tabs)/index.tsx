@@ -1374,7 +1374,6 @@ export default function HomeScreen() {
                         isSaved: savedPlanIds.has(mid),
                         fitPct:
                             currentUserId &&
-                            !found.es_organizador &&
                             String(found.creador_id || found.host?.id || '') !== String(currentUserId)
                                 ? feedFitPercent(
                                       {
